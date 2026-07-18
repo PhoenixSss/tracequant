@@ -1,0 +1,113 @@
+name: Implementation task
+description: 用于一个可由单个 PR 完成的实现任务。
+title: "[Task] "
+labels:
+  - type:task
+  - codex:needs-spec
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景
+      description: 说明为什么需要这个任务，以及它与项目目标或上级 Issue 的关系。
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: 目标
+      description: 描述本任务唯一的主要目标。
+    validations:
+      required: true
+  - type: textarea
+    id: inputs
+    attributes:
+      label: 输入
+      description: 列出实现所需的输入、配置、数据、接口或文档。
+    validations:
+      required: true
+  - type: textarea
+    id: outputs
+    attributes:
+      label: 输出
+      description: 列出任务完成后应产生的代码、文档、配置或行为变化。
+    validations:
+      required: true
+  - type: textarea
+    id: behavior_requirements
+    attributes:
+      label: 行为要求
+      description: 描述必须满足的业务行为、约束和交互规则。
+    validations:
+      required: true
+  - type: textarea
+    id: edge_cases
+    attributes:
+      label: 异常与边界情况
+      description: 描述错误路径、边界输入、状态不一致或其他需要显式处理的情况。
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: 范围外
+      description: 明确本任务不应处理的内容，避免实现时扩展范围。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: 验收标准
+      description: 使用可测试、可核对的条目描述完成条件。
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: verification_commands
+    attributes:
+      label: 验证命令
+      description: 列出完成后必须运行的测试、lint、type-check 或其他验证命令。
+      placeholder: |
+        ```powershell
+        dotnet test
+        ```
+    validations:
+      required: true
+  - type: input
+    id: dependencies
+    attributes:
+      label: 依赖 Issue
+      description: 列出父 Issue、阻塞 Issue 或相关 Issue；若无，请写“无”。
+      placeholder: "Depends on #"
+    validations:
+      required: true
+  - type: dropdown
+    id: estimated_size
+    attributes:
+      label: 预计规模
+      description: 选择预计实现规模；L 通常表示应继续拆分。
+      options:
+        - XS：局部小修改
+        - S：一个清晰的小能力
+        - M：多个相关文件，但可由一个 PR 完成
+        - L：应继续拆分
+    validations:
+      required: true
+  - type: checkboxes
+    id: ready_check
+    attributes:
+      label: Ready 检查
+      description: 全部满足后，维护者才应将标签从 codex:needs-spec 调整为 codex:ready。
+      options:
+        - label: 任务只有一个主要目标
+          required: true
+        - label: 验收标准清晰且可以测试
+          required: true
+        - label: 已明确范围外内容
+          required: true
+        - label: 不需要开发者猜测关键架构决定
+          required: true
+    validations:
+      required: true

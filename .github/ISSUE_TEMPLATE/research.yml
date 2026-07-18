@@ -1,0 +1,75 @@
+name: Research
+description: 用于需要先验证事实、假设、数据或方法的研究任务。
+title: "[Research] "
+labels:
+  - type:research
+  - codex:needs-spec
+body:
+  - type: markdown
+    attributes:
+      value: |
+        研究结果必须明确区分：已验证事实、推断、假设、未解决问题。
+        如涉及回测，必须说明数据范围、交易成本、样本外验证和潜在未来数据泄漏。
+  - type: textarea
+    id: research_question
+    attributes:
+      label: 研究问题
+      description: 用一个清晰问题描述本次研究要回答什么。
+    validations:
+      required: true
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景
+      description: 说明研究动机、上下文和相关 Issue。
+    validations:
+      required: true
+  - type: textarea
+    id: known_facts
+    attributes:
+      label: 已知事实
+      description: 列出现阶段已经确认的事实，并说明来源。
+    validations:
+      required: true
+  - type: textarea
+    id: hypotheses
+    attributes:
+      label: 待验证假设
+      description: 列出需要通过数据、实验或文档验证的假设。
+    validations:
+      required: true
+  - type: textarea
+    id: data_requirements
+    attributes:
+      label: 数据需求
+      description: 描述所需数据、时间范围、字段、质量要求和数据不可用时的处理方式。
+    validations:
+      required: true
+  - type: textarea
+    id: research_method
+    attributes:
+      label: 研究方法
+      description: 描述将如何验证事实和假设；涉及回测时说明数据范围、交易成本、样本外验证和潜在未来数据泄漏。
+    validations:
+      required: true
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: 输出产物
+      description: 列出研究报告、实验记录、数据摘要、图表或后续 Issue。
+    validations:
+      required: true
+  - type: textarea
+    id: decision_criteria
+    attributes:
+      label: 判定标准
+      description: 说明什么结果支持继续实现、调整方向或停止投入。
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: 范围外
+      description: 明确本研究不包含的实现、调参或生产行为。
+    validations:
+      required: true

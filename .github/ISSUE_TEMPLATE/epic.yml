@@ -1,0 +1,54 @@
+name: Epic
+description: 用于规划由多个 Feature 或 Task 子 Issue 组成的较大成果。
+title: "[Epic] "
+labels:
+  - type:epic
+  - codex:needs-spec
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Epic 应由多个 Feature 或 Task 子 Issue 组成，用于描述较大的目标成果和边界。
+        Epic 本身通常不直接对应实现 PR。
+  - type: textarea
+    id: target_outcome
+    attributes:
+      label: 目标成果
+      description: 描述 Epic 完成后项目应具备的能力或状态。
+    validations:
+      required: true
+  - type: textarea
+    id: background_value
+    attributes:
+      label: 背景与价值
+      description: 说明为什么需要这个 Epic，以及它对研究、交易安全或工程质量的价值。
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 范围
+      description: 列出 Epic 包含的主要能力、模块或子问题。
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: 范围外
+      description: 明确不属于本 Epic 的内容。
+    validations:
+      required: true
+  - type: textarea
+    id: completion_conditions
+    attributes:
+      label: 完成条件
+      description: 描述哪些子 Issue、文档或验证结果完成后，Epic 可关闭。
+    validations:
+      required: true
+  - type: textarea
+    id: major_risks
+    attributes:
+      label: 主要风险
+      description: 列出数据正确性、回测偏差、实盘安全、凭据安全、订单状态或架构范围风险。
+    validations:
+      required: true

@@ -1,0 +1,92 @@
+name: Bug report
+description: 用于报告可复现或可验证的软件缺陷。
+title: "[Bug] "
+labels:
+  - type:bug
+  - codex:needs-spec
+body:
+  - type: textarea
+    id: problem_description
+    attributes:
+      label: 问题描述
+      description: 简要说明出现了什么问题。
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影响范围
+      description: 描述受影响的模块、数据、流程、用户或交易安全边界。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction_steps
+    attributes:
+      label: 复现步骤
+      description: 提供可以复现问题的最小步骤。
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: 预期行为
+      description: 描述系统原本应该如何表现。
+    validations:
+      required: true
+  - type: textarea
+    id: actual_behavior
+    attributes:
+      label: 实际行为
+      description: 描述实际观察到的行为。
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      description: 说明操作系统、运行模式、数据范围、配置和相关版本。
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志或错误信息
+      description: 粘贴相关日志、错误信息或截图说明；不要包含凭据。
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: 临时解决方式
+      description: 如有临时规避方式，请说明；若无，请写“无”。
+    validations:
+      required: true
+  - type: checkboxes
+    id: risk_flags
+    attributes:
+      label: 风险复选项
+      description: 请选择所有相关风险。不要依赖自动风险标签，创建者应后续选择合适标签。
+      options:
+        - label: 数据完整性
+        - label: 未来数据泄漏
+        - label: 实盘交易
+        - label: 凭据安全
+        - label: 订单状态
+        - label: 无上述风险
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: 验收标准
+      description: 描述修复完成后必须满足的可验证条件。
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
