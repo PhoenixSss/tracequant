@@ -1,0 +1,155 @@
+name: Feature
+description: A coherent system capability composed of one or more implementation tasks
+title: "[Feature] "
+labels:
+  - type:feature
+  - codex:needs-spec
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature 表示一个完整但仍需拆分的系统能力。
+        Feature 通常属于某个 Epic。
+        Feature 可以包含多个 Task 子 Issue。
+        Feature 通常不应直接交给 Codex 一次性实现。
+        只有足够小且验收边界清晰时，Feature 才可以直接对应一个 PR。
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景
+      description: 说明为什么需要该能力，以及当前系统缺少什么。
+    validations:
+      required: true
+  - type: textarea
+    id: capability
+    attributes:
+      label: 目标能力
+      description: 描述完成后系统具备什么明确能力，而不是列实现步骤。
+    validations:
+      required: true
+  - type: textarea
+    id: value
+    attributes:
+      label: 用户或系统价值
+      description: 说明该能力对研究正确性、可复现性、风控、安全性或开发效率的价值。
+    validations:
+      required: true
+  - type: textarea
+    id: inputs
+    attributes:
+      label: 输入
+      description: 描述该 Feature 接收的数据、接口、配置或上游能力。
+    validations:
+      required: true
+  - type: textarea
+    id: outputs
+    attributes:
+      label: 输出
+      description: 描述完成后提供的数据、接口、命令、报告或系统行为。
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 功能范围
+      description: 使用可验证的列表说明包含哪些能力。
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: non_functional
+    attributes:
+      label: 非功能要求
+      description: 说明与正确性、可复现性、性能、可观测性、安全性、可维护性相关的约束；允许填写“不适用”，但必须说明原因。
+    validations:
+      required: true
+  - type: textarea
+    id: edge_cases
+    attributes:
+      label: 异常与边界情况
+      description: 描述缺失数据、非法输入、外部服务异常、重复执行和部分失败等情况。
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: 范围外
+      description: 必须明确禁止本 Feature 顺手实现的相关功能。
+    validations:
+      required: true
+  - type: textarea
+    id: completion
+    attributes:
+      label: 完成条件
+      description: 使用 Markdown checklist 描述 Feature 完成条件。
+      placeholder: |
+        - [ ] 所有必需 Task 子 Issue 已关闭
+        - [ ] 集成测试或阶段验收通过
+        - [ ] 文档已更新
+        - [ ] 风险和限制已记录
+        - [ ] 没有遗留未说明的占位实现
+    validations:
+      required: true
+  - type: textarea
+    id: suggested_tasks
+    attributes:
+      label: 建议子任务
+      description: 列出初步预计需要拆出的 Task；创建 Feature 时不要求所有 Task 已经存在。
+    validations:
+      required: true
+  - type: input
+    id: dependencies
+    attributes:
+      label: 依赖 Issue
+      description: 填写依赖 Issue 编号；没有则填写“无”。
+      placeholder: "Depends on #"
+    validations:
+      required: true
+  - type: input
+    id: parent_epic
+    attributes:
+      label: 父 Epic
+      description: 填写所属 Epic Issue 编号；没有则说明原因。
+      placeholder: "Part of #"
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: 主要风险
+      description: 列出可能涉及的数据完整性、未来数据泄漏、凭据、实盘交易、订单状态、架构复杂度或其他风险。
+    validations:
+      required: true
+  - type: dropdown
+    id: size
+    attributes:
+      label: 预计规模
+      description: 选择预计 Feature 规模。
+      options:
+        - S：较小的完整能力，可能直接对应一个 PR
+        - M：需要多个相关 Task
+        - L：需要继续拆分为多个 Feature 或较多 Task
+    validations:
+      required: true
+  - type: checkboxes
+    id: readiness
+    attributes:
+      label: Ready 检查
+      description: 全部满足后，维护者才应将标签从 codex:needs-spec 调整为 codex:ready。
+      options:
+        - label: 目标能力清晰
+          required: true
+        - label: 输入和输出明确
+          required: true
+        - label: 完成条件可以验证
+          required: true
+        - label: 已明确范围外内容
+          required: true
+        - label: 已识别父 Epic 和依赖
+          required: true
+        - label: 不需要实施者猜测关键架构决定
+          required: true
+    validations:
+      required: true
