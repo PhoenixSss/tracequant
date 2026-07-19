@@ -68,3 +68,7 @@ Run strict type checking with:
 ```console
 uv run mypy src tests
 ```
+
+## Continuous integration
+
+Pull requests targeting `main` and pushes to `main` automatically run CI. The workflow runs pytest, Ruff lint, Ruff format checking, and mypy. Use the equivalent local commands in the existing Development environment section above.

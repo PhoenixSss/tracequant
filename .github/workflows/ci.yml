@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.28"
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Sync locked dependencies
+        run: uv sync --locked --dev
+
+      - name: Validate lock file
+        run: uv lock --check
+
+      - name: Run tests
+        run: uv run --frozen pytest
+
+      - name: Run Ruff lint
+        run: uv run --frozen ruff check .
+
+      - name: Check Ruff formatting
+        run: uv run --frozen ruff format --check .
+
+      - name: Run mypy
+        run: uv run --frozen mypy src tests
