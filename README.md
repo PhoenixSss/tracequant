@@ -35,3 +35,17 @@ A research-first quantitative trading system for cryptocurrency perpetual future
 ## Current status
 
 The project is in its initial planning and repository setup stage. No live-trading capability has been implemented.
+
+## Development environment
+
+Python 3.11 or newer and [uv](https://docs.astral.sh/uv/) are required. Create or update the local environment with:
+
+```console
+uv sync
+```
+
+Verify that the project package is importable with:
+
+```console
+uv run python -c "import quant_system; print(quant_system.__name__)"
+```
