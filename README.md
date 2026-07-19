@@ -41,11 +41,30 @@ The project is in its initial planning and repository setup stage. No live-tradi
 Python 3.11 or newer and [uv](https://docs.astral.sh/uv/) are required. Create or update the local environment with:
 
 ```console
-uv sync
+uv sync --dev
 ```
 
 Verify that the project package is importable with:
 
 ```console
 uv run python -c "import quant_system; print(quant_system.__name__)"
+```
+
+Run the test suite with:
+
+```console
+uv run pytest
+```
+
+Run lint and formatting checks with:
+
+```console
+uv run ruff check .
+uv run ruff format --check .
+```
+
+Run strict type checking with:
+
+```console
+uv run mypy src tests
 ```
