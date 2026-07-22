@@ -32,6 +32,15 @@ A research-first quantitative trading system for cryptocurrency perpetual future
 - `tests/`: unit, integration, and regression tests.
 - `.github/`: Issue templates, Pull Request templates, and CI workflows.
 
+## Documentation
+
+- [Technical baseline](docs/architecture/technical-baseline.md): current approved technology choices and architecture boundaries.
+- [Project roadmap](docs/planning/project-roadmap.md): current four-stage plan, Issue navigation, dependencies, and implementation entry point.
+- [Planning baseline v1.0](docs/planning/quant-system-planning-baseline-v1.0.md): historical planning snapshot retained for context and decision history.
+- [Deep research report](docs/research/deep-research-report.md): historical broad research on markets, strategies, data, backtesting, and operations.
+- [Deep research report 2](docs/research/deep-research-report-2.md): historical follow-up research used to refine the technical direction.
+- [Technical roadmap research](docs/research/technical-roadmap-research.md): historical comparative research behind the selected implementation route.
+
 ## Current status
 
 The project is in its initial planning and repository setup stage. No live-trading capability has been implemented.
