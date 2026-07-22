@@ -22,11 +22,14 @@ Before changing code:
 GitHub Issues are the source of truth for planned work.
 Repository documentation is the source of truth for current implemented behavior.
 
-When handling a GitHub Task specification, implementation, Pull Request, review,
-merge, post-merge verification, or branch cleanup, first read
-`.agents/skills/task-lifecycle/SKILL.md`. This root `AGENTS.md` remains the
-repository-level rule source. The Skill only supplements the Task lifecycle and
-does not override system, developer, user, or more specific scoped instructions.
+When the user specifies an already-created GitHub Task and asks for specification
+review, Ready checks, implementation, Pull Request work, final review, merge,
+post-merge verification, or branch cleanup, first read
+`.agents/skills/task-lifecycle/SKILL.md`. Identifying, splitting, planning,
+drafting, or creating new Tasks is outside that Skill. This root `AGENTS.md`
+remains the repository-level rule source. The Skill only supplements the Task
+lifecycle and does not override system, developer, user, or more specific scoped
+instructions.
 
 ## Implementation rules
 

@@ -1,6 +1,6 @@
 ---
 name: task-lifecycle
-description: Manage this repository's GitHub Task lifecycle when creating or revising a Task specification, performing a read-only readiness audit, changing Ready state, implementing on a branch, committing or pushing, creating or reviewing a Pull Request, squash-merging, verifying post-merge state, cleaning up branches, or reviewing the lifecycle process. Do not use for ordinary code explanation, research analysis, or work that is not tied to a GitHub Task.
+description: Manage this repository's lifecycle for an already-created GitHub Task, including reading the Task, pre-implementation review, readiness, implementation, Pull Request work, final review, merge, post-merge verification, cleanup, and retrospective. Do not use for creating, planning, drafting from scratch, choosing, or splitting new Tasks, ordinary code explanation, research analysis, or work that is not tied to an existing GitHub Task.
 ---
 
 # Task lifecycle
@@ -10,6 +10,11 @@ Do not override system, developer, or user instructions, or any applicable
 `AGENTS.md` or `AGENTS.override.md`. Do not treat this Skill as a replacement for
 the current Issue, `.github/ISSUE_TEMPLATE/task.yml`,
 `.github/pull_request_template.md`, workflows, `pyproject.toml`, or lock files.
+
+This Skill starts only after the user specifies an existing GitHub Task. It does
+not identify the next Task, split Features or Epics into new Tasks, decide that a
+new Task should exist, draft a new Task from scratch, create GitHub Issues, or
+choose initial Parent, Project fields, labels, or Relationships for new Tasks.
 
 Read the current repository and GitHub sources on every run. Never rely on a
 template, command, field value, or workflow cached when this Skill was created.
@@ -40,9 +45,9 @@ acceptance criteria.
 
 Classify the request as exactly one or more explicitly requested stages:
 
-1. Task specification creation or revision.
+1. Existing Task intake, specification review, or authorized revision.
 2. Pre-implementation read-only audit.
-3. Ready-state transition.
+3. Authorized lifecycle metadata transition.
 4. Branch and implementation.
 5. Commit, push, and Pull Request creation.
 6. Final read-only Pull Request review.
@@ -65,27 +70,38 @@ Perform a write only when the user explicitly requests its corresponding stage
 and all gates for that stage pass. Authorization for one write stage does not
 authorize later stages.
 
-## Stage 1: Create or revise a Task specification
+## Stage 1: Intake an existing Task and review or revise its specification
 
-- **Entry:** The user explicitly requests Task creation or specification changes.
-- **Default permission:** Write only the requested GitHub Task metadata and body;
-  otherwise remain read-only.
-- **Allowed:** Read the current Task template; draft or update one Task; validate
-  its fields, labels, Parent, dependencies, and Project values.
-- **Forbidden:** Implement the Task, create a branch or Pull Request, invent a
-  replacement Issue structure, or mark an unaudited Task Ready.
+- **Entry:** The user specifies an existing GitHub Task and explicitly requests
+  specification intake, review, revision advice, or an authorized revision.
+- **Default permission:** Read-only unless the user explicitly authorizes
+  changing the specified existing Task.
+- **Allowed:** Read the current Task template to check the existing Task
+  structure; validate its fields, labels, Parent, dependencies, Relationships,
+  and Project values; propose precise revisions; update only the specified
+  existing Task when authorized.
+- **Forbidden:** Identify, split, plan, draft from scratch, or create a new Task;
+  implement the Task; create a branch or Pull Request; invent a replacement Issue
+  structure; mark an unaudited Task Ready; or change Project, Parent, labels, or
+  Relationships unless explicitly authorized.
 - **Read:** Governing agent files, `.github/ISSUE_TEMPLATE/task.yml`, the parent
   Issue, linked sources, dependency Issues, Project field definitions, and label
   definitions.
-- **Check:** Preserve every required template section. Give the Task one primary
-  goal that one independent Pull Request can complete. Recommend splitting size
-  L. Explicitly verify Parent, Project fields, and labels. Start a new Task with
-  `codex:needs-spec`. Use `type:task`; do not add a mutually exclusive
-  `type:docs` merely because the work is documentation-only.
-- **Exit:** The specification is complete and auditable, but remains
-  `codex:needs-spec` until Stage 2 passes and Stage 3 is requested.
-- **Report:** Task identity, sources, proposed fields, validation findings,
-  unresolved decisions, and the next gate.
+- **Check:** Confirm the specified Task has one primary goal that one independent
+  Pull Request can complete, preserves required template sections, has explicit
+  Parent, Project fields, labels, dependencies, and Relationships, and does not
+  require the implementer to guess key architecture decisions. Recommend splitting
+  size L. Use `type:task`; do not add a mutually exclusive `type:docs` merely
+  because the work is documentation-only.
+- **Exit:** The existing Task specification is complete and auditable, or exact
+  revision needs are reported. It remains `codex:needs-spec` until Stage 2 passes
+  and an authorized Stage 3 Ready transition is requested.
+- **Report:** Existing Task identity, sources, current fields, validation
+  findings, proposed revisions, unresolved decisions, and the next gate.
+
+Reading `.github/ISSUE_TEMPLATE/task.yml` in this Skill means checking the
+structure and required sections of an existing Task. It does not authorize
+planning or creating a new Task.
 
 ### Parent, dependencies, and Relationships
 
@@ -117,25 +133,129 @@ a precautionary pause.
   acceptance criteria, correct Parent and Project fields, consistent labels, and
   no unresolved formal or factual blocker.
 - **Exit:** Report pass or fail. A pass permits a separately requested Ready
-  transition or implementation stage; it performs neither.
+  transition. Implementation may begin only after the Task actually has
+  `codex:ready`, is unblocked, and Stage 4 is separately requested. The audit
+  performs neither transition nor implementation.
 - **Report:** Findings by severity, exact evidence, readiness conclusion, and
   unresolved gates.
 
-## Stage 3: Change Ready state
+## Stage 3: Apply an authorized lifecycle metadata transition
 
-- **Entry:** Stage 2 passed and the user explicitly requests a label or Project
-  state change.
-- **Default permission:** Limited GitHub metadata write.
-- **Allowed:** Apply only the approved state transition and re-read the result.
-- **Forbidden:** Change unrelated fields, implement, create a branch, or use
-  `codex:blocked` without a real unresolved blocker.
-- **Read:** Current Issue, audit result, label definitions, and Project field
-  options.
-- **Check:** Ensure specification completeness and replace conflicting lifecycle
-  labels rather than accumulating them. Apply `codex:ready` only after audit.
-- **Exit:** GitHub reports the requested label and Project state consistently.
-- **Report:** Previous and resulting values, mutation performed, verification,
-  and the next gate.
+- **Entry:** The user explicitly requests a specific Codex-label or Project
+  Status transition, and current repository and GitHub facts support that
+  transition. Transitioning to `Ready` additionally requires Stage 2 to have
+  passed.
+- **Default permission:** Limited GitHub metadata write for the exact authorized
+  transition only.
+- **Allowed:** Apply only the approved lifecycle transition, replace conflicting
+  lifecycle labels when required, and re-read the result.
+- **Forbidden:** Change unrelated fields; infer or broaden the requested
+  transition; implement; create a branch; use `codex:blocked` without a real
+  unresolved blocker; or set `Done` without verified merge and post-merge
+  completion.
+- **Read:** Current Issue and comments, relevant audit or lifecycle evidence,
+  label definitions, current labels, Project field definitions, available
+  Project Status options, and the current Project item values.
+- **Check:** Confirm the requested transition against current facts:
+  - For `Ready`, require a passed Stage 2 audit and complete specification.
+  - For `In Progress`, require implementation to be starting or active.
+  - For `Review`, require a Pull Request to exist or final review to be starting.
+  - For `Blocked`, require a real unresolved blocker.
+  - When leaving `Blocked`, restore the state and Codex label supported by the
+    actual lifecycle stage rather than mechanically restoring `Ready`.
+  - For `Done`, first verify merge and post-merge completion and verify whether
+    repository automation already applied the transition. Perform a manual
+    transition only when the user explicitly authorizes it.
+  Replace conflicting lifecycle labels rather than accumulating them.
+- **Exit:** GitHub reports the exact requested label and Project Status
+  consistently, or the mismatch is reported without unrelated changes.
+- **Report:** Previous and resulting values, evidence supporting the transition,
+  mutation performed, verification, and the next gate.
+
+### Codex labels and Project Status
+
+Keep Codex lifecycle labels separate from the Project `Status` field:
+
+- `codex:*` labels express Codex specification gates, implementation permission,
+  or blocker state.
+- Project `Status` expresses the Task's current project workflow phase.
+
+For an existing Task, first read its current Project `Status` field and available
+options. While the repository Project Status options are exactly `Inbox`,
+`Specifying`, `Ready`, `In Progress`, `Review`, `Blocked`, and `Done`, use this
+mapping:
+
+| Lifecycle state | Codex label | Project Status |
+| --- | --- | --- |
+| Task recorded, specification not started | `codex:needs-spec` | `Inbox` |
+| Specification is being completed | `codex:needs-spec` | `Specifying` |
+| Pre-implementation review passed | `codex:ready` | `Ready` |
+| Implementation branch or work is active | `codex:ready` | `In Progress` |
+| Pull Request exists or final review is active | `codex:ready` | `Review` |
+| A real unresolved blocker exists | `codex:blocked` | `Blocked` |
+| PR is merged and post-merge verification passed | Follow current label policy | `Done` |
+
+When pre-implementation review passes, recommend exactly:
+
+```text
+Remove codex:needs-spec
+Add codex:ready
+Project Status: Specifying -> Ready
+```
+
+If the existing Task is still in `Inbox` when review passes, recommend:
+
+```text
+Remove codex:needs-spec
+Add codex:ready
+Project Status: Inbox -> Ready
+```
+
+When implementation starts, recommend:
+
+```text
+Project Status: Ready -> In Progress
+```
+
+When a Pull Request is created or final review starts, recommend:
+
+```text
+Project Status: In Progress -> Review
+```
+
+When a real unresolved blocker appears, recommend:
+
+```text
+Remove codex:ready or codex:needs-spec
+Add codex:blocked
+Project Status: current status -> Blocked
+```
+
+After a blocker is resolved, do not mechanically restore `Ready`. Restore
+`Specifying`, `Ready`, `In Progress`, or `Review` according to the lifecycle stage
+and current facts, and restore the corresponding Codex label.
+
+After merge and post-merge verification, explicitly check:
+
+```text
+Project Status: Review -> Done
+```
+
+Issue `OPEN` or `CLOSED` state and Project `Status` are independent facts.
+`Closes #<Task>` may close the Issue automatically, while Project Status may or
+may not update automatically. Read and report both facts separately after merge.
+
+Changing Codex labels or Project Status is a write operation. Read-only stages
+may only report the exact recommended transition. Do not change labels, Project
+fields, Parent, or Relationships without explicit authorization.
+
+If the actual Project Status options differ from the seven options above, report
+the actual options, identify the mismatch, stop related state writes, and wait
+for maintainer direction. Do not guess, create, or rename Project Status options.
+
+This mapping applies only to existing Tasks. Do not use it to choose the next
+Task, split a Feature, create a GitHub Issue, choose initial fields for a new
+Task, or replace planning outside this Skill.
 
 ## Stage 4: Create a branch and implement
 
@@ -145,8 +265,9 @@ a precautionary pause.
 - **Allowed:** Create or use the Task branch, make the smallest scoped changes,
   and run current repository validation.
 - **Forbidden:** Unrelated refactors; scope expansion; destructive cleanup;
-  GitHub metadata writes; commits, pushes, or Pull Requests unless separately
-  requested.
+  GitHub metadata writes except a separately and explicitly requested Stage 3
+  transition performed as a distinct substep; commits, pushes, or Pull Requests
+  unless separately requested.
 - **Read:** Complete Issue and comments, Parent and dependencies, linked docs and
   ADRs, governing agent files, current implementation docs, workflows,
   `pyproject.toml`, and lock files.
@@ -185,7 +306,9 @@ a precautionary pause.
 - **Allowed:** Stage explicit in-scope paths, verify the staged diff, commit, push
   the Task branch, and create one Pull Request when each action is requested.
 - **Forbidden:** Bulk staging, unrelated files, force push, duplicate Pull
-  Requests, Issue/Project edits, merge, or claims about post-merge state.
+  Requests, Issue/Project edits except a separately and explicitly requested
+  Stage 3 transition performed as a distinct substep, merge, or claims about
+  post-merge state.
 - **Read:** Current Issue, current `.github/pull_request_template.md`, Git status
   and diffs, current workflows and check requirements, and existing Pull Requests
   for the branch.
@@ -233,12 +356,17 @@ local validation passed
 
 - **Entry:** The user explicitly requests merge; independent review passed;
   required checks succeeded; no blocking findings or requested changes remain.
-- **Default permission:** Merge write followed by read-only verification.
+- **Default permission:** Merge write followed by read-only verification. Any
+  Codex-label or Project Status write requires a separately and explicitly
+  requested Stage 3 transition performed as a distinct substep.
 - **Allowed:** Perform the repository-approved merge, then synchronize and verify
-  state as explicitly requested.
+  state as explicitly requested. Apply a separately authorized Stage 3
+  transition only after the required lifecycle evidence exists.
 - **Forbidden:** `--admin`, bypassing protection or CI, merging with failed gates,
-  manually closing a Task expected to close through `Closes #<Task>`, closing the
-  parent Feature from sub-issue count alone, or deleting branches.
+  Codex-label or Project Status writes without a separately authorized Stage 3
+  substep, manually closing a Task expected to close through
+  `Closes #<Task>`, closing the parent Feature from sub-issue count alone, or
+  deleting branches.
 - **Read:** PR mergeability, reviews, required checks, Issue linkage, current
   merge policy, Parent, Project fields, local Git state, and key files.
 - **Check:** Default to squash merge. After merge, switch to local main and use
