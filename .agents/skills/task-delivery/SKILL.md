@@ -17,6 +17,10 @@ A normal invocation authorizes the bounded sequence in this Skill from Task
 identity verification through a Pull Request that is ready for a separate,
 independent review. It does not authorize merge or post-merge work.
 
+After this Skill creates or recovers the PR and passes its own readiness
+self-check, the next step is a new session using `task-pr-review`. This Skill
+must not automatically call, simulate, or replace that independent review.
+
 ## Standard invocation
 
 Prefer a complete current Task title plus Issue number:
@@ -440,6 +444,12 @@ local validation passed
 != merge is authorized
 ```
 
+The independent review must be performed in a separate session with
+`task-pr-review`. That review re-reads and verifies the handoff facts; it does
+not accept this Skill's self-check or handoff as correctness evidence. Any
+change to PR head, base, or effective diff invalidates a previous independent
+review conclusion and requires review of the new effective diff.
+
 ## Fixed independent-review handoff
 
 Stop after producing a handoff containing at least:
@@ -464,8 +474,20 @@ Known limitations or residual risks
 Ready for independent review: yes or no
 ```
 
-The next review must occur in a separate session under an independent read-only
-process. Do not continue to merge, closeout, or branch cleanup.
+Also include the exact next prompt:
+
+```text
+请使用 task-pr-review，独立只读审查
+[Task] <当前完整标题> #<Task编号>
+对应的 PR #<PR编号>。
+
+Expected base SHA: <base SHA>
+Expected head SHA: <head SHA>
+```
+
+The next review must occur in a separate session under `task-pr-review` and an
+independent read-only process. Do not continue to merge, closeout, branch
+cleanup, or represent the self-check as an independent review.
 
 ## Mandatory pause conditions
 

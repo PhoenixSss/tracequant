@@ -10,6 +10,7 @@
 ```text
 AGENTS.md / AGENTS.override.md
 .agents/skills/task-delivery/SKILL.md
+.agents/skills/task-pr-review/SKILL.md
 .agents/skills/task-closeout/SKILL.md
 ```
 
@@ -21,6 +22,7 @@ AGENTS.md / AGENTS.override.md
 | Skill | 用途 | 正常终点 | 明确不做 |
 | --- | --- | --- | --- |
 | `task-delivery` | 完整处理一个维护者指定的已创建 Task | PR 已通过本地验证和 Required Checks，准备进入独立审查 | 不做独立审查、不 Merge、不关闭 Issue、不清理分支、不判断 Feature 完成 |
+| `task-pr-review` | 在新会话中对指定 Task PR 做独立只读合并前审查 | 输出绑定 reviewed base/head SHA 的三选一 verdict | 不修复、不提交 GitHub Review、不 Merge、不改 Issue/PR/Project、不判断 Feature 完成 |
 | `task-closeout` | 维护者人工 Merge 后完成核验、状态收敛、验证和分支清理 | Task、Project、`main`、验证和精确分支均完成收尾 | 不 Merge、不手动关闭 Issue、不修复代码、不判断 Feature 完成 |
 
 旧的 `task-lifecycle` 已退役，不再作为活动入口。
@@ -35,6 +37,8 @@ task-delivery
 PR 准备好接受独立审查
         ↓
 新会话进行独立只读 PR 审查
+        ↓
+task-pr-review
         ↓
 维护者人工 Squash Merge
         ↓
@@ -158,11 +162,52 @@ Ready for independent review
 不采用实施会话结论作为证据
 ```
 
-当前仓库尚未提供专用 `task-pr-review` Skill。在该 Skill 合并前，维护者应在
-新会话中提供明确的临时只读审查指令，并要求审查者自行读取 Task、PR、
-完整 diff、commits、Checks、reviews 和 threads。
+标准提示词：
 
-临时指令示例（这不是 Skill 调用）：
+```text
+请使用 task-pr-review，独立只读审查
+[Task] <当前完整标题> #<Task编号>
+对应的 PR #<PR编号>。
+
+Expected base SHA: <base SHA>
+Expected head SHA: <head SHA>
+```
+
+`task-pr-review` 必须自行重新读取 Task、PR、完整 diff、commits、Checks、
+reviews、threads、受影响文件上下文和当前仓库规则。`task-delivery` 的
+handoff 只用于定位对象和 expected SHA，不是审查证据。
+
+最终 verdict 只能是：
+
+- `通过，可以人工合并`
+- `有条件通过，不得合并`
+- `不通过，需要修复`
+
+任何新的 commit、head SHA 变化、base 或有效 diff 变化都会使旧 review
+结论失效，必须在新会话中重新审查新的有效 diff。修复 finding 时返回
+`task-delivery` 或单独授权的实施流程；修复产生新 commit 后，再开新会话
+复审。
+
+`task-pr-review` 不提交 GitHub Review、Approve 或 Request Changes，不
+resolve thread，不修改代码或 GitHub 状态，也不 Merge。
+
+维护者人工 Squash Merge 前必须核对当前 PR head SHA 等于 review 报告中的
+`Reviewed head SHA`，并确认 Required Checks 仍成功、没有新的阻塞 thread。
+
+### `task-pr-review` 自举规则
+
+Reviewer 不得使用“正在被审查的规则”证明自身正确。
+
+当 PR 不修改 `task-pr-review` 时，使用当前已合并版本作为受信任规则。
+
+当 PR 修改已有 `task-pr-review` 时，使用 PR base commit 中的已合并版本
+审查，并在报告中记录该 base 版本或 SHA。
+
+首次引入 `task-pr-review` 时，base 中还不存在该 Skill，因此对应 PR 必须
+继续使用维护者提供的临时独立只读审查提示词；新 Skill 只能作为审查对象。
+只有合并进入 `main` 后，后续 Task 才正式使用它。
+
+临时首次引入审查提示词示例：
 
 ```text
 请在本会话中对
@@ -173,9 +218,6 @@ Ready for independent review
 不要采用实施会话的结论作为证据，不要修改代码或 GitHub 状态，不要 Merge。
 请输出 reviewed head SHA、按严重度分类的发现、验收标准覆盖情况和明确结论。
 ```
-
-任何新的 commit、base 变化或有效 diff 变化都会使原审查结论失效，必须在
-新会话中重新审查新的 head SHA。
 
 ## 维护者人工 Squash Merge
 
@@ -354,7 +396,7 @@ git branch -D <exact-task-branch>
 
 ## 执行环境说明
 
-当前两个 Skills 保留 normal-first elevated fallback：
+当前 Task 工作流 Skills 保留 normal-first elevated fallback：
 
 1. 普通执行；
 2. 仅在明确的权限、凭据或登录会话隔离失败时，elevated 重试同一命令；
@@ -369,7 +411,6 @@ elevated 只改变执行环境，不会赋予生命周期权限。
 
 以下能力尚未作为活动 Skill 提供：
 
-- 独立 `task-pr-review`；
 - `feature-completion-audit`；
 - 环境感知的 command-execution policy 和本地 execution profile。
 
