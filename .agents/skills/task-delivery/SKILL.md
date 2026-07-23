@@ -1,6 +1,6 @@
 ---
 name: task-delivery
-description: Deliver a maintainer-specified, already-created GitHub Task from identity and specification gates through implementation, validation, commit, push, Pull Request creation, successful required checks, and a fixed handoff for independent review. Do not use to choose, plan, split, draft, or create Tasks; review Feature completion; perform an independent Pull Request review; merge; close Issues; verify post-merge state; or clean branches.
+description: Deliver a maintainer-specified, already-created GitHub Task from identity and specification gates through implementation, validation, commit, push, Pull Request creation, successful configured Required Checks and applicable check runs, and a fixed handoff for independent review. Do not use to choose, plan, split, draft, or create Tasks; review Feature completion; perform an independent Pull Request review; merge; close Issues; verify post-merge state; or clean branches.
 ---
 
 # Task delivery
@@ -16,6 +16,10 @@ replacement for the current Issue, `.github/ISSUE_TEMPLATE/task.yml`,
 A normal invocation authorizes the bounded sequence in this Skill from Task
 identity verification through a Pull Request that is ready for a separate,
 independent review. It does not authorize merge or post-merge work.
+
+After this Skill creates or recovers the PR and passes its own readiness
+self-check, the next step is a new session using `task-pr-review`. This Skill
+must not automatically call, simulate, or replace that independent review.
 
 ## Standard invocation
 
@@ -90,7 +94,7 @@ the exact identified Task, when each gate passes:
 5. current CI-equivalent local validation;
 6. explicit-path staging, one scoped commit, and ordinary non-force push;
 7. creation or reuse of one non-Draft Pull Request for the Task;
-8. waiting for and reading required checks;
+8. waiting for and reading configured Required Checks and applicable check runs;
 9. a self-check and fixed independent-review handoff.
 
 This invocation does not authorize:
@@ -404,12 +408,27 @@ before resuming. Never create a duplicate PR.
 
 ## Phase 8: Wait for checks and perform the readiness self-check
 
-Wait for all current required checks to reach a terminal state.
+Read and report both:
+
+- the branch protection Required Checks configuration and its current status;
+- all applicable check runs produced by current workflows and their conclusions.
+
+If no Required Checks are configured, do not invent a required gate.
+
+Wait until both are true:
+
+- all configured Required Checks, if any, have reached a successful terminal
+  state;
+- all applicable check runs have reached a successful terminal state.
+
+Do not report readiness while any applicable CI check run is failed, cancelled,
+skipped unexpectedly, stale, pending, or in progress.
 
 A Pull Request is ready for independent review only when:
 
 - local CI-equivalent validation passed;
-- required GitHub checks passed;
+- configured Required Checks, if any, and all applicable GitHub check runs
+  passed;
 - PR is open and not Draft;
 - base, head, head SHA, commits, and changed files are stable and expected;
 - `Closes #<Task>` is present and correct;
@@ -440,6 +459,16 @@ local validation passed
 != merge is authorized
 ```
 
+The independent review must be performed in a separate session with
+`task-pr-review`. That review re-reads and verifies the handoff facts; it does
+not accept this Skill's self-check or handoff as correctness evidence. Any
+change to PR head, base, or effective diff invalidates a previous independent
+review conclusion and requires a new Codex session to review the new effective
+diff from the beginning. After this Skill pushes a fix that creates a new head
+SHA, the previous review session must not continue to a new verdict. Old review
+findings may guide the fix, but old verdicts and completed review steps are not
+inherited.
+
 ## Fixed independent-review handoff
 
 Stop after producing a handoff containing at least:
@@ -456,7 +485,8 @@ Base SHA
 Head SHA
 Changed files
 Local validation commands and results
-Required-check status
+Required Checks configuration and status
+Actual check runs and conclusions
 Project Status
 Codex lifecycle label
 Unresolved review threads
@@ -464,8 +494,22 @@ Known limitations or residual risks
 Ready for independent review: yes or no
 ```
 
-The next review must occur in a separate session under an independent read-only
-process. Do not continue to merge, closeout, or branch cleanup.
+Also include the exact next prompt:
+
+```text
+请使用 task-pr-review，独立只读审查
+[Task] <当前完整标题> #<Task编号>
+对应的 PR #<PR编号>。
+
+Expected base SHA: <base SHA>
+Expected head SHA: <head SHA>
+```
+
+The next review must occur in a separate session under `task-pr-review` and an
+independent read-only process. Do not continue to merge, closeout, branch
+cleanup, or represent the self-check as an independent review. If another commit
+is pushed after this handoff, generate a new handoff with the new base/head SHAs
+and start a new independent review session.
 
 ## Mandatory pause conditions
 
@@ -480,7 +524,7 @@ Pause immediately when any of these applies:
 - worktree, index, untracked files, branch, or worktree ownership is unsafe;
 - `main` and `origin/main` are not safely synchronized;
 - implementation needs out-of-scope files or decisions;
-- validation or required CI fails;
+- validation, configured Required Checks, or applicable CI check runs fail;
 - a branch, commit, or PR cannot be proven to belong to this Task;
 - PR head, base, or effective diff changes unexpectedly;
 - a Blocking, High, or unresolved Medium self-check finding exists;
@@ -553,7 +597,7 @@ Keep reports concise and include:
 - files changed;
 - validation commands, exit codes, and results;
 - commit, branch, and Pull Request state;
-- required checks;
+- Required Checks configuration/status and actual check runs/conclusions;
 - self-check findings;
 - actions deliberately not performed;
 - fixed independent-review handoff;
@@ -570,7 +614,8 @@ Keep reports concise and include:
 - Parent and sub-issue facts were not converted into Feature completion advice.
 - All tracked and untracked files were inspected.
 - Changed, staged, committed, pushed, and PR scope remained approved.
-- Current CI-equivalent validation and required checks passed.
+- Current CI-equivalent validation, configured Required Checks if any, and all
+  applicable check runs passed.
 - The PR used the current template and contains `Closes #<Task>`.
 - The self-check was not represented as an independent review.
 - No merge, Issue close, post-merge work, or branch deletion occurred.

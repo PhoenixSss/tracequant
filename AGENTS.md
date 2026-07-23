@@ -26,13 +26,22 @@ When the user specifies an already-created GitHub Task and requests the complete
 pre-merge workflow through a Pull Request that is ready for independent review,
 first read `.agents/skills/task-delivery/SKILL.md`.
 
+When the user requests an independent read-only review of a Task Pull Request in
+a new session, first read `.agents/skills/task-pr-review/SKILL.md`.
+
 When the user states that a Pull Request was manually merged and requests
 post-merge verification, state convergence, validation, or Task-branch cleanup,
 first read `.agents/skills/task-closeout/SKILL.md`.
 
-Both Skills start only after the user identifies an existing Task. They do not
-identify, split, plan, draft, choose, or create new Tasks. They do not assess,
-recommend, or perform Feature completion. Neither Skill may merge a Pull Request.
+These Skills start only after the user identifies an existing Task or Task Pull
+Request. They do not identify, split, plan, draft, choose, or create new Tasks.
+They do not assess, recommend, or perform Feature completion. No Task workflow
+Skill may merge a Pull Request.
+
+The independent PR Review Skill must run in a session that did not participate
+in implementation or modification of the PR. It is strictly read-only, does not
+submit a GitHub Review, does not fix findings, does not change Issue/PR/Project
+state, and does not merge.
 
 When the user provides both a Task number and title, treat the Issue number as
 the primary key and the current GitHub Issue title as the canonical title. Stop
@@ -40,8 +49,7 @@ before writes when the supplied title and numbered Issue clearly identify
 different work.
 
 A final merge decision requires an independent read-only Pull Request review in
-a separate session. Until a dedicated review Skill is added to the repository,
-use explicit maintainer-provided review instructions for that separate session.
+a separate session through `task-pr-review`, followed by maintainer manual merge.
 
 This root `AGENTS.md` remains the repository-level rule source. Repository Skills
 supplement these rules and do not override system, developer, user, or more
