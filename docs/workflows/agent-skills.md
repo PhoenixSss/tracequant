@@ -200,6 +200,14 @@ Checks 报告必须区分 branch protection 的 Required Checks configuration �
 虚构 required gate；但任一适用 CI check 失败、取消或未完成时，仍不得输出
 `通过，可以人工合并`。
 
+若专用 branch-protection 或 ruleset endpoint 仅因 GitHub 套餐限制返回 `403`，
+该永久服务限制本身不自动导致 `有条件通过`。Reviewer 必须独立核验
+`gh pr checks --required`、base branch 的 `protected` 状态、可读取的 ruleset /
+mergeability 事实以及全部适用 check runs。只有这些事实一致表明当前 PR 没有
+可执行的 Required Check、没有相互矛盾的保护证据且实际 CI 全部成功时，才可
+在报告限制后给出通过；证据缺失、冲突，或受保护分支的门禁无法确定时仍必须
+`有条件通过，不得合并`。
+
 `task-pr-review` 不提交 GitHub Review、Approve 或 Request Changes，不
 resolve thread，不修改代码或 GitHub 状态，也不 Merge。
 

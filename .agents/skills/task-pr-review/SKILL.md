@@ -307,11 +307,30 @@ are pending, content review may continue, but the final verdict cannot permit
 manual merge.
 
 Distinguish branch protection configured Required Checks from ordinary check
-runs. If no Required Checks are configured or the configuration cannot be read,
-do not invent a required gate. Still read and report all relevant check runs
-created by current workflows. Any applicable CI check run that is failed,
-cancelled, skipped unexpectedly, stale, pending, or in progress prevents the
-passing verdict even when no Required Checks are configured.
+runs. Do not invent a required gate when none is configured.
+
+Prefer direct branch-protection or ruleset configuration when the repository and
+GitHub plan expose it. When a dedicated configuration endpoint is unavailable
+solely because of a documented GitHub plan limitation such as HTTP `403`, do not
+treat that permanent service limitation as an automatic merge blocker. Instead,
+independently collect all available corroborating facts, including:
+
+- `gh pr checks --required` for the reviewed PR;
+- the base branch object's `protected` value;
+- any readable repository ruleset or mergeability information;
+- all applicable workflow check runs and conclusions.
+
+The unavailable endpoint may be reported as a limitation while a passing verdict
+remains possible only when the available facts consistently show that no
+enforceable Required Check is configured for the reviewed PR, there is no
+contradictory protection or ruleset evidence, and every applicable CI check run
+is successful and complete.
+
+If the available signals are missing, ambiguous, or contradictory, or the branch
+is protected but its required gates cannot be determined, use a conditional
+verdict until the gate can be resolved. Any applicable CI check run that is
+failed, cancelled, skipped unexpectedly, stale, pending, or in progress prevents
+a passing verdict regardless of Required Checks configuration.
 
 ## Command execution routing
 
@@ -362,17 +381,27 @@ acceptance criteria are satisfied; scope is correct; configured Required Checks,
 if any, succeeded; all applicable CI check runs are successful and complete;
 there are no requested changes or unresolved blocking threads; PR head/base/diff
 remained stable; and the PR is open, non-Draft, and ready for the maintainer's
-manual merge gate. Do not require a fictional Required Check when none is
-configured.
+manual merge gate.
+
+Do not require a fictional Required Check when none is configured. A dedicated
+configuration endpoint that is unavailable solely because of a documented
+GitHub plan limitation does not by itself prevent this verdict when independent
+fallback evidence consistently shows no enforceable Required Check for the
+reviewed PR and no contradictory protection or ruleset fact exists.
 
 ```text
 有条件通过，不得合并
 ```
 
 Use when no confirmed Blocking, High, or Medium code defect was found, but
-checks are pending or incomplete, Required Checks configuration is unavailable
-and must be re-read, evidence is missing, base/head stability or mergeability is
-not ready, or another objective gate still requires re-verification.
+checks are pending or incomplete; Required Checks evidence is missing,
+ambiguous, or contradictory; a protected branch's enforced gates cannot be
+determined; base/head stability or mergeability is not ready; or another
+objective gate still requires re-verification.
+
+Do not use this verdict solely because a dedicated branch-protection endpoint is
+permanently unavailable under the current GitHub plan when the approved fallback
+evidence is complete, consistent, and shows no enforceable Required Check.
 
 ```text
 不通过，需要修复
@@ -405,7 +434,10 @@ Produce a report containing at least:
 6. correctness and safety review;
 7. tests, validation, and documentation review;
 8. GitHub checks, reviews, and unresolved threads:
-   - Required Checks configuration;
+   - Required Checks configuration source and result;
+   - plan-limited endpoint errors, when applicable;
+   - fallback evidence used (`gh pr checks --required`, branch protection flag,
+     readable rulesets or mergeability facts);
    - actual check runs and conclusions;
 9. material execution-routing decisions and elevated attempts required by the
    trusted command policy;
