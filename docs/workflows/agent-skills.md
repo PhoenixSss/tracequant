@@ -141,7 +141,7 @@ Base SHA
 Head SHA
 Changed files
 Local validation results
-Required-check status
+Required Checks configuration and status
 Actual check runs and conclusions
 Project Status
 Codex label

@@ -312,6 +312,23 @@ session isolation, retry the same safe read-only or validation command elevated
 when supported. Elevation changes execution context only; it does not authorize
 writes.
 
+### Credential isolation and `gh auth`
+
+If sandboxed `gh` returns `401`, reports an authentication failure, or appears
+to be running in a different login session:
+
+1. do not run `gh auth login`;
+2. run the safe read-only command `gh auth status`;
+3. retry the original read-only GitHub query elevated when supported;
+4. treat the problem as a real credential failure only when elevated execution
+   also confirms that the credentials are invalid;
+5. report the evidence and wait for the maintainer to decide whether and how to
+   reauthenticate.
+
+`task-pr-review` must never execute `gh auth login` itself. Elevation must not be
+used for any GitHub write, GitHub Review submission, thread resolution, Issue or
+Project mutation, merge, or other operation forbidden by this Skill.
+
 ## Severity
 
 Use exactly these severities:
