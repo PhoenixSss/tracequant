@@ -54,3 +54,6 @@ models/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Local agent execution routing
+.agents/execution-profile.local.toml

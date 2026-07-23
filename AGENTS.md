@@ -51,6 +51,12 @@ different work.
 A final merge decision requires an independent read-only Pull Request review in
 a separate session through `task-pr-review`, followed by maintainer manual merge.
 
+Before a Task workflow Skill executes a command, it must read
+`.agents/policies/command-execution.md` and may read the optional local
+`.agents/execution-profile.local.toml`. The local profile is ignored by Git and
+must not be committed. It may select an execution context only after the active
+Skill authorizes the command; it never expands lifecycle or GitHub permissions.
+
 This root `AGENTS.md` remains the repository-level rule source. Repository Skills
 supplement these rules and do not override system, developer, user, or more
 specific scoped instructions.

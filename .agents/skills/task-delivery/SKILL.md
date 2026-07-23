@@ -70,6 +70,9 @@ Never infer Feature completion from `n / n closed`.
 - Use `.github/pull_request_template.md` for the Pull Request body.
 - Use current workflows, `pyproject.toml`, and lock files for validation commands,
   tools, versions, and environment constraints.
+- Use `.agents/policies/command-execution.md` as the single normative command
+  routing policy and the optional ignored local execution profile only as a
+  machine-specific routing preference.
 - Use historical Tasks and Pull Requests only as process evidence, never as a
   current fact source.
 
@@ -214,6 +217,8 @@ Read:
   Relationships;
 - current Task template and Pull Request template;
 - current workflows, `pyproject.toml`, and lock files;
+- `.agents/policies/command-execution.md` and the optional ignored local
+  execution profile;
 - existing branches, commits, and Pull Requests related to the Task.
 
 Check:
@@ -564,26 +569,23 @@ current state before reuse. Completed steps are verified rather than repeated.
 - Keep worktree, staged, committed, and PR file scope aligned with Task scope.
 - Interpret command exit codes according to command semantics.
 
-## Sandbox and elevated fallback
+## Command execution routing
 
-Until a separate environment-routing policy is implemented, use normal-first
-fallback:
+Before executing a command, read `.agents/policies/command-execution.md` and
+check the optional ignored `.agents/execution-profile.local.toml`.
 
-1. run the authorized command normally;
-2. if failure resembles sandbox permission, credential isolation, or
-   login-session isolation, retry the same command elevated when supported;
-3. only after the elevated retry fails, diagnose a real credential, environment,
-   or code problem.
+First apply this Skill's lifecycle authorization and prohibitions. Only then use
+the shared policy to select `sandbox-first`, `elevated-first`, or `adaptive`.
+A route changes execution context only; it never authorizes implementation,
+metadata writes, commit, push, Pull Request creation, or another lifecycle step.
 
-If sandboxed `gh` returns 401, do not immediately run `gh auth login`. First run
-`gh auth status` and the original query elevated. Ask for reauthentication only
-when elevated execution also confirms invalid credentials.
+Keep every retry identical in executable, argv, working directory, repository,
+Task identity, lifecycle stage, and intent. Do not execute `gh auth login`; use
+the shared credential procedure and wait for a maintainer decision when elevated
+execution also confirms invalid credentials.
 
-Apply the same reasoning to access-denied or login-session failures from `git`,
-`uv`, or `python`. Elevation changes execution context only; it does not grant a
-lifecycle permission. Never elevate a forbidden operation.
-
-Report normal failure and elevated retry separately when they occur.
+Report routing events required by the shared policy. Never elevate a command
+forbidden by this Skill.
 
 ## Delivery report
 
@@ -596,6 +598,8 @@ Keep reports concise and include:
 - lifecycle transitions;
 - files changed;
 - validation commands, exit codes, and results;
+- material execution-routing decisions and elevated attempts required by the
+  shared command policy;
 - commit, branch, and Pull Request state;
 - Required Checks configuration/status and actual check runs/conclusions;
 - self-check findings;
@@ -619,5 +623,7 @@ Keep reports concise and include:
 - The PR used the current template and contains `Closes #<Task>`.
 - The self-check was not represented as an independent review.
 - No merge, Issue close, post-merge work, or branch deletion occurred.
+- Command routes followed the shared policy and no local profile expanded this
+  Skill's permissions.
 - No force push, `--admin`, reset, clean, bypass, credential exposure, or
   unrelated change occurred.
