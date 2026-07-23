@@ -1,4 +1,4 @@
-﻿# AGENTS.md
+# AGENTS.md
 
 ## Project purpose
 
@@ -22,14 +22,30 @@ Before changing code:
 GitHub Issues are the source of truth for planned work.
 Repository documentation is the source of truth for current implemented behavior.
 
-When the user specifies an already-created GitHub Task and asks for specification
-review, Ready checks, implementation, Pull Request work, final review, merge,
-post-merge verification, or branch cleanup, first read
-`.agents/skills/task-lifecycle/SKILL.md`. Identifying, splitting, planning,
-drafting, or creating new Tasks is outside that Skill. This root `AGENTS.md`
-remains the repository-level rule source. The Skill only supplements the Task
-lifecycle and does not override system, developer, user, or more specific scoped
-instructions.
+When the user specifies an already-created GitHub Task and requests the complete
+pre-merge workflow through a Pull Request that is ready for independent review,
+first read `.agents/skills/task-delivery/SKILL.md`.
+
+When the user states that a Pull Request was manually merged and requests
+post-merge verification, state convergence, validation, or Task-branch cleanup,
+first read `.agents/skills/task-closeout/SKILL.md`.
+
+Both Skills start only after the user identifies an existing Task. They do not
+identify, split, plan, draft, choose, or create new Tasks. They do not assess,
+recommend, or perform Feature completion. Neither Skill may merge a Pull Request.
+
+When the user provides both a Task number and title, treat the Issue number as
+the primary key and the current GitHub Issue title as the canonical title. Stop
+before writes when the supplied title and numbered Issue clearly identify
+different work.
+
+A final merge decision requires an independent read-only Pull Request review in
+a separate session. Until a dedicated review Skill is added to the repository,
+use explicit maintainer-provided review instructions for that separate session.
+
+This root `AGENTS.md` remains the repository-level rule source. Repository Skills
+supplement these rules and do not override system, developer, user, or more
+specific scoped instructions.
 
 ## Implementation rules
 
