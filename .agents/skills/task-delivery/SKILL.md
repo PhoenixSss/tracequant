@@ -448,7 +448,11 @@ The independent review must be performed in a separate session with
 `task-pr-review`. That review re-reads and verifies the handoff facts; it does
 not accept this Skill's self-check or handoff as correctness evidence. Any
 change to PR head, base, or effective diff invalidates a previous independent
-review conclusion and requires review of the new effective diff.
+review conclusion and requires a new Codex session to review the new effective
+diff from the beginning. After this Skill pushes a fix that creates a new head
+SHA, the previous review session must not continue to a new verdict. Old review
+findings may guide the fix, but old verdicts and completed review steps are not
+inherited.
 
 ## Fixed independent-review handoff
 
@@ -467,6 +471,7 @@ Head SHA
 Changed files
 Local validation commands and results
 Required-check status
+Actual check runs and conclusions
 Project Status
 Codex lifecycle label
 Unresolved review threads
@@ -487,7 +492,9 @@ Expected head SHA: <head SHA>
 
 The next review must occur in a separate session under `task-pr-review` and an
 independent read-only process. Do not continue to merge, closeout, branch
-cleanup, or represent the self-check as an independent review.
+cleanup, or represent the self-check as an independent review. If another commit
+is pushed after this handoff, generate a new handoff with the new base/head SHAs
+and start a new independent review session.
 
 ## Mandatory pause conditions
 
