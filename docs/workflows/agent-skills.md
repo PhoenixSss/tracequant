@@ -12,6 +12,7 @@ AGENTS.md / AGENTS.override.md
 .agents/skills/task-delivery/SKILL.md
 .agents/skills/task-pr-review/SKILL.md
 .agents/skills/task-closeout/SKILL.md
+.agents/policies/command-execution.md
 ```
 
 本文档是使用指南，不替代上述规则。出现冲突时，以更高优先级和更具体的
@@ -198,6 +199,14 @@ Checks 报告必须区分 branch protection 的 Required Checks configuration �
 实际 workflow 产生的 check runs / conclusions。没有 Required Checks 时不得
 虚构 required gate；但任一适用 CI check 失败、取消或未完成时，仍不得输出
 `通过，可以人工合并`。
+
+若专用 branch-protection 或 ruleset endpoint 仅因 GitHub 套餐限制返回 `403`，
+该永久服务限制本身不自动导致 `有条件通过`。Reviewer 必须独立核验
+`gh pr checks --required`、base branch 的 `protected` 状态、可读取的 ruleset /
+mergeability 事实以及全部适用 check runs。只有这些事实一致表明当前 PR 没有
+可执行的 Required Check、没有相互矛盾的保护证据且实际 CI 全部成功时，才可
+在报告限制后给出通过；证据缺失、冲突，或受保护分支的门禁无法确定时仍必须
+`有条件通过，不得合并`。
 
 `task-pr-review` 不提交 GitHub Review、Approve 或 Request Changes，不
 resolve thread，不修改代码或 GitHub 状态，也不 Merge。
@@ -420,24 +429,96 @@ verdict 或已完成步骤。
 
 视为幂等完成，不重新创建。
 
-## 执行环境说明
+## 环境感知的命令执行
 
-当前 Task 工作流 Skills 保留 normal-first elevated fallback：
+三个 Task workflow Skills 共同使用规范性 policy：
 
-1. 普通执行；
-2. 仅在明确的权限、凭据或登录会话隔离失败时，elevated 重试同一命令；
-3. elevated 仍失败后才诊断真实环境或凭据问题。
+```text
+.agents/policies/command-execution.md
+```
 
-elevated 只改变执行环境，不会赋予生命周期权限。
+仓库提供可复制的示例：
 
-环境感知的 `sandbox-first`、`elevated-first`、`adaptive` execution profile
-属于后续计划，当前尚未实现。
+```text
+.agents/execution-profile.example.toml
+```
+
+维护者可以在本机创建：
+
+```text
+.agents/execution-profile.local.toml
+```
+
+PowerShell 示例：
+
+```powershell
+Copy-Item .agents/execution-profile.example.toml .agents/execution-profile.local.toml
+```
+
+local profile 已被 `.gitignore` 忽略，不得提交，也不得包含凭据、token、私钥、
+用户名或敏感本地路径。三个 Skills 不会自动创建、修改或学习并写回该文件。
+
+### 三种 route
+
+- `sandbox-first`：先在普通 sandbox 执行；仅在明确属于执行环境隔离时，使用
+  完全相同的命令 elevated 重试。
+- `elevated-first`：当前 Skill 已授权命令且本地 profile 精确匹配后，直接在
+  elevated 上下文执行，避免制造已知 sandbox 失败。
+- `adaptive`：结合有效 profile 和本次 workflow run 中相同精确命令的隔离
+  证据选择初始上下文；不会自动把观察写回 profile。
+
+profile 缺失、无法解析、schema 不支持、规则冲突或命令无匹配时，安全回退
+到 `sandbox-first`。profile 只能选择执行上下文，不能授权命令，更不能扩大
+Task lifecycle、GitHub、review、merge、metadata 或 branch cleanup 权限。
+
+保持：
+
+```text
+Lifecycle authorization
+!= command execution routing
+!= operating-system elevation
+```
+
+### 当前机器的推荐起点
+
+- `python -X utf8 ...quick_validate.py`：`elevated-first`；
+- `uv` toolchain：`elevated-first`；
+- `gh`：`adaptive`，不得把所有 GitHub 操作视为已授权写入；
+- `git status` 和 `git diff`：`sandbox-first`。
+
+这些只是机器级路由建议。任何命令都必须先通过当前 Skill 的权限与门禁。
+`gh auth login`、Merge、`--admin`、force push、`git reset --hard`、
+`git clean` 和其他禁止操作不会因 profile 获得授权。
+
+### 路由报告
+
+使用 elevated-first、sandbox 失败后 elevated retry、profile 无效、adaptive
+切换、elevated 仍失败或凭据隔离判断时，报告至少记录：
+
+```text
+Command
+Lifecycle authorization source
+Selected route
+Route source
+Sandbox result, if attempted
+Elevated result, if attempted
+Final interpretation
+```
+
+普通低风险命令以 sandbox-first 一次成功时可以汇总，不需要制造冗长日志。
+
+### Review 自举边界
+
+当 PR 修改 command-execution policy、profile example、`AGENTS.md`、
+`task-pr-review` 或其他治理规则时，`task-pr-review` 继续使用 PR base 中的
+受信任规则作为 control plane。PR head 文件只能作为审查对象。local profile
+可以影响已授权命令的执行上下文，但不能改变 reviewed SHA、严重度、验收覆盖
+或 verdict。
 
 ## 后续计划
 
 以下能力尚未作为活动 Skill 提供：
 
-- `feature-completion-audit`；
-- 环境感知的 command-execution policy 和本地 execution profile。
+- `feature-completion-audit`。
 
-在这些能力正式合并前，不要使用对应 Skill 名称假定其已经可用。
+在该能力正式合并前，不要使用对应 Skill 名称假定其已经可用。

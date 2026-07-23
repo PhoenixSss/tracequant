@@ -71,6 +71,9 @@ Never infer Feature completion from `n / n closed`.
   linkage, merge, and Issue state.
 - Use current Project definitions for fields and actual Status options.
 - Use current workflows, `pyproject.toml`, and lock files for validation.
+- Use `.agents/policies/command-execution.md` as the single normative command
+  routing policy and the optional ignored local execution profile only as a
+  machine-specific routing preference.
 - Use the Pull Request head ref and current Git refs to resolve branch identity.
 - Use historical records only as evidence, never as a current fact source.
 
@@ -409,26 +412,25 @@ Pause before the related write when:
 Report completed steps, exact evidence, current safe state, and the next
 maintainer decision or recovery gate.
 
-## Sandbox and elevated fallback
+## Command execution routing
 
-Until a separate environment-routing policy is implemented, use normal-first
-fallback:
+Before executing a command, read `.agents/policies/command-execution.md` and
+check the optional ignored `.agents/execution-profile.local.toml`.
 
-1. run the authorized command normally;
-2. if failure resembles sandbox permission, credential isolation, or
-   login-session isolation, retry the same command elevated when supported;
-3. only after the elevated retry fails, diagnose a real credential, environment,
-   or code problem.
+Apply every closeout identity, merge, synchronization, validation, metadata, and
+branch-cleanup gate before route selection. A local profile may choose only the
+execution context of an exact command already authorized by this Skill. It
+cannot authorize merge, manual Issue close, repair work, metadata beyond the
+precise final convergence allowed here, or branch deletion before all exact
+branch safety gates pass.
 
-If sandboxed `gh` returns 401, do not immediately run `gh auth login`. First run
-`gh auth status` and the original query elevated. Ask for reauthentication only
-when elevated execution also confirms invalid credentials.
+Preserve executable, argv, working directory, repository, Task/PR identity,
+closeout phase, and intent across retries. The profile cannot weaken tree-diff,
+worktree, remote-branch, `-d`, or squash-specific exact `-D` gates. This Skill
+never executes `gh auth login`.
 
-Apply the same reasoning to access-denied or login-session failures from `git`,
-`uv`, or `python`. Elevation changes execution context only; it does not grant a
-lifecycle permission. Never elevate a forbidden operation.
-
-Report normal failure and elevated retry separately when they occur.
+Report routing events required by the shared policy. Never elevate a forbidden
+operation.
 
 ## Closeout report
 
@@ -443,6 +445,8 @@ Include:
 - Parent and sub-issue facts without Feature completion judgment;
 - local and remote `main` state;
 - post-merge validation commands, exit codes, and results;
+- material execution-routing decisions and elevated attempts required by the
+  shared command policy;
 - required checks on remote `main`;
 - exact remote and local branch actions;
 - whether `-D` was required and every gate that justified it;
@@ -466,5 +470,7 @@ Include:
 - Only the exact Task branches were deleted.
 - Any local `-D` use satisfied every squash-specific safety gate.
 - Final worktree, index, untracked state, refs, and `main` are clean and correct.
+- Command routes followed the shared policy and no local profile weakened any
+  closeout or exact-branch safety gate.
 - No merge, manual Issue close, repair commit, force push, `--admin`, reset,
   clean, bypass, Feature completion action, or unrelated change occurred.

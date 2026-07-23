@@ -1,0 +1,41 @@
+# Copy this file to .agents/execution-profile.local.toml and adjust it for
+# this workstation. The local file is ignored by Git and must not contain
+# credentials, usernames, private keys, tokens, or sensitive local paths.
+
+schema_version = 1
+default_route = "sandbox-first"
+
+[[rules]]
+name = "python-skill-validator"
+executable = "python"
+argument_prefix = ["-X", "utf8"]
+route = "elevated-first"
+reason = "Repeated login-session isolation on this workstation"
+
+[[rules]]
+name = "uv-toolchain"
+executable = "uv"
+argument_prefix = []
+route = "elevated-first"
+reason = "Repeated access-denied isolation on this workstation"
+
+[[rules]]
+name = "github-cli"
+executable = "gh"
+argument_prefix = []
+route = "adaptive"
+reason = "Use session evidence for read-only queries; Skill permissions still govern writes"
+
+[[rules]]
+name = "git-status"
+executable = "git"
+argument_prefix = ["status"]
+route = "sandbox-first"
+reason = "Read-only repository status normally works in sandbox"
+
+[[rules]]
+name = "git-diff"
+executable = "git"
+argument_prefix = ["diff"]
+route = "sandbox-first"
+reason = "Read-only diff inspection normally works in sandbox"
