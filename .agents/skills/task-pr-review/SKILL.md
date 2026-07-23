@@ -17,10 +17,10 @@ of the PR, stop and report:
 本会话不能提供独立审查
 ```
 
-Do not override system, developer, current explicit user instructions, or any
-applicable `AGENTS.md` or `AGENTS.override.md`. Read current repository and
-GitHub facts on every run. A delivery handoff can identify the Task, PR, branch,
-and expected SHAs, but it is not correctness evidence.
+Do not override system, developer, current explicit user instructions, or
+trusted-base applicable `AGENTS.md` or `AGENTS.override.md`. Read current
+repository and GitHub facts on every run. A delivery handoff can identify the
+Task, PR, branch, and expected SHAs, but it is not correctness evidence.
 
 This Skill is strictly read-only for reviewed code, Git history, GitHub Task/PR
 state, Project state, labels, reviews, threads, and Relationships.
@@ -235,7 +235,8 @@ Read independently:
 
 - Task body, comments, scope, acceptance criteria, out-of-scope items, Parent,
   dependencies, labels, Project Status, and Relationships;
-- all applicable `AGENTS.md` and `AGENTS.override.md`;
+- all trusted-base applicable `AGENTS.md` and `AGENTS.override.md`, following
+  the bootstrap isolation rules above;
 - `.github/ISSUE_TEMPLATE/task.yml`;
 - `.github/pull_request_template.md`;
 - `.github/workflows/ci.yml`;
