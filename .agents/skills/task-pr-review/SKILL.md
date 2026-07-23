@@ -212,7 +212,10 @@ commits, checks, reviews, and unresolved threads. The review is invalidated by:
 - changed-files or effective diff change;
 - new requested changes;
 - new unresolved blocking thread;
-- a required check changing from success to failure or cancellation.
+- a configured Required Check or applicable CI check run changing from success
+  to failed, cancelled, stale, pending, or in progress;
+- a new applicable CI check run appearing with a failed, cancelled, stale,
+  pending, or in-progress state.
 
 When invalidated, do not output a passing verdict. Report:
 

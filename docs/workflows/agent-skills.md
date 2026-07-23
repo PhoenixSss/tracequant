@@ -109,7 +109,7 @@ GitHub：
 - 当前 CI 等价验证；
 - 显式路径暂存、commit 和普通 push；
 - 唯一非 Draft PR 创建或恢复；
-- Required Checks 等待与核验；
+- Required Checks 配置读取/核验，以及实际适用 check runs 等待与结论核验；
 - 实施者 self-check；
 - 独立审查交接包。
 
