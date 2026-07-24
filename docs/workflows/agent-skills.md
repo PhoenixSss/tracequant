@@ -601,4 +601,3 @@ Final interpretation
 可以影响已授权命令的执行上下文，但不能改变 reviewed SHA、严重度、验收覆盖
 或 verdict。对 `feature-completion-audit`，local profile 同样不能改变 Feature
 身份、直接子 Issue 分类、`Audited main SHA`、验收覆盖、findings 或 verdict。
-
