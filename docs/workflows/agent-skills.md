@@ -12,6 +12,7 @@ AGENTS.md / AGENTS.override.md
 .agents/skills/task-delivery/SKILL.md
 .agents/skills/task-pr-review/SKILL.md
 .agents/skills/task-closeout/SKILL.md
+.agents/skills/feature-completion-audit/SKILL.md
 .agents/policies/command-execution.md
 ```
 
@@ -25,6 +26,7 @@ AGENTS.md / AGENTS.override.md
 | `task-delivery` | 完整处理一个维护者指定的已创建 Task | PR 已通过本地验证、Required Checks 配置核验和适用 check runs，准备进入独立审查 | 不做独立审查、不 Merge、不关闭 Issue、不清理分支、不判断 Feature 完成 |
 | `task-pr-review` | 在新会话中对指定 Task PR 做独立只读合并前审查 | 输出绑定 reviewed base/head SHA 的三选一 verdict | 不修复、不提交 GitHub Review、不 Merge、不改 Issue/PR/Project、不判断 Feature 完成 |
 | `task-closeout` | 维护者人工 Merge 后完成核验、状态收敛、验证和分支清理 | Task、Project、`main`、验证和精确分支均完成收尾 | 不 Merge、不手动关闭 Issue、不修复代码、不判断 Feature 完成 |
+| `feature-completion-audit` | 在新会话中对维护者指定的开放 Feature 和当前 `main` 做独立只读完成审计 | 输出绑定 `Audited main SHA` 的三选一 Feature verdict | 不创建 Task、不修改 GitHub 状态、不关闭 Feature、不设置 Project `Done`、不判断 Epic 完成 |
 
 旧的 `task-lifecycle` 已退役，不再作为活动入口。
 
@@ -301,6 +303,90 @@ PR #<PR编号> 已由我人工 Squash Merge。
 - 判断或建议 Feature 是否完成；
 - 删除其他分支。
 
+## 使用 `feature-completion-audit`
+
+Feature Completion Audit 是独立于单个 Task 流程的维护者显式门禁。它不会在
+每次 `task-closeout` 后自动运行，也不能根据 `n / n closed` 自动判断 Feature
+完成。
+
+适合在维护者认为一个 Feature 的必要子工作已经全部完成，并准备人工关闭
+Feature 之前运行。
+
+### 前置条件
+
+- Feature 是当前仓库中明确指定的开放 `type:feature` Issue；
+- 使用一个没有参与相关直接子 Task 拆分、实施、修复、review verdict 或
+  closeout 的新 Codex 会话；
+- 维护者提供或允许 Skill 读取当前 `origin/main` SHA；
+- Feature 正文、直接子 Issue 和正式 Relationships 可以被读取；
+- audit 过程严格只读。
+
+### 标准提示词
+
+```text
+请使用 feature-completion-audit，独立只读审计
+[Feature] <当前完整标题> #<Feature编号>。
+
+Expected main SHA: <当前 main SHA>
+```
+
+Issue 编号是主键，GitHub Issue 当前标题是 canonical title。只提供编号时，
+Skill 可以读取并回显标题。Expected main SHA 与实际 `origin/main` 不一致时停止。
+
+### 审计内容
+
+`feature-completion-audit` 会独立读取并核验：
+
+- Feature body、comments、fields、Parent、blockers、dependencies 和正式
+  Relationships；
+- 全部直接子 Issue，并区分 direct child、indirect descendant、related 和
+  unrelated Issue；
+- 必要直接子 Task 的 Issue、merged PR、checks、自动关闭和 closeout 状态；
+- Feature 每条验收标准在当前 `main` 中的源码、测试、文档、ADR 或批准决策
+  证据；
+- 跨 Task 集成、端到端行为、兼容性、操作文档和适用安全边界；
+- 当前 `main` 的 Feature 相关验证、完整 CI 等价验证和实际远端 check runs；
+- 未拆分、遗漏、重开、blocked、orphaned 或证据不足的工作。
+
+所有子 Issue 关闭只是库存事实，不是充分的 Feature 完成证明。审计聚焦当前
+`main` 的 Feature 级结果，不默认逐行重新审查所有历史 PR。
+
+### 固定 verdict
+
+只能输出：
+
+```text
+Feature 已完成，可以由维护者人工收尾
+
+Feature 尚未完成，需要补充或修复 Task
+
+证据不足，暂不能判定 Feature 完成
+```
+
+任何未解决的 Blocking、High 或 Medium finding 都阻止通过。Skill 可以提出
+候选 gap-to-Task 标题和最小范围，但不会创建、重开或修改 Issue。
+
+### `main` SHA 和失效规则
+
+报告必须绑定：
+
+```text
+Audited main SHA: <actual main SHA>
+```
+
+`origin/main` SHA、Feature 范围或验收标准、直接子 Issue 集合、必要子 Issue
+状态、blocker 或关键验证事实发生变化时，旧 audit 失效。必须在新会话中对新的
+`main` SHA 重新审计，不能继承旧 verdict 或验收矩阵。
+
+### 维护者人工收尾
+
+通过 verdict 只表示可以进入维护者人工门禁。操作前仍需确认当前 `main` 等于
+`Audited main SHA`、Feature 和直接子 Issue 集合未变化、没有新的 blocker 或
+失败检查。
+
+随后由维护者人工决定是否关闭 Feature、将 Project Status 设置为 `Done`，或
+执行其他单独批准的元数据收敛。`feature-completion-audit` 不执行这些写操作。
+
 ## Done 后保留 `codex:ready`
 
 最终状态：
@@ -431,7 +517,7 @@ verdict 或已完成步骤。
 
 ## 环境感知的命令执行
 
-三个 Task workflow Skills 共同使用规范性 policy：
+三个 Task workflow Skills 与 `feature-completion-audit` 共同使用规范性 policy：
 
 ```text
 .agents/policies/command-execution.md
@@ -456,7 +542,7 @@ Copy-Item .agents/execution-profile.example.toml .agents/execution-profile.local
 ```
 
 local profile 已被 `.gitignore` 忽略，不得提交，也不得包含凭据、token、私钥、
-用户名或敏感本地路径。三个 Skills 不会自动创建、修改或学习并写回该文件。
+用户名或敏感本地路径。这些 Skills 不会自动创建、修改或学习并写回该文件。
 
 ### 三种 route
 
@@ -513,12 +599,5 @@ Final interpretation
 `task-pr-review` 或其他治理规则时，`task-pr-review` 继续使用 PR base 中的
 受信任规则作为 control plane。PR head 文件只能作为审查对象。local profile
 可以影响已授权命令的执行上下文，但不能改变 reviewed SHA、严重度、验收覆盖
-或 verdict。
-
-## 后续计划
-
-以下能力尚未作为活动 Skill 提供：
-
-- `feature-completion-audit`。
-
-在该能力正式合并前，不要使用对应 Skill 名称假定其已经可用。
+或 verdict。对 `feature-completion-audit`，local profile 同样不能改变 Feature
+身份、直接子 Issue 分类、`Audited main SHA`、验收覆盖、findings 或 verdict。

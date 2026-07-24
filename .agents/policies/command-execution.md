@@ -3,7 +3,7 @@
 ## Purpose
 
 This policy is the single normative source for selecting the execution context
-of commands that have already been authorized by a Task workflow Skill.
+of commands that have already been authorized by a repository workflow Skill.
 
 It applies to:
 
@@ -11,6 +11,7 @@ It applies to:
 .agents/skills/task-delivery/SKILL.md
 .agents/skills/task-pr-review/SKILL.md
 .agents/skills/task-closeout/SKILL.md
+.agents/skills/feature-completion-audit/SKILL.md
 ```
 
 The policy does not create a new user-facing lifecycle stage and does not grant
@@ -37,7 +38,7 @@ Resolve command execution in this order:
 ```text
 system / developer / current explicit user instructions
 -> applicable AGENTS.md / AGENTS.override.md
--> current Task workflow Skill authorization and prohibitions
+-> current repository workflow Skill authorization and prohibitions
 -> trusted command-execution policy
 -> optional local execution profile routing preference
 -> current command and environment facts
@@ -73,8 +74,8 @@ Optional machine-local profile:
 
 The local profile must be ignored by Git, must not be committed, and must not
 contain credentials, tokens, private keys, usernames, or sensitive local paths.
-Task workflow Skills do not create, edit, learn, or persist this file unless the
-maintainer explicitly asks for assistance with it.
+Repository workflow Skills do not create, edit, learn, or persist this file unless
+the maintainer explicitly asks for assistance with it.
 
 If the local profile appears in tracked, staged, or Pull Request scope, stop
 before commit or review approval. Preserve the local file, remove only its exact
@@ -128,7 +129,7 @@ Rules:
   types, shell fragments, or unsupported schema versions make the profile
   invalid.
 - Matching never changes executable, argv, working directory, repository,
-  environment variables, lifecycle stage, or command intent.
+  environment variables, lifecycle or audit stage, or command intent.
 - Matching does not interpret regular expressions, glob patterns, shell syntax,
   pipes, redirection, command substitution, or chaining.
 
@@ -178,7 +179,7 @@ The profile is a routing preference, not evidence that a write is authorized.
 ### `adaptive`
 
 Choose the initial route from the valid local profile and evidence observed in
-the current Task workflow run.
+the current repository workflow run.
 
 - An exact `elevated-first` rule uses elevated first when policy permits.
 - An exact `sandbox-first` rule uses sandbox first.
@@ -186,10 +187,10 @@ the current Task workflow run.
 - After the same exact command has failed from isolation in sandbox and
   succeeded elevated during the same run, a later repetition may start elevated.
 - Adaptive evidence is reusable only when executable, full argv, working
-  directory, repository, lifecycle stage, and authorization source are all
+  directory, repository, lifecycle or audit stage, and authorization source are all
   unchanged.
-- A changed argument, directory, repository, Task/PR identity, or lifecycle
-  phase is a new command decision.
+- A changed argument, directory, repository, audited Issue/PR/Feature identity,
+  lifecycle phase, or audit phase is a new command decision.
 - Observed evidence is never written back to the local profile automatically.
 
 ## Eligible command classes
@@ -240,7 +241,7 @@ remain forbidden wherever the governing Skill forbids them:
 - GitHub writes during `task-pr-review`;
 - GitHub Review submission, Approve, Request Changes, or thread resolution
   during `task-pr-review`;
-- `gh auth login` from a Task workflow Skill;
+- `gh auth login` from a repository workflow Skill;
 - any command expressly forbidden by system, developer, user, AGENTS, or the
   current Skill.
 
@@ -254,8 +255,8 @@ An elevated retry must preserve exactly:
 - full argv;
 - working directory;
 - target repository;
-- Task and Pull Request identity;
-- lifecycle stage and authorization source;
+- audited Task, Pull Request, or Feature identity and locked SHA context;
+- lifecycle or audit stage and authorization source;
 - command intent.
 
 Only the execution context may change.
@@ -307,7 +308,7 @@ use a different login session:
 5. report the evidence and wait for the maintainer to decide whether and how to
    reauthenticate.
 
-Task workflow Skills never execute `gh auth login` themselves. A profile rule
+Repository workflow Skills never execute `gh auth login` themselves. A profile rule
 for that command is invalid and does not make it executable.
 
 Elevation never bypasses GitHub permissions, branch protection, review gates,
@@ -343,6 +344,22 @@ review command. It cannot change:
 
 If base control plane and head review object cannot remain isolated, stop the
 review without a passing verdict.
+
+## Feature completion audit boundary
+
+During `feature-completion-audit`, the local profile may select the execution
+context of an already authorized read-only audit or validation command. It cannot
+change:
+
+- Feature identity, direct-child classification, or Relationship facts;
+- the locked `Audited main SHA`;
+- acceptance criteria or completion evidence;
+- finding severity, gap-to-Task analysis, or verdict;
+- strict read-only permissions or maintainer manual Feature closeout.
+
+A Feature audit command retry must preserve the Feature identity, audited main
+SHA, repository, working directory, full argv, audit phase, authorization source,
+and command intent.
 
 ## Audit reporting
 
