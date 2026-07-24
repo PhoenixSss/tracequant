@@ -605,6 +605,12 @@ Final interpretation
 
 ## Task Workflow Token 消耗测量
 
+开发人员的完整配置、运行、JSON 模板、故障处理和扩展说明见：
+
+```text
+docs/workflows/task-workflow-telemetry.md
+```
+
 Task Workflow Telemetry 是可选的本地旁路测量能力，不是新的 workflow
 Skill，也不是 delivery、review、closeout 或 Feature audit 的门禁。
 
