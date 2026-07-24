@@ -1,0 +1,7 @@
+schema_version = 1
+output_dir = ".agents/telemetry.local"
+default_mode = "baseline-only"
+store_raw_transcript = false
+store_command_output = false
+store_file_contents = false
+allow_usage_patch = true

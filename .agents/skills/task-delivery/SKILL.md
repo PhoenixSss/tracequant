@@ -73,6 +73,8 @@ Never infer Feature completion from `n / n closed`.
 - Use `.agents/policies/command-execution.md` as the single normative command
   routing policy and the optional ignored local execution profile only as a
   machine-specific routing preference.
+- Use `.agents/policies/task-workflow-telemetry.md` only for an explicitly
+  active, local measurement run. Telemetry is not a gate or correctness source.
 - Use historical Tasks and Pull Requests only as process evidence, never as a
   current fact source.
 
@@ -569,6 +571,24 @@ current state before reuse. Completed steps are verified rather than repeated.
 - Keep worktree, staged, committed, and PR file scope aligned with Task scope.
 - Interpret command exit codes according to command semantics.
 
+
+## Optional workflow telemetry
+
+Read `.agents/policies/task-workflow-telemetry.md`, then perform one lightweight
+local `telemetry.py status` check for this Task. If there is no explicit active
+run, do no further telemetry work and add no telemetry report fields.
+
+When a run is active, use only facts and counts already produced by delivery.
+Append one `task-delivery` phase summary at completion or interruption. Do not
+add GitHub queries, repository reads, validation commands, or retries only for
+measurement. Do not store raw prompts, source contents, command output, or
+credentials.
+
+Telemetry does not authorize implementation, metadata writes, commit, push, PR
+creation, or readiness. A telemetry write failure is reported as `telemetry
+incomplete`; delivery continues or stops only according to this Skill's existing
+gates. Do not create or edit the local telemetry configuration automatically.
+
 ## Command execution routing
 
 Before executing a command, read `.agents/policies/command-execution.md` and
@@ -600,6 +620,7 @@ Keep reports concise and include:
 - validation commands, exit codes, and results;
 - material execution-routing decisions and elevated attempts required by the
   shared command policy;
+- telemetry run ID and completion state only when an explicit run is active;
 - commit, branch, and Pull Request state;
 - Required Checks configuration/status and actual check runs/conclusions;
 - self-check findings;

@@ -74,6 +74,8 @@ Never infer Feature completion from `n / n closed`.
 - Use `.agents/policies/command-execution.md` as the single normative command
   routing policy and the optional ignored local execution profile only as a
   machine-specific routing preference.
+- Use `.agents/policies/task-workflow-telemetry.md` only for an explicitly
+  active local run. Telemetry never changes closeout gates or branch authority.
 - Use the Pull Request head ref and current Git refs to resolve branch identity.
 - Use historical records only as evidence, never as a current fact source.
 
@@ -412,6 +414,24 @@ Pause before the related write when:
 Report completed steps, exact evidence, current safe state, and the next
 maintainer decision or recovery gate.
 
+
+## Optional workflow telemetry
+
+Read `.agents/policies/task-workflow-telemetry.md` and perform one lightweight
+local status check for this Task. With no explicit active run, do no further
+telemetry work.
+
+When active, append one `task-closeout` summary using only facts and counts
+already produced by merge verification, synchronization, validation, metadata
+convergence, and exact branch cleanup. Record retries and the squash-specific
+exact `-D` fallback when they occur. Do not add GitHub queries, Git commands, or
+validation only for measurement.
+
+Telemetry cannot authorize merge, Issue close, metadata writes, main updates, or
+branch deletion and cannot weaken any exact branch gate. If the ignored local
+append fails, report `telemetry incomplete`; closeout behavior remains governed
+only by this Skill.
+
 ## Command execution routing
 
 Before executing a command, read `.agents/policies/command-execution.md` and
@@ -447,6 +467,7 @@ Include:
 - post-merge validation commands, exit codes, and results;
 - material execution-routing decisions and elevated attempts required by the
   shared command policy;
+- telemetry run ID and completion state only when an explicit run is active;
 - required checks on remote `main`;
 - exact remote and local branch actions;
 - whether `-D` was required and every gate that justified it;
