@@ -33,10 +33,19 @@ When the user states that a Pull Request was manually merged and requests
 post-merge verification, state convergence, validation, or Task-branch cleanup,
 first read `.agents/skills/task-closeout/SKILL.md`.
 
-These Skills start only after the user identifies an existing Task or Task Pull
-Request. They do not identify, split, plan, draft, choose, or create new Tasks.
-They do not assess, recommend, or perform Feature completion. No Task workflow
-Skill may merge a Pull Request.
+When the user requests an independent read-only completion audit of a specified
+open GitHub Feature before maintainer closeout, first read
+`.agents/skills/feature-completion-audit/SKILL.md`.
+
+The three Task workflow Skills start only after the user identifies an existing
+Task or Task Pull Request. They do not identify, split, plan, draft, choose, or
+create new Tasks. They do not assess, recommend, or perform Feature completion.
+No Task workflow Skill may merge a Pull Request.
+
+Feature completion is audited only through a separately invoked, independent,
+strictly read-only `feature-completion-audit` session. That Skill may recommend
+completion gaps but does not create Tasks, close the Feature, set Project `Done`,
+or assess Epic completion. Feature closeout remains a maintainer manual gate.
 
 The independent PR Review Skill must run in a session that did not participate
 in implementation or modification of the PR. It is strictly read-only, does not
@@ -51,7 +60,7 @@ different work.
 A final merge decision requires an independent read-only Pull Request review in
 a separate session through `task-pr-review`, followed by maintainer manual merge.
 
-Before a Task workflow Skill executes a command, it must read
+Before a repository workflow Skill listed above executes a command, it must read
 `.agents/policies/command-execution.md` and may read the optional local
 `.agents/execution-profile.local.toml`. The local profile is ignored by Git and
 must not be committed. It may select an execution context only after the active
