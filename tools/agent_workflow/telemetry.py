@@ -1721,11 +1721,9 @@ def _command_start(args: argparse.Namespace) -> int:
     active_file = config.output_dir / "active" / f"task-{args.task}.json"
     if active_file.exists():
         active = _read_json(active_file)
-        raise TelemetryError(
-            (
-                f"Task #{args.task} already has active run "
-                f"{active.get('run_id', 'unknown')}"
-            )
+        raise TelemetryError(        
+            f"Task #{args.task} already has active run "
+            f"{active.get('run_id', 'unknown')}"    
         )
     now = _utc_now()
     timestamp = now[:19].replace(":", "").replace("-", "")
