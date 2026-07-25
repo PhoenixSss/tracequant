@@ -62,6 +62,8 @@ This Skill may:
   locked `origin/main` SHA;
 - run current CI-equivalent and Feature-applicable validation;
 - create local temporary validation output;
+- append aggregate events to the exact ignored `.agents/telemetry.local/`
+  directory when the maintainer explicitly started a telemetry run;
 - produce candidate gap-to-Task recommendations and an audit report.
 
 It does not:
@@ -79,7 +81,7 @@ It does not:
 - run `task-delivery`, `task-pr-review`, or `task-closeout` as a write workflow;
 - delete business branches;
 - assess Epic completion;
-- add token telemetry, token optimization, or evidence-runner behavior.
+- add token optimization or evidence-runner behavior.
 
 Never use force push, `--admin`, branch-protection bypass, `git reset --hard`,
 `git clean`, broad cleanup, or another destructive operation.
@@ -93,6 +95,7 @@ system / developer / current explicit user instructions
 -> applicable AGENTS.md / AGENTS.override.md
 -> feature-completion-audit permission and audit rules
 -> trusted .agents/policies/command-execution.md
+-> trusted .agents/policies/task-workflow-telemetry.md for optional measurement only
 -> optional ignored local execution profile for routing only
 -> current GitHub Feature body, comments, fields, and Relationships
 -> current origin/main repository state and current validation sources
@@ -118,8 +121,10 @@ A normal invocation authorizes only:
 3. creation and exact removal of one temporary detached audit worktree when
    needed;
 4. current read-only validation;
-5. an audit report and non-writing gap-to-Task recommendations.
+5. an audit report and non-writing gap-to-Task recommendations;
+6. one exact ignored local telemetry append when an explicit run is active.
 
+The telemetry append is aggregate measurement only and is not Feature evidence.
 It does not authorize any repository or GitHub lifecycle mutation. The optional
 local execution profile may select execution context only after this Skill has
 authorized the exact command. Elevation never grants a write permission.
@@ -526,9 +531,10 @@ Produce a report containing at least:
 7. current-main local validation and remote check runs;
 8. blockers, dependencies, open/reopened/orphaned work, and state conflicts;
 9. gap-to-Task recommendations;
-10. residual risks and known limitations;
-11. actions deliberately not performed;
-12. one fixed verdict.
+10. telemetry run ID and append result only when an explicit run is active;
+11. residual risks and known limitations;
+12. actions deliberately not performed;
+13. one fixed verdict.
 
 End with:
 
@@ -538,6 +544,25 @@ Audited main SHA: <actual main SHA>
 
 A successful report may be concise, but it must not omit the direct child
 inventory, acceptance matrix, findings, validation, verdict, or SHA.
+
+
+## Optional workflow telemetry
+
+Read `.agents/policies/task-workflow-telemetry.md` and perform one lightweight
+local status check for the associated Task measurement run. Do not create an
+implicit run. Task delivery, review, or closeout telemetry is not Feature
+completion evidence and must not influence child classification, acceptance
+coverage, findings, severity, gaps, or verdict.
+
+When an explicit run includes Feature audit, append one aggregate
+`feature-completion-audit` summary to the exact ignored
+`.agents/telemetry.local/` directory. Use only facts and counts already produced
+by the audit. Do not add child-Issue queries, repository reads, validation, or
+report expansion for measurement.
+
+If the telemetry path is tracked, staged, or not ignored, do not write. Report
+`telemetry incomplete`; the Feature audit continues or stops only according to
+its existing evidence and stability gates.
 
 ## Command execution routing
 

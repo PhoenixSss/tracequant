@@ -66,6 +66,14 @@ Before a repository workflow Skill listed above executes a command, it must read
 must not be committed. It may select an execution context only after the active
 Skill authorizes the command; it never expands lifecycle or GitHub permissions.
 
+Optional Task workflow measurement is governed by
+`.agents/policies/task-workflow-telemetry.md`. Telemetry is disabled unless the
+maintainer explicitly starts a local run. Its config and data remain in ignored
+`.agents/task-workflow-telemetry.local.toml` and `.agents/telemetry.local/`.
+Telemetry records aggregate process measurements only; it never changes workflow
+permissions, gates, validation, review findings, verdicts, Merge authorization,
+or Feature completion evidence.
+
 This root `AGENTS.md` remains the repository-level rule source. Repository Skills
 supplement these rules and do not override system, developer, user, or more
 specific scoped instructions.

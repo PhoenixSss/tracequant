@@ -57,3 +57,7 @@ desktop.ini
 
 # Local agent execution routing
 .agents/execution-profile.local.toml
+
+# Local Task workflow telemetry
+.agents/task-workflow-telemetry.local.toml
+.agents/telemetry.local/

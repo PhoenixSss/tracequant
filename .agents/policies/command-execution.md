@@ -12,6 +12,7 @@ It applies to:
 .agents/skills/task-pr-review/SKILL.md
 .agents/skills/task-closeout/SKILL.md
 .agents/skills/feature-completion-audit/SKILL.md
+tools/agent_workflow/telemetry.py
 ```
 
 The policy does not create a new user-facing lifecycle stage and does not grant
@@ -208,6 +209,10 @@ be routed according to a valid profile:
   `task-closeout`;
 - exact branch operations already authorized by `task-closeout` after all of its
   branch-safety gates pass;
+- an explicitly maintainer-requested `telemetry.py start` command, and other
+  local `tools/agent_workflow/telemetry.py` commands plus exact writes below
+  `.agents/telemetry.local/` when an active run authorizes them under
+  `.agents/policies/task-workflow-telemetry.md`;
 - other non-destructive commands explicitly authorized by the current Skill.
 
 For writes, route selection happens only after the Skill's complete write gate
@@ -221,7 +226,8 @@ A profile cannot authorize or broaden:
 - commit or push;
 - branch creation or deletion;
 - temporary worktree creation or removal;
-- filesystem writes;
+- filesystem writes, except the exact ignored local telemetry append already
+  authorized by an active run and the telemetry policy;
 - any other repository or GitHub write.
 
 Such actions remain governed entirely by the active Skill. If authorized there,
@@ -324,6 +330,9 @@ AGENTS.md
 AGENTS.override.md
 .agents/policies/command-execution.md
 .agents/execution-profile.example.toml
+.agents/policies/task-workflow-telemetry.md
+.agents/task-workflow-telemetry.example.toml
+tools/agent_workflow/telemetry.py
 .agents/skills/task-pr-review/SKILL.md
 another shared governance policy
 ```
@@ -360,6 +369,26 @@ change:
 A Feature audit command retry must preserve the Feature identity, audited main
 SHA, repository, working directory, full argv, audit phase, authorization source,
 and command intent.
+
+When an explicit telemetry run is active, `task-pr-review` and
+`feature-completion-audit` may append aggregate events only below the exact
+ignored `.agents/telemetry.local/` directory. This narrow local write is not a
+reviewed-file mutation, GitHub write, correctness fact, or completion evidence.
+If the local path is tracked, staged, or not ignored, do not write telemetry.
+The review or audit continues or stops only according to its existing gates.
+
+## Task workflow telemetry boundary
+
+`telemetry.py start` requires an explicit maintainer request. Every later
+telemetry command and local data write requires the resulting active run and
+`.agents/policies/task-workflow-telemetry.md`. The CLI is local-only and must not
+access the network, launch Git or validation commands, or mutate GitHub.
+
+Routing may change the execution context of an already authorized telemetry CLI
+command. It cannot authorize tracked-file writes, implicit run creation, raw
+conversation capture, credential storage, workflow changes, or another
+lifecycle action. A telemetry failure is reported as incomplete and never
+changes the governing workflow verdict.
 
 ## Audit reporting
 
