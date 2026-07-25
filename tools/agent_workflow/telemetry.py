@@ -261,6 +261,7 @@ def _is_within(path: Path, parent: Path) -> bool:
         return False
     return True
 
+
 def _gitignore_patterns(repo_root: Path) -> set[str]:
     ignore_file = repo_root / ".gitignore"
     if not ignore_file.exists():
@@ -839,9 +840,7 @@ def _aggregate_events(
             )
             operations[aggregate_field] = {
                 category: _sum_optional(
-                    event.get("operations", {})
-                    .get(aggregate_field, {})
-                    .get(category)
+                    event.get("operations", {}).get(aggregate_field, {}).get(category)
                     for event in phase_events
                     if isinstance(event.get("operations"), dict)
                 )
@@ -1226,11 +1225,7 @@ def _validate_manifest(value: Any) -> dict[str, Any]:
     for field in ("workflow_main_sha", "base_sha", "head_sha"):
         _validate_sha(value.get(field), field)
     task_title = value.get("task_canonical_title")
-    if (
-        not isinstance(task_title, str)
-        or not task_title
-        or len(task_title) > 512
-    ):
+    if not isinstance(task_title, str) or not task_title or len(task_title) > 512:
         raise TelemetryError("manifest task_canonical_title is invalid")
     model = value.get("model")
     if model is not None and (
@@ -1295,8 +1290,13 @@ def _validate_event(event: Any) -> dict[str, Any]:
     _reject_sensitive(event)
     if event_type == "usage-patch":
         patch_allowed = {
-            "schema_version", "event_id", "event_type", "phase",
-            "target_event_id", "recorded_at", "usage",
+            "schema_version",
+            "event_id",
+            "event_type",
+            "phase",
+            "target_event_id",
+            "recorded_at",
+            "usage",
         }
         if set(event) - patch_allowed:
             raise TelemetryError("usage patch contains unsupported fields")
@@ -1651,14 +1651,8 @@ def _markdown_summary(
                 "- Validation all passed: `"
                 f"{summary['quality']['validation_all_passed']}`"
             ),
-            (
-                "- Review invalidations: `"
-                f"{summary['quality']['review_invalidations']}`"
-            ),
-            (
-                "- Maintainer decisions: `"
-                f"{summary['quality']['maintainer_decisions']}`"
-            ),
+            (f"- Review invalidations: `{summary['quality']['review_invalidations']}`"),
+            (f"- Maintainer decisions: `{summary['quality']['maintainer_decisions']}`"),
             f"- Limitations: `{'; '.join(summary['limitations']) or 'none'}`",
         ]
     )
@@ -1721,9 +1715,9 @@ def _command_start(args: argparse.Namespace) -> int:
     active_file = config.output_dir / "active" / f"task-{args.task}.json"
     if active_file.exists():
         active = _read_json(active_file)
-        raise TelemetryError(        
+        raise TelemetryError(
             f"Task #{args.task} already has active run "
-            f"{active.get('run_id', 'unknown')}"    
+            f"{active.get('run_id', 'unknown')}"
         )
     now = _utc_now()
     timestamp = now[:19].replace(":", "").replace("-", "")
