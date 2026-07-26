@@ -22,7 +22,7 @@ def test_load_settings_uses_environment_and_defaults() -> None:
     assert settings == Settings(
         environment=Environment.DEVELOPMENT,
         log_level=LogLevel.INFO,
-        log_format=LogFormat.TEXT,
+        log_format=LogFormat.JSON,
         log_dir=None,
     )
 
