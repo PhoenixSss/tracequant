@@ -141,3 +141,24 @@ exception output: `password`, `secret`, `token`, `api_key`, `apikey`,
 `authorization`, and `cookie`. This boundary does not guarantee detection of secrets
 that callers manually concatenate into free-text messages, so callers must not place
 raw credentials in log messages.
+
+## Agent workflow evidence and validation
+
+Repository workflow Skills use compact local tooling for deterministic metadata
+and validation summaries:
+
+```powershell
+python -X utf8 tools/agent_workflow/workflow_evidence.py --help
+python -X utf8 tools/agent_workflow/workflow_validation.py --help
+python -X utf8 tools/agent_workflow/trusted_runner.py --help
+```
+
+Local outputs are stored only in Git-ignored directories:
+
+```text
+.agents/evidence.local/
+.agents/validation.local/
+```
+
+See `docs/workflows/workflow-evidence.md`. These tools do not replace semantic
+review, independent PR review, manual Merge, or Feature closeout.

@@ -13,6 +13,9 @@ It applies to:
 .agents/skills/task-closeout/SKILL.md
 .agents/skills/feature-completion-audit/SKILL.md
 tools/agent_workflow/telemetry.py
+tools/agent_workflow/workflow_evidence.py
+tools/agent_workflow/workflow_validation.py
+tools/agent_workflow/trusted_runner.py
 ```
 
 The policy does not create a new user-facing lifecycle stage and does not grant
@@ -213,6 +216,12 @@ be routed according to a valid profile:
   local `tools/agent_workflow/telemetry.py` commands plus exact writes below
   `.agents/telemetry.local/` when an active run authorizes them under
   `.agents/policies/task-workflow-telemetry.md`;
+- read-only `workflow_evidence.py` and `trusted_runner.py` operations plus exact
+  sanitized local writes below `.agents/evidence.local/` authorized by
+  `.agents/policies/workflow-evidence.md`;
+- `workflow_validation.py` checks plus exact sanitized local writes below
+  `.agents/validation.local/` authorized by
+  `.agents/policies/workflow-evidence.md`;
 - other non-destructive commands explicitly authorized by the current Skill.
 
 For writes, route selection happens only after the Skill's complete write gate
@@ -226,8 +235,8 @@ A profile cannot authorize or broaden:
 - commit or push;
 - branch creation or deletion;
 - temporary worktree creation or removal;
-- filesystem writes, except the exact ignored local telemetry append already
-  authorized by an active run and the telemetry policy;
+- filesystem writes, except exact ignored local telemetry, evidence, and
+  validation artifacts already authorized by their governing policies;
 - any other repository or GitHub write.
 
 Such actions remain governed entirely by the active Skill. If authorized there,

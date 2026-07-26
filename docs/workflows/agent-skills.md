@@ -20,6 +20,27 @@ AGENTS.md / AGENTS.override.md
 本文档是使用指南，不替代上述规则。出现冲突时，以更高优先级和更具体的
 规范性文件为准。
 
+
+## Workflow Evidence 与紧凑验证
+
+四个活动 Skills 现在使用统一的只读 Evidence 和 Validation 工具替代重复的机械命令链：
+
+```text
+tools/agent_workflow/workflow_evidence.py
+tools/agent_workflow/workflow_validation.py
+tools/agent_workflow/trusted_runner.py
+```
+
+规范性规则位于 `.agents/policies/workflow-evidence.md`，详细使用方法见
+`docs/workflows/workflow-evidence.md`。
+
+Evidence 只收敛身份、SHA、checks、threads、Project、Relationships、branch 和 direct
+child 等元数据。Task/Feature 正文、PR 完整 diff、源码、测试与文档仍由 Agent 进行
+语义读取。脚本输出 `pass/fail/unknown`，`unknown` 不能当作成功。
+
+正常流程不再完整执行旧机械查询链后再叠加脚本。工具失败时使用 Skill 允许的安全只读
+fallback，并在报告和 Telemetry 中记录 limitation。
+
 ## 当前活动 Skills
 
 | Skill | 用途 | 正常终点 | 明确不做 |

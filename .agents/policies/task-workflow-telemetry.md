@@ -447,3 +447,40 @@ Never use telemetry to:
 - bypass independent review, new-SHA re-review, manual Merge, or manual Feature
   closeout;
 - submit raw telemetry to Git.
+
+## Workflow Evidence and compact-report metrics
+
+When `.agents/policies/workflow-evidence.md` is active, phase summaries may
+record these aggregate counters from normal work:
+
+```text
+operations.evidence_snapshots
+operations.evidence_rechecks
+operations.validation_runner_invocations
+operations.fallbacks
+operations.snapshot_drifts
+```
+
+They may also record previous-handoff size separately from the current report:
+
+```text
+report.previous_handoff_characters
+report.previous_handoff_lines
+report.previous_handoff_estimated_tokens
+report.previous_handoff_estimation_method
+```
+
+Do not invoke Evidence, Validation, Git, or GitHub again solely to populate these
+fields. Unknown values remain `null`.
+
+Telemetry summary must keep two concepts separate:
+
+```text
+phase/event structure completeness
+numeric usage coverage
+```
+
+An event with `usage.source=unavailable` and null token fields counts as a usage
+record but not as numeric usage. `usage_coverage.numeric_usage_complete` is true
+only when every effective event has numeric usage. Report/handoff estimates are
+proxy metrics and must never be added to model token totals.
