@@ -1019,7 +1019,6 @@ def _aggregate_events(
     required_phases = {
         "task-delivery",
         "task-pr-review",
-        "manual-merge",
         "task-closeout",
     }
     if manifest.get("workflow_shape") == "task-plus-feature-audit":
@@ -1331,7 +1330,40 @@ def _validate_event(event: Any) -> dict[str, Any]:
     return dict(event)
 
 
-def _validate_run(paths: RunPaths) -> dict[str, Any]:
+def _validate_event_identity_against_manifest(
+    event: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> None:
+    identity = event.get("identity")
+    if not isinstance(identity, dict):
+        return
+
+    event_title = identity.get("task_canonical_title")
+    if event_title is not None and event_title != manifest["task_canonical_title"]:
+        raise TelemetryError("event Task title conflicts with manifest")
+
+    event_workflow_sha = identity.get("workflow_main_sha")
+    if (
+        event_workflow_sha is not None
+        and event_workflow_sha != manifest["workflow_main_sha"]
+    ):
+        raise TelemetryError("event workflow_main_sha conflicts with manifest")
+
+    event_feature = identity.get("feature_number")
+    manifest_feature = manifest.get("feature_number")
+    if (
+        isinstance(event_feature, int)
+        and manifest_feature is not None
+        and event_feature != manifest_feature
+    ):
+        raise TelemetryError("event Feature number conflicts with manifest")
+
+
+def _validate_run(
+    paths: RunPaths,
+    *,
+    check_stored_summary: bool = True,
+) -> dict[str, Any]:
     manifest = _validate_manifest(_read_json(paths.manifest_file))
     events = _read_events(paths.events_file)
     seen_ids: set[str] = set()
@@ -1348,20 +1380,9 @@ def _validate_run(paths: RunPaths) -> dict[str, Any]:
     feature_numbers: set[int] = set()
     for event in events:
         validated = _validate_event(event)
+        _validate_event_identity_against_manifest(validated, manifest)
         identity = validated.get("identity")
         if isinstance(identity, dict):
-            event_title = identity.get("task_canonical_title")
-            if (
-                event_title is not None
-                and event_title != manifest["task_canonical_title"]
-            ):
-                raise TelemetryError("event Task title conflicts with manifest")
-            event_workflow_sha = identity.get("workflow_main_sha")
-            if (
-                event_workflow_sha is not None
-                and event_workflow_sha != manifest["workflow_main_sha"]
-            ):
-                raise TelemetryError("event workflow_main_sha conflicts with manifest")
             event_pr = identity.get("pr_number")
             if isinstance(event_pr, int):
                 pr_numbers.add(event_pr)
@@ -1400,7 +1421,7 @@ def _validate_run(paths: RunPaths) -> dict[str, Any]:
         ):
             raise TelemetryError("usage patch targets an unknown event")
     computed = _aggregate_events(manifest, events)
-    if paths.summary_file.exists():
+    if check_stored_summary and paths.summary_file.exists():
         stored = _read_json(paths.summary_file)
         if stored != computed:
             raise TelemetryError(
@@ -1829,7 +1850,7 @@ def _command_record(args: argparse.Namespace) -> int:
     if phase not in PHASES:
         raise TelemetryError("unsupported phase")
     _validate_run(paths)
-    _require_active_manifest(paths)
+    manifest = _require_active_manifest(paths)
     events = _read_events(paths.events_file)
     if data["event_type"] == "phase-summary" and any(
         event.get("event_type") == "phase-summary" and event.get("phase") == phase
@@ -1844,6 +1865,7 @@ def _command_record(args: argparse.Namespace) -> int:
         "recorded_at": data.get("recorded_at") or _utc_now(),
     }
     _validate_event(event)
+    _validate_event_identity_against_manifest(event, manifest)
     _ensure_append_timestamp(events, event["recorded_at"])
     _append_jsonl(paths.events_file, event)
     active = _read_json(paths.active_file)
@@ -1980,10 +2002,12 @@ def _command_summarize(args: argparse.Namespace) -> int:
         feature=args.feature,
         run_id=args.run_id,
     )
-    _validate_run(paths)
+    _validate_run(paths, check_stored_summary=False)
     manifest = _validate_manifest(_read_json(paths.manifest_file))
     events = _read_events(paths.events_file)
     summary = _aggregate_events(manifest, events)
+    if manifest["status"] != "active":
+        _atomic_write_json(paths.summary_file, summary)
     comparison = (
         _spot_check(config, summary) if manifest["mode"] == "spot-check" else None
     )

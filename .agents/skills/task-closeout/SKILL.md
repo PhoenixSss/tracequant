@@ -427,6 +427,12 @@ convergence, and exact branch cleanup. Record retries and the squash-specific
 exact `-D` fallback when they occur. Do not add GitHub queries, Git commands, or
 validation only for measurement.
 
+When the summary identity includes `workflow_main_sha`, copy the immutable value
+from the active Telemetry run manifest. Do not derive it from current `main`,
+`origin/main`, the PR base or head SHA, or the Squash merge commit. Maintainer
+manual Merge remains a closeout prerequisite but does not require a separate
+Telemetry event.
+
 Telemetry cannot authorize merge, Issue close, metadata writes, main updates, or
 branch deletion and cannot weaken any exact branch gate. If the ignored local
 append fails, report `telemetry incomplete`; closeout behavior remains governed

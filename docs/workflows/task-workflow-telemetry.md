@@ -261,6 +261,9 @@ task-delivery
 → task-closeout
 ```
 
+这里的 manual merge 是业务工作流中的维护者门禁，不是必需 Telemetry phase。
+Telemetry 完整性只要求实际由 Agent/Codex 执行的阶段。
+
 四个 Skills 只使用正常工作已经产生的事实维护聚合计数，不得为 Telemetry
 额外查询 GitHub、重新读取文件或重跑验证。
 
@@ -294,17 +297,11 @@ python tools/agent_workflow/telemetry.py record `
 
 输入文件可以放在 ignored telemetry 目录中。不要把输入 JSON 暂存或提交。
 
-### 4. 人工 Merge 阶段
+### 4. 可选的历史 `manual-merge` 事件
 
-人工 Merge 没有模型 usage 也可以记录。使用 `manual-merge` phase，token 字段
-保持 `null`，source 使用 `unavailable`。
-
-```powershell
-python tools/agent_workflow/telemetry.py record `
-  --task 123 `
-  --phase manual-merge `
-  --data-file .agents/telemetry.local/input/manual-merge.json
-```
+人工 Merge 不在 Codex 会话中发生，不产生模型 usage，也不需要为了完整性手工
+记录。`manual-merge` 仍保留为合法的可选 phase/event type，仅用于兼容已经包含
+该事件的历史本地 Run；有无该事件均不影响标准 Task Run 的完整性。
 
 ### 5. 会话结束后补录 usage
 
@@ -373,9 +370,18 @@ python tools/agent_workflow/telemetry.py summarize `
   --format json
 ```
 
+`summarize` 会从 manifest 与 append-only events 重新计算确定性摘要。对于已经
+结束的 Run，它会原子刷新派生的 `summary.json`，但不会修改 manifest 或 event
+stream。这样在完整性规则修复后，旧 Run 可以直接重新汇总并随后通过
+`validate`，无需伪造或编辑历史 event。
+
 ## Phase summary JSON 模板
 
 下面是可直接复制的完整模板。未知值使用 `null`，不得使用 `0` 假装已经测量。
+
+`workflow_main_sha` 必须复制自本次 Run 的 manifest，是 `start` 时锁定的不可变
+工作流基线。它不是 PR base、PR head、Squash merge commit，也不是 closeout 时
+当前的 `main`。`record` 会在追加前拒绝与 manifest 冲突的值。
 
 ```json
 {
@@ -551,6 +557,9 @@ review-run
 manual-merge
 ```
 
+`manual-merge` 只是向后兼容的可选事件，不属于完整性必需阶段，也不应被当作
+模型 Token 消耗。
+
 例如 review 因新 head 失效时，可追加 `review-run` 或 `rework` 事件，并在
 `rework.review_invalidations`、`head_sha_changes` 和
 `independent_review_runs` 中记录数量。
@@ -566,7 +575,7 @@ manual-merge
 start(task-only)
 → task-delivery phase-summary
 → task-pr-review phase-summary
-→ manual-merge event
+→ 维护者人工 Merge（业务门禁，不要求 Telemetry event）
 → task-closeout phase-summary
 → finish
 → validate
@@ -581,7 +590,7 @@ start(task-with-re-review)
 → review-run #1
 → rework / new head
 → review-run #2
-→ manual-merge
+→ 维护者人工 Merge（业务门禁，不要求 Telemetry event）
 → task-closeout
 → finish
 ```
@@ -594,7 +603,7 @@ start(task-with-re-review)
 start(task-plus-feature-audit, --feature 2)
 → task-delivery
 → task-pr-review
-→ manual-merge
+→ 维护者人工 Merge（业务门禁，不要求 Telemetry event）
 → task-closeout
 → status --feature 2
 → feature-completion-audit
@@ -693,6 +702,10 @@ event type，不要覆盖原 summary。
 查看 `missing_phases` 和每个 event 的 `outcome.telemetry_complete`。这只表示
 测量不完整，不改变正常 workflow 结果。
 
+标准 `task-only` 与 `task-with-re-review` 只要求 `task-delivery`、
+`task-pr-review` 和 `task-closeout`。`task-plus-feature-audit` 额外要求
+`feature-completion-audit`。`manual-merge` 缺失不是不完整原因。
+
 ### spot-check 样本不足
 
 同类完成 run 少于 3 个。只做结构性比较，继续积累样本；不要从一个样本推导
@@ -753,6 +766,8 @@ finish / validate / summarize
 schema version rejection
 sensitive field rejection
 incomplete run
+pre-append identity conflict rejection
+optional manual-merge compatibility
 spot-check sample insufficiency
 deterministic summary
 ```
