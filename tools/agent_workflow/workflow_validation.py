@@ -17,10 +17,10 @@ from workflow_common import (
     MAX_LOG_BYTES,
     CommandRunner,
     WorkflowToolError,
+    is_sha,
     print_json,
     redact_machine_paths,
     redact_sensitive,
-    is_sha,
     require_exact_ignored_directory,
     safe_text,
     sha256_json,
@@ -59,18 +59,23 @@ def _git_changed_files(runner: CommandRunner, base_sha: str | None) -> list[str]
 
 
 def _discover_skill_validator(explicit: str | None) -> Path | None:
-    candidates: list[Path] = []
     if explicit:
-        candidates.append(Path(explicit).expanduser())
+        candidate = Path(explicit).expanduser()
+        return candidate.resolve() if candidate.is_file() else None
     env_value = os.environ.get("CODEX_SKILL_VALIDATOR")
     if env_value:
-        candidates.append(Path(env_value).expanduser())
-    candidates.extend(
-        [
-            Path.home() / ".codex/skills/.system/skill-creator/scripts/quick_validate.py",
-            Path.home() / ".codex" / "skills" / ".system" / "skill-creator" / "scripts" / "quick_validate.py",
-        ]
-    )
+        candidate = Path(env_value).expanduser()
+        return candidate.resolve() if candidate.is_file() else None
+    candidates: list[Path] = [
+        Path.home() / ".codex/skills/.system/skill-creator/scripts/quick_validate.py",
+        Path.home()
+        / ".codex"
+        / "skills"
+        / ".system"
+        / "skill-creator"
+        / "scripts"
+        / "quick_validate.py",
+    ]
     for candidate in candidates:
         if candidate.is_file():
             return candidate.resolve()
@@ -93,13 +98,17 @@ def _build_plan(
     if lock.exists():
         commands.append(ValidationCommand("uv-lock-check", ("uv", "lock", "--check")))
     if tests.exists():
-        commands.append(ValidationCommand("pytest", ("uv", "run", "--frozen", "pytest")))
+        commands.append(
+            ValidationCommand("pytest", ("uv", "run", "--frozen", "pytest"))
+        )
     if pyproject.exists():
         content = pyproject.read_text(encoding="utf-8")
         if "[tool.ruff" in content:
             commands.extend(
                 [
-                    ValidationCommand("ruff-check", ("uv", "run", "--frozen", "ruff", "check", ".")),
+                    ValidationCommand(
+                        "ruff-check", ("uv", "run", "--frozen", "ruff", "check", ".")
+                    ),
                     ValidationCommand(
                         "ruff-format-check",
                         ("uv", "run", "--frozen", "ruff", "format", "--check", "."),
@@ -168,14 +177,21 @@ def _summary(command_id: str, stdout: str, stderr: str, returncode: int) -> str:
     if pattern:
         match = re.search(pattern, combined)
         if match:
-            return safe_text(match.group(1) if match.lastindex else match.group(0), limit=240) or "pass"
+            return (
+                safe_text(
+                    match.group(1) if match.lastindex else match.group(0), limit=240
+                )
+                or "pass"
+            )
     lines = [line.strip() for line in combined.splitlines() if line.strip()]
     if not lines:
         return "pass"
     return safe_text(lines[-1], limit=240) or "pass"
 
 
-def _run_validation(args: argparse.Namespace, repo_root: Path) -> tuple[dict[str, Any], int]:
+def _run_validation(
+    args: argparse.Namespace, repo_root: Path
+) -> tuple[dict[str, Any], int]:
     runner = CommandRunner(repo_root)
     skill_validator = _discover_skill_validator(args.skill_validator)
     plan, limitations = _build_plan(
@@ -194,7 +210,13 @@ def _run_validation(args: argparse.Namespace, repo_root: Path) -> tuple[dict[str
         "phase": args.phase,
         "base_sha": args.base_sha,
         "commands": [
-            {"command_id": item.command_id, "argv": [Path(value).name if index == 0 else value for index, value in enumerate(item.argv)]}
+            {
+                "command_id": item.command_id,
+                "argv": [
+                    Path(value).name if index == 0 else value
+                    for index, value in enumerate(item.argv)
+                ],
+            }
             for item in plan
         ],
     }
@@ -257,9 +279,7 @@ def _run_validation(args: argparse.Namespace, repo_root: Path) -> tuple[dict[str
         "output_dir": run_dir.relative_to(repo_root).as_posix(),
         "trusted_runner": {
             "source_sha": os.environ.get("WORKFLOW_TRUSTED_RUNNER_SHA"),
-            "content_sha256": os.environ.get(
-                "WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256"
-            ),
+            "content_sha256": os.environ.get("WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256"),
             "active": bool(os.environ.get("WORKFLOW_TRUSTED_RUNNER_SHA")),
         },
     }
@@ -301,8 +321,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     repo_root = Path(args.repo_root).resolve()
-    if args.command == "run" and args.base_sha is not None and not is_sha(args.base_sha):
-        print("workflow validation error: --base-sha must be a full commit SHA", file=sys.stderr)
+    if (
+        args.command == "run"
+        and args.base_sha is not None
+        and not is_sha(args.base_sha)
+    ):
+        print(
+            "workflow validation error: --base-sha must be a full commit SHA",
+            file=sys.stderr,
+        )
         return 2
     try:
         output, returncode = _run_validation(args, repo_root)

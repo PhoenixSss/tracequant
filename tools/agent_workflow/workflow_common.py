@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -22,14 +23,14 @@ WINDOWS_ABSOLUTE_PATH: Final = re.compile(r"^[A-Za-z]:[\\/]")
 WINDOWS_ABSOLUTE_PATH_IN_TEXT: Final = re.compile(
     r"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s\"']+"
 )
-POSIX_ABSOLUTE_PATH_IN_TEXT: Final = re.compile(
-    r"(?<![:/A-Za-z0-9])/(?!/)[^\s\"']+"
-)
+POSIX_ABSOLUTE_PATH_IN_TEXT: Final = re.compile(r"(?<![:/A-Za-z0-9])/(?!/)[^\s\"']+")
 SENSITIVE_VALUE_PATTERNS: Final = (
     re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~-]{16,}"),
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    re.compile(r"(?i)(authorization|cookie|api[_-]?key|token|password|secret)\s*[:=]\s*\S+"),
+    re.compile(
+        r"(?i)(authorization|cookie|api[_-]?key|token|password|secret)\s*[:=]\s*\S+"
+    ),
 )
 
 
@@ -67,20 +68,27 @@ class CommandRunner:
     ) -> CommandResult:
         if not argv:
             raise WorkflowToolError("command argv cannot be empty")
-        executable = Path(argv[0]).name.lower()
+        process_env = os.environ.copy()
+        process_env.setdefault("PYTHONUTF8", "1")
+        process_env.setdefault("PYTHONIOENCODING", "utf-8")
+        if env:
+            process_env.update(env)
+        executable_path = shutil.which(str(argv[0]), path=process_env.get("PATH"))
+        resolved_argv = [
+            executable_path or str(argv[0]),
+            *[str(arg) for arg in argv[1:]],
+        ]
+        executable = Path(resolved_argv[0]).name.lower()
         self.tool_calls += 1
-        if executable in {"git", "git.exe"}:
+        if executable in {"git", "git.exe", "git.cmd"}:
             self.git_commands += 1
-        if executable in {"gh", "gh.exe"}:
+        if executable in {"gh", "gh.exe", "gh.cmd"}:
             self.github_queries += 1
         if validation:
             self.validation_commands += 1
-        process_env = os.environ.copy()
-        if env:
-            process_env.update(env)
         try:
             completed = subprocess.run(
-                list(argv),
+                resolved_argv,
                 cwd=cwd or self.repo_root,
                 check=False,
                 capture_output=True,
@@ -89,17 +97,17 @@ class CommandRunner:
                 errors="replace",
                 env=process_env,
             )
-        except FileNotFoundError as exc:
+        except FileNotFoundError:
             return CommandResult(
                 command_id=command_id,
-                argv=tuple(argv),
+                argv=tuple(resolved_argv),
                 returncode=127,
                 stdout="",
                 stderr=f"executable not found: {Path(argv[0]).name}",
             )
         return CommandResult(
             command_id=command_id,
-            argv=tuple(argv),
+            argv=tuple(resolved_argv),
             returncode=completed.returncode,
             stdout=completed.stdout,
             stderr=completed.stderr,
@@ -117,7 +125,10 @@ class CommandRunner:
 def json_dumps(value: Any, *, pretty: bool = False) -> str:
     if pretty:
         return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    return (
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    )
 
 
 def print_json(value: Mapping[str, Any], *, pretty: bool = False) -> None:
@@ -170,7 +181,9 @@ def safe_text(value: Any, *, limit: int = MAX_STRING) -> str | None:
         return None
     text = str(value).replace("\x00", "")
     text = redact_machine_paths(redact_sensitive(text))
-    if WINDOWS_ABSOLUTE_PATH.match(text) or (text.startswith("/") and not text.startswith("//")):
+    if WINDOWS_ABSOLUTE_PATH.match(text) or (
+        text.startswith("/") and not text.startswith("//")
+    ):
         return "<absolute-path-redacted>"
     if len(text) <= limit:
         return text

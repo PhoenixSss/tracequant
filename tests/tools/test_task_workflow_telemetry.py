@@ -934,6 +934,4 @@ def test_report_handoff_and_evidence_operation_metrics_are_aggregated(
     assert delivery["report"]["previous_handoff_characters"] == 400
     assert delivery["report"]["previous_handoff_lines"] == 20
     assert delivery["report"]["previous_handoff_estimated_tokens"] == 100
-    assert delivery["report"]["previous_handoff_estimation_methods"] == [
-        "chars-div-4"
-    ]
+    assert delivery["report"]["previous_handoff_estimation_methods"] == ["chars-div-4"]

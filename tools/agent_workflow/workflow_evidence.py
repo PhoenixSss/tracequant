@@ -267,7 +267,11 @@ def _issue_view(
     value = read_json_text(result.stdout, field=f"Issue #{number}")
     if not isinstance(value, dict):
         warnings.append(
-            {"command_id": result.command_id, "exit_code": 0, "error": "Issue response is not an object"}
+            {
+                "command_id": result.command_id,
+                "exit_code": 0,
+                "error": "Issue response is not an object",
+            }
         )
         return None
     labels = value.get("labels", [])
@@ -305,7 +309,9 @@ def _issue_view(
                     "author": author.get("login") if isinstance(author, dict) else None,
                     "created_at": comment.get("createdAt"),
                     "updated_at": comment.get("updatedAt"),
-                    "body": comment.get("body") if isinstance(comment.get("body"), str) else None,
+                    "body": comment.get("body")
+                    if isinstance(comment.get("body"), str)
+                    else None,
                 }
             )
     content_facts = {"body": body, "comments": comment_facts}
@@ -359,7 +365,7 @@ def _graphql(
             "api",
             "graphql",
             "-f",
-            f"query={query}",
+            f"query={' '.join(query.split())}",
             "-F",
             f"owner={owner}",
             "-F",
@@ -375,7 +381,11 @@ def _graphql(
     value = read_json_text(result.stdout, field=command_id)
     if not isinstance(value, dict):
         warnings.append(
-            {"command_id": command_id, "exit_code": 0, "error": "GraphQL response is not an object"}
+            {
+                "command_id": command_id,
+                "exit_code": 0,
+                "error": "GraphQL response is not an object",
+            }
         )
         return None
     errors = value.get("errors")
@@ -437,7 +447,9 @@ def _relationship_snapshot(
                 continue
             labels: list[str] = []
             raw_labels = item.get("labels")
-            if isinstance(raw_labels, dict) and isinstance(raw_labels.get("nodes"), list):
+            if isinstance(raw_labels, dict) and isinstance(
+                raw_labels.get("nodes"), list
+            ):
                 labels = [
                     label["name"]
                     for label in raw_labels["nodes"]
@@ -464,16 +476,26 @@ def _relationship_snapshot(
     issue_type = issue.get("issueType")
     sub_issue_nodes = _nodes("subIssues")
     sub_connection = issue.get("subIssues")
-    sub_page = sub_connection.get("pageInfo") if isinstance(sub_connection, dict) else None
-    sub_has_next = sub_page.get("hasNextPage") is True if isinstance(sub_page, dict) else False
+    sub_page = (
+        sub_connection.get("pageInfo") if isinstance(sub_connection, dict) else None
+    )
+    sub_has_next = (
+        sub_page.get("hasNextPage") is True if isinstance(sub_page, dict) else False
+    )
     sub_bounded = bounded_list(sub_issue_nodes, item_limit=MAX_CHILDREN)
     return {
         "available": True,
-        "issue_type": safe_text(issue_type.get("name")) if isinstance(issue_type, dict) else None,
+        "issue_type": safe_text(issue_type.get("name"))
+        if isinstance(issue_type, dict)
+        else None,
         "parent": normalized_parent,
         "sub_issues": sub_bounded,
         "sub_issue_set_digest": sha256_json(
-            sorted(item.get("number") for item in sub_issue_nodes if isinstance(item.get("number"), int))
+            sorted(
+                item.get("number")
+                for item in sub_issue_nodes
+                if isinstance(item.get("number"), int)
+            )
         ),
         "sub_issues_complete": not sub_has_next and not sub_bounded["truncated"],
         "blocked_by": bounded_list(_nodes("blockedBy")),
@@ -502,7 +524,11 @@ def _pr_view(
     value = read_json_text(result.stdout, field=f"PR #{number}")
     if not isinstance(value, dict):
         warnings.append(
-            {"command_id": result.command_id, "exit_code": 0, "error": "PR response is not an object"}
+            {
+                "command_id": result.command_id,
+                "exit_code": 0,
+                "error": "PR response is not an object",
+            }
         )
         return None
     files: list[str] = []
@@ -543,7 +569,9 @@ def _pr_view(
             reviews.append(
                 {
                     "state": safe_text(item.get("state")),
-                    "author": safe_text(author.get("login")) if isinstance(author, dict) else None,
+                    "author": safe_text(author.get("login"))
+                    if isinstance(author, dict)
+                    else None,
                     "submitted_at": safe_text(item.get("submittedAt")),
                 }
             )
@@ -555,15 +583,23 @@ def _pr_view(
         "content_sha256": sha256_json(
             {"body": value.get("body") if isinstance(value.get("body"), str) else None}
         ),
-        "body_characters": len(value["body"]) if isinstance(value.get("body"), str) else None,
+        "body_characters": len(value["body"])
+        if isinstance(value.get("body"), str)
+        else None,
         "state": safe_text(value.get("state")),
         "is_draft": value.get("isDraft"),
         "url": safe_text(value.get("url")),
         "base_branch": safe_text(value.get("baseRefName")),
-        "base_sha": value.get("baseRefOid") if is_sha(value.get("baseRefOid")) else None,
+        "base_sha": value.get("baseRefOid")
+        if is_sha(value.get("baseRefOid"))
+        else None,
         "head_branch": safe_text(value.get("headRefName")),
-        "head_sha": value.get("headRefOid") if is_sha(value.get("headRefOid")) else None,
-        "merge_commit_sha": merge_commit.get("oid") if isinstance(merge_commit, dict) and is_sha(merge_commit.get("oid")) else None,
+        "head_sha": value.get("headRefOid")
+        if is_sha(value.get("headRefOid"))
+        else None,
+        "merge_commit_sha": merge_commit.get("oid")
+        if isinstance(merge_commit, dict) and is_sha(merge_commit.get("oid"))
+        else None,
         "merged_at": safe_text(value.get("mergedAt")),
         "mergeable": safe_text(value.get("mergeable")),
         "review_decision": safe_text(value.get("reviewDecision")),
@@ -591,16 +627,38 @@ def _normalize_checks(value: Any) -> dict[str, Any]:
     for item in value:
         if not isinstance(item, dict):
             continue
-        name = item.get("name") or item.get("context") or item.get("workflowName") or "unnamed"
-        state = item.get("conclusion") or item.get("state") or item.get("status") or "UNKNOWN"
+        name = (
+            item.get("name")
+            or item.get("context")
+            or item.get("workflowName")
+            or "unnamed"
+        )
+        state = (
+            item.get("conclusion")
+            or item.get("state")
+            or item.get("status")
+            or "UNKNOWN"
+        )
         normalized_state = str(state).upper()
         if normalized_state in {"SUCCESS", "NEUTRAL"}:
             success += 1
             category = "success"
-        elif normalized_state in {"PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING"}:
+        elif normalized_state in {
+            "PENDING",
+            "QUEUED",
+            "IN_PROGRESS",
+            "EXPECTED",
+            "WAITING",
+        }:
             pending += 1
             category = "pending"
-        elif normalized_state in {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"}:
+        elif normalized_state in {
+            "FAILURE",
+            "ERROR",
+            "CANCELLED",
+            "TIMED_OUT",
+            "ACTION_REQUIRED",
+        }:
             failed += 1
             category = "failed"
         else:
@@ -752,13 +810,23 @@ def _runner_source(
     if not is_sha(trusted_source):
         commit = _git_value(
             runner,
-            ["log", "-1", "--format=%H", "--", "tools/agent_workflow/workflow_evidence.py"],
+            [
+                "log",
+                "-1",
+                "--format=%H",
+                "--",
+                "tools/agent_workflow/workflow_evidence.py",
+            ],
             command_id="git-runner-source-sha",
             warnings=warnings,
         )
     return {
         "path": "tools/agent_workflow/workflow_evidence.py",
-        "source_sha": trusted_source if is_sha(trusted_source) else commit if is_sha(commit) else None,
+        "source_sha": trusted_source
+        if is_sha(trusted_source)
+        else commit
+        if is_sha(commit)
+        else None,
         "content_sha256": trusted_digest if isinstance(trusted_digest, str) else digest,
         "trusted_bootstrap": is_sha(trusted_source),
     }
@@ -781,7 +849,9 @@ def _issue_gates(
     actual_title = issue.get("title")
     if expected_title is None:
         gates["title"] = _gate("pass")
-    elif isinstance(actual_title, str) and _normalize_title(actual_title) == _normalize_title(expected_title):
+    elif isinstance(actual_title, str) and _normalize_title(
+        actual_title
+    ) == _normalize_title(expected_title):
         gates["title"] = _gate("pass")
     else:
         gates["title"] = _gate("fail", "supplied and canonical titles differ")
@@ -793,15 +863,23 @@ def _issue_gates(
         gates["issue_state"] = _gate("fail", f"expected {expected_state}")
     labels = set(issue.get("labels", {}).get("items", []))
     if required_label:
-        gates[f"label:{required_label}"] = _gate("pass" if required_label in labels else "fail")
+        gates[f"label:{required_label}"] = _gate(
+            "pass" if required_label in labels else "fail"
+        )
     if forbidden_label:
-        gates[f"label-not:{forbidden_label}"] = _gate("pass" if forbidden_label not in labels else "fail")
+        gates[f"label-not:{forbidden_label}"] = _gate(
+            "pass" if forbidden_label not in labels else "fail"
+        )
     if expected_type_label:
         issue_type = relationships.get("issue_type")
         matches_type = expected_type_label in labels or (
-            isinstance(issue_type, str) and issue_type.casefold() == expected_type_label.removeprefix("type:").casefold()
+            isinstance(issue_type, str)
+            and issue_type.casefold()
+            == expected_type_label.removeprefix("type:").casefold()
         )
-        gates["issue_type"] = _gate("pass" if matches_type else "unknown", expected_type_label)
+        gates["issue_type"] = _gate(
+            "pass" if matches_type else "unknown", expected_type_label
+        )
     blocked = relationships.get("blocked_by", {}).get("items", [])
     if relationships.get("available") is True:
         gates["formal_blockers"] = _gate(
@@ -836,11 +914,16 @@ def _pr_gates(
         return {"pr_available": _gate("unknown", "PR metadata unavailable")}
     gates: dict[str, Any] = {"pr_available": _gate("pass")}
     state = str(pr.get("state", "")).upper()
-    gates["pr_state"] = _gate("pass" if (state == "OPEN" if require_open else state == "MERGED") else "fail", state)
+    gates["pr_state"] = _gate(
+        "pass" if (state == "OPEN" if require_open else state == "MERGED") else "fail",
+        state,
+    )
     if require_open:
         gates["not_draft"] = _gate("pass" if pr.get("is_draft") is False else "fail")
     gates["closing_linkage"] = _gate(
-        "pass" if task_number in pr.get("closing_issues", {}).get("items", []) else "fail"
+        "pass"
+        if task_number in pr.get("closing_issues", {}).get("items", [])
+        else "fail"
     )
     gates["base_sha"] = _sha_gate(pr.get("base_sha"), expected_base_sha, "base SHA")
     gates["head_sha"] = _sha_gate(pr.get("head_sha"), expected_head_sha, "head SHA")
@@ -857,7 +940,9 @@ def _pr_gates(
     if config in {"available", "configured-empty", "not-configured"}:
         gates["required_checks_configuration"] = _gate("pass", str(config))
     elif config == "plan-limited-403":
-        gates["required_checks_configuration"] = _gate("unknown", "GitHub plan-limit 403")
+        gates["required_checks_configuration"] = _gate(
+            "unknown", "GitHub plan-limit 403"
+        )
     else:
         gates["required_checks_configuration"] = _gate("unknown")
     if threads.get("available") is True and threads.get("truncated") is not True:
@@ -905,7 +990,9 @@ def _base_snapshot(
     return {**core, "snapshot_id": snapshot_id}
 
 
-def _store_snapshot(repo_root: Path, snapshot: Mapping[str, Any], no_store: bool) -> str | None:
+def _store_snapshot(
+    repo_root: Path, snapshot: Mapping[str, Any], no_store: bool
+) -> str | None:
     if no_store:
         return None
     root = require_exact_ignored_directory(repo_root, EVIDENCE_ROOT)
@@ -996,7 +1083,11 @@ def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, 
     limitations: list[str] = []
     if repository is None:
         limitations.append("repository identity unavailable")
-        observed = {"git": _git_snapshot(runner, warnings), "issue": None, "relationships": {}}
+        observed = {
+            "git": _git_snapshot(runner, warnings),
+            "issue": None,
+            "relationships": {},
+        }
         gates = {"repository": _gate("unknown")}
     else:
         issue = _issue_view(runner, repository, args.task, warnings)
@@ -1014,7 +1105,9 @@ def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, 
         )
         gates["repository"] = _gate("pass")
         gates["origin_fetch"] = _gate(git.get("origin_fetch", "unknown"))
-        gates["origin_main"] = _sha_gate(git.get("origin_main_sha"), args.expected_main_sha, "origin/main SHA")
+        gates["origin_main"] = _sha_gate(
+            git.get("origin_main_sha"), args.expected_main_sha, "origin/main SHA"
+        )
         gates["worktree_clean"] = _gate("pass" if git.get("clean") is True else "fail")
     trusted = {
         "trusted_sha": observed.get("git", {}).get("origin_main_sha"),
@@ -1033,7 +1126,9 @@ def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, 
     )
 
 
-def _task_pr_snapshot(args: argparse.Namespace, repo_root: Path, operation: str) -> dict[str, Any]:
+def _task_pr_snapshot(
+    args: argparse.Namespace, repo_root: Path, operation: str
+) -> dict[str, Any]:
     runner = CommandRunner(repo_root)
     warnings: list[dict[str, Any]] = []
     repository = _repository_slug(runner, args.repository, warnings)
@@ -1059,7 +1154,9 @@ def _task_pr_snapshot(args: argparse.Namespace, repo_root: Path, operation: str)
         issue = observed.get("issue")
         if isinstance(issue, dict):
             project = issue.get("project_status")
-            gates["project_status_review"] = _gate("pass" if project == "Review" else "unknown", str(project))
+            gates["project_status_review"] = _gate(
+                "pass" if project == "Review" else "unknown", str(project)
+            )
     pr = observed.get("pr")
     trusted_sha = pr.get("base_sha") if isinstance(pr, dict) else None
     trusted = {"trusted_sha": trusted_sha, "runner": _runner_source(runner, warnings)}
@@ -1106,7 +1203,13 @@ def _closeout_plan(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
         gates["merge_sha"] = _sha_gate(merge_sha, args.expected_merge_sha, "merge SHA")
         if isinstance(merge_sha, str):
             ancestry = runner.run(
-                ["git", "merge-base", "--is-ancestor", merge_sha, "refs/remotes/origin/main"],
+                [
+                    "git",
+                    "merge-base",
+                    "--is-ancestor",
+                    merge_sha,
+                    "refs/remotes/origin/main",
+                ],
                 command_id="git-closeout-merge-on-main",
             )
             if ancestry.returncode == 0:
@@ -1132,9 +1235,15 @@ def _closeout_plan(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
         )
         if isinstance(issue, dict):
             project = issue.get("project_status")
-            gates["project_done"] = _gate("pass" if project == "Done" else "unknown", str(project))
+            gates["project_done"] = _gate(
+                "pass" if project == "Done" else "unknown", str(project)
+            )
             labels = set(issue.get("labels", {}).get("items", []))
-            gates["final_codex_label"] = _gate("pass" if "codex:ready" in labels and "codex:blocked" not in labels else "fail")
+            gates["final_codex_label"] = _gate(
+                "pass"
+                if "codex:ready" in labels and "codex:blocked" not in labels
+                else "fail"
+            )
         branch = pr.get("head_branch") if isinstance(pr, dict) else None
         if isinstance(branch, str) and branch:
             remote_exists = _git_value(
@@ -1177,11 +1286,18 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
     git = _git_snapshot(runner, warnings)
     if repository is None:
         limitations.append("repository identity unavailable")
-        observed = {"git": git, "feature": None, "relationships": {}, "direct_children": bounded_list([])}
+        observed = {
+            "git": git,
+            "feature": None,
+            "relationships": {},
+            "direct_children": bounded_list([]),
+        }
         gates = {"repository": _gate("unknown")}
     else:
         feature = _issue_view(runner, repository, args.feature, warnings)
-        relationships = _relationship_snapshot(runner, repository, args.feature, warnings)
+        relationships = _relationship_snapshot(
+            runner, repository, args.feature, warnings
+        )
         child_items = relationships.get("sub_issues", {}).get("items", [])
         children: list[dict[str, Any]] = []
         for child in child_items[:MAX_CHILDREN]:
@@ -1200,15 +1316,25 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
                     "blocking": child_relationships.get("blocking"),
                 }
                 pull_summaries: list[dict[str, Any]] = []
-                pull_items = child_issue.get("closing_pull_requests", {}).get("items", [])
+                pull_items = child_issue.get("closing_pull_requests", {}).get(
+                    "items", []
+                )
                 if isinstance(pull_items, list):
                     for pull_item in pull_items[:3]:
-                        if not isinstance(pull_item, dict) or not isinstance(pull_item.get("number"), int):
+                        if not isinstance(pull_item, dict) or not isinstance(
+                            pull_item.get("number"), int
+                        ):
                             continue
-                        pull = _pr_view(runner, repository, pull_item["number"], warnings)
+                        pull = _pr_view(
+                            runner, repository, pull_item["number"], warnings
+                        )
                         if pull is None:
                             continue
-                        checks = pull.get("checks") if isinstance(pull.get("checks"), dict) else {}
+                        checks = (
+                            pull.get("checks")
+                            if isinstance(pull.get("checks"), dict)
+                            else {}
+                        )
                         pull_summaries.append(
                             {
                                 "number": pull.get("number"),
@@ -1222,7 +1348,9 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
                                 "closing_issues": pull.get("closing_issues"),
                             }
                         )
-                child_issue["pull_request_evidence"] = bounded_list(pull_summaries, item_limit=3)
+                child_issue["pull_request_evidence"] = bounded_list(
+                    pull_summaries, item_limit=3
+                )
                 children.append(child_issue)
         observed = {
             "git": git,
@@ -1241,7 +1369,9 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
         )
         gates["repository"] = _gate("pass")
         gates["origin_fetch"] = _gate(git.get("origin_fetch", "unknown"))
-        gates["audited_main_sha"] = _sha_gate(git.get("origin_main_sha"), args.expected_main_sha, "origin/main SHA")
+        gates["audited_main_sha"] = _sha_gate(
+            git.get("origin_main_sha"), args.expected_main_sha, "origin/main SHA"
+        )
         gates["direct_children_available"] = _gate(
             "pass" if relationships.get("available") else "unknown"
         )
@@ -1254,15 +1384,17 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
         for child in observed.get("direct_children", {}).get("items", [])
         if isinstance(child, dict) and isinstance(child.get("number"), int)
     ]
-    observed["direct_child_set_digest"] = (
-        observed.get("relationships", {}).get("sub_issue_set_digest")
-        or sha256_json(sorted(direct_numbers))
-    )
+    observed["direct_child_set_digest"] = observed.get("relationships", {}).get(
+        "sub_issue_set_digest"
+    ) or sha256_json(sorted(direct_numbers))
     observed["direct_child_evidence_digest"] = sha256_json(
         observed.get("direct_children", {}).get("items", [])
     )
     observed["relationships_digest"] = sha256_json(observed.get("relationships", {}))
-    trusted = {"trusted_sha": git.get("origin_main_sha"), "runner": _runner_source(runner, warnings)}
+    trusted = {
+        "trusted_sha": git.get("origin_main_sha"),
+        "runner": _runner_source(runner, warnings),
+    }
     return _base_snapshot(
         operation="feature-audit-snapshot",
         subject={"kind": "feature", "feature_number": args.feature},
@@ -1285,7 +1417,9 @@ def _snapshot_path(repo_root: Path, snapshot_id: str) -> Path:
     return directory / f"{snapshot_id}.json"
 
 
-def _collect_for_recheck(previous: Mapping[str, Any], repo_root: Path) -> dict[str, Any]:
+def _collect_for_recheck(
+    previous: Mapping[str, Any], repo_root: Path
+) -> dict[str, Any]:
     operation = previous.get("operation")
     subject = previous.get("subject")
     repository = previous.get("repository")
@@ -1320,7 +1454,9 @@ def _collect_for_recheck(previous: Mapping[str, Any], repo_root: Path) -> dict[s
         current = _feature_snapshot(namespace, repo_root)
         current["operation"] = "feature-audit-recheck"
     else:
-        raise WorkflowToolError(f"snapshot operation does not support recheck: {operation}")
+        raise WorkflowToolError(
+            f"snapshot operation does not support recheck: {operation}"
+        )
     return current
 
 
@@ -1329,20 +1465,34 @@ def _stability_projection(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(observed, dict):
         return {}
     pr = observed.get("pr") if isinstance(observed.get("pr"), dict) else {}
-    issue = observed.get("issue") if isinstance(observed.get("issue"), dict) else observed.get("feature") if isinstance(observed.get("feature"), dict) else {}
+    issue = (
+        observed.get("issue")
+        if isinstance(observed.get("issue"), dict)
+        else observed.get("feature")
+        if isinstance(observed.get("feature"), dict)
+        else {}
+    )
     git = observed.get("git") if isinstance(observed.get("git"), dict) else {}
-    threads = observed.get("review_threads") if isinstance(observed.get("review_threads"), dict) else {}
+    threads = (
+        observed.get("review_threads")
+        if isinstance(observed.get("review_threads"), dict)
+        else {}
+    )
     return {
         "repository": snapshot.get("repository"),
         "subject": snapshot.get("subject"),
         "issue_number": issue.get("number") if isinstance(issue, dict) else None,
         "issue_title": issue.get("title") if isinstance(issue, dict) else None,
         "issue_state": issue.get("state") if isinstance(issue, dict) else None,
-        "issue_content_sha256": issue.get("content_sha256") if isinstance(issue, dict) else None,
+        "issue_content_sha256": issue.get("content_sha256")
+        if isinstance(issue, dict)
+        else None,
         "issue_metadata_sha256": sha256_json(
             {
                 "labels": issue.get("labels") if isinstance(issue, dict) else None,
-                "project_status": issue.get("project_status") if isinstance(issue, dict) else None,
+                "project_status": issue.get("project_status")
+                if isinstance(issue, dict)
+                else None,
                 "relationships": observed.get("relationships"),
             }
         ),
@@ -1361,7 +1511,9 @@ def _stability_projection(snapshot: Mapping[str, Any]) -> dict[str, Any]:
                 "closing_issues": pr.get("closing_issues"),
             }
         ),
-        "effective_diff_sha256": observed.get("effective_diff", {}).get("sha256") if isinstance(observed.get("effective_diff"), dict) else None,
+        "effective_diff_sha256": observed.get("effective_diff", {}).get("sha256")
+        if isinstance(observed.get("effective_diff"), dict)
+        else None,
         "checks": pr.get("checks") if isinstance(pr, dict) else None,
         "required_checks": observed.get("required_checks"),
         "unresolved_threads": threads.get("unresolved"),
@@ -1379,7 +1531,9 @@ def _recheck(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
     current = _collect_for_recheck(previous, repo_root)
     before = _stability_projection(previous)
     after = _stability_projection(current)
-    changed = sorted(key for key in set(before) | set(after) if before.get(key) != after.get(key))
+    changed = sorted(
+        key for key in set(before) | set(after) if before.get(key) != after.get(key)
+    )
     drift = {
         "stable": len(changed) == 0,
         "changed_fields": bounded_list(changed),
@@ -1389,15 +1543,21 @@ def _recheck(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
     }
     current["stability"] = drift
     current["gates"] = dict(current.get("gates", {}))
-    current["gates"]["snapshot_stability"] = _gate("pass" if not changed else "fail", ", ".join(changed))
-    current["snapshot_id"] = f"ev-{sha256_json({key: value for key, value in current.items() if key != 'snapshot_id'})[:16]}"
+    current["gates"]["snapshot_stability"] = _gate(
+        "pass" if not changed else "fail", ", ".join(changed)
+    )
+    current["snapshot_id"] = (
+        f"ev-{sha256_json({key: value for key, value in current.items() if key != 'snapshot_id'})[:16]}"
+    )
     return current
 
 
 def _common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repo-root", default=".", help="repository root")
     parser.add_argument("--repository", help="GitHub owner/repository override")
-    parser.add_argument("--no-store", action="store_true", help="do not write ignored snapshot file")
+    parser.add_argument(
+        "--no-store", action="store_true", help="do not write ignored snapshot file"
+    )
     parser.add_argument("--pretty", action="store_true", help="pretty-print JSON")
 
 
@@ -1419,7 +1579,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    delivery = sub.add_parser("delivery-preflight", help="Task and repository preflight snapshot")
+    delivery = sub.add_parser(
+        "delivery-preflight", help="Task and repository preflight snapshot"
+    )
     _common(delivery)
     _task_args(delivery)
     delivery.add_argument("--expected-main-sha")
@@ -1428,18 +1590,24 @@ def _build_parser() -> argparse.ArgumentParser:
     _common(readiness)
     _pr_args(readiness)
 
-    review = sub.add_parser("pr-review-snapshot", help="independent PR review metadata snapshot")
+    review = sub.add_parser(
+        "pr-review-snapshot", help="independent PR review metadata snapshot"
+    )
     _common(review)
     _pr_args(review)
 
-    closeout = sub.add_parser("closeout-plan", help="read-only post-merge closeout plan")
+    closeout = sub.add_parser(
+        "closeout-plan", help="read-only post-merge closeout plan"
+    )
     _common(closeout)
     _task_args(closeout)
     closeout.add_argument("--pr", type=int, required=True)
     closeout.add_argument("--expected-head-sha")
     closeout.add_argument("--expected-merge-sha")
 
-    feature = sub.add_parser("feature-audit-snapshot", help="Feature inventory and locked-main snapshot")
+    feature = sub.add_parser(
+        "feature-audit-snapshot", help="Feature inventory and locked-main snapshot"
+    )
     _common(feature)
     feature.add_argument("--feature", type=int, required=True)
     feature.add_argument("--expected-title")

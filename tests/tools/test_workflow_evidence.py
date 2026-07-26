@@ -14,6 +14,16 @@ PYTHON = os.environ.get("WORKFLOW_TEST_PYTHON", sys.executable)
 def _write_fake_tools(tmp_path: Path) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+
+    def add_windows_launcher(name: str) -> None:
+        if os.name != "nt":
+            return
+        launcher = bin_dir / f"{name}.cmd"
+        launcher.write_text(
+            f'@echo off\r\n"{PYTHON}" "{bin_dir / name}" %*\r\n',
+            encoding="utf-8",
+        )
+
     git_script = bin_dir / "git"
     git_script.write_text(
         f"""#!{PYTHON}
@@ -73,7 +83,7 @@ elif args[:2] == ['pr','diff']:
     sys.stdout.write(state.get('diff','diff --git a/a b/a\\n'))
 elif args[:2] == ['api','graphql']:
     query=' '.join(args)
-    if 'pullRequest(number' in query:
+    if 'pullRequest' in query and 'reviewThreads' in query:
         dump({{'data':{{'repository':{{'pullRequest':{{'reviewThreads':state.get('threads',{{'nodes':[],'pageInfo':{{'hasNextPage':False}}}})}}}}}}}})
     else:
         number_value=None
@@ -95,6 +105,8 @@ else:
     )
     git_script.chmod(0o755)
     gh_script.chmod(0o755)
+    add_windows_launcher("git")
+    add_windows_launcher("gh")
     return bin_dir
 
 
@@ -118,7 +130,12 @@ def _base_state() -> dict[str, Any]:
         "url": "https://github.com/owner/repo/issues/63",
         "closedAt": "2026-07-26T00:00:00Z",
         "closedByPullRequestsReferences": [
-            {"number": 67, "state": "MERGED", "mergedAt": "2026-07-26T00:00:00Z", "url": "https://github.com/owner/repo/pull/67"}
+            {
+                "number": 67,
+                "state": "MERGED",
+                "mergedAt": "2026-07-26T00:00:00Z",
+                "url": "https://github.com/owner/repo/pull/67",
+            }
         ],
     }
     return {
@@ -138,7 +155,11 @@ def _base_state() -> dict[str, Any]:
                 "title": "[Task] Child",
                 "state": "CLOSED",
                 "issueType": {"name": "Task"},
-                "parent": {"number": 62, "title": "[Feature] Workflow", "state": "OPEN"},
+                "parent": {
+                    "number": 62,
+                    "title": "[Feature] Workflow",
+                    "state": "OPEN",
+                },
                 "subIssues": {"nodes": [], "pageInfo": {"hasNextPage": False}},
                 "blockedBy": {"nodes": []},
                 "blocking": {"nodes": []},
@@ -206,7 +227,9 @@ def _base_state() -> dict[str, Any]:
     }
 
 
-def _write_repo(tmp_path: Path, state: dict[str, Any]) -> tuple[Path, Path, dict[str, str]]:
+def _write_repo(
+    tmp_path: Path, state: dict[str, Any]
+) -> tuple[Path, Path, dict[str, str]]:
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".gitignore").write_text(
@@ -219,10 +242,14 @@ def _write_repo(tmp_path: Path, state: dict[str, Any]) -> tuple[Path, Path, dict
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
     env["FAKE_WORKFLOW_STATE"] = str(state_path)
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     return repo, state_path, env
 
 
-def _run(repo: Path, env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
+def _run(
+    repo: Path, env: dict[str, str], *args: str
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [PYTHON, str(SCRIPT), *args, "--repo-root", str(repo)],
         cwd=repo,
@@ -343,7 +370,12 @@ def test_feature_recheck_detects_direct_child_set_drift(tmp_path: Path) -> None:
         "parent": None,
         "subIssues": {
             "nodes": [
-                {"number": 63, "title": "[Task] Child", "state": "CLOSED", "labels": {"nodes": [{"name": "type:task"}]}}
+                {
+                    "number": 63,
+                    "title": "[Task] Child",
+                    "state": "CLOSED",
+                    "labels": {"nodes": [{"name": "type:task"}]},
+                }
             ],
             "pageInfo": {"hasNextPage": False},
         },
@@ -358,9 +390,16 @@ def test_feature_recheck_detects_direct_child_set_drift(tmp_path: Path) -> None:
     assert child["relationship_evidence"]["parent"]["number"] == 62
     assert child["pull_request_evidence"]["items"][0]["number"] == 67
     assert child["pull_request_evidence"]["items"][0]["checks_all_success"] is True
-    state["issues"]["64"] = dict(state["issues"]["63"], number=64, title="[Task] Another")
+    state["issues"]["64"] = dict(
+        state["issues"]["63"], number=64, title="[Task] Another"
+    )
     state["relationships"]["subIssues"]["nodes"].append(
-        {"number": 64, "title": "[Task] Another", "state": "CLOSED", "labels": {"nodes": [{"name": "type:task"}]}}
+        {
+            "number": 64,
+            "title": "[Task] Another",
+            "state": "CLOSED",
+            "labels": {"nodes": [{"name": "type:task"}]},
+        }
     )
     state_path.write_text(json.dumps(state), encoding="utf-8")
     second = _run(
@@ -376,7 +415,9 @@ def test_feature_recheck_detects_direct_child_set_drift(tmp_path: Path) -> None:
     assert "direct_child_set_digest" in value["stability"]["changed_fields"]["items"]
 
 
-def test_closeout_accepts_merge_reachable_from_later_origin_main(tmp_path: Path) -> None:
+def test_closeout_accepts_merge_reachable_from_later_origin_main(
+    tmp_path: Path,
+) -> None:
     state = _base_state()
     state["branch"] = "main"
     state["git_head"] = "9" * 40
@@ -441,7 +482,9 @@ def test_truncated_review_threads_do_not_pass(tmp_path: Path) -> None:
     assert value["gates"]["unresolved_threads"]["status"] == "unknown"
 
 
-def test_recheck_detects_issue_content_and_review_metadata_drift(tmp_path: Path) -> None:
+def test_recheck_detects_issue_content_and_review_metadata_drift(
+    tmp_path: Path,
+) -> None:
     state = _base_state()
     state["issues"]["70"]["body"] = "initial body"
     state["issues"]["70"]["comments"] = []
@@ -473,7 +516,9 @@ def test_recheck_detects_issue_content_and_review_metadata_drift(tmp_path: Path)
     assert "pr_review_metadata_sha256" in changed
 
 
-def test_feature_recheck_detects_child_lifecycle_drift_without_set_change(tmp_path: Path) -> None:
+def test_feature_recheck_detects_child_lifecycle_drift_without_set_change(
+    tmp_path: Path,
+) -> None:
     state = _base_state()
     state["issues"]["62"] = {
         "number": 62,

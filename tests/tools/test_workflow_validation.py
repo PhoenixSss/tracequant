@@ -6,13 +6,25 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCRIPT = Path(__file__).parents[2] / "tools" / "agent_workflow" / "workflow_validation.py"
+SCRIPT = (
+    Path(__file__).parents[2] / "tools" / "agent_workflow" / "workflow_validation.py"
+)
 PYTHON = os.environ.get("WORKFLOW_TEST_PYTHON", sys.executable)
 
 
 def _write_fake_tools(tmp_path: Path, *, fail: str | None = None) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+
+    def add_windows_launcher(name: str) -> None:
+        if os.name != "nt":
+            return
+        launcher = bin_dir / f"{name}.cmd"
+        launcher.write_text(
+            f'@echo off\r\n"{PYTHON}" "{bin_dir / name}" %*\r\n',
+            encoding="utf-8",
+        )
+
     uv = bin_dir / "uv"
     uv.write_text(
         f"""#!{PYTHON}
@@ -46,7 +58,7 @@ else:
 import os, sys
 args=sys.argv[1:]
 if args[:2] == ['diff','--name-only']:
-    print(os.environ.get('FAKE_CHANGED_FILE', 'tools/agent_workflow/workflow_validation.py'))
+    print(os.environ.get('FAKE_CHANGED_FILE', 'src/example.py'))
 elif args[:2] == ['diff','--check']:
     sys.exit(0)
 else:
@@ -56,6 +68,8 @@ else:
     )
     uv.chmod(0o755)
     git.chmod(0o755)
+    add_windows_launcher("uv")
+    add_windows_launcher("git")
     return bin_dir
 
 
@@ -76,7 +90,12 @@ def _write_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _run(repo: Path, env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
+def _run(
+    repo: Path, env: dict[str, str], *args: str
+) -> subprocess.CompletedProcess[str]:
+    env = env.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     return subprocess.run(
         [PYTHON, str(SCRIPT), "run", "--repo-root", str(repo), *args],
         cwd=repo,
@@ -139,7 +158,7 @@ def test_required_skill_validator_fails_closed_when_missing(tmp_path: Path) -> N
     bin_dir = _write_fake_tools(tmp_path)
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
-    env.pop("CODEX_SKILL_VALIDATOR", None)
+    env["CODEX_SKILL_VALIDATOR"] = str(tmp_path / "missing_quick_validate.py")
     result = _run(
         repo,
         env,
@@ -152,7 +171,9 @@ def test_required_skill_validator_fails_closed_when_missing(tmp_path: Path) -> N
     assert "required but unavailable" in result.stderr
 
 
-def test_base_sha_detects_governance_change_and_runs_skill_validator(tmp_path: Path) -> None:
+def test_base_sha_detects_governance_change_and_runs_skill_validator(
+    tmp_path: Path,
+) -> None:
     repo = _write_repo(tmp_path)
     bin_dir = _write_fake_tools(tmp_path)
     validator = tmp_path / "quick_validate.py"
@@ -173,7 +194,9 @@ def test_base_sha_detects_governance_change_and_runs_skill_validator(tmp_path: P
     assert result.returncode == 0, result.stderr
     value = json.loads(result.stdout)
     assert value["base_sha"] == "a" * 40
-    assert any(item["command_id"] == "skill-task-delivery" for item in value["commands"])
+    assert any(
+        item["command_id"] == "skill-task-delivery" for item in value["commands"]
+    )
 
 
 def test_invalid_base_sha_fails_closed(tmp_path: Path) -> None:
@@ -186,7 +209,9 @@ def test_invalid_base_sha_fails_closed(tmp_path: Path) -> None:
     assert "full commit SHA" in result.stderr
 
 
-def test_machine_absolute_paths_are_redacted_from_summary_and_log(tmp_path: Path) -> None:
+def test_machine_absolute_paths_are_redacted_from_summary_and_log(
+    tmp_path: Path,
+) -> None:
     repo = _write_repo(tmp_path)
     bin_dir = _write_fake_tools(tmp_path)
     env = os.environ.copy()

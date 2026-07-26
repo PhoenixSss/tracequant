@@ -904,9 +904,7 @@ def _aggregate_events(
                 for event in phase_events
                 if isinstance(event.get("report"), dict)
                 and isinstance(
-                    event.get("report", {}).get(
-                        "previous_handoff_estimation_method"
-                    ),
+                    event.get("report", {}).get("previous_handoff_estimation_method"),
                     str,
                 )
             }

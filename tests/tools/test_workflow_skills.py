@@ -12,7 +12,9 @@ SKILLS = {
 }
 
 
-def test_skills_use_shared_evidence_and_validation_without_legacy_command_chain() -> None:
+def test_skills_use_shared_evidence_and_validation_without_legacy_command_chain() -> (
+    None
+):
     for name, path in SKILLS.items():
         text = path.read_text(encoding="utf-8")
         assert f"name: {name}" in text

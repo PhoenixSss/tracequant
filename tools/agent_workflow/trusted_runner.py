@@ -56,7 +56,9 @@ def _run_git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
     )
 
 
-def _extract(repo_root: Path, trusted_sha: str, tool: str) -> tuple[Path, dict[str, str]]:
+def _extract(
+    repo_root: Path, trusted_sha: str, tool: str
+) -> tuple[Path, dict[str, str]]:
     if ".agents/evidence.local/" not in _gitignore_patterns(repo_root):
         raise RuntimeError(".agents/evidence.local/ must be exactly Git ignored")
     verified = _run_git(repo_root, "rev-parse", "--verify", f"{trusted_sha}^{{commit}}")
