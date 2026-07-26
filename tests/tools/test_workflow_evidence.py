@@ -314,6 +314,50 @@ def test_pr_snapshot_is_compact_bounded_and_read_only(tmp_path: Path) -> None:
     assert value["observed"]["effective_diff"]["sha256"]
 
 
+def test_pr_snapshot_fails_when_pr_closes_extra_issue(tmp_path: Path) -> None:
+    state = _base_state()
+    state["pr"]["closingIssuesReferences"] = [{"number": 70}, {"number": 999}]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(repo, env, "pr-review-snapshot", "--task", "70", "--pr", "71")
+    assert result.returncode == 0, result.stderr
+    gate = json.loads(result.stdout)["gates"]["closing_linkage"]
+    assert gate["status"] == "fail"
+    assert "observed=[70, 999]" in gate["detail"]
+
+
+def test_pr_snapshot_fails_when_pr_closes_wrong_issue(tmp_path: Path) -> None:
+    state = _base_state()
+    state["pr"]["closingIssuesReferences"] = [{"number": 999}]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(repo, env, "pr-review-snapshot", "--task", "70", "--pr", "71")
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["gates"]["closing_linkage"]["status"] == "fail"
+
+
+def test_pr_snapshot_fails_without_closing_issue(tmp_path: Path) -> None:
+    state = _base_state()
+    state["pr"]["closingIssuesReferences"] = []
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(repo, env, "pr-review-snapshot", "--task", "70", "--pr", "71")
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["gates"]["closing_linkage"]["status"] == "fail"
+
+
+def test_pr_snapshot_never_passes_truncated_closing_linkage(tmp_path: Path) -> None:
+    state = _base_state()
+    state["pr"]["closingIssuesReferences"] = [
+        {"number": 70},
+        *({"number": number} for number in range(1000, 1050)),
+    ]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(repo, env, "pr-review-snapshot", "--task", "70", "--pr", "71")
+    assert result.returncode == 0, result.stderr
+    gate = json.loads(result.stdout)["gates"]["closing_linkage"]
+    assert gate["status"] == "fail"
+    assert "count=51" in gate["detail"]
+    assert "truncated=true" in gate["detail"]
+
+
 def test_review_recheck_detects_head_and_diff_drift(tmp_path: Path) -> None:
     state = _base_state()
     repo, state_path, env = _write_repo(tmp_path, state)

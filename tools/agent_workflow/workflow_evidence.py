@@ -900,6 +900,33 @@ def _sha_gate(actual: Any, expected: str | None, name: str) -> dict[str, Any]:
     return _gate("fail", f"expected {expected}, observed {actual}")
 
 
+def _closing_linkage_gate(closing_issues: Any, *, task_number: int) -> dict[str, Any]:
+    if not isinstance(closing_issues, Mapping):
+        return _gate("unknown", "closing linkage unavailable")
+
+    items = closing_issues.get("items")
+    count = closing_issues.get("count")
+    truncated = closing_issues.get("truncated")
+    if (
+        not isinstance(items, list)
+        or not all(
+            isinstance(item, int) and not isinstance(item, bool) for item in items
+        )
+        or not isinstance(count, int)
+        or isinstance(count, bool)
+        or count < 0
+        or not isinstance(truncated, bool)
+    ):
+        return _gate("unknown", "closing linkage metadata is malformed")
+
+    exact = truncated is False and count == 1 and items == [task_number]
+    detail = (
+        f"expected=[{task_number}], count={count}, "
+        f"truncated={str(truncated).lower()}, observed={items[:10]}"
+    )
+    return _gate("pass" if exact else "fail", detail)
+
+
 def _pr_gates(
     pr: Mapping[str, Any] | None,
     threads: Mapping[str, Any],
@@ -920,10 +947,8 @@ def _pr_gates(
     )
     if require_open:
         gates["not_draft"] = _gate("pass" if pr.get("is_draft") is False else "fail")
-    gates["closing_linkage"] = _gate(
-        "pass"
-        if task_number in pr.get("closing_issues", {}).get("items", [])
-        else "fail"
+    gates["closing_linkage"] = _closing_linkage_gate(
+        pr.get("closing_issues"), task_number=task_number
     )
     gates["base_sha"] = _sha_gate(pr.get("base_sha"), expected_base_sha, "base SHA")
     gates["head_sha"] = _sha_gate(pr.get("head_sha"), expected_head_sha, "head SHA")
