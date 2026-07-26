@@ -92,7 +92,7 @@ class Settings:
 
     environment: Environment
     log_level: LogLevel = LogLevel.INFO
-    log_format: LogFormat = LogFormat.TEXT
+    log_format: LogFormat = LogFormat.JSON
     log_dir: Path | None = None
 
 
@@ -117,7 +117,7 @@ def load_settings(
         ),
         log_format=_parse_log_format(
             _select_value(
-                log_format, source, EnvVarName.LOG_FORMAT, default=LogFormat.TEXT
+                log_format, source, EnvVarName.LOG_FORMAT, default=LogFormat.JSON
             )
         ),
         log_dir=_parse_log_dir(

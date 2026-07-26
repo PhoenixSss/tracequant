@@ -96,7 +96,7 @@ Supported environment variables:
 
 - `QUANT_SYSTEM_ENV`: required; one of `development`, `test`, or `production`.
 - `QUANT_SYSTEM_LOG_LEVEL`: optional; one of `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`; defaults to `INFO`.
-- `QUANT_SYSTEM_LOG_FORMAT`: optional; one of `text` or `json`; defaults to `text`.
+- `QUANT_SYSTEM_LOG_FORMAT`: optional; one of `text` or `json`; defaults to `json`. Logging currently supports `json`.
 - `QUANT_SYSTEM_LOG_DIR`: optional; empty or unset disables file logging.
 
 Loading priority is:
@@ -124,3 +124,20 @@ It is a display-safety boundary only, not encryption, a secrets manager, or a sy
 keyring. Current configuration scope does not include exchange credentials, account
 settings, databases, trading modes, structured logging setup, or automatic log
 directory creation.
+
+## Structured logging
+
+Applications configure logging explicitly with `quant_system.logging.configure_logging(settings)`.
+Importing the logging module does not configure handlers, create directories, or open
+files. Modules should continue to use `logging.getLogger(__name__)`.
+
+JSON log records are single-line UTF-8 objects with stable `timestamp`, `level`,
+`logger`, and `message` fields. Timestamps are timezone-aware UTC ISO 8601 strings.
+When `settings.log_dir` is set, the exact directory is created and logs are appended
+to `quant-system.jsonl`; when it is empty or unset, only console logging is enabled.
+
+Known sensitive keys are redacted case-insensitively in structured fields and
+exception output: `password`, `secret`, `token`, `api_key`, `apikey`,
+`authorization`, and `cookie`. This boundary does not guarantee detection of secrets
+that callers manually concatenate into free-text messages, so callers must not place
+raw credentials in log messages.
