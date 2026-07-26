@@ -177,7 +177,7 @@ def _record_required_phases(
     task: int = 123,
     source: str = "unavailable",
 ) -> None:
-    for phase in ("task-delivery", "task-pr-review", "manual-merge", "task-closeout"):
+    for phase in ("task-delivery", "task-pr-review", "task-closeout"):
         _record(repo, phase, _phase_file(repo, f"{phase}.json", source=source), task)
 
 
@@ -291,6 +291,60 @@ def test_record_is_append_only_and_rejects_duplicate_primary_summary(
     assert "already exists" in duplicate.stderr
 
 
+def test_record_rejects_conflicting_workflow_sha_before_append(
+    tmp_path: Path,
+) -> None:
+    repo = _write_repo(tmp_path)
+    started = _start(repo)
+    run_dir = repo / started["run_path"]
+    events_path = run_dir / "events.jsonl"
+    manifest_path = run_dir / "manifest.json"
+    active_path = repo / ".agents" / "telemetry.local" / "active" / "task-123.json"
+    summary_path = run_dir / "summary.json"
+
+    before_events = events_path.read_bytes()
+    before_manifest = manifest_path.read_bytes()
+    before_active = active_path.read_bytes()
+
+    data_file = _phase_file(repo, "conflicting-closeout.json")
+    data = json.loads(data_file.read_text(encoding="utf-8"))
+    data["identity"] = {
+        "task_canonical_title": "[Task] Example",
+        "pr_number": 456,
+        "base_sha": "1111111",
+        "head_sha": "2222222",
+        "workflow_main_sha": "7654321fedcba",
+    }
+    data_file.write_text(json.dumps(data), encoding="utf-8")
+
+    rejected = _run(
+        repo,
+        "record",
+        "--task",
+        "123",
+        "--phase",
+        "task-closeout",
+        "--data-file",
+        str(data_file),
+    )
+    assert rejected.returncode == 2
+    assert "workflow_main_sha conflicts with manifest" in rejected.stderr
+    assert events_path.read_bytes() == before_events
+    assert manifest_path.read_bytes() == before_manifest
+    assert active_path.read_bytes() == before_active
+    assert not summary_path.exists()
+
+    data["identity"]["workflow_main_sha"] = "abcdef1234567"
+    data_file.write_text(json.dumps(data), encoding="utf-8")
+    recorded = _record(repo, "task-closeout", data_file)
+    assert recorded["recorded"] is True
+
+    stored_event = json.loads(events_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert stored_event["identity"]["workflow_main_sha"] == "abcdef1234567"
+    assert stored_event["identity"]["base_sha"] == "1111111"
+    assert stored_event["identity"]["head_sha"] == "2222222"
+
+
 def test_schema_and_sensitive_fields_are_rejected(tmp_path: Path) -> None:
     repo = _write_repo(tmp_path)
     _start(repo)
@@ -395,10 +449,82 @@ def test_finish_validate_and_summarize_are_deterministic(tmp_path: Path) -> None
     second = _run(repo, "summarize", "--task", "123", "--format", "json", check=True)
     assert first.stdout == second.stdout
     summary = json.loads(first.stdout)
-    assert summary["total_usage"]["total_tokens"] == 480
-    assert summary["usage_coverage"]["by_source"]["runtime-exact"] == 4
+    assert summary["total_usage"]["total_tokens"] == 360
+    assert summary["usage_coverage"]["by_source"]["runtime-exact"] == 3
     assert summary["quality"]["validation_all_passed"] is True
     assert summary["quality"]["findings_by_severity"]["blocking"] == 0
+
+
+def test_summarize_refreshes_stale_derived_summary(tmp_path: Path) -> None:
+    repo = _write_repo(tmp_path)
+    started = _start(repo)
+    _record_required_phases(repo)
+    _run(repo, "finish", "--task", "123", check=True)
+
+    summary_path = repo / started["run_path"] / "summary.json"
+    stale = json.loads(summary_path.read_text(encoding="utf-8"))
+    stale["missing_phases"] = ["manual-merge"]
+    stale["telemetry_complete"] = False
+    summary_path.write_text(json.dumps(stale), encoding="utf-8")
+
+    invalid = _run(repo, "validate", "--task", "123")
+    assert invalid.returncode == 2
+    assert "stored summary does not match" in invalid.stderr
+
+    summarized = _run(
+        repo,
+        "summarize",
+        "--task",
+        "123",
+        "--format",
+        "json",
+        check=True,
+    )
+    value = json.loads(summarized.stdout)
+    assert value["missing_phases"] == []
+    assert value["telemetry_complete"] is True
+    assert json.loads(summary_path.read_text(encoding="utf-8")) == value
+
+    validated = _run(repo, "validate", "--task", "123", check=True)
+    assert json.loads(validated.stdout)["valid"] is True
+
+
+def test_optional_manual_merge_event_remains_compatible(tmp_path: Path) -> None:
+    repo = _write_repo(tmp_path)
+    _start(repo)
+    _record_required_phases(repo, source="runtime-exact")
+
+    manual_merge_file = _phase_file(repo, "manual-merge.json")
+    manual_merge = json.loads(manual_merge_file.read_text(encoding="utf-8"))
+    manual_merge["event_type"] = "manual-merge"
+    manual_merge["usage"] = {
+        "source": "unavailable",
+        "input_tokens": None,
+        "cached_input_tokens": None,
+        "output_tokens": None,
+        "reasoning_tokens": None,
+        "total_tokens": None,
+        "model": None,
+    }
+    manual_merge_file.write_text(json.dumps(manual_merge), encoding="utf-8")
+    _record(repo, "manual-merge", manual_merge_file)
+
+    finished = _run(repo, "finish", "--task", "123", check=True)
+    assert json.loads(finished.stdout)["telemetry_complete"] is True
+    summary = _run(
+        repo,
+        "summarize",
+        "--task",
+        "123",
+        "--format",
+        "json",
+        check=True,
+    )
+    value = json.loads(summary.stdout)
+    assert value["missing_phases"] == []
+    assert value["total_usage"]["total_tokens"] == 360
+    assert value["usage_coverage"]["by_source"]["runtime-exact"] == 3
+    assert value["usage_coverage"]["by_source"]["unavailable"] == 1
 
 
 def test_finish_marks_incomplete_run_without_required_phases(tmp_path: Path) -> None:
@@ -488,6 +614,87 @@ def test_feature_selector_uses_associated_active_run(tmp_path: Path) -> None:
         check=True,
     )
     assert json.loads(recorded.stdout)["phase"] == "feature-completion-audit"
+
+
+def test_feature_workflow_requires_audit_but_not_manual_merge(
+    tmp_path: Path,
+) -> None:
+    repo = _write_repo(tmp_path)
+    _run(
+        repo,
+        "start",
+        "--task",
+        "123",
+        "--task-title",
+        "[Task] Example",
+        "--repository",
+        "owner/repo",
+        "--workflow-main-sha",
+        "abcdef1234567",
+        "--feature",
+        "7",
+        "--task-kind",
+        "feature-code",
+        "--size",
+        "M",
+        "--risk-class",
+        "normal",
+        "--workflow-shape",
+        "task-plus-feature-audit",
+        check=True,
+    )
+    _record_required_phases(repo)
+
+    before_audit = _run(repo, "status", "--feature", "7", "--json", check=True)
+    assert json.loads(before_audit.stdout)["active"] is True
+
+    _run(
+        repo,
+        "record",
+        "--feature",
+        "7",
+        "--phase",
+        "feature-completion-audit",
+        "--data-file",
+        str(_phase_file(repo, "feature-audit-complete.json")),
+        check=True,
+    )
+    finished = _run(repo, "finish", "--feature", "7", check=True)
+    value = json.loads(finished.stdout)
+    assert value["missing_phases"] == []
+    assert value["telemetry_complete"] is True
+
+
+def test_feature_workflow_reports_missing_audit(tmp_path: Path) -> None:
+    repo = _write_repo(tmp_path)
+    _run(
+        repo,
+        "start",
+        "--task",
+        "123",
+        "--task-title",
+        "[Task] Example",
+        "--repository",
+        "owner/repo",
+        "--workflow-main-sha",
+        "abcdef1234567",
+        "--feature",
+        "7",
+        "--task-kind",
+        "feature-code",
+        "--size",
+        "M",
+        "--risk-class",
+        "normal",
+        "--workflow-shape",
+        "task-plus-feature-audit",
+        check=True,
+    )
+    _record_required_phases(repo)
+    finished = _run(repo, "finish", "--task", "123", check=True)
+    value = json.loads(finished.stdout)
+    assert value["telemetry_complete"] is False
+    assert value["missing_phases"] == ["feature-completion-audit"]
 
 
 def test_sensitive_token_value_and_naive_timestamp_are_rejected(tmp_path: Path) -> None:

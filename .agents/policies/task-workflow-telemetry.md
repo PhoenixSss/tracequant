@@ -109,6 +109,26 @@ task-closeout
 feature-completion-audit
 ```
 
+Telemetry completeness requires only Agent-executed phases:
+
+```text
+task-only / task-with-re-review:
+  task-delivery
+  task-pr-review
+  task-closeout
+
+task-plus-feature-audit:
+  task-delivery
+  task-pr-review
+  task-closeout
+  feature-completion-audit
+```
+
+Maintainer manual Merge remains a mandatory business workflow gate, but it is
+not a required telemetry phase. `manual-merge` remains a legal optional phase
+and event type for compatibility with existing local runs; its absence does not
+make an otherwise complete run incomplete.
+
 Each Agent session writes at most one primary `phase-summary` for its phase.
 Interruption, rework, review-run, and usage-patch events may be appended
 separately. Events are append-only.
@@ -162,6 +182,11 @@ After PR creation, a phase event may supplement `pr_number`, `base_sha`, and
 `head_sha` in its `identity` object. Later head-SHA values preserve event history
 and the deterministic summary reports the latest value. Task title, Feature
 number, and workflow SHA must not conflict with the manifest.
+
+`workflow_main_sha` is the immutable workflow baseline captured by `start`. It
+is not the PR base SHA, PR head SHA, Squash merge commit, or post-merge current
+`main` SHA. A closeout event that includes this field must copy it from the
+active run manifest rather than recomputing it from Git.
 
 ## Phase event schema
 
@@ -375,6 +400,14 @@ The CLI validates schema version, configuration, ignored storage, event order,
 usage consistency, and sensitive-field prohibitions. It uses append-only event
 records and deterministic summaries. It does not silently migrate an
 unsupported schema or overwrite history.
+
+`record` validates manifest-bound event identity before appending. A conflicting
+Task title, Feature number, or `workflow_main_sha` is rejected without changing
+the event stream, manifest, summary, or active pointer.
+
+`summarize` deterministically recomputes derived output from the manifest and
+append-only events. For a finished run it may atomically refresh `summary.json`;
+it never edits the manifest or event history.
 
 For `task-only` and `task-with-re-review`, finish the run after `task-closeout`.
 For `task-plus-feature-audit`, record closeout but keep the same run active until

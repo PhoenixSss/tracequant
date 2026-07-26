@@ -765,6 +765,15 @@ python tools/agent_workflow/telemetry.py summarize --task 123 --format markdown
 audit 隐式创建第二个 run。`spot-check` 摘要可以输出历史中位数、范围、delta
 和信息性 anomaly flags；样本不足时必须明确说明。
 
+维护者人工 Merge 仍是 `task-pr-review` 与 `task-closeout` 之间的业务硬门禁，
+但不是必需 Telemetry phase，也不需要手工 `record`。标准 Task Run 的完整性只
+要求 `task-delivery`、`task-pr-review` 和 `task-closeout`；Feature audit workflow
+再额外要求 `feature-completion-audit`。历史 `manual-merge` event 仍可兼容读取。
+
+任何 phase summary 中的 `workflow_main_sha` 都表示 `start` 时写入 manifest 的
+不可变工作流基线。closeout 不得使用合并后的当前 `main`、PR base/head 或 merge
+commit 替代。CLI 会在事件追加前拒绝与 manifest 冲突的身份字段。
+
 ### 隐私和只读边界
 
 Telemetry 不保存：
