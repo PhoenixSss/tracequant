@@ -85,3 +85,42 @@ Pull requests targeting `main` and pushes to `main` automatically run CI. The wo
 ## UTC time handling
 
 Internal datetimes must be timezone-aware and use UTC as the standard timezone. Naive datetimes are explicitly rejected. Time utilities are provided by `quant_system.core.time`.
+
+## Configuration
+
+Application configuration is loaded explicitly with `quant_system.config.load_settings`.
+Importing the module does not read environment variables, parse `.env` files, create
+directories, or cache a global settings singleton.
+
+Supported environment variables:
+
+- `QUANT_SYSTEM_ENV`: required; one of `development`, `test`, or `production`.
+- `QUANT_SYSTEM_LOG_LEVEL`: optional; one of `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`; defaults to `INFO`.
+- `QUANT_SYSTEM_LOG_FORMAT`: optional; one of `text` or `json`; defaults to `text`.
+- `QUANT_SYSTEM_LOG_DIR`: optional; empty or unset disables file logging.
+
+Loading priority is:
+
+```text
+explicit load_settings arguments
+> process environment variables
+> defaults
+```
+
+Use `.env.example` as the committed variable list and copy values into your shell,
+IDE, or env-file tooling when needed. Local `.env` and `.env.*` files remain ignored
+by Git and are not read automatically by this project.
+
+Tests can construct isolated settings directly:
+
+```python
+from quant_system.config import Environment, Settings
+
+settings = Settings(environment=Environment.TEST)
+```
+
+`SecretValue` provides redacted `repr` and `str` output for future sensitive fields.
+It is a display-safety boundary only, not encryption, a secrets manager, or a system
+keyring. Current configuration scope does not include exchange credentials, account
+settings, databases, trading modes, structured logging setup, or automatic log
+directory creation.
