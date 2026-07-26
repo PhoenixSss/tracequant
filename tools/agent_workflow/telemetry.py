@@ -1339,10 +1339,7 @@ def _validate_event_identity_against_manifest(
         return
 
     event_title = identity.get("task_canonical_title")
-    if (
-        event_title is not None
-        and event_title != manifest["task_canonical_title"]
-    ):
+    if event_title is not None and event_title != manifest["task_canonical_title"]:
         raise TelemetryError("event Task title conflicts with manifest")
 
     event_workflow_sha = identity.get("workflow_main_sha")
