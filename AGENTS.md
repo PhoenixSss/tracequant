@@ -74,6 +74,17 @@ Telemetry records aggregate process measurements only; it never changes workflow
 permissions, gates, validation, review findings, verdicts, Merge authorization,
 or Feature completion evidence.
 
+Deterministic workflow fact collection and compact validation are governed by
+`.agents/policies/workflow-evidence.md`. Repository workflow Skills use
+`tools/agent_workflow/workflow_evidence.py` and
+`tools/agent_workflow/workflow_validation.py` to replace repeated mechanical
+command chains, while retaining all semantic review, safety, and lifecycle
+judgment. Local evidence and validation artifacts remain in exact ignored
+`.agents/evidence.local/` and `.agents/validation.local/` directories. A PR that
+changes governance or these tools must be reviewed using the trusted PR base
+control plane through `tools/agent_workflow/trusted_runner.py` or an equivalent
+trusted detached worktree.
+
 This root `AGENTS.md` remains the repository-level rule source. Repository Skills
 supplement these rules and do not override system, developer, user, or more
 specific scoped instructions.

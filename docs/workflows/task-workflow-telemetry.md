@@ -803,3 +803,33 @@ deterministic summary
 - [ ] 已查看 sanitized summary；
 - [ ] 原始 telemetry 未进入 Git index；
 - [ ] 是否创建独立 Token Optimization Task 由维护者决定。
+
+
+## Evidence、Validation 与 handoff 代理指标
+
+优化后的 phase summary 可以记录：
+
+```text
+operations.evidence_snapshots
+operations.evidence_rechecks
+operations.validation_runner_invocations
+operations.fallbacks
+operations.snapshot_drifts
+report.previous_handoff_characters
+report.previous_handoff_lines
+report.previous_handoff_estimated_tokens
+```
+
+这些值只能来自正常 workflow 已经产生的事实，不得为了 Telemetry 再运行一次工具。
+
+`usage_coverage` 现在分别报告：
+
+```text
+events_with_usage
+events_with_numeric_usage
+events_without_numeric_usage
+numeric_usage_complete
+```
+
+`usage.source=unavailable` 且 token 为 `null` 的 event 有 usage 记录，但没有 numeric
+usage。report/handoff 估算值属于代理指标，不会加到 model token 总量。

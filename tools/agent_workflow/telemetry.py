@@ -498,6 +498,11 @@ def _validate_operations(value: Any) -> dict[str, Any]:
         "sandbox_attempts",
         "elevated_attempts",
         "retries",
+        "evidence_snapshots",
+        "evidence_rechecks",
+        "validation_runner_invocations",
+        "fallbacks",
+        "snapshot_drifts",
     }
     allowed = counters | {"retry_categories", "command_categories"}
     unknown = set(value) - allowed
@@ -548,19 +553,34 @@ def _validate_report(value: Any) -> dict[str, Any]:
         "report_estimated_tokens",
         "report_estimation_method",
         "copied_to_next_phase",
+        "previous_handoff_characters",
+        "previous_handoff_lines",
+        "previous_handoff_estimated_tokens",
+        "previous_handoff_estimation_method",
     }
     unknown = set(value) - allowed
     if unknown:
         raise TelemetryError(f"unknown report fields: {sorted(unknown)}")
     normalized = dict(value)
-    for field in ("report_characters", "report_lines", "report_estimated_tokens"):
+    for field in (
+        "report_characters",
+        "report_lines",
+        "report_estimated_tokens",
+        "previous_handoff_characters",
+        "previous_handoff_lines",
+        "previous_handoff_estimated_tokens",
+    ):
         field_value = normalized.get(field)
         _nonnegative_int_or_null(field_value, f"report.{field}")
         normalized.setdefault(field, None)
-    method = normalized.get("report_estimation_method")
-    if method is not None and (not isinstance(method, str) or len(method) > 128):
-        raise TelemetryError("report_estimation_method must be a short string or null")
-    normalized.setdefault("report_estimation_method", None)
+    for method_field in (
+        "report_estimation_method",
+        "previous_handoff_estimation_method",
+    ):
+        method = normalized.get(method_field)
+        if method is not None and (not isinstance(method, str) or len(method) > 128):
+            raise TelemetryError(f"{method_field} must be a short string or null")
+        normalized.setdefault(method_field, None)
     copied = normalized.get("copied_to_next_phase")
     if copied is not None and not isinstance(copied, bool):
         raise TelemetryError("copied_to_next_phase must be boolean or null")
@@ -823,6 +843,11 @@ def _aggregate_events(
             "sandbox_attempts",
             "elevated_attempts",
             "retries",
+            "evidence_snapshots",
+            "evidence_rechecks",
+            "validation_runner_invocations",
+            "fallbacks",
+            "snapshot_drifts",
         )
         operations = {
             field: _sum_optional(
@@ -850,6 +875,9 @@ def _aggregate_events(
             "report_characters",
             "report_lines",
             "report_estimated_tokens",
+            "previous_handoff_characters",
+            "previous_handoff_lines",
+            "previous_handoff_estimated_tokens",
         )
         report = {
             field: _sum_optional(
@@ -866,6 +894,17 @@ def _aggregate_events(
                 if isinstance(event.get("report"), dict)
                 and isinstance(
                     event.get("report", {}).get("report_estimation_method"),
+                    str,
+                )
+            }
+        )
+        report["previous_handoff_estimation_methods"] = sorted(
+            {
+                event.get("report", {}).get("previous_handoff_estimation_method")
+                for event in phase_events
+                if isinstance(event.get("report"), dict)
+                and isinstance(
+                    event.get("report", {}).get("previous_handoff_estimation_method"),
                     str,
                 )
             }
@@ -956,16 +995,36 @@ def _aggregate_events(
     )
     usage_coverage = {
         "events_with_usage": 0,
+        "events_with_numeric_usage": 0,
+        "events_without_numeric_usage": 0,
         "by_source": {source: 0 for source in sorted(USAGE_SOURCES)},
         "events_without_usage": 0,
+        "numeric_usage_complete": False,
     }
     for event in effective:
         usage = event.get("usage")
         if not isinstance(usage, dict):
             usage_coverage["events_without_usage"] += 1
+            usage_coverage["events_without_numeric_usage"] += 1
             continue
         usage_coverage["events_with_usage"] += 1
         usage_coverage["by_source"][usage["source"]] += 1
+        token_fields = (
+            "input_tokens",
+            "cached_input_tokens",
+            "output_tokens",
+            "reasoning_tokens",
+            "total_tokens",
+        )
+        if usage.get("source") != "unavailable" and any(
+            isinstance(usage.get(field), int) for field in token_fields
+        ):
+            usage_coverage["events_with_numeric_usage"] += 1
+        else:
+            usage_coverage["events_without_numeric_usage"] += 1
+    usage_coverage["numeric_usage_complete"] = bool(effective) and (
+        usage_coverage["events_with_numeric_usage"] == len(effective)
+    )
     total_findings = {
         severity: _sum_optional(
             phase.get("rework", {}).get("findings_by_severity", {}).get(severity)
@@ -1630,6 +1689,15 @@ def _markdown_summary(
                 for source, count in summary["usage_coverage"]["by_source"].items()
             )
             + "`"
+        ),
+        (
+            "- Numeric usage events: `"
+            f"{summary['usage_coverage']['events_with_numeric_usage']} / "
+            f"{summary['usage_coverage']['events_with_usage']}`"
+        ),
+        (
+            "- Numeric usage complete: `"
+            f"{str(summary['usage_coverage']['numeric_usage_complete']).lower()}`"
         ),
         "",
         "## Phases",

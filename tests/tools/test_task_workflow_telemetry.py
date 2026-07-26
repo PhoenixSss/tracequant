@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 SCRIPT = Path(__file__).parents[2] / "tools" / "agent_workflow" / "telemetry.py"
+PYTHON = os.environ.get("WORKFLOW_TEST_PYTHON", sys.executable)
 
 
 def _write_repo(
@@ -50,7 +52,7 @@ def _run(
     check: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), *args],
+        [PYTHON, str(SCRIPT), *args],
         cwd=repo,
         check=False,
         capture_output=True,
@@ -559,7 +561,7 @@ def test_cli_help_for_all_commands() -> None:
         "validate",
         "summarize",
     ):
-        args = [sys.executable, str(SCRIPT)]
+        args = [PYTHON, str(SCRIPT)]
         if command is not None:
             args.append(command)
         args.append("--help")
@@ -837,3 +839,99 @@ def test_phase_identity_supplements_summary_run_identity(tmp_path: Path) -> None
     assert run["pr_number"] == 456
     assert run["base_sha"] == "abcdef1234567"
     assert run["head_sha"] == "1234567abcdef"
+
+
+def test_numeric_usage_coverage_distinguishes_unavailable_from_measured(
+    tmp_path: Path,
+) -> None:
+    unavailable_repo = _write_repo(tmp_path / "unavailable")
+    _start(unavailable_repo)
+    _record_required_phases(unavailable_repo, source="unavailable")
+    _run(unavailable_repo, "finish", "--task", "123", check=True)
+    unavailable_summary = json.loads(
+        _run(
+            unavailable_repo,
+            "summarize",
+            "--task",
+            "123",
+            "--format",
+            "json",
+            check=True,
+        ).stdout
+    )
+    coverage = unavailable_summary["usage_coverage"]
+    assert coverage["events_with_usage"] == 3
+    assert coverage["events_with_numeric_usage"] == 0
+    assert coverage["events_without_numeric_usage"] == 3
+    assert coverage["numeric_usage_complete"] is False
+
+    measured_repo = _write_repo(tmp_path / "measured")
+    _start(measured_repo)
+    _record_required_phases(measured_repo, source="runtime-exact")
+    _run(measured_repo, "finish", "--task", "123", check=True)
+    measured_summary = json.loads(
+        _run(
+            measured_repo,
+            "summarize",
+            "--task",
+            "123",
+            "--format",
+            "json",
+            check=True,
+        ).stdout
+    )
+    measured_coverage = measured_summary["usage_coverage"]
+    assert measured_coverage["events_with_numeric_usage"] == 3
+    assert measured_coverage["events_without_numeric_usage"] == 0
+    assert measured_coverage["numeric_usage_complete"] is True
+
+
+def test_report_handoff_and_evidence_operation_metrics_are_aggregated(
+    tmp_path: Path,
+) -> None:
+    repo = _write_repo(tmp_path)
+    _start(repo)
+    data_file = _phase_file(repo, "phase-with-evidence.json")
+    value = json.loads(data_file.read_text(encoding="utf-8"))
+    value["operations"].update(
+        {
+            "evidence_snapshots": 1,
+            "evidence_rechecks": 1,
+            "validation_runner_invocations": 1,
+            "fallbacks": 0,
+            "snapshot_drifts": 1,
+        }
+    )
+    value["report"].update(
+        {
+            "previous_handoff_characters": 400,
+            "previous_handoff_lines": 20,
+            "previous_handoff_estimated_tokens": 100,
+            "previous_handoff_estimation_method": "chars-div-4",
+        }
+    )
+    data_file.write_text(json.dumps(value), encoding="utf-8")
+    _record(repo, "task-delivery", data_file)
+    for phase in ("task-pr-review", "task-closeout"):
+        _record(repo, phase, _phase_file(repo, f"{phase}.json"))
+    _run(repo, "finish", "--task", "123", check=True)
+    summary = json.loads(
+        _run(
+            repo,
+            "summarize",
+            "--task",
+            "123",
+            "--format",
+            "json",
+            check=True,
+        ).stdout
+    )
+    delivery = summary["phases"]["task-delivery"]
+    assert delivery["operations"]["evidence_snapshots"] == 1
+    assert delivery["operations"]["evidence_rechecks"] == 1
+    assert delivery["operations"]["validation_runner_invocations"] == 1
+    assert delivery["operations"]["snapshot_drifts"] == 1
+    assert delivery["report"]["previous_handoff_characters"] == 400
+    assert delivery["report"]["previous_handoff_lines"] == 20
+    assert delivery["report"]["previous_handoff_estimated_tokens"] == 100
+    assert delivery["report"]["previous_handoff_estimation_methods"] == ["chars-div-4"]
