@@ -25,6 +25,8 @@ def test_skills_use_shared_evidence_and_validation_without_legacy_command_chain(
         assert "git status --short" not in text
         assert "gh pr view" not in text
         assert "git add ." not in text or "never use `git add .`" in text.casefold()
+        assert "telemetry" not in text.casefold()
+        assert "active run" not in text.casefold()
 
 
 def test_review_and_audit_preserve_fixed_verdicts_and_trusted_control_plane() -> None:

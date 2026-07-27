@@ -14,7 +14,6 @@ AGENTS.md / AGENTS.override.md
 .agents/skills/task-closeout/SKILL.md
 .agents/skills/feature-completion-audit/SKILL.md
 .agents/policies/command-execution.md
-.agents/policies/task-workflow-telemetry.md
 ```
 
 本文档是使用指南，不替代上述规则。出现冲突时，以更高优先级和更具体的
@@ -39,7 +38,7 @@ child 等元数据。Task/Feature 正文、PR 完整 diff、源码、测试与�
 语义读取。脚本输出 `pass/fail/unknown`，`unknown` 不能当作成功。
 
 正常流程不再完整执行旧机械查询链后再叠加脚本。工具失败时使用 Skill 允许的安全只读
-fallback，并在报告和 Telemetry 中记录 limitation。
+fallback，并在报告中记录 limitation。
 
 ## 当前活动 Skills
 
@@ -624,204 +623,26 @@ Final interpretation
 或 verdict。对 `feature-completion-audit`，local profile 同样不能改变 Feature
 身份、直接子 Issue 分类、`Audited main SHA`、验收覆盖、findings 或 verdict。
 
-## Task Workflow Token 消耗测量
+## 仓库外 Token 消耗分析边界
 
-开发人员的完整配置、运行、JSON 模板、故障处理和扩展说明见：
+项目不再运行 Task Workflow Token telemetry，也不维护运行状态、阶段事件、usage
+补丁或仓库内分析摘要。正常 delivery、review、closeout 和 Feature audit 不执行任何
+Token 测量命令，也不因外部分析缺失而增加字段、fallback 或改变 verdict。
 
-```text
-docs/workflows/task-workflow-telemetry.md
-```
-
-Task Workflow Telemetry 是可选的本地旁路测量能力，不是新的 workflow
-Skill，也不是 delivery、review、closeout 或 Feature audit 的门禁。
-
-规范性协议：
+Token 分析由维护者在仓库外完成：
 
 ```text
-.agents/policies/task-workflow-telemetry.md
+Codex rollout JSONL
++ Task / Workflow 元数据
+→ 版本化 Task 分析报告
+→ 基准与优化后报告对比
 ```
 
-仓库示例配置：
+原始 rollout 日志可能包含 prompt、response、源码、命令输出、本地路径或认证相关
+信息，不得提交本仓库。仓库外生成的 Token 分析模板、基准报告和对比报告也不属于
+项目运行产物。
 
-```text
-.agents/task-workflow-telemetry.example.toml
-```
-
-维护者本地配置和数据：
-
-```text
-.agents/task-workflow-telemetry.local.toml
-.agents/telemetry.local/
-```
-
-两者都已被 `.gitignore` 忽略，不得提交。Telemetry 默认关闭；没有显式
-active run 时，四个 workflow Skills 不记录数据、不增加报告字段，也不执行
-额外查询或验证。
-
-保持：
-
-```text
-Observation
-!= workflow authorization
-!= correctness evidence
-!= merge authorization
-```
-
-Telemetry 失败只会标记测量不完整，不会改变 Task、PR 或 Feature verdict。
-
-### 创建本地配置
-
-PowerShell：
-
-```powershell
-Copy-Item `
-  .agents/task-workflow-telemetry.example.toml `
-  .agents/task-workflow-telemetry.local.toml
-```
-
-schema v1 固定禁止保存完整会话、prompt、源码和命令输出：
-
-```toml
-store_raw_transcript = false
-store_command_output = false
-store_file_contents = false
-```
-
-本地配置不能包含凭据、token、私钥、认证 header、用户名或敏感绝对路径。
-
-### 两种模式
-
-- `baseline-only`：建立指定 Task 的完整本地基准，不自动比较或优化；
-- `spot-check`：按同一协议测量，并与本地同类历史 run 做信息性比较。
-
-严格同类比较默认要求以下分类一致：
-
-```text
-task_kind
-size
-risk_class
-workflow_shape
-```
-
-少于 3 个同类完成样本时，只做结构性比较，不生成统计异常结论。异常 flag
-不会改变 workflow verdict。
-
-### 启动和查看状态
-
-```powershell
-python tools/agent_workflow/telemetry.py start `
-  --task 123 `
-  --task-title "[Task] Example" `
-  --mode baseline-only `
-  --task-kind feature-code `
-  --size M `
-  --risk-class normal `
-  --workflow-shape task-only `
-  --repository PhoenixSss/quant-system `
-  --workflow-main-sha <main-sha>
-```
-
-```powershell
-python tools/agent_workflow/telemetry.py status --task 123 --json
-```
-
-需要把后续 Feature audit 纳入同一 run 时，在 `start` 中同时提供
-`--feature <Feature编号>`，Feature audit 会话可使用：
-
-```powershell
-python tools/agent_workflow/telemetry.py status --feature 2 --json
-```
-
-同一 Task 已存在 active run 时，CLI 拒绝重复启动。Workflow 中断后应恢复
-同一 run，不应隐式新建。
-
-### 阶段记录和 usage 后补
-
-四个 Skills 只在 active run 存在时，使用正常流程已经产生的事实写入紧凑
-aggregate summary。不得为了测量增加 GitHub 查询、文件读取或验证命令。
-
-手工记录接口：
-
-```powershell
-python tools/agent_workflow/telemetry.py record `
-  --task 123 `
-  --phase task-delivery `
-  --data-file <phase-summary.json>
-```
-
-会话结束后获得 token usage 时：
-
-```powershell
-python tools/agent_workflow/telemetry.py patch-usage `
-  --task 123 `
-  --phase task-pr-review `
-  --data-file <usage.json>
-```
-
-Token source 只能是：
-
-```text
-runtime-exact
-client-export
-estimated-external
-unavailable
-```
-
-未知值使用 `null`，不得使用 `0` 假装已测量，也不得把字符估算描述为精确
-token。Telemetry 不记录私有 reasoning；仅允许 runtime 暴露的聚合 reasoning
-count。
-
-### 完成、验证和摘要
-
-```powershell
-python tools/agent_workflow/telemetry.py finish --task 123
-python tools/agent_workflow/telemetry.py validate --task 123
-python tools/agent_workflow/telemetry.py summarize --task 123 --format markdown
-```
-
-`finish` 保留 append-only events，并生成确定性 `summary.json`。
-`task-only` 和 `task-with-re-review` 在 closeout 后结束 run。
-`task-plus-feature-audit` 在 closeout 后保持同一 run active，待 Feature audit
-追加阶段记录后，再通过 `--task` 或关联的 `--feature` 结束；不得为 Feature
-audit 隐式创建第二个 run。`spot-check` 摘要可以输出历史中位数、范围、delta
-和信息性 anomaly flags；样本不足时必须明确说明。
-
-维护者人工 Merge 仍是 `task-pr-review` 与 `task-closeout` 之间的业务硬门禁，
-但不是必需 Telemetry phase，也不需要手工 `record`。标准 Task Run 的完整性只
-要求 `task-delivery`、`task-pr-review` 和 `task-closeout`；Feature audit workflow
-再额外要求 `feature-completion-audit`。历史 `manual-merge` event 仍可兼容读取。
-
-任何 phase summary 中的 `workflow_main_sha` 都表示 `start` 时写入 manifest 的
-不可变工作流基线。closeout 不得使用合并后的当前 `main`、PR base/head 或 merge
-commit 替代。CLI 会在事件追加前拒绝与 manifest 冲突的身份字段。
-
-### 隐私和只读边界
-
-Telemetry 不保存：
-
-- 完整 prompt、assistant response、会话或私有 reasoning；
-- 源码、测试、文档内容；
-- 完整 stdout / stderr 或敏感命令行；
-- token、cookie、认证 header、密码或私钥；
-- 用户主目录或敏感绝对路径。
-
-`task-pr-review` 和 `feature-completion-audit` 的严格只读边界只增加一个精确
-例外：当维护者已启动 run 时，可以向被忽略的
-`.agents/telemetry.local/` 追加 aggregate event。该本地写入不是被审查文件
-修改，也不是 correctness 或 Feature completion 证据。若路径被跟踪、进入
-index 或不再被忽略，停止 telemetry 写入并报告。
-
-### 持续优化循环
-
-Telemetry 本身不修改 Skills 或创建优化 Issue。长期流程为：
-
-```text
-baseline-only
-→ 去敏聚合分析
-→ 维护者创建独立 Token Optimization Task
-→ 优化合并
-→ 使用后续相近 Task 再次 baseline-only 或 spot-check
-```
-
-随着项目出现更典型的功能 Task，可以重复该循环。也可以仅对指定 Task 做
-`spot-check`，用于发现异常消耗而不立即优化。
+保留在本机的旧 `.agents/task-workflow-telemetry.local.toml` 或
+`.agents/telemetry.local/` 仅是历史私有数据；当前工具和 Skills 不读取、不写入，也不
+依赖它们。精确 ignore 规则继续防止这些遗留文件被意外提交。维护者可自行安全归档
+或删除，但仓库 Workflow 不执行清理。

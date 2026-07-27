@@ -30,7 +30,6 @@ Read applicable `AGENTS.md` / `AGENTS.override.md` and:
 ```text
 .agents/policies/command-execution.md
 .agents/policies/workflow-evidence.md
-.agents/policies/task-workflow-telemetry.md
 ```
 
 Use current Task/PR, refs, worktrees, workflows, `pyproject.toml`, and lock files.
@@ -105,7 +104,7 @@ After synchronization verify:
 local main == origin/main
 verified merge commit is reachable from origin/main
 merged files and tree match the reviewed/merged Task scope
-no local execution/evidence/validation/telemetry artifacts are tracked or staged
+no local execution/evidence/validation artifacts are tracked or staged
 ```
 
 For Squash Merge, ancestry will not necessarily contain the old Task tip; use
@@ -192,14 +191,6 @@ them. Resume from the first unverified gate when metadata is already correct,
 `main` is already synchronized, validation is partly complete, or exact branches
 are already absent. Never recreate a deleted branch.
 
-## Telemetry
-
-If a maintainer-started run is active, perform one lightweight status check and
-append one aggregate `task-closeout` summary using facts already produced.
-Record Evidence/Validation calls, synchronization, exact branch operations,
-retries, fallbacks, and Squash-specific `-D` use. `workflow_main_sha`, when
-recorded, comes from the immutable run manifest—not current main or merge SHA.
-Telemetry cannot authorize closeout and does not change its result.
 
 ## Compact closeout report
 

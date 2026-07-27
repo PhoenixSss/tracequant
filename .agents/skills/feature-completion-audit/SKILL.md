@@ -37,7 +37,6 @@ Read applicable `AGENTS.md` / `AGENTS.override.md` and trusted versions of:
 .agents/skills/feature-completion-audit/SKILL.md
 .agents/policies/command-execution.md
 .agents/policies/workflow-evidence.md
-.agents/policies/task-workflow-telemetry.md
 ```
 
 Use current Feature/child/PR facts and locked `origin/main` implementation,
@@ -65,7 +64,7 @@ source SHA/content digest, and child-set/snapshot fingerprints.
 This audit is strictly read-only for Feature, Task, Issue, PR, Project, label,
 Relationship, review/thread, repository, branch, and code state. It may fetch
 refs, create and remove one exact detached temporary audit worktree, run
-validation, and write exact ignored local evidence/validation/telemetry files.
+validation, and write exact ignored local evidence/validation files.
 
 It never:
 
@@ -261,7 +260,7 @@ Feature title/body, direct-child set, blockers, and checks immediately before
 manually closing the Feature or setting Project `Done`. This Skill performs none
 of those writes and never assesses Epic completion.
 
-## Temporary worktree, recovery, and telemetry
+## Temporary worktree and recovery
 
 A temporary audit worktree must be unique, detached at the locked main SHA,
 read-only for audited files, and removed by exact path without `git clean`.
@@ -269,9 +268,3 @@ read-only for audited files, and removed by exact path without `git clean`.
 Re-run in a new independent session after any new merged Task, clarified Feature,
 resolved blocker, repaired validation, changed main, child-set change, or
 reopened Feature. Never inherit an old verdict.
-
-If a maintainer-started Task workflow run explicitly includes Feature audit,
-perform one lightweight status check and append one aggregate
-`feature-completion-audit` summary using facts already produced. Record Evidence
-and Validation operations, report size, fallbacks, retries, findings, and drift
-when known. Telemetry is not Feature evidence and never affects verdict.
