@@ -10,7 +10,6 @@ Checks、SHA、分支和稳定性事实收敛为有界 JSON。Validation Runner 
 Skill：权限、阶段、语义判断、finding、verdict
 Evidence：确定性事实、规范化、snapshot/recheck
 Validation：命令编排、退出码、有限摘要
-Telemetry：聚合旁路测量
 ```
 
 规范性规则位于：
@@ -193,21 +192,12 @@ check runs 会分别记录，不合并为同一种状态。
 Handoff 不复制完整正文、diff、验证 stdout 或上一阶段完整报告。独立 Review 必须重新
 取证，不能把 Delivery handoff 作为正确性证据。
 
-## Telemetry
+## 仓库外 Token 分析
 
-Active run 存在时，使用正常流程已有事实记录：
-
-```text
-evidence_snapshots
-evidence_rechecks
-validation_runner_invocations
-fallbacks
-snapshot_drifts
-report / previous_handoff size
-```
-
-不得为了 Telemetry 额外运行 Evidence、GitHub 查询或验证。numeric usage 不可用时保持
-`null`，只能报告代理指标。
+Workflow Evidence 和 Validation 不执行运行期 Token 测量，也不写入跨阶段 usage
+事件。维护者可在仓库外使用 Codex rollout 日志和 Task 元数据生成版本化分析报告。
+不得为了外部分析额外运行 Evidence、GitHub 查询或验证；原始 rollout 日志和外部
+分析报告不得提交本仓库，分析是否可用也不影响 Skill verdict。
 
 ## Closeout 与 Feature Audit 说明
 

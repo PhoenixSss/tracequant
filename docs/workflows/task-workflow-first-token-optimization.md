@@ -2,11 +2,13 @@
 
 ## 结论边界
 
-本轮依据 Task #63、#64 的结构性代理证据实施。两个 Run 的 numeric model usage 均为
-`unavailable`，因此本文不报告真实 Token 降幅或统计显著性。
+本轮最初依据 Task #63、#64 的结构性代理证据实施；当时仓库内测量记录未提供
+numeric model usage。后续维护者已从 Codex rollout JSONL 生成 Protocol v1 精确基准
+报告，因此本文件只保留 #72 的实现历史，不再作为 Token 数值基准。
 
-本轮只优化四个 workflow Skills 及其直接依赖的只读 Evidence、Validation 和
-Telemetry 聚合能力；不修改 Issue 模板或既有 Issue 正文。
+本轮只优化四个 workflow Skills 及其直接依赖的只读 Evidence、Validation、trusted
+control plane 和紧凑报告；不修改 Issue 模板或既有 Issue 正文。运行期测量模块已在
+后续治理变更中移除，Token 分析转移到仓库外。
 
 ## 实现
 
@@ -54,21 +56,21 @@ Merge、Issue close 或分支删除。
 - 精确分支清理规则；
 - Feature Completion Audit 和维护者人工收尾。
 
-## Task #65 验证规则
+## 后续验证规则
 
-Task #65 继续使用与 #63/#64 相同的：
+后续相近 Task 继续使用与 #63/#64 相同的比较族：
 
 ```text
 feature-code / M / high-correctness / task-only
 ```
 
-至少比较：
+维护者在仓库外使用 Codex rollout JSONL、Task 元数据和 Protocol v1 报告比较：
 
-- Skill / governance bytes；
-- Evidence、Validation、Git、GitHub 操作计数；
-- report 和 previous handoff 字符、行数与估算 Token；
-- fallback、retry、drift、review invalidation；
-- validation、findings、维护者决策和最终质量。
+- Task 与阶段级 total/input/cached/uncached/output Token；
+- Root、Guardian 和其他 Subagent 分布；
+- Evidence、Validation、Git、GitHub 操作与重试；
+- compact report 和 handoff 体积；
+- validation、findings、返工、fallback 和最终质量。
 
-若 numeric usage 仍不可获得，只能写“代理指标改善，Token 效果未验证”。不同业务规模、
-workflow main SHA 或返工路径的绝对差异不能被解释为纯优化效果。
+不同业务规模、workflow main SHA、Codex/model 版本或异常路径必须降低可比性，不得
+把绝对差异直接解释为纯优化效果。外部分析是否执行不影响仓库 Workflow verdict。

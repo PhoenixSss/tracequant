@@ -66,13 +66,12 @@ Before a repository workflow Skill listed above executes a command, it must read
 must not be committed. It may select an execution context only after the active
 Skill authorizes the command; it never expands lifecycle or GitHub permissions.
 
-Optional Task workflow measurement is governed by
-`.agents/policies/task-workflow-telemetry.md`. Telemetry is disabled unless the
-maintainer explicitly starts a local run. Its config and data remain in ignored
-`.agents/task-workflow-telemetry.local.toml` and `.agents/telemetry.local/`.
-Telemetry records aggregate process measurements only; it never changes workflow
-permissions, gates, validation, review findings, verdicts, Merge authorization,
-or Feature completion evidence.
+The repository does not run Task workflow Token telemetry. Token-consumption
+analysis is performed outside this repository from Codex rollout logs plus
+maintainer-supplied Task metadata. Raw rollout logs and generated external Token
+reports must not be committed. Whether external analysis is available or
+successful never changes workflow permissions, gates, validation, findings,
+verdicts, Merge authorization, or Feature completion evidence.
 
 Deterministic workflow fact collection and compact validation are governed by
 `.agents/policies/workflow-evidence.md`. Repository workflow Skills use

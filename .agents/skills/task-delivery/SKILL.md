@@ -27,7 +27,6 @@ Before commands, read the applicable `AGENTS.md` / `AGENTS.override.md` and:
 ```text
 .agents/policies/command-execution.md
 .agents/policies/workflow-evidence.md
-.agents/policies/task-workflow-telemetry.md
 ```
 
 Use current Issue, templates, workflows, `pyproject.toml`, and lock files as
@@ -147,7 +146,7 @@ Before commit:
 - perform semantic self-check against every acceptance criterion;
 - inspect full diff, untracked files, generated files, secrets, and scope;
 - resolve all Blocking, High, and Medium self-check findings;
-- ensure local ignored execution, evidence, validation, and telemetry files are
+- ensure local ignored execution, evidence, and validation files are
   not staged.
 
 Stage explicit paths only; never use `git add .`. Make one scoped commit unless a
@@ -224,14 +223,6 @@ Task branch, scoped changes, commit, push, PR, or completed checks already exist
 Never repeat a correct metadata write or recreate a deleted artifact merely to
 follow phase numbering.
 
-## Telemetry
-
-If and only if a maintainer-started run is active, perform one lightweight
-status check and append one aggregate `task-delivery` phase summary at completion
-or interruption. Use facts already produced by the normal workflow. Record
-Evidence/Validation invocation counts, report/handoff size, retries, fallbacks,
-and drift when known. Unknown values remain `null`; telemetry failure does not
-change delivery.
 
 ## Final report
 

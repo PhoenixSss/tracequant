@@ -10,7 +10,6 @@ Skills.
 Skill       authorization, phases, semantic judgment, findings, verdict
 Evidence    current mechanical facts, normalization, bounded snapshots
 Validation  current applicable checks, bounded results
-Telemetry   aggregate observation only
 Maintainer  manual Merge and Feature closeout
 ```
 
@@ -73,7 +72,7 @@ Skill's stop or re-review rule; an old snapshot is never current evidence.
 ## Trusted control plane
 
 A reviewed change must not control its own review. If a PR changes applicable
-agent rules, Skills, this policy, command/telemetry policy, Evidence, Validation,
+agent rules, Skills, this policy, command policy, Evidence, Validation,
 or another shared governance dependency, use locked PR-base versions. Feature
 audits use the locked audited-main versions.
 
@@ -126,13 +125,11 @@ Any abnormal path uses a detailed report. Handoffs never copy complete bodies,
 diffs, successful logs, or prior reports. Delivery handoff locates the review
 object and is not review evidence.
 
-## Telemetry
+## External Token analysis boundary
 
-When an active maintainer-started run exists, record only aggregate facts already
-produced: Evidence/Validation invocations, Git/GitHub/validation operations,
-retries/fallbacks, drift/review invalidation, and report/handoff size. Do not run
-extra work for Telemetry.
-
-Keep event completeness separate from numeric usage coverage. Unknown values are
-`null`; `usage.source=unavailable` with null tokens is not numeric usage.
-Telemetry failure never changes a Skill verdict.
+Repository workflow Skills do not start, update, validate, or summarize a runtime
+usage run. Token-consumption analysis is an external maintainer activity based on
+Codex rollout logs and Task metadata. Do not add queries, validation, report fields,
+local writes, fallbacks, or verdict branches solely for that analysis. Raw rollout
+logs and generated analysis reports are not repository artifacts, and missing or
+failed external analysis never changes a Skill verdict.

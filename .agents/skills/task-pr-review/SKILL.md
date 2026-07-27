@@ -38,7 +38,6 @@ Read applicable `AGENTS.md` / `AGENTS.override.md` and trusted versions of:
 .agents/skills/task-pr-review/SKILL.md
 .agents/policies/command-execution.md
 .agents/policies/workflow-evidence.md
-.agents/policies/task-workflow-telemetry.md
 ```
 
 Use current Task/PR, templates, workflows, `pyproject.toml`, and lock files.
@@ -48,7 +47,7 @@ Historical reports are supporting evidence only. Run current checks through
 This review is strictly read-only for code, Git history, GitHub, Project,
 reviews, threads, labels, Relationships, and lifecycle state. It may fetch refs,
 use one detached temporary review worktree, run validation, and write only exact
-ignored local evidence/validation/telemetry artifacts.
+ignored local evidence/validation artifacts.
 
 It never fixes files, edits Issue/PR/Project state, submits Approve or Request
 Changes, resolves threads, commits, pushes, merges, closes Issues, deletes Task
@@ -59,7 +58,7 @@ branches, performs closeout, or assesses Feature completion.
 Do not use reviewed rules to prove themselves.
 
 Lock the actual PR base SHA before formal review. If the PR changes an applicable
-agent file, workflow Skill, Evidence/Validation/Telemetry tool, or shared policy,
+agent file, workflow Skill, Evidence/Validation tool, or shared policy,
 obtain `trusted_runner.py` from the PR base or execute it in a detached base
 worktree. Use it to run Evidence and Validation from that same base. PR-head
 versions are review objects only.
@@ -240,11 +239,3 @@ A temporary worktree must be unique, detached at the exact locked commit, never
 modify reviewed files, and be removed by exact path without `git clean`. Re-run
 from current facts after any interrupted review, repaired PR, changed SHA,
 resolved blocker, or stale evidence. Never inherit an old verdict.
-
-## Telemetry
-
-If a maintainer-started run is active, perform one lightweight status check and
-append one aggregate `task-pr-review` summary using facts already produced.
-Record independent review run, Evidence/Validation calls, report/handoff size,
-findings, fallbacks, retries, drift, and invalidation when known. Telemetry never
-influences findings or verdict and never authorizes a write.
