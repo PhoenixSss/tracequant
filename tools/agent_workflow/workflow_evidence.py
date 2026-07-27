@@ -57,8 +57,14 @@ query($owner:String!, $name:String!, $number:Int!) {
         }
         pageInfo { hasNextPage }
       }
-      blockedBy(first:50) { nodes { number title state } }
-      blocking(first:50) { nodes { number title state } }
+      blockedBy(first:50) {
+        nodes { number title state }
+        pageInfo { hasNextPage }
+      }
+      blocking(first:50) {
+        nodes { number title state }
+        pageInfo { hasNextPage }
+      }
     }
   }
 }
@@ -483,6 +489,16 @@ def _relationship_snapshot(
         sub_page.get("hasNextPage") is True if isinstance(sub_page, dict) else False
     )
     sub_bounded = bounded_list(sub_issue_nodes, item_limit=MAX_CHILDREN)
+
+    def _bounded_connection(field: str) -> dict[str, Any]:
+        connection = issue.get(field)
+        nodes = _nodes(field)
+        bounded = bounded_list(nodes)
+        page = connection.get("pageInfo") if isinstance(connection, dict) else None
+        if isinstance(page, dict) and page.get("hasNextPage") is True:
+            bounded["truncated"] = True
+        return bounded
+
     return {
         "available": True,
         "issue_type": safe_text(issue_type.get("name"))
@@ -498,8 +514,8 @@ def _relationship_snapshot(
             )
         ),
         "sub_issues_complete": not sub_has_next and not sub_bounded["truncated"],
-        "blocked_by": bounded_list(_nodes("blockedBy")),
-        "blocking": bounded_list(_nodes("blocking")),
+        "blocked_by": _bounded_connection("blockedBy"),
+        "blocking": _bounded_connection("blocking"),
     }
 
 
@@ -880,14 +896,71 @@ def _issue_gates(
         gates["issue_type"] = _gate(
             "pass" if matches_type else "unknown", expected_type_label
         )
-    blocked = relationships.get("blocked_by", {}).get("items", [])
-    if relationships.get("available") is True:
-        gates["formal_blockers"] = _gate(
-            "pass" if not blocked else "fail", f"count={len(blocked)}"
-        )
-    else:
-        gates["formal_blockers"] = _gate("unknown", "Relationship facts unavailable")
+    gates["formal_blockers"] = _formal_blockers_gate(relationships)
     return gates
+
+
+def _formal_blockers_gate(relationships: Mapping[str, Any]) -> dict[str, Any]:
+    if relationships.get("available") is not True:
+        return _gate("unknown", "Relationship facts unavailable")
+
+    blocked_by = relationships.get("blocked_by")
+    if not isinstance(blocked_by, Mapping):
+        return _gate("unknown", "Blocked-by metadata unavailable")
+
+    items = blocked_by.get("items")
+    count = blocked_by.get("count")
+    truncated = blocked_by.get("truncated")
+    if (
+        not isinstance(items, list)
+        or not isinstance(count, int)
+        or isinstance(count, bool)
+        or count < 0
+        or not isinstance(truncated, bool)
+    ):
+        return _gate("unknown", "Blocked-by metadata is malformed")
+
+    open_numbers: list[int] = []
+    unresolved = 0
+    resolved = 0
+    unknown_state = 0
+    for item in items:
+        if not isinstance(item, Mapping):
+            unknown_state += 1
+            continue
+        state = item.get("state")
+        normalized_state = state.upper() if isinstance(state, str) else ""
+        if normalized_state == "OPEN":
+            unresolved += 1
+            number = item.get("number")
+            if isinstance(number, int) and not isinstance(number, bool):
+                open_numbers.append(number)
+        elif normalized_state == "CLOSED":
+            resolved += 1
+        else:
+            unknown_state += 1
+
+    if unresolved:
+        return _gate(
+            "fail",
+            f"unresolved={unresolved}, resolved={resolved}, open={open_numbers[:10]}",
+        )
+    if truncated:
+        return _gate(
+            "unknown",
+            f"blocked-by list truncated; observed={len(items)}, resolved={resolved}",
+        )
+    if count != len(items):
+        return _gate(
+            "unknown",
+            f"blocked-by count mismatch: count={count}, observed={len(items)}",
+        )
+    if unknown_state:
+        return _gate(
+            "unknown",
+            f"unknown_state={unknown_state}, resolved={resolved}, total={count}",
+        )
+    return _gate("pass", f"unresolved=0, resolved={resolved}, total={count}")
 
 
 def _sha_gate(actual: Any, expected: str | None, name: str) -> dict[str, Any]:

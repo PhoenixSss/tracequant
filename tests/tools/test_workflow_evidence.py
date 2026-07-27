@@ -516,6 +516,85 @@ def test_relationship_unavailable_keeps_blocker_gate_unknown(tmp_path: Path) -> 
     assert value["gates"]["formal_blockers"]["status"] == "unknown"
 
 
+def test_no_formal_blockers_passes(tmp_path: Path) -> None:
+    state = _base_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    assert result.returncode == 0, result.stderr
+    gate = json.loads(result.stdout)["gates"]["formal_blockers"]
+    assert gate["status"] == "pass"
+    assert gate["detail"] == "unresolved=0, resolved=0, total=0"
+
+
+def test_closed_formal_blocker_is_resolved(tmp_path: Path) -> None:
+    state = _base_state()
+    state["relationships"]["blockedBy"]["nodes"] = [
+        {"number": 72, "title": "[Task] Dependency", "state": "CLOSED"}
+    ]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    assert result.returncode == 0, result.stderr
+    gate = json.loads(result.stdout)["gates"]["formal_blockers"]
+    assert gate["status"] == "pass"
+    assert gate["detail"] == "unresolved=0, resolved=1, total=1"
+
+
+def test_open_formal_blocker_fails(tmp_path: Path) -> None:
+    state = _base_state()
+    state["relationships"]["blockedBy"]["nodes"] = [
+        {"number": 72, "title": "[Task] Dependency", "state": "OPEN"}
+    ]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    assert result.returncode == 0, result.stderr
+    gate = json.loads(result.stdout)["gates"]["formal_blockers"]
+    assert gate["status"] == "fail"
+    assert "unresolved=1" in gate["detail"]
+    assert "open=[72]" in gate["detail"]
+
+
+def test_mixed_formal_blockers_fail_when_any_is_open(tmp_path: Path) -> None:
+    state = _base_state()
+    state["relationships"]["blockedBy"]["nodes"] = [
+        {"number": 72, "title": "[Task] Resolved", "state": "CLOSED"},
+        {"number": 73, "title": "[Task] Unresolved", "state": "OPEN"},
+    ]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    assert result.returncode == 0, result.stderr
+    gate = json.loads(result.stdout)["gates"]["formal_blockers"]
+    assert gate["status"] == "fail"
+    assert "unresolved=1" in gate["detail"]
+    assert "resolved=1" in gate["detail"]
+
+
+def test_unknown_formal_blocker_state_does_not_pass(tmp_path: Path) -> None:
+    state = _base_state()
+    state["relationships"]["blockedBy"]["nodes"] = [
+        {"number": 72, "title": "[Task] Dependency", "state": "UNKNOWN"}
+    ]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    assert result.returncode == 0, result.stderr
+    gate = json.loads(result.stdout)["gates"]["formal_blockers"]
+    assert gate["status"] == "unknown"
+    assert "unknown_state=1" in gate["detail"]
+
+
+def test_truncated_formal_blockers_do_not_pass(tmp_path: Path) -> None:
+    state = _base_state()
+    state["relationships"]["blockedBy"] = {
+        "nodes": [{"number": 72, "title": "[Task] Resolved", "state": "CLOSED"}],
+        "pageInfo": {"hasNextPage": True},
+    }
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    assert result.returncode == 0, result.stderr
+    gate = json.loads(result.stdout)["gates"]["formal_blockers"]
+    assert gate["status"] == "unknown"
+    assert "truncated" in gate["detail"]
+
+
 def test_truncated_review_threads_do_not_pass(tmp_path: Path) -> None:
     state = _base_state()
     state["threads"]["pageInfo"]["hasNextPage"] = True
