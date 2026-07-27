@@ -644,5 +644,7 @@ Codex rollout JSONL
 
 保留在本机的旧 `.agents/task-workflow-telemetry.local.toml` 或
 `.agents/telemetry.local/` 仅是历史私有数据；当前工具和 Skills 不读取、不写入，也不
-依赖它们。精确 ignore 规则继续防止这些遗留文件被意外提交。维护者可自行安全归档
-或删除，但仓库 Workflow 不执行清理。
+依赖它们。仓库不再提供 Telemetry 专属 ignore 规则；如果这些历史文件仍位于工作区，
+它们可能作为 untracked 文件出现在 `git status` 中。维护者应在提交前自行将其移出仓库、
+安全归档或删除。仓库 Workflow 不执行清理，也不得通过新增宽泛 ignore 规则重新隐藏
+这些文件。
