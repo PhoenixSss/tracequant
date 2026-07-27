@@ -142,9 +142,7 @@ def test_no_renamed_runtime_usage_tracker_exists() -> None:
     )
     for path in (ROOT / "tools/agent_workflow").glob("*.py"):
         stem = path.stem.casefold()
-        assert not any(
-            fragment in stem for fragment in suspicious_fragments
-        ), path.name
+        assert not any(fragment in stem for fragment in suspicious_fragments), path.name
 
 
 def test_external_analysis_boundary_is_documented() -> None:
@@ -160,9 +158,7 @@ def test_external_analysis_boundary_is_documented() -> None:
 def test_legacy_local_measurement_data_remains_exactly_ignored() -> None:
     patterns = {
         line.strip()
-        for line in (ROOT / ".gitignore")
-        .read_text(encoding="utf-8-sig")
-        .splitlines()
+        for line in (ROOT / ".gitignore").read_text(encoding="utf-8-sig").splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     }
     assert ".agents/task-workflow-telemetry.local.toml" in patterns
