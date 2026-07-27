@@ -58,10 +58,6 @@ desktop.ini
 # Local agent execution routing
 .agents/execution-profile.local.toml
 
-# Local Task workflow telemetry
-.agents/task-workflow-telemetry.local.toml
-.agents/telemetry.local/
-
 # Local workflow evidence and validation output
 .agents/evidence.local/
 .agents/validation.local/

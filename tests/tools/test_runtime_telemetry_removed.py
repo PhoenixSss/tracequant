@@ -32,7 +32,6 @@ ACTIVE_WORKFLOW_FILES = (
 )
 
 APPROVED_TELEMETRY_REFERENCE_FILES = {
-    ".gitignore": "protect private legacy local data from accidental commits",
     "AGENTS.md": "normative statement that runtime telemetry is disabled",
     "docs/workflows/agent-skills.md": "developer-facing external-analysis boundary",
     "tests/tools/test_runtime_telemetry_removed.py": "removal regression assertions",
@@ -46,7 +45,7 @@ LOCAL_ONLY_EXCLUSIONS = {
 
 def _tracked_text_paths() -> list[Path]:
     completed = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        ["git", "ls-files", "--cached", "-z"],
         cwd=ROOT,
         check=False,
         capture_output=True,
@@ -155,13 +154,19 @@ def test_external_analysis_boundary_is_documented() -> None:
     assert "不得提交本仓库" in guide
 
 
-def test_legacy_local_measurement_data_remains_exactly_ignored() -> None:
+def test_gitignore_has_no_runtime_telemetry_specific_rules() -> None:
     patterns = {
         line.strip()
         for line in (ROOT / ".gitignore").read_text(encoding="utf-8-sig").splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     }
-    assert ".agents/task-workflow-telemetry.local.toml" in patterns
-    assert ".agents/telemetry.local/" in patterns
+
+    forbidden_telemetry_rules = {
+        ".agents/task-workflow-telemetry.local.toml",
+        ".agents/telemetry.local/",
+    }
+    assert patterns.isdisjoint(forbidden_telemetry_rules)
+
+    # Evidence and validation remain active local-only workflow outputs.
     assert ".agents/evidence.local/" in patterns
     assert ".agents/validation.local/" in patterns
