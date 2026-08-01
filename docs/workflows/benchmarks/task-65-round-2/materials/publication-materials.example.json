@@ -1,0 +1,141 @@
+{
+  "schema_version": "1.0",
+  "protocol_id": "task-65-round-2-v1",
+  "arm_id": "task65-current-windows",
+  "run_id": "replace-with-unique-run-id",
+  "document_targets": {
+    "agent_workflow_design_handbook": {
+      "title": "代理开发工作流设计指导手册",
+      "required_sections": [
+        "适用范围与前置条件",
+        "冻结输入与权威来源",
+        "标准执行步骤与阶段边界",
+        "命令、预期输出与检查清单",
+        "常见失败、诊断、恢复与回滚",
+        "独立 Review、人工 Merge 与安全边界",
+        "可复用模板、案例与项目特定限制"
+      ]
+    },
+    "technical_sharing_article": {
+      "title": "代理工作流 Token 优化技术分享文章",
+      "required_sections": [
+        "问题背景与历史基线",
+        "假设、实验变量与控制变量",
+        "实验隔离、统计口径与质量门槛",
+        "前后流程与架构对照",
+        "Token、Guardian、命令、质量与时长结果",
+        "成功、失败与反直觉案例",
+        "采用、调整、否决方案及证据",
+        "可推广结论、项目限制与研究边界"
+      ]
+    }
+  },
+  "materials": [
+    {
+      "material_id": "mat-001",
+      "category": "fact",
+      "title": "replace-with-material-title",
+      "summary": "replace-with-public-safe-summary",
+      "source_refs": [
+        {
+          "kind": "rollout|snapshot|validation|report|issue|pr|commit|config",
+          "path_or_id": "replace-with-stable-path-or-id",
+          "sha256": null,
+          "locator": "replace-with-line-range-event-id-or-json-pointer"
+        }
+      ],
+      "claim_type": "fact|derived|inference|recommendation|hypothesis",
+      "evidence_strength": "direct|derived|corroborated|limited",
+      "public_status": "public|redacted|internal-only",
+      "redaction_notes": null,
+      "license_or_attribution": null,
+      "document_uses": [
+        {
+          "document": "agent_workflow_design_handbook|technical_sharing_article",
+          "section": "replace-with-section-name",
+          "usage": "procedure|example|claim|chart|diagram|warning|checklist"
+        }
+      ],
+      "asset_paths": []
+    }
+  ],
+  "experimental_design": {
+    "hypothesis": null,
+    "changed_variables": [],
+    "controlled_variables": [],
+    "prohibited_confounders": [],
+    "expected_effects": [],
+    "observed_effects": []
+  },
+  "cases": [
+    {
+      "case_id": "case-001",
+      "type": "success|failure|unexpected|recovery",
+      "title": "replace-with-case-title",
+      "trigger": null,
+      "timeline": [],
+      "observed_behavior": null,
+      "diagnosis": null,
+      "response": null,
+      "outcome": null,
+      "generalizable_lesson": null,
+      "project_specific_limit": null,
+      "evidence_refs": []
+    }
+  ],
+  "decisions": [
+    {
+      "decision_id": "decision-001",
+      "question": "replace-with-decision-question",
+      "options_considered": [],
+      "selected_option": null,
+      "rejected_options": [],
+      "rationale": null,
+      "evidence_refs": [],
+      "reversibility": "reversible|partially-reversible|irreversible",
+      "rollback_trigger": null
+    }
+  ],
+  "visuals": {
+    "workflow_before": null,
+    "workflow_after": null,
+    "state_matrix": null,
+    "metric_tables": [],
+    "charts": [],
+    "screenshots": [],
+    "editable_sources_required": true,
+    "captions_and_source_notes_required": true
+  },
+  "research_notes": {
+    "cohort": null,
+    "comparability": null,
+    "incomparability_factors": [],
+    "counterintuitive_findings": [],
+    "generalizable_principles": [],
+    "project_specific_limits": [],
+    "rejected_hypotheses": [],
+    "remaining_unknowns": []
+  },
+  "completeness": {
+    "required_categories": [
+      "fact",
+      "comparison",
+      "anomaly",
+      "decision",
+      "communication",
+      "research"
+    ],
+    "category_status": {
+      "fact": "pending",
+      "comparison": "pending",
+      "anomaly": "pending",
+      "decision": "pending",
+      "communication": "pending",
+      "research": "pending"
+    },
+    "handbook_material_map_complete": false,
+    "technical_article_material_map_complete": false,
+    "all_public_claims_have_evidence_refs": false,
+    "all_assets_have_source_and_redaction_status": false
+  }
+}
