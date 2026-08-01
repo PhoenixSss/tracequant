@@ -86,6 +86,37 @@ Pull requests targeting `main` and pushes to `main` automatically run CI. The wo
 
 Internal datetimes must be timezone-aware and use UTC as the standard timezone. Naive datetimes are explicitly rejected. Time utilities are provided by `quant_system.core.time`.
 
+## Domain models
+
+The initial Research MVP public domain import path is `quant_system.domain`.
+It exposes only `InstrumentId`, `TimeRange`, `OHLCVBar`, and
+`DomainValidationError`.
+
+`InstrumentId` trims input, normalizes it to uppercase, and accepts only ASCII
+letters and digits up to 32 characters. It intentionally does not encode venue,
+exchange, market type, tick size, lot size, or base/quote parsing.
+
+`TimeRange` represents UTC half-open intervals as `[start, end)`. Its datetimes
+must be timezone-aware UTC values, `start` must be earlier than `end`, and
+serialization uses stable UTC ISO 8601 strings.
+
+`OHLCVBar` stores an `InstrumentId`, UTC `start` and `end`, and float `open`,
+`high`, `low`, `close`, and `volume` values. Values must be finite, volume must
+be non-negative, and OHLC relationships are validated. Prices may currently be
+zero or negative so research data is not rejected prematurely; downstream
+modules must decide whether stricter price constraints are appropriate.
+
+All three models are immutable dataclasses with explicit `to_dict` and
+`from_dict` APIs. The serialized dictionaries are JSON-compatible internal
+Research MVP payloads, not a long-term external compatibility contract, and do
+not rely on pickle or dataclass implementation details.
+
+Shared test construction lives in `tests/fixtures/domain.py`; pytest fixtures in
+`tests/conftest.py` are reserved for values reused by multiple test modules.
+Factories are deterministic, allow explicit field overrides, use fixed UTC
+times, and must not read current time, randomness, environment variables,
+network, or files.
+
 ## Configuration
 
 Application configuration is loaded explicitly with `quant_system.config.load_settings`.
