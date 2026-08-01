@@ -1,0 +1,57 @@
+--- task-65-original.md
++++ task-65-frozen.md
+@@ -55,2 +55 @@
+-- 第一轮 Token 优化的当前结果或维护者不实施决定；
+-- 当前 Telemetry 使用指南。
++- 已冻结的第二轮 Task Workflow Token 实验协议和业务规格哈希。
+@@ -72,2 +71 @@
+-- 最小领域模型和 fixture 使用说明；
+-- 优化后的 `baseline-only` Telemetry run。
++- 最小领域模型和 fixture 使用说明。
+@@ -291 +289 @@
+-- [ ] 原始 Telemetry 和本地数据未进入 PR
++- [ ] 原始 rollout、实验材料和本地数据未进入 PR
+@@ -320,23 +318,5 @@
+-### Telemetry 运行要求
+-
+-本 Task 是第一轮优化后的功能代码验证样本。
+-
+-```text
+-mode: baseline-only
+-task_kind: feature-code
+-size: M
+-risk_class: high-correctness
+-workflow_shape: task-only
+-```
+-
+-要求：
+-
+-- 在满足“计划顺序门禁”后、`task-delivery` 前启动；
+-- 使用实际 Task 编号和当前优化后的 workflow main SHA；
+-- delivery、review、manual merge、closeout 使用同一 run；
+-- 新 head 和重审不新建 run；
+-- closeout 后 `finish`、`validate`、`summarize`；
+-- 与配置、日志基准比较时同时报告复杂度差异；
+-- 比较 findings、validation、review invalidation 和维护者决策；
+-- 不能仅用总 Token 判断优化成功；
+-- 若不可比，明确 limitations。
++### 实验关联
++
++本 Task 的业务规格由第二轮 Task Workflow Token 实验协议冻结。Windows
++`current-baseline` 与 WSL2 `candidate` 必须在独立实验 Task 中执行，并且都在人工
++Merge 前停止。该关联不设置正式 `Blocked by`，也不授权业务 PR 自动关闭本 Task。
+@@ -353,8 +332,0 @@
+-
+-计划顺序关联：
+-
+-```text
+-[Feature] 建立 Task Workflow Token 基准并完成第一轮优化
+-```
+-
+-该关联不设置正式 `Blocked by`。
+@@ -381 +353 @@
+-- [x] 已明确计划顺序但不制造虚假依赖
++- [x] 已明确实验关联但不制造虚假依赖
+@@ -384 +356 @@
+-- [x] Telemetry 分类明确
++- [x] 实验协议与业务实现解耦明确

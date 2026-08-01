@@ -36,6 +36,24 @@ APPROVED_TELEMETRY_REFERENCE_FILES = {
     "docs/workflows/agent-skills.md": "developer-facing external-analysis boundary",
     "tests/tools/test_runtime_telemetry_removed.py": "removal regression assertions",
     "tests/tools/test_workflow_skills.py": "Skill regression assertion",
+    "docs/workflows/benchmarks/task-65-round-2/README.md": (
+        "Task #65 round-two benchmark evidence index"
+    ),
+    "docs/workflows/benchmarks/task-65-round-2/benchmark-manifest.json": (
+        "machine-readable freeze record for retired Task #65 requirements"
+    ),
+    "docs/workflows/benchmarks/task-65-round-2/protocol.md": (
+        "round-two protocol describing the retired runtime requirement boundary"
+    ),
+    "docs/workflows/benchmarks/task-65-round-2/task-65-frozen.md": (
+        "frozen Task #65 body after removing retired runtime requirements"
+    ),
+    "docs/workflows/benchmarks/task-65-round-2/task-65-original.md": (
+        "verbatim historical Task #65 body retained for audit"
+    ),
+    "docs/workflows/benchmarks/task-65-round-2/task-65-telemetry-only.diff": (
+        "auditable historical-to-frozen Task #65 diff"
+    ),
 }
 
 LOCAL_ONLY_EXCLUSIONS = {
