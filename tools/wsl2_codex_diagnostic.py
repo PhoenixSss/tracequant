@@ -21,10 +21,11 @@ import subprocess
 import tempfile
 import time
 import uuid
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 MAX_STREAM_CHARS = 4_000
@@ -145,12 +146,18 @@ class Recorder:
                 timeout=timeout,
             )
             duration = time.monotonic() - started
-            stdout = redact_text(completed.stdout, home=self.home, repo_root=self.repo_root)
-            stderr = redact_text(completed.stderr, home=self.home, repo_root=self.repo_root)
+            stdout = redact_text(
+                completed.stdout, home=self.home, repo_root=self.repo_root
+            )
+            stderr = redact_text(
+                completed.stderr, home=self.home, repo_root=self.repo_root
+            )
             result = CommandResult(
                 command_id=command_id,
                 argv=display_argv(argv, home=self.home, repo_root=self.repo_root),
-                cwd=redact_text(str(actual_cwd), home=self.home, repo_root=self.repo_root),
+                cwd=redact_text(
+                    str(actual_cwd), home=self.home, repo_root=self.repo_root
+                ),
                 exit_code=completed.returncode,
                 duration_seconds=round(duration, 3),
                 status="pass" if completed.returncode == 0 else "fail",
@@ -162,7 +169,9 @@ class Recorder:
             result = CommandResult(
                 command_id=command_id,
                 argv=display_argv(argv, home=self.home, repo_root=self.repo_root),
-                cwd=redact_text(str(actual_cwd), home=self.home, repo_root=self.repo_root),
+                cwd=redact_text(
+                    str(actual_cwd), home=self.home, repo_root=self.repo_root
+                ),
                 exit_code=None,
                 duration_seconds=round(duration, 3),
                 status="error",
@@ -485,11 +494,15 @@ def remote_read_probe(
                     ),
                 ]
             )
-        gh_results = [recorder.run(command_id, argv) for command_id, argv in gh_commands]
+        gh_results = [
+            recorder.run(command_id, argv) for command_id, argv in gh_commands
+        ]
         capabilities.append(
             Capability(
                 capability="github-read",
-                status="pass" if all(result.status == "pass" for result in gh_results) else "fail",
+                status="pass"
+                if all(result.status == "pass" for result in gh_results)
+                else "fail",
                 evidence=[command_id for command_id, _ in gh_commands],
                 approval_observation="not-observable-inside-script",
                 notes="No GitHub write is performed by this probe.",
@@ -635,9 +648,14 @@ def formal_write_probe(
                 ["git", "branch", "-D", branch],
                 cwd=repo_root,
             )
-            if result.status != "pass" and "not found" not in result.stderr_summary.lower():
+            if (
+                result.status != "pass"
+                and "not found" not in result.stderr_summary.lower()
+            ):
                 cleanup_errors.append(branch)
-        recorder.run("formal-worktree-prune", ["git", "worktree", "prune"], cwd=repo_root)
+        recorder.run(
+            "formal-worktree-prune", ["git", "worktree", "prune"], cwd=repo_root
+        )
         if cleanup_errors:
             raise DiagnosticError(
                 "formal write probe cleanup incomplete: " + ", ".join(cleanup_errors)
@@ -713,7 +731,8 @@ def github_write_probe(
         return Capability(
             capability="github-write",
             status="pass",
-            evidence=evidence + ["github-write-delete-ref", "github-write-verify-deleted"],
+            evidence=evidence
+            + ["github-write-delete-ref", "github-write-verify-deleted"],
             approval_observation="not-observable-inside-script",
             notes="Only a unique temporary branch ref is created and deleted; no PR or Issue is created.",
         )
@@ -870,9 +889,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="local",
         help="full adds temporary no-proxy comparison; write probes still require flags",
     )
-    parser.add_argument("--github-repo", help="OWNER/NAME for bounded gh reads or write probe")
     parser.add_argument(
-        "--skip-project-validation", action="store_true", help="skip uv/pytest/Ruff/mypy"
+        "--github-repo", help="OWNER/NAME for bounded gh reads or write probe"
+    )
+    parser.add_argument(
+        "--skip-project-validation",
+        action="store_true",
+        help="skip uv/pytest/Ruff/mypy",
     )
     parser.add_argument("--skip-workspace-probe", action="store_true")
     parser.add_argument("--skip-temp-git-probe", action="store_true")
@@ -910,7 +933,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         relative_output = output_dir.relative_to(repo_root)
     except ValueError:
         pass
-    if relative_output is not None and not ensure_ignored(repo_root, relative_output, recorder):
+    if relative_output is not None and not ensure_ignored(
+        repo_root, relative_output, recorder
+    ):
         raise SystemExit(f"output directory is not Git ignored: {relative_output}")
 
     environment = environment_payload(repo_root, recorder)
@@ -1039,7 +1064,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status": "pass" if not errors else "partial",
         "run_id": run_id,
         "profile": args.profile,
-        "output_dir": redact_text(str(output_dir), home=Path.home(), repo_root=repo_root),
+        "output_dir": redact_text(
+            str(output_dir), home=Path.home(), repo_root=repo_root
+        ),
         "capabilities": {item.capability: item.status for item in capabilities},
         "errors": errors,
         "artifacts": {

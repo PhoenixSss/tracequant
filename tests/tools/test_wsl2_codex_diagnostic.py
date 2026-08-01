@@ -38,8 +38,8 @@ def _write_fake_uv(bin_dir: Path) -> None:
     uv = bin_dir / "uv"
     uv.write_text(
         "#!/bin/sh\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'uv 0.11.28'; exit 0; fi\n"
-        "if [ \"$1\" = \"run\" ] && [ \"$2\" = \"python\" ]; then "
+        'if [ "$1" = "--version" ]; then echo \'uv 0.11.28\'; exit 0; fi\n'
+        'if [ "$1" = "run" ] && [ "$2" = "python" ]; then '
         "echo 'Python 3.11.9'; exit 0; fi\n"
         "exit 0\n",
         encoding="utf-8",
@@ -128,7 +128,9 @@ def test_local_diagnostic_writes_parseable_bounded_artifacts(tmp_path: Path) -> 
     json.loads((output_dir / "capability-matrix.json").read_text(encoding="utf-8"))
     commands = [
         json.loads(line)
-        for line in (output_dir / "commands.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in (output_dir / "commands.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
     ]
     assert commands
     assert all(len(item["stdout_summary"]) <= 4_020 for item in commands)
@@ -236,9 +238,7 @@ def test_committed_wsl2_materials_are_parseable_and_redacted() -> None:
     diagnostic = json.loads(
         (docs / "current-diagnostic.json").read_text(encoding="utf-8")
     )
-    article = json.loads(
-        (docs / "article-materials.json").read_text(encoding="utf-8")
-    )
+    article = json.loads((docs / "article-materials.json").read_text(encoding="utf-8"))
     assert diagnostic["security"]["sensitive_data_committed"] is False
     assert diagnostic["security"]["broad_rules_configured"] is False
     assert diagnostic["security"]["task_65_candidate_executed"] is False
