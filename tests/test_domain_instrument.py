@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -6,8 +7,10 @@ from quant_system.domain import DomainValidationError, InstrumentId
 from tests.fixtures.domain import INVALID_INSTRUMENT_VALUES, make_instrument
 
 
-def test_instrument_id_normalizes_whitespace_and_case() -> None:
-    instrument = InstrumentId(" btcusdt ")
+def test_instrument_id_normalizes_whitespace_and_case(
+    instrument_factory: Callable[[str], InstrumentId],
+) -> None:
+    instrument = instrument_factory(" btcusdt ")
 
     assert instrument.value == "BTCUSDT"
     assert str(instrument) == "BTCUSDT"

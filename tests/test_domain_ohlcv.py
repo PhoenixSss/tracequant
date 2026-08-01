@@ -1,6 +1,7 @@
 import json
 import math
 import os
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,10 +18,9 @@ from tests.fixtures.domain import (
 
 
 def test_ohlcv_bar_uses_instrument_and_utc_interval(
-    ohlcv_bar_factory: object,
+    instrument_factory: Callable[[str], InstrumentId],
 ) -> None:
-    assert callable(ohlcv_bar_factory)
-    bar = make_ohlcv_bar()
+    bar = make_ohlcv_bar(instrument=instrument_factory("BTCUSDT"))
 
     assert bar.instrument == InstrumentId("BTCUSDT")
     assert bar.start == VALID_RANGE_START
