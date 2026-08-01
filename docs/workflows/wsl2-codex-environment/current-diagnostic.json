@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "status": "ready-with-gaps",
+  "observed_at": "2026-08-01",
+  "environment": {
+    "distribution": "Ubuntu 24.04.4 LTS",
+    "distribution_id": "Ubuntu-24.04",
+    "kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "repository_path_contract": "/home/<user>/code/quant-system",
+    "repository_filesystem": "ext4",
+    "repository_under_windows_mount": false,
+    "vscode_remote_wsl": "verified",
+    "codex_in_wsl": "verified"
+  },
+  "tools": {
+    "system_python": {
+      "command": "python3",
+      "observed_version": "3.12.3",
+      "observed_path": "/usr/bin/python3",
+      "bare_python_required": false
+    },
+    "project_python": {
+      "version_contract": "3.11",
+      "launcher": "uv run python"
+    },
+    "uv": {
+      "version": "0.11.28",
+      "path_contract": "$HOME/.local/bin/uv"
+    },
+    "git": {
+      "observed_version": "2.43.0",
+      "path": "/usr/bin/git"
+    },
+    "github_cli": {
+      "observed_version": "2.45.0",
+      "path": "/usr/bin/gh",
+      "authentication": "verified",
+      "credential_boundary": "WSL-local, revocable; credential contents are not recorded"
+    }
+  },
+  "validation": {
+    "status": "pass",
+    "pytest": "106 passed at environment diagnostic time",
+    "commands": [
+      "uv lock --check",
+      "uv run --frozen pytest",
+      "uv run --frozen ruff check .",
+      "uv run --frozen ruff format --check .",
+      "uv run --frozen mypy src tests",
+      "git diff --check"
+    ]
+  },
+  "capabilities": [
+    {
+      "capability": "workspace-read",
+      "result": "direct-success"
+    },
+    {
+      "capability": "ignored-workspace-write",
+      "result": "guardian-approved-success",
+      "reason": "sandbox repository mount was read-only"
+    },
+    {
+      "capability": "temporary-git-write",
+      "result": "direct-success",
+      "location": "/tmp"
+    },
+    {
+      "capability": "uv-project-workflow",
+      "result": "guardian-approved-success",
+      "reason": "sandbox could not access the user uv cache"
+    },
+    {
+      "capability": "formal-repository-fetch",
+      "result": "guardian-approved-success",
+      "reason": "network and Git metadata access required approval"
+    },
+    {
+      "capability": "formal-repository-add-commit-switch",
+      "result": "guardian-approved-success",
+      "probe": "disposable worktree; no push; fully cleaned"
+    },
+    {
+      "capability": "github-read",
+      "result": "guardian-approved-success"
+    },
+    {
+      "capability": "github-reversible-write",
+      "result": "guardian-approved-success",
+      "probe": "unique temporary remote ref created, read, deleted, and verified absent"
+    }
+  ],
+  "network": {
+    "proxy_enabled": "pass in approved execution context",
+    "proxy_endpoint_policy": "loopback endpoint is machine-local and not fixed by the repository",
+    "temporary_no_proxy": "partial",
+    "no_proxy_observation": {
+      "api.github.com": "pass",
+      "github.com": "timeout",
+      "git_ls_remote": "timeout"
+    },
+    "classification": "approved proxy path is the supported workflow; unapproved sandbox failures are not a host-network verdict"
+  },
+  "security": {
+    "sensitive_data_committed": false,
+    "broad_rules_configured": false,
+    "task_65_candidate_executed": false,
+    "github_probe_residual_ref": false,
+    "issue_or_pr_created_by_probe": false
+  },
+  "remaining_gaps": [
+    "Codex approval is still required for user cache, formal Git metadata, and GitHub network operations.",
+    "No-proxy direct access is partial and is not a supported workflow dependency.",
+    "Final minimum-permission Rules are intentionally deferred to a separate Task.",
+    "The diagnostic process cannot infer Guardian routing from inside a child process; rollout evidence remains authoritative."
+  ]
+}
