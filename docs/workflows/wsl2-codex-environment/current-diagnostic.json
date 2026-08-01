@@ -40,7 +40,7 @@
   },
   "validation": {
     "status": "pass",
-    "pytest": "106 passed at environment diagnostic time",
+    "pytest": "111 passed in delivery validation",
     "commands": [
       "uv lock --check",
       "uv run --frozen pytest",
