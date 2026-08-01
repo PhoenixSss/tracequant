@@ -237,8 +237,49 @@ PR 不得包含 `Closes #65`、`Fixes #65`、`Resolves #65` 或等价关闭引�
 - `reports/`：Token、质量、命令和比较报告；
 - `evidence/`：Task/PR/SHA/check/thread/Project 快照；
 - `validation/`：命令、退出码、digest 和必要失败日志；
-- `publication/`：决策背景、步骤、成功/失败、偏差、采用结论、可推广经验、项目限制、
-  可公开图表和案例素材。
+- `publication/publication-materials.json`：使用
+  `materials/publication-materials.example.json` 的结构，建立两篇公共文档的素材索引。
+
+公共文档目标固定为：
+
+1. `代理开发工作流设计指导手册`：需要前置条件、冻结输入、阶段边界、可执行步骤、
+   命令和预期输出、检查清单、常见失败、诊断、恢复、回滚、安全边界与可复用案例；
+2. `代理工作流 Token 优化技术分享文章`：需要问题与基线、假设、实验变量与控制变量、
+   隔离和统计口径、前后流程图、量化结果、成功/失败/反直觉案例、采用或否决决策、
+   可推广结论、项目限制与研究边界。
+
+每个实验必须同步沉淀六类材料，不得在最后写作阶段凭记忆补齐：
+
+- **事实材料**：snapshot、validation digest、rollout 定位、Task/PR/SHA/config manifest；
+- **对比材料**：两臂指标、Skill/Runner/报告体积、命令调用、质量与时长对照；
+- **异常材料**：sandbox、权限、unknown gate、head drift、review invalidation、fallback、
+  中断与恢复时间线；
+- **决策材料**：候选方案、采用/调整/否决结论、理由、证据、可逆性和回滚触发器；
+- **传播材料**：前后工作流图、状态矩阵、可编辑图表源、截图、典型成功与失败案例；
+- **研究材料**：cohort、可比性、证据强度、反直觉发现、被否决假设、未知项、
+  通用原则与项目特定限制。
+
+所有准备进入公共文档的 claim、案例、图表或截图必须记录：
+
+- 稳定 source reference、SHA 或事件/行号/JSON pointer；
+- `fact / derived / inference / recommendation / hypothesis` 类型；
+- 证据强度；
+- 脱敏状态、公开状态和必要授权/署名；
+- 目标文档、目标章节和预期用途。
+
+`publication-materials.json` 只有在以下条件全部满足时才可标记 complete：
+
+- 两篇文档均有逐章节素材映射；
+- 至少覆盖事实、对比、异常、决策、传播和研究六类材料；
+- 每个公开 claim 都有证据引用；
+- 每个视觉资产都有可编辑源、标题、数据来源、口径和脱敏状态；
+- 至少记录一个成功、一个失败或恢复、一个与预期不一致的案例；若某类事件没有发生，
+  必须显式记录 `not-observed`，不得省略；
+- 被否决方案和剩余未知项均有记录。
+
+Task #65 本轮只覆盖 `merge-pre`。指导手册中的 Merge/Closeout 示例必须引用经过核验的
+历史样本（例如 Task #63/#64）或后续独立材料，不得把本轮缺失的 Closeout 伪造为零成本
+或完整案例。
 
 任何原始凭据、token、keyring、完整用户级配置或敏感日志必须脱敏或排除。
 
@@ -268,4 +309,7 @@ PY
 - `merge-pre` 只包含 Delivery 和独立 Review；
 - branch/PR 模板不含关闭引用；
 - `benchmark-manifest.json` 不包含凭据或原始 rollout；
+- `experiment-record.example.json` 明确记录实验变量、控制变量和公共材料索引；
+- `publication-materials.example.json` 同时覆盖两篇公共文档、六类材料、证据强度、
+  claim/source 映射、决策、案例和前后流程视觉资产；
 - 材料示例能由未参与实现的读者理解和复核。

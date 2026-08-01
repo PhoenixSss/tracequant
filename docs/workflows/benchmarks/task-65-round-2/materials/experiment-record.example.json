@@ -77,6 +77,14 @@
   "limitations": [],
   "incomparability_factors": [],
   "maintainer_decision": null,
+  "experimental_design": {
+    "hypothesis": null,
+    "changed_variables": [],
+    "controlled_variables": [],
+    "prohibited_confounders": [],
+    "expected_effects": []
+  },
+  "source_index": [],
   "publication_materials": {
     "decision_background": null,
     "actual_steps": [],
@@ -86,6 +94,18 @@
     "adopt_adjust_reject": null,
     "generalizable_lessons": [],
     "project_specific_limits": [],
-    "public_chart_assets": []
+    "public_chart_assets": [],
+    "package_index_path": "publication/publication-materials.json",
+    "document_targets": [
+      "agent_workflow_design_handbook",
+      "technical_sharing_article"
+    ],
+    "counterintuitive_findings": [],
+    "rejected_options": [],
+    "workflow_before_assets": [],
+    "workflow_after_assets": [],
+    "state_matrix_assets": [],
+    "case_study_ids": [],
+    "claim_evidence_map_complete": false
   }
 }

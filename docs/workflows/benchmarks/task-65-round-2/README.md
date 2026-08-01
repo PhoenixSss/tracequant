@@ -12,7 +12,8 @@ Task #65 的领域代码，也不执行任何实验臂。
 - `task-65-telemetry-only.diff`：原文与冻结正文的统一差异；
 - `environment-current-windows.md`：当前 Windows 基准环境的脱敏摘要；
 - `benchmark-manifest.json`：机器可解析的冻结标识、SHA 和协议字段；
-- `materials/experiment-record.example.json`：仓库外实验归档的最小记录示例。
+- `materials/experiment-record.example.json`：仓库外实验归档的最小记录示例；
+- `materials/publication-materials.example.json`：面向“代理开发工作流设计指导手册”和技术分享文章的素材索引、案例、决策、图表与证据映射示例。
 
 ## 冻结状态
 

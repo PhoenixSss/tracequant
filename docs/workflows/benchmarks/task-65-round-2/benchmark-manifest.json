@@ -191,13 +191,13 @@
   "artifacts": [
     {
       "path": "docs/workflows/benchmarks/task-65-round-2/README.md",
-      "sha256": "7a518ae31d191b317465beab90e2fe6d5f090f87e1befd475bfbae8a13a4ea82",
-      "bytes": 1608
+      "sha256": "95c364c743aa4746b27e29c95d010b027abcb295021cbd5d5d87fc909d78579e",
+      "bytes": 1798
     },
     {
       "path": "docs/workflows/benchmarks/task-65-round-2/protocol.md",
-      "sha256": "bc3c8006fa8846704c9ea9bdfd139c59edea105ac6eabf23bccf669395c13a24",
-      "bytes": 11671
+      "sha256": "de8423d4b42c7627e2bcdd4c4e3c1ae213cec62e800773d6d0b92c82d752146c",
+      "bytes": 14465
     },
     {
       "path": "docs/workflows/benchmarks/task-65-round-2/task-65-original.md",
@@ -221,8 +221,13 @@
     },
     {
       "path": "docs/workflows/benchmarks/task-65-round-2/materials/experiment-record.example.json",
-      "sha256": "a3e7275b71e88a8d4651348fca9e37d246eadccb86e5465dfa07f31cbb9bd1c4",
-      "bytes": 2449
+      "sha256": "b6a40396e9e9023e14b2f23cbe450fe37f68d757e2bd98dfc33e801cccecc0cc",
+      "bytes": 3055
+    },
+    {
+      "path": "docs/workflows/benchmarks/task-65-round-2/materials/publication-materials.example.json",
+      "sha256": "5543a3f8ac6851598a6d6c6d51a4458786b5de085955e098d30214d60890cc3c",
+      "bytes": 4314
     }
   ],
   "repository_files": [
@@ -331,5 +336,32 @@
     "user_rules_contents_in_repository": false,
     "local_evidence_in_repository": false,
     "automatic_merge_allowed": false
+  },
+  "publication_material_requirements": {
+    "document_targets": [
+      "agent_workflow_design_handbook",
+      "technical_sharing_article"
+    ],
+    "required_categories": [
+      "fact",
+      "comparison",
+      "anomaly",
+      "decision",
+      "communication",
+      "research"
+    ],
+    "required_structures": [
+      "experimental variables and controls",
+      "stable claim-to-source mapping",
+      "evidence strength and claim type",
+      "accepted/adjusted/rejected decision record",
+      "success/failure-or-recovery/unexpected case records",
+      "before/after workflow diagrams and state matrix",
+      "editable chart sources with captions and metric definitions",
+      "cohort/comparability/limitations/rejected hypotheses",
+      "public redaction and attribution status",
+      "per-document section material mapping"
+    ],
+    "closeout_source_rule": "Task #65 round-2 is merge-pre only; handbook Merge/Closeout examples must come from verified historical or later independent evidence and must not treat missing Closeout as zero."
   }
 }
