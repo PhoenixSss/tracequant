@@ -670,8 +670,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     try:
-        args = parser.parse_args(argv)
+        if len(raw_argv) != 1:
+            parser.error(
+                "expected exactly one profile argument; trailing arguments are not accepted"
+            )
+        args = parser.parse_args(raw_argv)
         return _run_profile(args.profile)
     except KeyboardInterrupt:
         print(

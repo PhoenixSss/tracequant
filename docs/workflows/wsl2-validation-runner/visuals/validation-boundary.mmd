@@ -1,14 +1,15 @@
 flowchart LR
-    C[Codex session] -->|one fixed argv| R[Project Rules]
-    R -->|allowed profiles only| V[WSL2 Validation Runner]
+    C[Codex session] -->|candidate argv| R[Project Rules]
+    R -->|prefix policy decision| V[WSL2 Validation Runner]
     V --> I[Pre-execution HEAD integrity check]
-    I --> P[Canonical profile and argv validation]
-    P --> S1[uv lock --check]
-    P --> S2[pytest]
-    P --> S3[Ruff check]
-    P --> S4[Ruff format check]
-    P --> S5[mypy]
-    P --> S6[git diff --check]
+    I --> P[Full argv and profile semantic validation]
+    P --> A[Canonical validation commands]
+    A --> S1[uv lock --check]
+    A --> S2[pytest]
+    A --> S3[Ruff check]
+    A --> S4[Ruff format check]
+    A --> S5[mypy]
+    A --> S6[git diff --check]
     S1 --> E[Structured result]
     S2 --> E
     S3 --> E
@@ -19,5 +20,7 @@ flowchart LR
     E --> L[Ignored full logs]
 
     X[Direct uv / python / shell / GitHub write] -. not allowed by Task #83 Rules .-> R
+    R -. prefix allow can occur .-> Y[Allowed profile plus trailing argv]
+    Y -. runner rejects before validation .-> V
     T[Timeout or interrupt] --> G[Process-group TERM/INT then KILL]
     G --> E

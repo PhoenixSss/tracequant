@@ -27,17 +27,58 @@
       "claim_id": "task83-rules-static-boundaries",
       "claim_type": "fact",
       "status": "observed",
-      "statement": "Static execpolicy checks cover allowed runner profiles plus negative cases for interpreters, shells, GitHub writes, dangerous Git operations, unknown profiles, and known injection prefixes; the Runner verifies trusted files against HEAD and rejects non-canonical command IDs/argv before subcommands execute.",
+      "statement": "Static execpolicy checks cover allowed runner profiles plus negative cases for interpreters, shells, GitHub writes, dangerous Git operations, unknown profiles, known injection prefixes, and the observed prefix-matching boundary for arbitrary trailing argv.",
       "evidence": [
         ".codex/rules/quant-system-wsl-validation.rules",
+        "tests/tools/test_wsl2_validation_rules.py",
         "tests/tools/test_wsl2_validation_runner.py"
+      ]
+    },
+    {
+      "claim_id": "task83-prefix-trailing-allow",
+      "claim_type": "fact",
+      "status": "observed",
+      "statement": "Current execpolicy returns allow for the fixed targeted profile followed by arbitrary trailing values such as `tests/tools` or `arbitrary-value`; this records prefix matching behavior only.",
+      "evidence": [
+        "tests/tools/test_wsl2_validation_rules.py",
+        ".codex/rules/quant-system-wsl-validation.rules"
+      ]
+    },
+    {
+      "claim_id": "task83-runner-trailing-rejects-before-validation",
+      "claim_type": "fact",
+      "status": "observed",
+      "statement": "The runner rejects trailing argv with a non-zero exit before any `uv`, pytest, Ruff, mypy, or Git validation subcommand starts, and it creates no success evidence for that rejected invocation.",
+      "evidence": [
+        "tests/tools/test_wsl2_validation_runner.py",
+        "tools/agent_workflow/wsl2_validation_runner.py"
+      ]
+    },
+    {
+      "claim_id": "task83-layered-safety-boundary",
+      "claim_type": "derived",
+      "status": "expected",
+      "statement": "The safety boundary comes from the combination of Rules entry/profile prefix restriction and runner complete-argv semantic validation.",
+      "evidence": [
+        "docs/workflows/wsl2-validation-runner/README.md",
+        "docs/workflows/wsl2-validation-runner/security-hardening-cases.md"
+      ]
+    },
+    {
+      "claim_id": "task83-rules-exact-match-not-claimed",
+      "claim_type": "not-claimed",
+      "status": "not-claimed",
+      "statement": "Task #83 does not claim that Rules alone provide exact argv or end-of-command matching.",
+      "evidence": [
+        ".codex/rules/quant-system-wsl-validation.rules",
+        "docs/workflows/wsl2-validation-runner/README.md"
       ]
     },
     {
       "claim_id": "task83-failure-case",
       "claim_type": "fact",
       "status": "observed",
-      "statement": "Tests include bounded failing pytest, failing git diff, process-group timeout and interruption cleanup, trusted Runner/spec/Rules replacement rejection, non-canonical command rejection, CI drift, and result-write failure cases.",
+      "statement": "Tests include bounded failing pytest, failing git diff, process-group timeout and interruption cleanup, trusted Runner/spec/Rules replacement rejection, non-canonical command rejection, trailing argv rejection before validation execution, CI drift, and result-write failure cases.",
       "evidence": [
         "tests/tools/test_wsl2_validation_runner.py"
       ]
@@ -189,6 +230,7 @@
     "docs/workflows/wsl2-validation-runner/README.md",
     "docs/workflows/wsl2-validation-runner/security-hardening-cases.md",
     "docs/workflows/wsl2-validation-runner/maintenance-and-adoption.md",
+    "tests/tools/test_wsl2_validation_rules.py",
     "docs/workflows/wsl2-validation-runner/live-activation-evidence.json",
     "docs/workflows/wsl2-validation-runner/current-ci-equivalent-evidence.json",
     "docs/workflows/wsl2-validation-runner/visuals/"

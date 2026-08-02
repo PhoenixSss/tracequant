@@ -378,7 +378,8 @@
   `docs/workflows/wsl2-validation-runner/security-hardening-cases.md`；
   `docs/workflows/wsl2-validation-runner/maintenance-and-adoption.md`；
   `docs/workflows/wsl2-validation-runner/visuals/`；
-  `tests/tools/test_wsl2_validation_runner.py`。
+  `tests/tools/test_wsl2_validation_runner.py`；
+  `tests/tools/test_wsl2_validation_rules.py`。
 - [x] 参考 rules 输入：
   `/tmp/quant-system-wsl.rules`，SHA-256
   `0a23cf86db6a04aaaea8fda5f82303f42eb962fd828d83c4d05ca01b011b25ab`。
@@ -400,9 +401,15 @@
 - [x] 决策、失败、恢复和反直觉案例：
   runner tests cover subcommand failure, process-group timeout/interruption cleanup,
   trusted Runner/spec/Rules replacement rejection, non-canonical command rejection,
-  CI drift, result-write failure, wrong cwd and symlink invocation.
+  trailing argv rejection before validation execution, CI drift, result-write
+  failure, wrong cwd and symlink invocation. Real execpolicy tests cover allowed
+  runner profile prefixes, negative interpreter/tool/shell/Git/GitHub cases, and
+  the prefix boundary where `targeted tests/tools` and `targeted arbitrary-value`
+  return `allow` while the runner rejects them.
 - [x] 可编辑图表源：
-  本 Task 未新增图表；后续 #85/#86 可基于 runner metrics 生成流程图。
+  `docs/workflows/wsl2-validation-runner/visuals/validation-boundary.mmd`
+  records Codex prefix policy decision, runner full argv validation, and
+  canonical validation command boundaries.
 
 ### 最终文档用途
 

@@ -254,7 +254,47 @@ def test_unknown_profile_unknown_argument_and_trailing_argument_fail(
     assert _run(repo, bin_dir, "unknown").returncode == 2
     assert _run(repo, bin_dir, "targeted", "--command", "pytest").returncode == 2
     assert _run(repo, bin_dir, "targeted", "tests/tools").returncode == 2
+    assert _run(repo, bin_dir, "targeted", "arbitrary-value").returncode == 2
+    assert _run(repo, bin_dir, "targeted", "--unknown").returncode == 2
+    assert _run(repo, bin_dir, "targeted", "--").returncode == 2
     assert _run(repo, bin_dir, "targeted", "--", "tests/tools").returncode == 2
+    assert _run(repo, bin_dir, "targeted", ">").returncode == 2
+
+
+def test_trailing_arguments_fail_before_validation_side_effects(
+    tmp_path: Path,
+) -> None:
+    repo = _copy_runner_repo(tmp_path)
+    bin_dir = _write_fake_tools(tmp_path, repo)
+    canary = bin_dir / "validation-command-started"
+    for tool in ("uv", "git"):
+        tool_path = bin_dir / tool
+        original = tool_path.read_text(encoding="utf-8")
+        tool_path.write_text(
+            original.replace(
+                "import sys\n",
+                f"import sys\nfrom pathlib import Path\nPath({str(canary)!r}).write_text({tool!r})\n",
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+    for extra in (
+        ("tests/tools",),
+        ("arbitrary-value",),
+        ("--unknown",),
+        ("--",),
+        (">",),
+        ("$(id)",),
+    ):
+        result = _run(repo, bin_dir, "targeted", *extra)
+        assert result.returncode == 2
+        assert "trailing arguments are not accepted" in result.stderr or (
+            "unrecognized arguments" in result.stderr
+        )
+        assert result.stdout == ""
+        assert not canary.exists()
+        assert not (repo / ".agents").exists()
 
 
 def test_failure_propagates_and_summaries_are_bounded_and_redacted(

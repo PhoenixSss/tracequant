@@ -48,6 +48,19 @@ recorded as an explicit local addition to the CI workflow commands.
 
 ## Security Model
 
+Task #83 uses a layered control boundary:
+
+| Layer | Responsibility |
+| --- | --- |
+| Execpolicy Rules | Authorize only the fixed runner entry and named profile prefixes. |
+| Validation Runner | Validate complete argv, argument count, argument values, profile semantics, configuration integrity, and canonical command semantics before executing validation subcommands. |
+
+`policy allow != command semantic acceptance`. Because the current execpolicy
+rules use prefix matching, a fixed profile followed by an arbitrary trailing
+value can still receive an `allow` policy decision. The runner must, and does,
+reject that full argv before creating success evidence or executing validation
+commands.
+
 The runner:
 
 - accepts no shell string, command flag, path flag, arbitrary pytest argument, or
@@ -94,18 +107,25 @@ Project rules live at:
 The rules only allow the fixed runner entry with approved profiles. They do not
 allow direct `python`, `python3`, `uv`, `uv run`, `bash`, `sh`, GitHub writes,
 `git push`, branch deletion, `git reset`, `git clean`, or raw GitHub API calls.
-The current execpolicy language is prefix-based, so the rules also include
-stricter forbidden prefixes for known injection flags and shell metacharacter
-forms. The runner remains the final argument validator and rejects any trailing
-argument before executing a subcommand.
+The current execpolicy language is prefix-based. Rules do not provide complete
+argv exact-match or end-of-command matching. They authorize the entry/profile
+prefix, while the runner validates complete argv semantics. The rules also
+include stricter forbidden prefixes for known injection flags and shell
+metacharacter forms as defense-in-depth; those forbidden examples are not a
+claim that Rules enumerate every arbitrary trailing value.
 
 Static checks can be run with:
 
 ```bash
 codex execpolicy check --pretty --rules .codex/rules/quant-system-wsl-validation.rules -- tools/agent_workflow/wsl2_validation_runner.py current-ci-equivalent
 codex execpolicy check --pretty --rules .codex/rules/quant-system-wsl-validation.rules -- tools/agent_workflow/wsl2_validation_runner.py targeted
+codex execpolicy check --pretty --rules .codex/rules/quant-system-wsl-validation.rules -- tools/agent_workflow/wsl2_validation_runner.py targeted tests/tools
 codex execpolicy check --pretty --rules .codex/rules/quant-system-wsl-validation.rules -- tools/agent_workflow/wsl2_validation_runner.py post-merge
 ```
+
+The `targeted tests/tools` static check is expected to return `allow` because
+of prefix matching. The paired runner invocation is expected to return non-zero
+before any validation subcommand starts.
 
 Rules activation in the live Codex session may require restarting Codex or
 starting a new session. Static `execpolicy check` results are not live Guardian

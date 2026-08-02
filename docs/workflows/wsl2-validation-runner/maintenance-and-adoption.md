@@ -9,8 +9,10 @@ Changing a validation command may require updates to:
 2. `tools/agent_workflow/wsl2_validation_profiles.json`;
 3. the runner's canonical command allowlist;
 4. CI/profile drift tests;
-5. Rules positive and negative tests when the entry or profile changes;
-6. usage, security, and publication documentation.
+5. real execpolicy positive, negative, and prefix-boundary tests when the entry
+   or profile changes;
+6. runner exact-argv and trailing-argument rejection tests;
+7. usage, security, and publication documentation.
 
 The drift and integrity tests are designed to make an incomplete update fail
 rather than silently execute a different validation set.
@@ -31,6 +33,10 @@ After commit, the fixed runner must be exercised again.
 Static `codex execpolicy check` validates matching behavior, but does not prove
 that a running Codex session reloaded the new project Rules. A Rules change
 requires a new or restarted Codex session and a narrowly scoped live probe.
+
+Before adopting Codex Rules, first confirm the matching semantics of the active
+policy language. The Task #83 rules use prefix matching, not exact command
+matching. Do not treat a prefix rule as a complete argv allowlist.
 
 ### New profiles are governance changes
 
@@ -67,6 +73,10 @@ It is less suitable when:
 
 - Rules authorize a small entry point; they do not replace input validation.
 - The runner owns profile semantics and fail-closed behavior.
+- Rules and runner behavior must be tested separately.
+- New profiles must update both the execpolicy matrix and runner exact-argv
+  rejection tests.
+- Reviewers should check composed Rules/Runner behavior, not only Rules text.
 - Full logs remain external and ignored; the model receives a compact digest.
 - Every real subcommand, exit code, duration, and truncation state remains
   auditable.

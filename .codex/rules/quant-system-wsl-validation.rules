@@ -1,7 +1,17 @@
 # quant-system WSL2 validation runner rules
 #
 # Scope:
-# - These rules only allow the fixed repository Validation Runner entry.
+# - Codex execpolicy currently uses prefix matching.
+# - These rules allow only the fixed repository Validation Runner entry and
+#   named profile prefixes.
+# - An allow decision here means the fixed entry/profile prefix is authorized;
+#   it is not complete argv semantic acceptance.
+# - The Rules language does not provide exact argv or end-of-command matching.
+# - Full argv count, argument value, profile, configuration, and command
+#   semantics are enforced by the runner before validation subcommands execute.
+# - The forbidden entries below are defense-in-depth for known dangerous options
+#   and metacharacter forms; they do not claim to cover every arbitrary trailing
+#   value after an allowed profile prefix.
 # - They do not allow python, python3, uv, uv run, bash, sh, GitHub writes,
 #   git push, branch deletion, reset, clean, fetch, or arbitrary command wrappers.
 # - The runner itself fail-closes unknown profiles, unknown arguments, trailing
@@ -13,7 +23,7 @@
 prefix_rule(
     pattern = ["tools/agent_workflow/wsl2_validation_runner.py", "current-ci-equivalent"],
     decision = "allow",
-    justification = "Allow only the fixed WSL2 validation runner current CI-equivalent profile.",
+    justification = "Allow only the fixed WSL2 validation runner current CI-equivalent profile prefix; runner validates complete argv before execution.",
     match = [
         "tools/agent_workflow/wsl2_validation_runner.py current-ci-equivalent",
     ],
@@ -26,7 +36,7 @@ prefix_rule(
 prefix_rule(
     pattern = ["tools/agent_workflow/wsl2_validation_runner.py", "targeted"],
     decision = "allow",
-    justification = "Allow the fixed default targeted workflow-tool test preset only.",
+    justification = "Allow the fixed default targeted workflow-tool test preset prefix; runner validates complete argv before execution.",
     match = [
         "tools/agent_workflow/wsl2_validation_runner.py targeted",
     ],
@@ -39,7 +49,7 @@ prefix_rule(
 prefix_rule(
     pattern = ["tools/agent_workflow/wsl2_validation_runner.py", "targeted:tools-tests"],
     decision = "allow",
-    justification = "Allow the named tools-tests preset without arbitrary pytest arguments.",
+    justification = "Allow the named tools-tests preset prefix; runner rejects arbitrary pytest or trailing arguments before execution.",
     match = [
         "tools/agent_workflow/wsl2_validation_runner.py targeted:tools-tests",
     ],
@@ -52,7 +62,7 @@ prefix_rule(
 prefix_rule(
     pattern = ["tools/agent_workflow/wsl2_validation_runner.py", "targeted:workflow-tests"],
     decision = "allow",
-    justification = "Allow the named workflow-tests preset without arbitrary pytest arguments.",
+    justification = "Allow the named workflow-tests preset prefix; runner rejects arbitrary pytest or trailing arguments before execution.",
     match = [
         "tools/agent_workflow/wsl2_validation_runner.py targeted:workflow-tests",
     ],
@@ -65,7 +75,7 @@ prefix_rule(
 prefix_rule(
     pattern = ["tools/agent_workflow/wsl2_validation_runner.py", "post-merge"],
     decision = "allow",
-    justification = "Allow fixed post-merge validation; the runner separately requires synchronized clean main.",
+    justification = "Allow fixed post-merge validation prefix; the runner separately validates full argv and synchronized clean main.",
     match = [
         "tools/agent_workflow/wsl2_validation_runner.py post-merge",
     ],
@@ -88,7 +98,7 @@ prefix_rule(
         ["--command", "--shell", "--exec", "--", "|", ">", "$(id)"],
     ],
     decision = "forbidden",
-    justification = "Runner profiles do not accept command, shell, exec, trailing separator, pipe, redirection or command-substitution arguments.",
+    justification = "Defense-in-depth for known command, shell, exec, separator, pipe, redirection and command-substitution forms; runner remains the complete trailing-argv gate.",
     match = [
         "tools/agent_workflow/wsl2_validation_runner.py targeted --command pytest",
         "tools/agent_workflow/wsl2_validation_runner.py targeted --shell 'uv run pytest'",

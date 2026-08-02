@@ -155,3 +155,59 @@ It does **not** independently prove every runtime behavior of runner `1.0.1`.
 The new integrity and process-tree semantics are supported by automated tests
 and static review. A second live probe may be recorded later, but the original
 observation must not be overwritten.
+
+## Case 4: Prefix rule allows arbitrary trailing argv
+
+### Trigger
+
+The current Codex execpolicy rules use prefix matching. The fixed profile
+prefix can therefore match a command such as:
+
+```text
+tools/agent_workflow/wsl2_validation_runner.py targeted tests/tools
+```
+
+### Observed behavior
+
+Static execpolicy checks return `allow` for:
+
+```text
+tools/agent_workflow/wsl2_validation_runner.py targeted extra
+```
+
+This is a platform boundary, not proof that the runner accepts the command.
+
+### Risk
+
+If the runner did not validate the complete argv before execution, prefix
+authorization could expand into an arbitrary execution channel through trailing
+paths, flags, shell forms, or wrapper arguments.
+
+### Actual mitigation
+
+The runner validates the complete argv before repository checks, run-directory
+creation, success evidence, or validation subcommand execution. It requires
+exactly one profile argument and rejects any unknown, duplicate, or trailing
+argument, including bare `--`, paths, and shell-like forms.
+
+### Regression evidence
+
+The regression is covered by:
+
+- real `codex execpolicy check` tests that record the prefix boundary;
+- runner integration tests that add canary wrappers for `uv` and `git` and
+  verify trailing argv rejection starts no validation subcommand;
+- explicit checks that no `status: pass` result, success evidence, or
+  `.agents/validation.local/` run directory is created for rejected trailing
+  argv.
+
+### Residual boundary
+
+Rules are not an exact-match policy language. Known dangerous options are
+forbidden as defense-in-depth, while arbitrary trailing values after an allowed
+profile prefix remain the runner's fail-closed responsibility.
+
+### Lesson
+
+Reviewers must test the composed behavior. Text inspection of a Rules file is
+not enough when the policy language matches command prefixes.
