@@ -41,6 +41,7 @@ A research-first quantitative trading system for cryptocurrency perpetual future
 - [Deep research report 2](docs/research/deep-research-report-2.md): historical follow-up research used to refine the technical direction.
 - [Technical roadmap research](docs/research/technical-roadmap-research.md): historical comparative research behind the selected implementation route.
 - [WSL2 Codex environment](docs/workflows/wsl2-codex-environment/README.md): reproducible WSL2 setup, diagnostics, approval boundaries, rollback, and troubleshooting.
+- [WSL2 GitHub evidence runner](docs/workflows/wsl2-github-evidence-runner/README.md): fixed read-only Task/PR snapshots, drift rechecks, least-privilege Rules, and Git/GitHub approval boundaries.
 
 ## Current status
 
@@ -152,6 +153,7 @@ and validation summaries:
 
 ```powershell
 python -X utf8 tools/agent_workflow/workflow_evidence.py --help
+tools/agent_workflow/wsl2_github_evidence_runner.py --help
 python -X utf8 tools/agent_workflow/workflow_validation.py --help
 python -X utf8 tools/agent_workflow/trusted_runner.py --help
 ```

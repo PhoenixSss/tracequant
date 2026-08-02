@@ -1,0 +1,4 @@
+stage,model_visible_invocations,internal_operations,status,scope
+legacy-task-stage,multiple,individual gh and Git commands,not-measured,external historical rollout required
+fixed-evidence-profile,1,reported per result,expected,Task #84 architecture
+snapshot-recheck,1,recollection plus fixed remote-ref comparison,expected,stability-sensitive stage

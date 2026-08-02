@@ -13,6 +13,7 @@ It applies to:
 .agents/skills/task-closeout/SKILL.md
 .agents/skills/feature-completion-audit/SKILL.md
 tools/agent_workflow/workflow_evidence.py
+tools/agent_workflow/wsl2_github_evidence_runner.py
 tools/agent_workflow/workflow_validation.py
 tools/agent_workflow/trusted_runner.py
 ```
@@ -211,7 +212,8 @@ be routed according to a valid profile:
   `task-closeout`;
 - exact branch operations already authorized by `task-closeout` after all of its
   branch-safety gates pass;
-- read-only `workflow_evidence.py` and `trusted_runner.py` operations plus exact
+- read-only `workflow_evidence.py`, fixed
+  `wsl2_github_evidence_runner.py`, and `trusted_runner.py` operations plus exact
   sanitized local writes below `.agents/evidence.local/` authorized by
   `.agents/policies/workflow-evidence.md`;
 - `workflow_validation.py` checks plus exact sanitized local writes below
