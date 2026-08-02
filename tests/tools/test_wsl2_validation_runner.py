@@ -377,7 +377,9 @@ def test_ci_drift_and_trusted_file_mutation_fail_closed(tmp_path: Path) -> None:
     spec_path = repo / "tools/agent_workflow" / SPEC.name
     spec = json.loads(spec_path.read_text(encoding="utf-8"))
     spec["profiles"]["targeted"]["commands"][0]["argv"] = [
-        "python3", "-c", "print('untrusted')"
+        "python3",
+        "-c",
+        "print('untrusted')",
     ]
     spec_path.write_text(json.dumps(spec), encoding="utf-8")
     changed_spec = _run(repo, bin_dir, "targeted")

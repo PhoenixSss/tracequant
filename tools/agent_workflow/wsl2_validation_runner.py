@@ -345,7 +345,9 @@ def _verify_drift(repo_root: Path, spec: Mapping[str, Any]) -> None:
     if workflow != CI_WORKFLOW_PATH:
         raise RunnerError("profile spec CI workflow path is not canonical")
     if expected != canonical:
-        raise RunnerError("profile spec CI commands differ from the runner canonical set")
+        raise RunnerError(
+            "profile spec CI commands differ from the runner canonical set"
+        )
     observed = _ci_run_commands(repo_root, workflow)
     if observed != canonical:
         raise RunnerError(
@@ -400,7 +402,9 @@ def _validated_commands(
             f"profile command sequence differs from canonical profile: {profile_name}"
         )
     if profile.get("kind") != CANONICAL_PROFILE_KINDS[profile_name]:
-        raise RunnerError(f"profile kind differs from canonical profile: {profile_name}")
+        raise RunnerError(
+            f"profile kind differs from canonical profile: {profile_name}"
+        )
     precondition_keys = (
         "requires_clean_worktree",
         "requires_main_branch",
@@ -470,7 +474,9 @@ def _terminate_process_group(
         try:
             return proc.communicate(timeout=PROCESS_TERM_GRACE_SECONDS)
         except subprocess.TimeoutExpired as exc:
-            raise RunnerError("failed to terminate validation command process group") from exc
+            raise RunnerError(
+                "failed to terminate validation command process group"
+            ) from exc
 
 
 def _run_command(

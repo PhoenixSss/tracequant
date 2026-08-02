@@ -98,7 +98,7 @@
     "runner_version": "1.0.1",
     "runner": {
       "path": "tools/agent_workflow/wsl2_validation_runner.py",
-      "sha256": "11105ca6bb9cc4a1c5782c1c10fbf2469b8b370b534f7b9d202c38e15bdcbbac"
+      "sha256": "69b6d1f86922c1c81612582c11e6d3910bd6405b49d44243b1fe92202787353a"
     },
     "profile_spec": {
       "path": "tools/agent_workflow/wsl2_validation_profiles.json",
@@ -110,7 +110,7 @@
     },
     "tests": {
       "path": "tests/tools/test_wsl2_validation_runner.py",
-      "sha256": "52c6327f003b77f697337c13be06003fc9b7aa8849f097166b26915e5639101e"
+      "sha256": "0ed26bb6c71bc742c0f41eccc995c493a8fcde4fe8808c68efd9295e47875031"
     }
   },
   "use_policy": {
