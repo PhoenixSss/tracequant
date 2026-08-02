@@ -1,0 +1,121 @@
+# quant-system WSL2 validation runner rules
+#
+# Scope:
+# - These rules only allow the fixed repository Validation Runner entry.
+# - They do not allow python, python3, uv, uv run, bash, sh, GitHub writes,
+#   git push, branch deletion, reset, clean, fetch, or arbitrary command wrappers.
+# - The runner itself fail-closes unknown profiles, unknown arguments, trailing
+#   arguments, wrong cwd, wrong repository root, symlink invocation, /mnt paths,
+#   CI/profile drift, and result write failures.
+# - Install or edit rules in a new Codex session before measuring live Guardian
+#   behavior; static execpolicy checks in this Task do not prove live activation.
+
+prefix_rule(
+    pattern = ["tools/agent_workflow/wsl2_validation_runner.py", "current-ci-equivalent"],
+    decision = "allow",
+    justification = "Allow only the fixed WSL2 validation runner current CI-equivalent profile.",
+    match = [
+        "tools/agent_workflow/wsl2_validation_runner.py current-ci-equivalent",
+    ],
+    not_match = [
+        "uv run --frozen pytest",
+        "python3 tools/agent_workflow/wsl2_validation_runner.py current-ci-equivalent",
+    ],
+)
+
+prefix_rule(
+    pattern = ["tools/agent_workflow/wsl2_validation_runner.py", "targeted"],
+    decision = "allow",
+    justification = "Allow the fixed default targeted workflow-tool test preset only.",
+    match = [
+        "tools/agent_workflow/wsl2_validation_runner.py targeted",
+    ],
+    not_match = [
+        "uv run --frozen pytest tests/tools",
+        "python tools/agent_workflow/wsl2_validation_runner.py targeted",
+    ],
+)
+
+prefix_rule(
+    pattern = ["tools/agent_workflow/wsl2_validation_runner.py", "targeted:tools-tests"],
+    decision = "allow",
+    justification = "Allow the named tools-tests preset without arbitrary pytest arguments.",
+    match = [
+        "tools/agent_workflow/wsl2_validation_runner.py targeted:tools-tests",
+    ],
+    not_match = [
+        "uv run --frozen pytest tests/tools",
+        "python3 tools/agent_workflow/wsl2_validation_runner.py targeted:tools-tests",
+    ],
+)
+
+prefix_rule(
+    pattern = ["tools/agent_workflow/wsl2_validation_runner.py", "targeted:workflow-tests"],
+    decision = "allow",
+    justification = "Allow the named workflow-tests preset without arbitrary pytest arguments.",
+    match = [
+        "tools/agent_workflow/wsl2_validation_runner.py targeted:workflow-tests",
+    ],
+    not_match = [
+        "uv run --frozen pytest tests/tools/test_workflow_validation.py",
+        "bash -c 'tools/agent_workflow/wsl2_validation_runner.py targeted:workflow-tests'",
+    ],
+)
+
+prefix_rule(
+    pattern = ["tools/agent_workflow/wsl2_validation_runner.py", "post-merge"],
+    decision = "allow",
+    justification = "Allow fixed post-merge validation; the runner separately requires synchronized clean main.",
+    match = [
+        "tools/agent_workflow/wsl2_validation_runner.py post-merge",
+    ],
+    not_match = [
+        "uv run --frozen pytest",
+        "python3 tools/agent_workflow/wsl2_validation_runner.py post-merge",
+    ],
+)
+
+prefix_rule(
+    pattern = [
+        "tools/agent_workflow/wsl2_validation_runner.py",
+        [
+            "current-ci-equivalent",
+            "targeted",
+            "targeted:tools-tests",
+            "targeted:workflow-tests",
+            "post-merge",
+        ],
+        ["--command", "--shell", "--exec", "--", "|", ">", "$(id)"],
+    ],
+    decision = "forbidden",
+    justification = "Runner profiles do not accept command, shell, exec, trailing separator, pipe, redirection or command-substitution arguments.",
+    match = [
+        "tools/agent_workflow/wsl2_validation_runner.py targeted --command pytest",
+        "tools/agent_workflow/wsl2_validation_runner.py targeted --shell 'uv run pytest'",
+        "tools/agent_workflow/wsl2_validation_runner.py targeted --exec id",
+        "tools/agent_workflow/wsl2_validation_runner.py targeted -- tests/core",
+        "tools/agent_workflow/wsl2_validation_runner.py targeted | cat",
+        "tools/agent_workflow/wsl2_validation_runner.py targeted > out.txt",
+        "tools/agent_workflow/wsl2_validation_runner.py targeted $(id)",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh", "auth", "token"],
+    decision = "forbidden",
+    justification = "Do not print GitHub authentication tokens.",
+)
+# Negative static check example: gh auth token
+
+prefix_rule(
+    pattern = ["git", ["push", "reset", "clean", "branch", "fetch"]],
+    decision = "prompt",
+    justification = "Git writes, dangerous local operations, branch deletion and fetch remain explicit workflow approvals.",
+)
+# Negative static check examples: git push, git reset --hard, git clean -fd
+
+prefix_rule(
+    pattern = ["gh", ["issue", "pr", "project", "api"]],
+    decision = "prompt",
+    justification = "GitHub mutations and raw API calls remain explicit workflow approvals.",
+)

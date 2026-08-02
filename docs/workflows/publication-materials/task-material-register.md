@@ -37,8 +37,8 @@
 | Task #64：结构化日志与敏感信息保护 | Issue #64 / PR #71 | 历史完整工作流 Token 与安全实现样本 | `historical-sample`、已完成 | Token 历史基线；敏感信息与 Review 案例 |
 | Task #65 第二轮实验协议与输入冻结 | Issue / PR：待回填 | 协议、冻结输入、统计口径、材料 Schema | `repository-final` | 两份文档的实验方法和权威输入 |
 | Task #65 Windows merge-pre 基准采集 | 元 Task Issue：待回填；业务 Issue #65；实验 PR #99 | 当前 Windows 正式基准、失败 pilot、rollout | `formal-sample` + `invalid-sample` | 当前基准、失败恢复、Token/命令/Guardian 数据 |
-| 可复现 WSL2 Codex 环境与能力诊断 | Issue #82 / PR #100 / Branch `82-task-reproducible-wsl2-codex-environment` / Base `a492f0b334f950f2613b4b2204e96bef413355be` | 环境指南、诊断工具、能力矩阵、决策与案例 | `review-ready-after-delivery-repair` | 指导手册环境章节；Token 文章候选变量与边界 |
-| WSL2 Validation Runner 与最小权限 Rules | 待创建或待执行 | Runner、Rules、权限与命令成本材料 | `placeholder` | 后续优化机制和控制面证据 |
+| 可复现 WSL2 Codex 环境与能力诊断 | Issue #82 / PR #100 / Branch `82-task-reproducible-wsl2-codex-environment` / Base `a492f0b334f950f2613b4b2204e96bef413355be` | 环境指南、诊断工具、能力矩阵、决策与案例 | `repository-final`、已完成 | 指导手册环境章节；Token 文章候选变量与边界 |
+| WSL2 Validation Runner 与最小权限 Rules | Issue #83 / PR：待回填 / Branch `83-task-wsl2-validation-runner-rules` / Base `767e995e7872c5eaea46002cf02381cef87f3eab` | Runner、Rules、权限与命令成本材料 | `delivery-pending` | 后续优化机制和控制面证据 |
 | Task #65 WSL2 candidate merge-pre | 业务 Issue #65；实验 PR：待创建 | Candidate Token、质量、Guardian、命令与时长 | `placeholder` | 最终前后对照和优化结论 |
 
 ---
@@ -248,10 +248,13 @@
 - PR：`#100`
 - Branch：`82-task-reproducible-wsl2-codex-environment`
 - Base SHA：`a492f0b334f950f2613b4b2204e96bef413355be`
-- final Delivery HEAD：由 PR #100 Delivery handoff / PR body 记录，不要求当前被审查提交自我回填。
-- reviewed HEAD / verdict：由 PR #100 独立 `task-pr-review` evidence 记录。
-- merge commit / Closeout：由 Task #82 closeout evidence 记录。
-- 当前状态：稳定身份已记录，动态生命周期字段等待独立 Review、Merge 与 Closeout 的权威 evidence。
+- final Delivery HEAD：`96b20b5505e5c0db053933792e67e298212c8cf9`
+- reviewed HEAD / verdict：`96b20b5505e5c0db053933792e67e298212c8cf9` / `pass`
+- squash merge commit：`767e995e7872c5eaea46002cf02381cef87f3eab`
+- Issue / Project：Issue closed；Project Status `Done`
+- Branch cleanup：completed
+- Post-merge validation：`112 passed` and quality success
+- 当前状态：Task #82 已完成，最终身份由 Task #83 回填。
 
 ### 已产生的仓库材料
 
@@ -309,10 +312,63 @@
 - [x] Issue、Parent、Epic、PR、Branch 和 Base SHA 已稳定记录。
 - [x] 三轮 `.agents/evidence.local/` 已生成可提交 SHA-256 manifest，未提交原始 evidence。
 - [x] 本清单、`publication-materials.json`、`evidence-index.json` 和 `publication-readiness.md` 的身份模型一致。
-- [ ] 合并前确认所有引用文件 SHA 没有因最终修订而失效。
-- [ ] independent Review evidence 记录 reviewed HEAD、Review verdict、findings 和验证结果。
-- [ ] Merge/Closeout evidence 记录 merge commit、最终 Issue/Project 状态、branch cleanup 和 Closeout verdict。
-- [ ] 如需回填 Task #82 最终身份，只能由 Task #83 或后续维护提交完成，不修改已审查 HEAD。
+- [x] independent Review evidence 记录 reviewed HEAD `96b20b5505e5c0db053933792e67e298212c8cf9`、Review verdict `pass`、findings 和验证结果。
+- [x] Merge/Closeout evidence 记录 squash merge commit `767e995e7872c5eaea46002cf02381cef87f3eab`、最终 Issue closed、Project Status `Done`、branch cleanup completed 和 post-merge validation `112 passed`。
+- [x] Task #82 最终身份由 Task #83 回填；未修改 Task #82 已审查 HEAD。
+
+---
+
+## Task — 建立 WSL2 Task Workflow Validation Runner 与最小权限 Rules
+
+### 身份
+
+- Task Issue：`#83`
+- PR：`待回填`
+- Parent Feature：`#77`
+- Epic：`#61`
+- Branch：`83-task-wsl2-validation-runner-rules`
+- Base / workflow / control-plane SHA：`767e995e7872c5eaea46002cf02381cef87f3eab`
+- Delivery HEAD：`待回填`
+- reviewed HEAD / verdict：`待回填`
+- merge commit：`待回填`
+- 生命周期状态：Delivery in progress；Task #65 candidate 未执行。
+
+### 已产生材料
+
+- [x] 仓库内实现和文档：
+  `tools/agent_workflow/wsl2_validation_runner.py`；
+  `tools/agent_workflow/wsl2_validation_profiles.json`；
+  `.codex/rules/quant-system-wsl-validation.rules`；
+  `docs/workflows/wsl2-validation-runner/README.md`；
+  `docs/workflows/wsl2-validation-runner/publication-materials.json`；
+  `tests/tools/test_wsl2_validation_runner.py`。
+- [x] 参考 rules 输入：
+  `/tmp/quant-system-wsl.rules`，SHA-256
+  `0a23cf86db6a04aaaea8fda5f82303f42eb962fd828d83c4d05ca01b011b25ab`。
+  Reused：固定 runner 规则应保持最小权限、禁止 `gh auth token`、Git/GitHub 写操作继续审批。
+  Excluded：不复制其宽泛只读 GitHub evidence 规则到本 Task 的 validation runner rules。
+- [x] Token/process/quality 指标：
+  `docs/workflows/wsl2-validation-runner/publication-materials.json`
+  按 `observed`、`derived`、`expected`、`not-measured` 区分。
+- [x] 决策、失败、恢复和反直觉案例：
+  runner tests cover subcommand failure, timeout, interruption, CI drift,
+  result-write failure, wrong cwd and symlink invocation.
+- [x] 可编辑图表源：
+  本 Task 未新增图表；后续 #85/#86 可基于 runner metrics 生成流程图。
+
+### 最终文档用途
+
+- 指导手册：固定入口、profile 选择、rules 激活 checkpoint、失败诊断和回滚。
+- Token 文章：命令收敛机制、局部输出体积、失败案例和未测量 Guardian 边界。
+- 本 Task **不能**提供 Token 降幅、Task #65 Candidate 优于 Windows 或质量无回退的结论。
+
+### 待办
+
+- [ ] PR 创建后回填 PR、Delivery HEAD 和 effective diff identity。
+- [ ] 独立 Review 后回填 reviewed HEAD、Review verdict 和 findings。
+- [ ] Merge/Closeout 后回填 merge commit、最终 Issue/Project 状态和 branch cleanup。
+- [ ] 新 Codex 会话加载 rules 后，仓库外记录 live Guardian、approval、输出大小和时长。
+- [ ] Task #84 处理 `baseRefOid` / GitHub Evidence helper 兼容性。
 
 ---
 

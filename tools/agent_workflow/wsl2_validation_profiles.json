@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "runner_version": "1.0.0",
+  "ci_workflow": ".github/workflows/ci.yml",
+  "ci_validation_commands": [
+    ["uv", "lock", "--check"],
+    ["uv", "run", "--frozen", "pytest"],
+    ["uv", "run", "--frozen", "ruff", "check", "."],
+    ["uv", "run", "--frozen", "ruff", "format", "--check", "."],
+    ["uv", "run", "--frozen", "mypy", "src", "tests"]
+  ],
+  "profiles": {
+    "current-ci-equivalent": {
+      "kind": "ci-equivalent",
+      "description": "Current CI validation commands plus local whitespace validation.",
+      "timeout_seconds": 900,
+      "requires_clean_worktree": false,
+      "requires_main_branch": false,
+      "commands": [
+        {
+          "id": "uv-lock-check",
+          "argv": ["uv", "lock", "--check"]
+        },
+        {
+          "id": "pytest",
+          "argv": ["uv", "run", "--frozen", "pytest"]
+        },
+        {
+          "id": "ruff-check",
+          "argv": ["uv", "run", "--frozen", "ruff", "check", "."]
+        },
+        {
+          "id": "ruff-format-check",
+          "argv": ["uv", "run", "--frozen", "ruff", "format", "--check", "."]
+        },
+        {
+          "id": "mypy",
+          "argv": ["uv", "run", "--frozen", "mypy", "src", "tests"]
+        },
+        {
+          "id": "git-diff-check",
+          "argv": ["git", "diff", "--check"]
+        }
+      ]
+    },
+    "targeted": {
+      "kind": "targeted",
+      "description": "Fixed workflow-tool test preset. This is not CI-equivalent.",
+      "timeout_seconds": 300,
+      "requires_clean_worktree": false,
+      "requires_main_branch": false,
+      "commands": [
+        {
+          "id": "pytest-tools",
+          "argv": ["uv", "run", "--frozen", "pytest", "tests/tools"]
+        }
+      ]
+    },
+    "targeted:tools-tests": {
+      "kind": "targeted",
+      "description": "Fixed tools test preset. This is not CI-equivalent.",
+      "timeout_seconds": 300,
+      "requires_clean_worktree": false,
+      "requires_main_branch": false,
+      "commands": [
+        {
+          "id": "pytest-tools",
+          "argv": ["uv", "run", "--frozen", "pytest", "tests/tools"]
+        }
+      ]
+    },
+    "targeted:workflow-tests": {
+      "kind": "targeted",
+      "description": "Fixed workflow runner test preset. This is not CI-equivalent.",
+      "timeout_seconds": 300,
+      "requires_clean_worktree": false,
+      "requires_main_branch": false,
+      "commands": [
+        {
+          "id": "pytest-workflow",
+          "argv": [
+            "uv",
+            "run",
+            "--frozen",
+            "pytest",
+            "tests/tools/test_workflow_validation.py",
+            "tests/tools/test_workflow_evidence.py",
+            "tests/tools/test_trusted_runner.py",
+            "tests/tools/test_wsl2_validation_runner.py"
+          ]
+        }
+      ]
+    },
+    "post-merge": {
+      "kind": "post-merge",
+      "description": "Post-merge validation for synchronized main only.",
+      "timeout_seconds": 900,
+      "requires_clean_worktree": true,
+      "requires_main_branch": true,
+      "requires_origin_main_identity": true,
+      "commands": [
+        {
+          "id": "uv-lock-check",
+          "argv": ["uv", "lock", "--check"]
+        },
+        {
+          "id": "pytest",
+          "argv": ["uv", "run", "--frozen", "pytest"]
+        },
+        {
+          "id": "ruff-check",
+          "argv": ["uv", "run", "--frozen", "ruff", "check", "."]
+        },
+        {
+          "id": "ruff-format-check",
+          "argv": ["uv", "run", "--frozen", "ruff", "format", "--check", "."]
+        },
+        {
+          "id": "mypy",
+          "argv": ["uv", "run", "--frozen", "mypy", "src", "tests"]
+        },
+        {
+          "id": "git-diff-check",
+          "argv": ["git", "diff", "--check"]
+        }
+      ]
+    }
+  }
+}

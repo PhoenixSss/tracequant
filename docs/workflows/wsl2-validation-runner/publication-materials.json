@@ -1,0 +1,112 @@
+{
+  "schema_version": "1.0",
+  "material_set_id": "wsl2-validation-runner-task-83-v1",
+  "scope": "Task #83 local validation runner, static rules checks, safety boundaries, and local behavior evidence only.",
+  "claims": [
+    {
+      "claim_id": "task83-runner-command-count",
+      "claim_type": "derived",
+      "status": "expected",
+      "statement": "The previous manual validation path used six separate validation calls; the runner exposes those checks through one fixed invocation while still executing six auditable subcommands for current-ci-equivalent.",
+      "evidence": [
+        "tools/agent_workflow/wsl2_validation_profiles.json",
+        ".github/workflows/ci.yml"
+      ]
+    },
+    {
+      "claim_id": "task83-guardian-live-effect",
+      "claim_type": "fact",
+      "status": "not-measured",
+      "statement": "Live Guardian turns and approval reductions require a restarted or new Codex session with the project rules loaded.",
+      "evidence": [
+        "docs/workflows/wsl2-validation-runner/README.md#live-activation-checkpoint"
+      ]
+    },
+    {
+      "claim_id": "task83-rules-static-boundaries",
+      "claim_type": "fact",
+      "status": "observed",
+      "statement": "Static execpolicy checks cover allowed runner profiles plus negative cases for interpreters, shells, GitHub writes, dangerous Git operations, unknown profiles, and known injection prefixes; arbitrary trailing arguments are rejected by the runner before subcommands execute.",
+      "evidence": [
+        ".codex/rules/quant-system-wsl-validation.rules",
+        "tests/tools/test_wsl2_validation_runner.py"
+      ]
+    },
+    {
+      "claim_id": "task83-failure-case",
+      "claim_type": "fact",
+      "status": "observed",
+      "statement": "Tests include bounded failing pytest, failing git diff, timeout, interrupted process, CI drift, and result-write failure cases.",
+      "evidence": [
+        "tests/tools/test_wsl2_validation_runner.py"
+      ]
+    },
+    {
+      "claim_id": "task83-no-token-claim",
+      "claim_type": "fact",
+      "status": "observed",
+      "statement": "Task #83 does not execute Task #65 candidate and does not claim token reduction or candidate superiority.",
+      "evidence": [
+        "docs/workflows/wsl2-validation-runner/README.md",
+        "docs/workflows/publication-materials/task-material-register.md"
+      ]
+    }
+  ],
+  "metrics": {
+    "pre_runner_model_visible_validation_invocations": {
+      "value": 6,
+      "status": "expected",
+      "basis": "Task #83 required validation command list before runner consolidation."
+    },
+    "post_runner_model_visible_validation_invocations": {
+      "value": 1,
+      "status": "expected",
+      "basis": "One fixed runner entry per selected profile."
+    },
+    "current_ci_equivalent_subcommands": {
+      "value": 6,
+      "status": "expected",
+      "basis": "Canonical profile spec."
+    },
+    "targeted_subcommands": {
+      "value": 1,
+      "status": "expected",
+      "basis": "Canonical profile spec."
+    },
+    "guardian_turns": {
+      "value": null,
+      "status": "not-measured",
+      "basis": "Requires live rules activation checkpoint in a new Codex session."
+    },
+    "elevated_executions": {
+      "value": null,
+      "status": "not-measured",
+      "basis": "Outer Codex execution route is not observable from inside the runner."
+    },
+    "success_stdout_bytes": {
+      "value": 346,
+      "status": "observed",
+      "basis": "Measured from `tools/agent_workflow/wsl2_validation_runner.py targeted` compact digest stdout during Task #83 delivery."
+    },
+    "failure_stdout_bytes": {
+      "value": 88,
+      "status": "observed",
+      "basis": "Measured as fail-closed stderr from `tools/agent_workflow/wsl2_validation_runner.py post-merge` on a non-clean non-main delivery branch."
+    },
+    "total_execution_time_ms": {
+      "value": 11174,
+      "status": "observed",
+      "basis": "Measured from `current-ci-equivalent` runner digest result `20260802T073329Z-e5d9d709d4e1`."
+    }
+  },
+  "known_followups": [
+    {
+      "task": "#84",
+      "description": "baseRefOid and GitHub Evidence helper compatibility remain deferred."
+    },
+    {
+      "task": "#85",
+      "description": "Formal Task Workflow Skills are not switched to this runner in Task #83."
+    }
+  ]
+}
