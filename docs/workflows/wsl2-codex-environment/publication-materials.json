@@ -689,13 +689,13 @@
         {
           "kind": "config",
           "path_or_id": "tools/wsl2_codex_diagnostic.py",
-          "sha256": "1e46656ab0c9655fc2e2bbfa7a188d6a26981a30aff95847111a70216c72e52b",
+          "sha256": "d812c0c7fdd90229fd657830ec383cdecafad9860d27332738d4bfea80bca2c8",
           "locator": "CLI profiles and write-probe confirmation handling"
         },
         {
           "kind": "validation",
           "path_or_id": "tests/tools/test_wsl2_codex_diagnostic.py",
-          "sha256": "9d30703a2fb1677a0d38009eff43be4e29b2132ecb22925d232eab494da7a75b",
+          "sha256": "5cef64b0c9d302c79f0ebf5bb9740ff61e5110ffc9dbb0012da1ad00d62a378d",
           "locator": "/"
         }
       ]

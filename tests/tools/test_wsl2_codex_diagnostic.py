@@ -62,7 +62,7 @@ def test_redact_text_hides_paths_proxy_credentials_and_tokens() -> None:
     os.environ["HTTPS_PROXY"] = "http://user:password@127.0.0.1:7897/path?secret=1"
     try:
         result = module.redact_text(
-            "/home/maple/repo github_pat_ABC123 "
+            "/home/maple/repo github_pat_ABC123 ghr_REFRESH123 "
             "http://user:password@127.0.0.1:7897/path?secret=1",
             home=Path("/home/maple"),
             repo_root=Path("/home/maple/repo"),
@@ -70,6 +70,7 @@ def test_redact_text_hides_paths_proxy_credentials_and_tokens() -> None:
     finally:
         os.environ.pop("HTTPS_PROXY", None)
     assert "github_pat_ABC123" not in result
+    assert "ghr_REFRESH123" not in result
     assert "password" not in result
     assert "secret=1" not in result
     assert "<repo>" in result

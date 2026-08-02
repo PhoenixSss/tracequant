@@ -40,7 +40,7 @@ PROXY_KEYS = {
     "no_proxy",
 }
 TOKEN_PATTERNS = (
-    re.compile(r"(?i)\b(?:gh[opsu]_|github_pat_)[A-Za-z0-9_]+"),
+    re.compile(r"(?i)\b(?:gh[oprsu]_|github_pat_)[A-Za-z0-9_]+"),
     re.compile(r"(?i)(authorization\s*[:=]\s*)(?:bearer\s+)?\S+"),
     re.compile(r"(?i)(token\s*[:=]\s*)\S+"),
 )
