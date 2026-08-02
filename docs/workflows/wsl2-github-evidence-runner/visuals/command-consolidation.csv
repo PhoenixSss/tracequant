@@ -1,4 +1,5 @@
-stage,model_visible_invocations,internal_operations,status,scope
-legacy-task-stage,multiple,individual gh and Git commands,not-measured,external historical rollout required
-fixed-evidence-profile,1,reported per result,expected,Task #84 architecture
-snapshot-recheck,1,recollection plus fixed remote-ref comparison,expected,stability-sensitive stage
+sample,scope,git_containing_command_calls,github_gh_containing_command_calls,model_visible_fixed_runner_invocations,status
+Task #63,Delivery+Review+Closeout,110,54,,observed-external-aggregate
+Task #64,Delivery+Review+Closeout,98,65,,observed-external-aggregate
+Task #84 fixed review profile,single stage,,,1,expected-until-live-probe
+Task #84 snapshot recheck,single stability check,,,1,expected-until-live-probe

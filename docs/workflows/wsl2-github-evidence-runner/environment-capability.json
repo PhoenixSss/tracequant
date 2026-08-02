@@ -1,0 +1,77 @@
+{
+  "schema_version": "1.0",
+  "task": 84,
+  "evidence_type": "environment-capability-baseline",
+  "status": "source-derived-with-live-refresh-required",
+  "source": {
+    "path": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+    "sha256": "e151c535a5d640d7060910dde5a8bf718cb8d8c3efe5f9200c4b7a9fd09e4495",
+    "observed_at": "2026-08-01"
+  },
+  "environment": {
+    "distribution": "Ubuntu 24.04.4 LTS",
+    "distribution_id": "Ubuntu-24.04",
+    "kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "repository_path_contract": "/home/<user>/code/quant-system",
+    "repository_filesystem": "ext4",
+    "repository_under_windows_mount": false,
+    "vscode_remote_wsl": "verified",
+    "codex_in_wsl": "verified"
+  },
+  "tools": {
+    "uv": {
+      "version": "0.12.1",
+      "path_contract": "$HOME/.local/bin/uv"
+    },
+    "git": {
+      "observed_version": "2.43.0",
+      "path": "/usr/bin/git"
+    },
+    "github_cli": {
+      "observed_version": "2.97.0",
+      "path": "$HOME/.local/bin/gh",
+      "authentication": "verified",
+      "credential_boundary": "WSL-local, revocable; credential contents are not recorded"
+    },
+    "codex": {
+      "version": null,
+      "status": "not-captured-in-committed-source",
+      "live_refresh_required": true
+    }
+  },
+  "github_capabilities": {
+    "authentication": {
+      "status": "verified",
+      "credential_boundary": "WSL-local, revocable; credential contents are not recorded"
+    },
+    "base_head_oid_metadata": {
+      "status": "observed-working-after-github-cli-upgrade",
+      "evidence": [
+        "docs/workflows/publication-materials/task-material-register.md"
+      ],
+      "live_task84_refresh_required": true
+    },
+    "project_read": {
+      "status": "live-task84-profile-required",
+      "scopes": null
+    },
+    "required_checks_configuration": {
+      "status": "plan-limited-403-observed",
+      "classification": "server-capability-unavailable",
+      "check_run_fallback_must_remain_auditable": true,
+      "live_task84_refresh_required": true
+    }
+  },
+  "security": {
+    "token_committed": false,
+    "token_value_recorded": false,
+    "complete_credential_recorded": false,
+    "proxy_credential_recorded": false,
+    "scopes_recorded": false
+  },
+  "limitations": [
+    "Codex version is not present in the committed environment diagnostic.",
+    "Current Task #84 Project, thread, and required-check behavior must be refreshed against the real PR.",
+    "No live Guardian, approval, elevated, API-call, duration, or stdout metric is inferred from this baseline."
+  ]
+}

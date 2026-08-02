@@ -462,6 +462,11 @@
   `docs/workflows/wsl2-github-evidence-runner/security-and-troubleshooting.md`。
 - [x] 指导手册与 Token 文章材料：
   `docs/workflows/wsl2-github-evidence-runner/publication-materials.json`；
+  `docs/workflows/wsl2-github-evidence-runner/historical-command-baseline.json`；
+  `docs/workflows/wsl2-github-evidence-runner/environment-capability.json`；
+  `docs/workflows/wsl2-github-evidence-runner/live-evidence-capture-plan.md`；
+  `docs/workflows/wsl2-github-evidence-runner/publication-readiness.md`；
+  `docs/workflows/wsl2-github-evidence-runner/templates/`；
   `docs/workflows/wsl2-github-evidence-runner/visuals/`。
 
 ### 当前证据边界
@@ -471,8 +476,14 @@
   symlink、路径含空格、并发输出隔离和无 GitHub 写操作。
 - [x] Rules 测试覆盖固定入口、直接 `gh`/Git/shell 不放行、Git/GitHub 写
   继续审批，以及 prefix allow + Runner complete-argv reject 的组合边界。
+- [x] Task #63/#64 外部分析报告中的历史 Git/`gh`、Guardian 与 Token
+  聚合数据已以摘要和 source SHA 归档；原始 rollout/report 不提交。
+- [x] Live profile、snapshot recheck、execpolicy 和环境能力的版本化采集
+  契约、JSON 模板与 readiness matrix 已归档。
 - [ ] 创建 PR 并提交 trusted files 后，对真实 Task #84 / PR 执行 live profile，
   记录 API 调用数、stdout、时长、Guardian、approval 和 result SHA-256。
+- [ ] 使用同一 snapshot 执行 live recheck，并在全新 Codex 会话记录真实
+  execpolicy matrix 和 Runner 尾随参数拒绝。
 - [ ] 外部 Token 指标继续留给 rollout 分析和 Task #86，不在本 Task 推导。
 
 ### 最终文档用途

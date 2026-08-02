@@ -217,6 +217,25 @@ A consuming Skill should:
 Do not run both the fixed runner and the complete legacy mechanical query chain
 unless a reported partial/failure requires a documented read-only fallback.
 
+
+## Publication evidence package
+
+The Task #84 publication package includes:
+
+- `historical-command-baseline.json`: Task #63/#64 aggregate Git, GitHub/`gh`,
+  Guardian, duration, and Token context derived from external reports without
+  committing raw rollout logs;
+- `environment-capability.json`: source-derived WSL2 and GitHub CLI capability
+  baseline with explicit live-refresh fields;
+- `live-evidence-capture-plan.md`: exact capture and claim contract;
+- `templates/`: valid JSON examples for live profile, recheck, Rules, and
+  external evidence manifest files;
+- `publication-readiness.md`: final-document coverage and remaining local gates;
+- `visuals/`: editable historical, live-metric, and capability-drift sources.
+
+The examples are not pass evidence. Local Delivery must copy them to the final
+filenames and replace only fields backed by actual observations.
+
 ## Live probe
 
 Task #84 Delivery should perform an explicit real-repository probe after the

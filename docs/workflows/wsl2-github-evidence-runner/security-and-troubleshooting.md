@@ -58,6 +58,18 @@ This is the known Codex prefix-matching boundary, not semantic acceptance. The
 runner's argparse contract rejects arbitrary trailing values before evidence
 collection. Tests must verify policy behavior and runner behavior separately.
 
+
+### GitHub CLI capability drift
+
+A previous trusted review recollection was blocked when the installed GitHub
+CLI did not expose a required PR JSON field. Upgrading the WSL2 GitHub CLI
+restored the metadata path and stable recheck.
+
+The reusable lesson is not "always upgrade blindly." Record the tool version,
+probe the actual required fields, and keep unsupported or unavailable facts
+explicitly partial. Task #84 therefore records environment capability alongside
+runner results. A future incompatibility must not be hidden by stale evidence.
+
 ## Troubleshooting checklist
 
 1. Confirm the command is run from the repository root under `/home`, not `/mnt`.

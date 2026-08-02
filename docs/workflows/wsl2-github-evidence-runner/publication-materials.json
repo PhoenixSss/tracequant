@@ -1,10 +1,10 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "task": 84,
   "parent_feature": 77,
   "epic": 61,
   "base_sha": "74a75872078221c38dbd132a1d438b0bb05c1870",
-  "material_set": "wsl2-github-evidence-runner-task-84-v1",
+  "material_set": "wsl2-github-evidence-runner-task-84-v2",
   "claims": [
     {
       "id": "task84-fixed-readonly-entry",
@@ -51,6 +51,41 @@
       "evidence": [
         "docs/workflows/wsl2-github-evidence-runner/publication-materials.json"
       ]
+    },
+    {
+      "id": "task84-historical-command-density",
+      "status": "observed",
+      "statement": "External aggregate reports for Tasks #63 and #64 record 110/98 Git-containing command calls and 54/65 GitHub/gh-containing command calls across Delivery, Review, and Closeout. Categories can overlap and are not additive.",
+      "evidence": [
+        "docs/workflows/wsl2-github-evidence-runner/historical-command-baseline.json",
+        "docs/workflows/wsl2-github-evidence-runner/visuals/historical-git-gh-baseline.csv"
+      ]
+    },
+    {
+      "id": "task84-historical-guardian-context",
+      "status": "observed",
+      "statement": "The same external reports record 54 and 72 Guardian turns and 2,290,161 and 3,259,735 Guardian Tokens for Tasks #63 and #64.",
+      "evidence": [
+        "docs/workflows/wsl2-github-evidence-runner/historical-command-baseline.json"
+      ]
+    },
+    {
+      "id": "task84-environment-capability-record",
+      "status": "observed-with-refresh-required",
+      "statement": "The committed WSL2 diagnostic records GitHub CLI 2.97.0 and verified WSL-local authentication. Task #84 live evidence must refresh PR, Project, Rules, and Required Checks capabilities.",
+      "evidence": [
+        "docs/workflows/wsl2-github-evidence-runner/environment-capability.json",
+        "docs/workflows/wsl2-codex-environment/current-diagnostic.json"
+      ]
+    },
+    {
+      "id": "task84-live-capture-contract",
+      "status": "expected",
+      "statement": "Live profile, recheck, Rules, and environment summaries follow versioned templates and keep raw evidence external.",
+      "evidence": [
+        "docs/workflows/wsl2-github-evidence-runner/live-evidence-capture-plan.md",
+        "docs/workflows/wsl2-github-evidence-runner/templates/"
+      ]
     }
   ],
   "metrics": {
@@ -83,6 +118,56 @@
       "value": null,
       "status": "not-measured",
       "scope": "record during Task #84 live Delivery probe"
+    },
+    "historical_task63_git_containing_commands": {
+      "value": 110,
+      "status": "observed-external-aggregate",
+      "scope": "Delivery+Review+Closeout; category may overlap GitHub/gh"
+    },
+    "historical_task63_github_gh_containing_commands": {
+      "value": 54,
+      "status": "observed-external-aggregate",
+      "scope": "Delivery+Review+Closeout; category may overlap Git"
+    },
+    "historical_task64_git_containing_commands": {
+      "value": 98,
+      "status": "observed-external-aggregate",
+      "scope": "Delivery+Review+Closeout; category may overlap GitHub/gh"
+    },
+    "historical_task64_github_gh_containing_commands": {
+      "value": 65,
+      "status": "observed-external-aggregate",
+      "scope": "Delivery+Review+Closeout; category may overlap Git"
+    },
+    "historical_task63_guardian_turns": {
+      "value": 54,
+      "status": "observed-external-aggregate",
+      "scope": "whole Task workflow"
+    },
+    "historical_task64_guardian_turns": {
+      "value": 72,
+      "status": "observed-external-aggregate",
+      "scope": "whole Task workflow"
+    },
+    "live_profile_duration_ms": {
+      "value": null,
+      "status": "not-measured",
+      "scope": "Task #84 real review profile"
+    },
+    "live_recheck_api_calls": {
+      "value": null,
+      "status": "not-measured",
+      "scope": "Task #84 exact snapshot recheck"
+    },
+    "approval_prompts": {
+      "value": null,
+      "status": "not-measured",
+      "scope": "fresh live Codex session"
+    },
+    "elevated_executions": {
+      "value": null,
+      "status": "not-measured",
+      "scope": "fresh live Codex session"
     }
   },
   "publication_mapping": {
@@ -101,8 +186,18 @@
     ]
   },
   "limitations": [
-    "No live Task #84 PR probe is included before a PR and committed head exist.",
+    "Task #63/#64 aggregate reports are external; only hashes and aggregate metrics are committed.",
+    "Git and GitHub/gh command categories can overlap and must not be summed.",
+    "No Task #84 live PR/profile/recheck/execpolicy observation is included before local Delivery capture.",
     "No Task #65 candidate or Token reduction claim is made.",
     "Task #85 is responsible for changing workflow Skills to consume the fixed runner."
+  ],
+  "source_documents": [
+    "docs/workflows/wsl2-github-evidence-runner/README.md",
+    "docs/workflows/wsl2-github-evidence-runner/historical-command-baseline.json",
+    "docs/workflows/wsl2-github-evidence-runner/environment-capability.json",
+    "docs/workflows/wsl2-github-evidence-runner/live-evidence-capture-plan.md",
+    "docs/workflows/wsl2-github-evidence-runner/publication-readiness.md",
+    "docs/workflows/wsl2-github-evidence-runner/visuals/"
   ]
 }
