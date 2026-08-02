@@ -24,7 +24,7 @@
       "launcher": "uv run python"
     },
     "uv": {
-      "version": "0.11.28",
+      "version": "0.12.1",
       "path_contract": "$HOME/.local/bin/uv"
     },
     "git": {
@@ -32,8 +32,8 @@
       "path": "/usr/bin/git"
     },
     "github_cli": {
-      "observed_version": "2.45.0",
-      "path": "/usr/bin/gh",
+      "observed_version": "2.97.0",
+      "path": "$HOME/.local/bin/gh",
       "authentication": "verified",
       "credential_boundary": "WSL-local, revocable; credential contents are not recorded"
     }

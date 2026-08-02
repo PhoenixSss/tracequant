@@ -13,9 +13,9 @@
 | 文件系统 | 仓库位于 Linux 文件系统，不在 `/mnt/<drive>` |
 | Python 引导 | `python3` 可用；不要求裸 `python` |
 | 项目 Python | `.python-version` 的 Python 3.11，由 uv 管理 |
-| uv | 精确 `0.11.28` |
+| uv | 精确 `0.12.1` |
 | Git | WSL 原生 Git，支持 worktree 与普通分支操作 |
-| gh | WSL 原生 GitHub CLI，独立、可撤销登录 |
+| gh | WSL 原生 GitHub CLI `2.97.0`，独立、可撤销登录 |
 | 输出目录 | 仅 `.agents/evidence.local/` 和 `.agents/validation.local/` |
 | 网络 | 正式远程操作使用已验证代理路径，并遵循 approval |
 | 凭据 | 不读取、不复制、不输出认证文件或 token |
@@ -28,7 +28,7 @@ Runner 开始前至少验证：
 2. 仓库路径不在 `/mnt/`；
 3. `git status` 与当前 Skill 的工作区约束一致；
 4. `python3`、`uv`、`git` 和适用时的 `gh` 路径均为 Linux 原生路径；
-5. `uv --version` 为 `0.11.28`；
+5. `uv --version` 为 `0.12.1`；
 6. 输出路径被 Git ignore；
 7. 网络、Git/GitHub 写入已经由当前 Skill 授权；
 8. trusted control-plane 要求由现有 workflow evidence policy 处理。

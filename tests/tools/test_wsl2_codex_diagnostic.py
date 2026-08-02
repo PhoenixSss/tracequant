@@ -40,7 +40,7 @@ def _write_fake_uv(bin_dir: Path) -> None:
     uv = bin_dir / "uv"
     uv.write_text(
         "#!/bin/sh\n"
-        'if [ "$1" = "--version" ]; then echo \'uv 0.11.28\'; exit 0; fi\n'
+        'if [ "$1" = "--version" ]; then echo \'uv 0.12.1\'; exit 0; fi\n'
         'if [ "$1" = "run" ] && [ "$2" = "python" ]; then '
         "echo 'Python 3.11.9'; exit 0; fi\n"
         "exit 0\n",

@@ -66,7 +66,7 @@
       "material_id": "mat-fact-002",
       "category": "fact",
       "title": "WSL 原生工具链与版本契约",
-      "summary": "系统诊断使用 /usr/bin/python3，项目 Python 固定为 3.11 并由 uv 管理，uv 固定为 0.11.28。",
+      "summary": "系统诊断使用 /usr/bin/python3，项目 Python 固定为 3.11 并由 uv 管理，uv 固定为 0.12.1。",
       "source_refs": [
         {
           "kind": "report",
@@ -573,10 +573,10 @@
       "case_id": "case-uv-drift",
       "type": "recovery",
       "title": "uv 版本漂移与恢复",
-      "trigger": "Local uv 0.12.0 differed from CI uv 0.11.28.",
+      "trigger": "Local uv differed from the CI-pinned uv version.",
       "timeline": [
         "Initial diagnostic recorded uv 0.12.0.",
-        "Maintainer downgraded to 0.11.28.",
+        "Maintainer aligned local and CI uv to 0.12.1.",
         "Follow-up validation passed."
       ],
       "observed_behavior": "The project worked, but reproducibility was not satisfied.",
@@ -818,10 +818,10 @@
       "decision_id": "decision-uv-pin",
       "question": "How should uv be versioned?",
       "options_considered": [
-        "Pin to CI 0.11.28",
+        "Pin to CI 0.12.1",
         "Use the newest local uv release"
       ],
-      "selected_option": "Pin to CI 0.11.28",
+      "selected_option": "Pin to CI 0.12.1",
       "rejected_options": [
         "Allow local/CI drift"
       ],
@@ -973,7 +973,7 @@
       "Record unknown and not-measured fields instead of inferring them"
     ],
     "project_specific_limits": [
-      "uv 0.11.28 and Python 3.11 are current repository contracts",
+      "uv 0.12.1 and Python 3.11 are current repository contracts",
       "The repository currently relies on a machine-local proxy path",
       "Exact Guardian routing is authoritative only in outer Codex rollout evidence"
     ],

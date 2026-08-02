@@ -13,7 +13,7 @@
       "evidence_id": "repo-current-diagnostic",
       "kind": "report",
       "path": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
-      "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+      "sha256": "e151c535a5d640d7060910dde5a8bf718cb8d8c3efe5f9200c4b7a9fd09e4495",
       "public_status": "public",
       "supports": [
         "WSL2 distribution and filesystem",
@@ -27,7 +27,7 @@
       "evidence_id": "repo-capability-matrix",
       "kind": "report",
       "path": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
-      "sha256": "cfac0f706ade85c6ce8c29d3ea41d59eee60a64fef6493a2c502244d96de91d4",
+      "sha256": "79fb14011f39f3f47edd2252112d5a4101c38755f5a622161416eae931d857c0",
       "public_status": "public",
       "supports": [
         "direct versus approval-required capability counts",
@@ -39,7 +39,7 @@
       "evidence_id": "repo-runner-contract",
       "kind": "config",
       "path": "docs/workflows/wsl2-codex-environment/runner-environment-contract.md",
-      "sha256": "033ba2d2b7759de515a3c376d765fc720083d8d1cf6e3be0f6ce3af9819b6aca",
+      "sha256": "81799fe8286aa24f8c52c06831e2d1a6ac1b937d1ffd41ed0bbd9e0b5488f670",
       "public_status": "public",
       "supports": [
         "future Runner preconditions",
@@ -63,7 +63,7 @@
       "evidence_id": "repo-diagnostic-tests",
       "kind": "validation",
       "path": "tests/tools/test_wsl2_codex_diagnostic.py",
-      "sha256": "5cef64b0c9d302c79f0ebf5bb9740ff61e5110ffc9dbb0012da1ad00d62a378d",
+      "sha256": "d47d75c6c5c71cfaca32f840a49fe3f90fe95a3d0b35b45381d04541895eb24a",
       "public_status": "public",
       "supports": [
         "diagnostic tool safety and output behavior"
@@ -105,7 +105,7 @@
       "evidence_id": "repo-ci-config",
       "kind": "config",
       "path": ".github/workflows/ci.yml",
-      "sha256": "a73b2e12664dca4b52e29d393a771378ab31bbe7b888d0583025deaf42ba6fa6",
+      "sha256": "c804628c3d53c8c1584de1a964f8e8dc56feaaff410efdd08f27c51f1ec2a9c9",
       "public_status": "public",
       "supports": [
         "CI toolchain and validation command contract"
