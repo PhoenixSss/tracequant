@@ -1,0 +1,234 @@
+{
+  "schema_version": "1.0",
+  "scope": "WSL2 Codex environment and execution-capability Task",
+  "public_evidence_policy": {
+    "raw_rollouts_committed": false,
+    "raw_credentials_committed": false,
+    "absolute_user_paths_committed": false,
+    "repository_sources_are_public_safe": true,
+    "external_evidence_is_referenced_by_run_id": true
+  },
+  "repository_sources": [
+    {
+      "evidence_id": "repo-current-diagnostic",
+      "kind": "report",
+      "path": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+      "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+      "public_status": "public",
+      "supports": [
+        "WSL2 distribution and filesystem",
+        "tool versions and paths",
+        "project validation result",
+        "capability classifications",
+        "network and security boundaries"
+      ]
+    },
+    {
+      "evidence_id": "repo-capability-matrix",
+      "kind": "report",
+      "path": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
+      "sha256": "cfac0f706ade85c6ce8c29d3ea41d59eee60a64fef6493a2c502244d96de91d4",
+      "public_status": "public",
+      "supports": [
+        "direct versus approval-required capability counts",
+        "Windows and WSL2 comparison",
+        "operations that must retain approval"
+      ]
+    },
+    {
+      "evidence_id": "repo-runner-contract",
+      "kind": "config",
+      "path": "docs/workflows/wsl2-codex-environment/runner-environment-contract.md",
+      "sha256": "033ba2d2b7759de515a3c376d765fc720083d8d1cf6e3be0f6ce3af9819b6aca",
+      "public_status": "public",
+      "supports": [
+        "future Runner preconditions",
+        "fail-closed behavior",
+        "credential and evidence boundaries"
+      ]
+    },
+    {
+      "evidence_id": "repo-diagnostic-tool",
+      "kind": "config",
+      "path": "tools/wsl2_codex_diagnostic.py",
+      "sha256": "d812c0c7fdd90229fd657830ec383cdecafad9860d27332738d4bfea80bca2c8",
+      "public_status": "public",
+      "supports": [
+        "repeatable local, remote-read and full diagnostic profiles",
+        "explicit confirmation for reversible write probes",
+        "bounded and redacted evidence output"
+      ]
+    },
+    {
+      "evidence_id": "repo-diagnostic-tests",
+      "kind": "validation",
+      "path": "tests/tools/test_wsl2_codex_diagnostic.py",
+      "sha256": "5cef64b0c9d302c79f0ebf5bb9740ff61e5110ffc9dbb0012da1ad00d62a378d",
+      "public_status": "public",
+      "supports": [
+        "diagnostic tool safety and output behavior"
+      ]
+    },
+    {
+      "evidence_id": "repo-windows-baseline",
+      "kind": "report",
+      "path": "docs/workflows/benchmarks/task-65-round-2/environment-current-windows.md",
+      "sha256": "e471431e3dc06c78dbe8349194f750b59805d7629a752ec21e82f29b08038989",
+      "public_status": "public",
+      "supports": [
+        "native Windows environment limitations used in the comparison"
+      ]
+    },
+    {
+      "evidence_id": "repo-experiment-protocol",
+      "kind": "config",
+      "path": "docs/workflows/benchmarks/task-65-round-2/protocol.md",
+      "sha256": "de8423d4b42c7627e2bcdd4c4e3c1ae213cec62e800773d6d0b92c82d752146c",
+      "public_status": "public",
+      "supports": [
+        "publication material categories",
+        "evidence requirements",
+        "Task #65 candidate boundary"
+      ]
+    },
+    {
+      "evidence_id": "repo-python-pin",
+      "kind": "config",
+      "path": ".python-version",
+      "sha256": "49a506dd32096b010d75205acf3430c9ae6c40351888129499e5a5e487126c93",
+      "public_status": "public",
+      "supports": [
+        "project Python 3.11 contract"
+      ]
+    },
+    {
+      "evidence_id": "repo-ci-config",
+      "kind": "config",
+      "path": ".github/workflows/ci.yml",
+      "sha256": "a73b2e12664dca4b52e29d393a771378ab31bbe7b888d0583025deaf42ba6fa6",
+      "public_status": "public",
+      "supports": [
+        "CI toolchain and validation command contract"
+      ]
+    }
+  ],
+  "external_runs": [
+    {
+      "run_id": "20260801T133921Z-66016f44",
+      "normalized_location": ".agents/evidence.local/wsl2-environment-diagnostic/20260801T133921Z-66016f44/",
+      "purpose": "initial environment and capability diagnostic",
+      "public_status": "external-only-manifested",
+      "expected_files": [
+        "environment.json",
+        "commands.jsonl",
+        "capability-matrix.json",
+        "guardian-approval-matrix.json",
+        "network-summary.json",
+        "git-github-summary.json",
+        "validation-summary.json",
+        "windows-wsl2-comparison.json",
+        "diagnostic-report.md"
+      ],
+      "sha256_manifest": {
+        "path": "docs/workflows/wsl2-codex-environment/external-evidence-manifest.json",
+        "sha256": "07e0715ed655641345ba7dd1e2e79b52dffe8f6c104058ddd9428d535146a76a",
+        "run_locator": "/runs/0",
+        "repository_inclusion_status": "committed-manifest-only"
+      },
+      "finalization_status": "manifest-committed"
+    },
+    {
+      "run_id": "20260801T145709Z-followup",
+      "normalized_location": ".agents/evidence.local/wsl2-environment-diagnostic/20260801T145709Z-followup/",
+      "purpose": "GitHub authentication, fetch and formal repository write follow-up",
+      "public_status": "external-only-manifested",
+      "expected_files": [
+        "followup-environment.json",
+        "github-auth-fetch.json",
+        "formal-repository-write-probe.json",
+        "followup-validation.json",
+        "followup-report.md"
+      ],
+      "sha256_manifest": {
+        "path": "docs/workflows/wsl2-codex-environment/external-evidence-manifest.json",
+        "sha256": "07e0715ed655641345ba7dd1e2e79b52dffe8f6c104058ddd9428d535146a76a",
+        "run_locator": "/runs/1",
+        "repository_inclusion_status": "committed-manifest-only"
+      },
+      "finalization_status": "manifest-committed"
+    },
+    {
+      "run_id": "20260801T152359Z-final-gaps",
+      "normalized_location": ".agents/evidence.local/wsl2-environment-diagnostic/20260801T152359Z-final-gaps/",
+      "purpose": "reversible GitHub write and proxy comparison",
+      "public_status": "external-only-manifested",
+      "expected_files": [
+        "github-write-probe.json",
+        "proxy-comparison.json",
+        "cleanup-verification.json",
+        "final-gap-report.md"
+      ],
+      "sha256_manifest": {
+        "path": "docs/workflows/wsl2-codex-environment/external-evidence-manifest.json",
+        "sha256": "07e0715ed655641345ba7dd1e2e79b52dffe8f6c104058ddd9428d535146a76a",
+        "run_locator": "/runs/2",
+        "repository_inclusion_status": "committed-manifest-only"
+      },
+      "finalization_status": "manifest-committed"
+    }
+  ],
+  "delivery_identity": {
+    "task_issue": "#82",
+    "parent_feature": "#77",
+    "epic": "#61",
+    "pull_request": "#100",
+    "branch": "82-task-reproducible-wsl2-codex-environment",
+    "base_sha": "a492f0b334f950f2613b4b2204e96bef413355be",
+    "dynamic_lifecycle_fields": {
+      "final_delivery_head": {
+        "status": "changes-with-delivery-repair-commits",
+        "authoritative_source": "PR #100 branch head at delivery handoff",
+        "repository_backfill_policy": "Do not require this reviewed PR head to backfill itself; record the new delivery head in PR handoff/body and later maintenance material if needed."
+      },
+      "reviewed_head": {
+        "status": "resolved-by-independent-review-evidence",
+        "authoritative_source": "PR #100 independent task-pr-review result",
+        "repository_backfill_policy": "Backfill only from a later Task or post-closeout maintenance change."
+      },
+      "review_verdict": {
+        "status": "resolved-by-independent-review-evidence",
+        "authoritative_source": "PR #100 independent task-pr-review result",
+        "repository_backfill_policy": "Backfill only from a later Task or post-closeout maintenance change."
+      },
+      "merge_commit": {
+        "status": "resolved-by-closeout-evidence",
+        "authoritative_source": "Task #82 closeout result",
+        "repository_backfill_policy": "Backfill after Task #82 is merged, without modifying its reviewed head."
+      },
+      "closeout_status": {
+        "status": "resolved-by-closeout-evidence",
+        "authoritative_source": "Task #82 closeout result",
+        "repository_backfill_policy": "Backfill after closeout or in a later maintenance update."
+      },
+      "branch_cleanup": {
+        "status": "resolved-by-closeout-evidence",
+        "authoritative_source": "Task #82 closeout result",
+        "repository_backfill_policy": "Backfill after branch cleanup verification if needed."
+      },
+      "final_issue_project_status": {
+        "status": "resolved-by-closeout-evidence",
+        "authoritative_source": "Task #82 closeout result",
+        "repository_backfill_policy": "Backfill after closeout or in a later maintenance update."
+      }
+    },
+    "status": "stable-identities-recorded-dynamic-fields-deferred-to-review-and-closeout-evidence"
+  },
+  "finalization_checks": [
+    "Repository-source SHA-256 values match current committed file contents.",
+    "External evidence manifest is committed and references all three external-only runs without raw evidence.",
+    "Task issue, parent Feature, Epic, PR, branch and base SHA are stable before independent Review.",
+    "Independent Review evidence is the authoritative source for reviewed HEAD, Review verdict, findings and validation result.",
+    "Closeout evidence is the authoritative source for merge commit, final Issue/Project status, branch cleanup and Closeout verdict.",
+    "Future backfill must happen in a later Task or maintenance change, not by modifying this PR after its reviewed head."
+  ]
+}

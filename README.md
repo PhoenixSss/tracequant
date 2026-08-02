@@ -40,6 +40,7 @@ A research-first quantitative trading system for cryptocurrency perpetual future
 - [Deep research report](docs/research/deep-research-report.md): historical broad research on markets, strategies, data, backtesting, and operations.
 - [Deep research report 2](docs/research/deep-research-report-2.md): historical follow-up research used to refine the technical direction.
 - [Technical roadmap research](docs/research/technical-roadmap-research.md): historical comparative research behind the selected implementation route.
+- [WSL2 Codex environment](docs/workflows/wsl2-codex-environment/README.md): reproducible WSL2 setup, diagnostics, approval boundaries, rollback, and troubleshooting.
 
 ## Current status
 
@@ -47,10 +48,10 @@ The project is in its initial planning and repository setup stage. No live-tradi
 
 ## Development environment
 
-Python 3.11 or newer and [uv](https://docs.astral.sh/uv/) are required. Create or update the local environment with:
+Python 3.11 or newer and [uv](https://docs.astral.sh/uv/) are required. The repository `.python-version` pins the project environment to Python 3.11, matching CI. Create or update the local environment with:
 
 ```console
-uv sync --dev
+uv sync --locked --dev
 ```
 
 Verify that the project package is importable with:
@@ -77,6 +78,8 @@ Run strict type checking with:
 ```console
 uv run mypy src tests
 ```
+
+For the supported VS Code Remote WSL + Codex environment, including pinned uv, GitHub CLI authentication, proxy behavior, diagnostics, and rollback, see [the WSL2 environment guide](docs/workflows/wsl2-codex-environment/README.md).
 
 ## Continuous integration
 

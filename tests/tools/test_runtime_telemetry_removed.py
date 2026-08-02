@@ -54,6 +54,9 @@ APPROVED_TELEMETRY_REFERENCE_FILES = {
     "docs/workflows/benchmarks/task-65-round-2/task-65-telemetry-only.diff": (
         "auditable historical-to-frozen Task #65 diff"
     ),
+    "docs/workflows/publication-materials/task-material-register.md": (
+        "publication material register retaining historical workflow sample labels"
+    ),
 }
 
 LOCAL_ONLY_EXCLUSIONS = {
