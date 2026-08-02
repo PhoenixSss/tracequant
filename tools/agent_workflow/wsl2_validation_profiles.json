@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "runner_version": "1.0.0",
+  "runner_version": "1.0.1",
   "ci_workflow": ".github/workflows/ci.yml",
   "ci_validation_commands": [
     ["uv", "lock", "--check"],

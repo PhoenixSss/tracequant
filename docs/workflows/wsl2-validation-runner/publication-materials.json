@@ -27,7 +27,7 @@
       "claim_id": "task83-rules-static-boundaries",
       "claim_type": "fact",
       "status": "observed",
-      "statement": "Static execpolicy checks cover allowed runner profiles plus negative cases for interpreters, shells, GitHub writes, dangerous Git operations, unknown profiles, and known injection prefixes; arbitrary trailing arguments are rejected by the runner before subcommands execute.",
+      "statement": "Static execpolicy checks cover allowed runner profiles plus negative cases for interpreters, shells, GitHub writes, dangerous Git operations, unknown profiles, and known injection prefixes; the Runner verifies trusted files against HEAD and rejects non-canonical command IDs/argv before subcommands execute.",
       "evidence": [
         ".codex/rules/quant-system-wsl-validation.rules",
         "tests/tools/test_wsl2_validation_runner.py"
@@ -37,7 +37,7 @@
       "claim_id": "task83-failure-case",
       "claim_type": "fact",
       "status": "observed",
-      "statement": "Tests include bounded failing pytest, failing git diff, timeout, interrupted process, CI drift, and result-write failure cases.",
+      "statement": "Tests include bounded failing pytest, failing git diff, process-group timeout and interruption cleanup, trusted Runner/spec/Rules replacement rejection, non-canonical command rejection, CI drift, and result-write failure cases.",
       "evidence": [
         "tests/tools/test_wsl2_validation_runner.py"
       ]

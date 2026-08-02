@@ -19,10 +19,12 @@ from pathlib import Path
 from typing import Any, Final
 
 SCHEMA_VERSION: Final = 1
+RUNNER_VERSION: Final = "1.0.1"
 OUTPUT_ROOT: Final = ".agents/validation.local/wsl2-runs"
 SPEC_PATH: Final = "tools/agent_workflow/wsl2_validation_profiles.json"
 RUNNER_PATH: Final = "tools/agent_workflow/wsl2_validation_runner.py"
 RULES_PATH: Final = ".codex/rules/quant-system-wsl-validation.rules"
+CI_WORKFLOW_PATH: Final = ".github/workflows/ci.yml"
 STDIO_LIMIT_BYTES: Final = 4096
 SENSITIVE_PATTERNS: Final = (
     re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
@@ -32,6 +34,80 @@ SENSITIVE_PATTERNS: Final = (
         r"(?i)(authorization|cookie|api[_-]?key|token|password|secret)\s*[:=]\s*\S+"
     ),
 )
+
+TRUSTED_PATHS: Final = (RUNNER_PATH, SPEC_PATH, RULES_PATH)
+COMMAND_ID_PATTERN: Final = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?")
+CANONICAL_COMMANDS: Final[dict[str, tuple[str, ...]]] = {
+    "uv-lock-check": ("uv", "lock", "--check"),
+    "pytest": ("uv", "run", "--frozen", "pytest"),
+    "ruff-check": ("uv", "run", "--frozen", "ruff", "check", "."),
+    "ruff-format-check": (
+        "uv",
+        "run",
+        "--frozen",
+        "ruff",
+        "format",
+        "--check",
+        ".",
+    ),
+    "mypy": ("uv", "run", "--frozen", "mypy", "src", "tests"),
+    "git-diff-check": ("git", "diff", "--check"),
+    "pytest-tools": ("uv", "run", "--frozen", "pytest", "tests/tools"),
+    "pytest-workflow": (
+        "uv",
+        "run",
+        "--frozen",
+        "pytest",
+        "tests/tools/test_workflow_validation.py",
+        "tests/tools/test_workflow_evidence.py",
+        "tests/tools/test_trusted_runner.py",
+        "tests/tools/test_wsl2_validation_runner.py",
+    ),
+}
+CANONICAL_PROFILE_COMMAND_IDS: Final[dict[str, tuple[str, ...]]] = {
+    "current-ci-equivalent": (
+        "uv-lock-check",
+        "pytest",
+        "ruff-check",
+        "ruff-format-check",
+        "mypy",
+        "git-diff-check",
+    ),
+    "targeted": ("pytest-tools",),
+    "targeted:tools-tests": ("pytest-tools",),
+    "targeted:workflow-tests": ("pytest-workflow",),
+    "post-merge": (
+        "uv-lock-check",
+        "pytest",
+        "ruff-check",
+        "ruff-format-check",
+        "mypy",
+        "git-diff-check",
+    ),
+}
+CANONICAL_PROFILE_KINDS: Final[dict[str, str]] = {
+    "current-ci-equivalent": "ci-equivalent",
+    "targeted": "targeted",
+    "targeted:tools-tests": "targeted",
+    "targeted:workflow-tests": "targeted",
+    "post-merge": "post-merge",
+}
+CANONICAL_PROFILE_PRECONDITIONS: Final[dict[str, tuple[bool, bool, bool]]] = {
+    "current-ci-equivalent": (False, False, False),
+    "targeted": (False, False, False),
+    "targeted:tools-tests": (False, False, False),
+    "targeted:workflow-tests": (False, False, False),
+    "post-merge": (True, True, True),
+}
+CANONICAL_CI_COMMANDS: Final[tuple[tuple[str, ...], ...]] = (
+    CANONICAL_COMMANDS["uv-lock-check"],
+    CANONICAL_COMMANDS["pytest"],
+    CANONICAL_COMMANDS["ruff-check"],
+    CANONICAL_COMMANDS["ruff-format-check"],
+    CANONICAL_COMMANDS["mypy"],
+)
+PROCESS_TERM_GRACE_SECONDS: Final = 2.0
+PROCESS_INTERRUPT_GRACE_SECONDS: Final = 5.0
 ALLOWED_ENV: Final = (
     "PATH",
     "HOME",
@@ -97,16 +173,71 @@ def _atomic_write(path: Path, payload: bytes, *, mode: int = 0o600) -> None:
         raise
 
 
-def _load_json(path: Path) -> dict[str, Any]:
+def _load_json_bytes(payload: bytes, path: Path) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise RunnerError(f"required file is missing: {path}") from exc
+        value = json.loads(payload.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise RunnerError(f"invalid UTF-8 in {path}") from exc
     except json.JSONDecodeError as exc:
         raise RunnerError(f"invalid JSON in {path}: {exc}") from exc
     if not isinstance(value, dict):
         raise RunnerError(f"invalid JSON object in {path}")
     return value
+
+
+def _run_bytes(
+    argv: Sequence[str], repo_root: Path
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [str(item) for item in argv],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        env=_command_env(),
+    )
+
+
+def _read_tracked_file(repo_root: Path, relative_path: str) -> bytes:
+    path = repo_root / relative_path
+    if path.is_symlink():
+        raise RunnerError(f"trusted file must not be a symlink: {relative_path}")
+    try:
+        actual = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise RunnerError(f"required file is missing: {relative_path}") from exc
+
+    for diff_args, label in (
+        (("git", "diff", "--quiet", "--", relative_path), "working tree"),
+        (("git", "diff", "--cached", "--quiet", "--", relative_path), "index"),
+    ):
+        result = _run_bytes(diff_args, repo_root)
+        if result.returncode == 1:
+            raise RunnerError(
+                f"trusted file differs from HEAD in the {label}: {relative_path}"
+            )
+        if result.returncode != 0:
+            raise RunnerError(
+                f"unable to verify trusted file {relative_path}: "
+                f"{_redact(result.stderr.decode('utf-8', errors='replace')).strip()}"
+            )
+
+    head_blob = _run_bytes(("git", "show", f"HEAD:{relative_path}"), repo_root)
+    if head_blob.returncode != 0:
+        raise RunnerError(f"trusted file is not tracked at HEAD: {relative_path}")
+    if actual != head_blob.stdout:
+        raise RunnerError(f"trusted file content does not match HEAD: {relative_path}")
+    return actual
+
+
+def _load_trusted_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str]]:
+    payloads = {
+        relative_path: _read_tracked_file(repo_root, relative_path)
+        for relative_path in TRUSTED_PATHS
+    }
+    spec_path = repo_root / SPEC_PATH
+    spec = _load_json_bytes(payloads[SPEC_PATH], spec_path)
+    hashes = {path: _sha256_bytes(payload) for path, payload in payloads.items()}
+    return spec, hashes
 
 
 def _run_quiet(
@@ -208,13 +339,85 @@ def _ci_run_commands(repo_root: Path, workflow: str) -> list[list[str]]:
 def _verify_drift(repo_root: Path, spec: Mapping[str, Any]) -> None:
     expected = spec.get("ci_validation_commands")
     workflow = spec.get("ci_workflow")
+    canonical = [list(argv) for argv in CANONICAL_CI_COMMANDS]
     if not isinstance(expected, list) or not isinstance(workflow, str):
         raise RunnerError("profile spec missing CI drift metadata")
+    if workflow != CI_WORKFLOW_PATH:
+        raise RunnerError("profile spec CI workflow path is not canonical")
+    if expected != canonical:
+        raise RunnerError("profile spec CI commands differ from the runner canonical set")
     observed = _ci_run_commands(repo_root, workflow)
-    if observed != expected:
+    if observed != canonical:
         raise RunnerError(
-            "CI validation commands drifted from canonical WSL2 profile spec"
+            "CI validation commands drifted from the canonical WSL2 command set"
         )
+
+
+def _validate_spec_identity(spec: Mapping[str, Any]) -> None:
+    if spec.get("schema_version") != SCHEMA_VERSION:
+        raise RunnerError("profile spec schema_version is unsupported")
+    if spec.get("runner_version") != RUNNER_VERSION:
+        raise RunnerError("profile spec runner_version does not match the runner")
+    profiles = spec.get("profiles")
+    if not isinstance(profiles, dict) or set(profiles) != set(
+        CANONICAL_PROFILE_COMMAND_IDS
+    ):
+        raise RunnerError("profile spec profile set differs from the canonical set")
+
+
+def _validated_commands(
+    profile_name: str, profile: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    commands = profile.get("commands")
+    if not isinstance(commands, list) or not commands:
+        raise RunnerError("profile must define at least one command")
+    validated: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for command in commands:
+        if not isinstance(command, dict):
+            raise RunnerError("invalid profile command definition")
+        command_id = command.get("id")
+        argv = command.get("argv")
+        if (
+            not isinstance(command_id, str)
+            or COMMAND_ID_PATTERN.fullmatch(command_id) is None
+        ):
+            raise RunnerError("invalid profile command id")
+        if command_id in seen_ids:
+            raise RunnerError(f"duplicate profile command id: {command_id}")
+        seen_ids.add(command_id)
+        canonical = CANONICAL_COMMANDS.get(command_id)
+        if canonical is None:
+            raise RunnerError(f"profile command id is not allowed: {command_id}")
+        if not isinstance(argv, list) or tuple(argv) != canonical:
+            raise RunnerError(
+                f"profile command argv does not match canonical command: {command_id}"
+            )
+        validated.append({"id": command_id, "argv": list(canonical)})
+    observed_ids = tuple(item["id"] for item in validated)
+    if observed_ids != CANONICAL_PROFILE_COMMAND_IDS[profile_name]:
+        raise RunnerError(
+            f"profile command sequence differs from canonical profile: {profile_name}"
+        )
+    if profile.get("kind") != CANONICAL_PROFILE_KINDS[profile_name]:
+        raise RunnerError(f"profile kind differs from canonical profile: {profile_name}")
+    precondition_keys = (
+        "requires_clean_worktree",
+        "requires_main_branch",
+        "requires_origin_main_identity",
+    )
+    precondition_values: list[bool] = []
+    for key in precondition_keys:
+        value = profile.get(key, False)
+        if type(value) is not bool:
+            raise RunnerError(f"profile precondition must be boolean: {key}")
+        precondition_values.append(value)
+    observed_preconditions = tuple(precondition_values)
+    if observed_preconditions != CANONICAL_PROFILE_PRECONDITIONS[profile_name]:
+        raise RunnerError(
+            f"profile preconditions differ from canonical profile: {profile_name}"
+        )
+    return validated
 
 
 def _verify_profile_preconditions(
@@ -222,22 +425,52 @@ def _verify_profile_preconditions(
 ) -> dict[str, Any]:
     branch = _git_value(repo_root, "branch", "--show-current")
     head = _git_value(repo_root, "rev-parse", "HEAD")
-    origin_main = _git_value(repo_root, "rev-parse", "refs/remotes/origin/main")
+    origin_main_result = _run_quiet(
+        ["git", "rev-parse", "--verify", "refs/remotes/origin/main"], repo_root
+    )
+    origin_main = (
+        origin_main_result.stdout.strip() if origin_main_result.returncode == 0 else ""
+    )
     status = _git_lines(repo_root, "status", "--short", "--untracked-files=all")
     if profile.get("requires_clean_worktree") and status:
         raise RunnerError("profile requires a clean working tree")
     if profile.get("requires_main_branch") and branch != "main":
         raise RunnerError("profile requires branch main")
-    if profile.get("requires_origin_main_identity") and (
-        branch != "main" or head != origin_main
-    ):
-        raise RunnerError("profile requires local main to equal origin/main")
+    if profile.get("requires_origin_main_identity"):
+        if not origin_main:
+            raise RunnerError("profile requires refs/remotes/origin/main")
+        if branch != "main" or head != origin_main:
+            raise RunnerError("profile requires local main to equal origin/main")
     return {
         "branch": branch,
         "head_sha": head,
         "origin_main_sha": origin_main,
         "clean": not status,
     }
+
+
+def _signal_process_group(proc: subprocess.Popen[str], sig: int) -> None:
+    try:
+        os.killpg(proc.pid, sig)
+    except ProcessLookupError:
+        return
+
+
+def _terminate_process_group(
+    proc: subprocess.Popen[str],
+    *,
+    first_signal: int,
+    grace_seconds: float,
+) -> tuple[str, str]:
+    _signal_process_group(proc, first_signal)
+    try:
+        return proc.communicate(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        _signal_process_group(proc, signal.SIGKILL)
+        try:
+            return proc.communicate(timeout=PROCESS_TERM_GRACE_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            raise RunnerError("failed to terminate validation command process group") from exc
 
 
 def _run_command(
@@ -262,6 +495,7 @@ def _run_command(
         encoding="utf-8",
         errors="replace",
         env=_command_env(),
+        start_new_session=True,
     )
     timed_out = False
     interrupted = False
@@ -269,16 +503,18 @@ def _run_command(
         stdout, stderr = proc.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         timed_out = True
-        proc.kill()
-        stdout, stderr = proc.communicate()
+        stdout, stderr = _terminate_process_group(
+            proc,
+            first_signal=signal.SIGTERM,
+            grace_seconds=PROCESS_TERM_GRACE_SECONDS,
+        )
     except KeyboardInterrupt:
         interrupted = True
-        proc.send_signal(signal.SIGINT)
-        try:
-            stdout, stderr = proc.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            stdout, stderr = proc.communicate()
+        stdout, stderr = _terminate_process_group(
+            proc,
+            first_signal=signal.SIGINT,
+            grace_seconds=PROCESS_INTERRUPT_GRACE_SECONDS,
+        )
     duration_ms = max(0, round((time.monotonic() - started) * 1000))
     stdout_summary, stdout_truncated, stdout_digest = _bounded(stdout)
     stderr_summary, stderr_truncated, stderr_digest = _bounded(stderr)
@@ -315,8 +551,8 @@ def _run_command(
 def _run_profile(profile_name: str) -> int:
     script_path = Path(__file__)
     repo_root = _find_repo_root(script_path)
-    spec_path = repo_root / SPEC_PATH
-    spec = _load_json(spec_path)
+    spec, trusted_hashes = _load_trusted_inputs(repo_root)
+    _validate_spec_identity(spec)
     profiles = spec.get("profiles")
     if not isinstance(profiles, dict):
         raise RunnerError("profile spec does not define profiles")
@@ -324,6 +560,13 @@ def _run_profile(profile_name: str) -> int:
     if not isinstance(profile, dict):
         raise RunnerError("unknown profile")
     _verify_drift(repo_root, spec)
+    commands = _validated_commands(profile_name, profile)
+    timeout_value = profile.get("timeout_seconds", 900)
+    if type(timeout_value) is not int:
+        raise RunnerError("profile timeout_seconds must be an integer")
+    timeout_seconds = timeout_value
+    if timeout_seconds <= 0 or timeout_seconds > 3600:
+        raise RunnerError("profile timeout_seconds is outside the allowed range")
     repository_state = _verify_profile_preconditions(repo_root, profile)
     output_root = _assert_output_root(repo_root)
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:12]
@@ -331,10 +574,6 @@ def _run_profile(profile_name: str) -> int:
     run_dir.mkdir(parents=True, exist_ok=False)
     run_dir.chmod(0o700)
     started_at = datetime.now(UTC)
-    timeout_seconds = int(profile.get("timeout_seconds", 900))
-    commands = profile.get("commands")
-    if not isinstance(commands, list) or not commands:
-        raise RunnerError("profile must define at least one command")
     results: list[dict[str, Any]] = []
     status = "pass"
     try:
@@ -349,10 +588,9 @@ def _run_profile(profile_name: str) -> int:
     except KeyboardInterrupt:
         status = "interrupted"
     duration_ms = max(0, round((datetime.now(UTC) - started_at).total_seconds() * 1000))
-    rules_file = repo_root / RULES_PATH
     result_document: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
-        "runner_version": spec.get("runner_version"),
+        "runner_version": RUNNER_VERSION,
         "profile": profile_name,
         "profile_kind": profile.get("kind"),
         "status": status,
@@ -371,11 +609,12 @@ def _run_profile(profile_name: str) -> int:
         },
         "integrity": {
             "runner_path": RUNNER_PATH,
-            "runner_sha256": _sha256_file(repo_root / RUNNER_PATH),
+            "verification": "tracked-head-pre-execution",
+            "runner_sha256": trusted_hashes[RUNNER_PATH],
             "profile_spec_path": SPEC_PATH,
-            "profile_spec_sha256": _sha256_file(spec_path),
+            "profile_spec_sha256": trusted_hashes[SPEC_PATH],
             "rules_path": RULES_PATH,
-            "rules_sha256": _sha256_file(rules_file) if rules_file.exists() else None,
+            "rules_sha256": trusted_hashes[RULES_PATH],
         },
     }
     result_path = run_dir / "result.json"
@@ -384,7 +623,7 @@ def _run_profile(profile_name: str) -> int:
     )
     digest = {
         "schema_version": SCHEMA_VERSION,
-        "runner_version": spec.get("runner_version"),
+        "runner_version": RUNNER_VERSION,
         "profile": profile_name,
         "status": status,
         "command_count": len(results),
@@ -428,6 +667,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = parser.parse_args(argv)
         return _run_profile(args.profile)
+    except KeyboardInterrupt:
+        print(
+            _json_dumps(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "status": "interrupted",
+                    "error": "runner interrupted before completion",
+                }
+            ),
+            end="",
+            file=sys.stderr,
+        )
+        return 130
     except (OSError, RunnerError) as exc:
         print(
             _json_dumps(

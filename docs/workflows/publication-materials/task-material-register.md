@@ -16,6 +16,27 @@
   `consumed_or_extended`。
 - 最终文档引用材料前，必须确认来源、统计口径、脱敏状态和适用边界。
 
+## 项目与 Issue 层级
+
+- Epic：`#61 [Epic] Agent 开发工作流与工程效能治理`
+- Feature：`#62 [Feature] 建立 Task Workflow Token 基准并完成第一轮优化`
+- Feature：`#77 [Feature] 迁移 WSL2 执行环境并降低 Guardian 与命令调用开销`
+  - `#80` 建立第二轮 Task Workflow Token 实验协议并冻结 Task #65 基准
+  - `#81` 采集 Task #65 当前 Windows Task Workflow merge-pre 基准
+  - `#82` 建立可复现的 WSL2 Codex 开发环境与执行能力诊断
+  - `#83` 建立 WSL2 Task Workflow Validation Runner 与最小权限 Rules
+  - `#84` 建立只读 GitHub Evidence Runner 与 Git 操作审批边界
+  - `#85` 将 Task Workflow Skills 切换到统一 Runner 并移除重复命令路径
+  - `#86` 采集 Task #65 WSL2 优化候选 merge-pre 基准并评估效果
+- Feature：`#78 [Feature] 重构 Task Workflow 规格上下文与独立审查`
+  - `#87` 审计 Task Workflow 规格与治理上下文重复并定义 Canonical Spec
+  - `#88` 实现 Task Workflow 阶段 Context Compiler 与可追溯上下文视图
+  - `#89` 定义独立 Review 事实继承契约与审查失效规则
+  - `#90` 建立 Task Workflow 固定 Patch Review 对照实验框架
+  - `#91` 基于 Task #65 完成 Issue、Context Compiler 与 Review 输入对照实验
+  - `#92` 审计 Task Workflow 质量门禁并定义风险自适应 Profiles
+- Feature：`#79 [Feature] 状态机化 Task Closeout 并建立连续执行与恢复能力`
+
 ## 状态说明
 
 | 状态 | 含义 |
@@ -31,15 +52,23 @@
 
 ## 总览
 
-| Task | Issue / PR | 主要材料角色 | 当前状态 | 两份最终文档用途 |
-| --- | --- | --- | --- | --- |
-| Task #63：基础配置管理与环境变量加载 | Issue #63 / PR #67 | 历史完整工作流 Token 与流程样本 | `historical-sample`、已完成 | Token 历史基线；Delivery/Review/Closeout 案例 |
-| Task #64：结构化日志与敏感信息保护 | Issue #64 / PR #71 | 历史完整工作流 Token 与安全实现样本 | `historical-sample`、已完成 | Token 历史基线；敏感信息与 Review 案例 |
-| Task #65 第二轮实验协议与输入冻结 | Issue / PR：待回填 | 协议、冻结输入、统计口径、材料 Schema | `repository-final` | 两份文档的实验方法和权威输入 |
-| Task #65 Windows merge-pre 基准采集 | 元 Task Issue：待回填；业务 Issue #65；实验 PR #99 | 当前 Windows 正式基准、失败 pilot、rollout | `formal-sample` + `invalid-sample` | 当前基准、失败恢复、Token/命令/Guardian 数据 |
-| 可复现 WSL2 Codex 环境与能力诊断 | Issue #82 / PR #100 / Branch `82-task-reproducible-wsl2-codex-environment` / Base `a492f0b334f950f2613b4b2204e96bef413355be` | 环境指南、诊断工具、能力矩阵、决策与案例 | `repository-final`、已完成 | 指导手册环境章节；Token 文章候选变量与边界 |
-| WSL2 Validation Runner 与最小权限 Rules | Issue #83 / PR #101 / Branch `83-task-wsl2-validation-runner-rules` / Base `767e995e7872c5eaea46002cf02381cef87f3eab` | Runner、Rules、权限与命令成本材料 | `delivery-pending` | 后续优化机制和控制面证据 |
-| Task #65 WSL2 candidate merge-pre | 业务 Issue #65；实验 PR：待创建 | Candidate Token、质量、Guardian、命令与时长 | `placeholder` | 最终前后对照和优化结论 |
+| Task | Issue / PR | Parent | 主要材料角色 | 当前状态 | 两份最终文档用途 |
+| --- | --- | --- | --- | --- | --- |
+| Task #63：基础配置管理与环境变量加载 | Issue #63 / PR #67 | Feature #2 | 历史完整工作流 Token 与流程样本 | `historical-sample`、已完成 | Token 历史基线；Delivery/Review/Closeout 案例 |
+| Task #64：结构化日志与敏感信息保护 | Issue #64 / PR #71 | Feature #2 | 历史完整工作流 Token 与安全实现样本 | `historical-sample`、已完成 | Token 历史基线；敏感信息与 Review 案例 |
+| Task #80：第二轮实验协议与 Task #65 输入冻结 | Issue #80 / PR：待回填 | Feature #77 / Epic #61 | 协议、冻结输入、统计口径、材料 Schema | `repository-final`、Issue 已完成 | 两份文档的实验方法和权威输入 |
+| Task #81：Windows merge-pre 基准采集 | Issue #81；业务 Issue #65；实验 PR #99 | Feature #77 / Epic #61 | 当前 Windows 正式基准、失败 pilot、rollout | `formal-sample` + `invalid-sample`、Issue 已完成 | 当前基准、失败恢复、Token/命令/Guardian 数据 |
+| Task #82：可复现 WSL2 Codex 环境与能力诊断 | Issue #82 / PR #100 / reviewed head `96b20b5...` / merge `767e995...` | Feature #77 / Epic #61 | 环境指南、诊断工具、能力矩阵、决策与案例 | `repository-final`、已完成 | 指导手册环境章节；Token 文章候选变量与边界 |
+| Task #83：WSL2 Validation Runner 与最小权限 Rules | Issue #83 / PR #101 / Base `767e995...` | Feature #77 / Epic #61 | Runner、Rules、权限与命令成本材料 | `delivery-pending` | 后续优化机制和控制面证据 |
+| Task #84：只读 GitHub Evidence Runner 与 Git 审批边界 | Issue #84；PR：待创建 | Feature #77 / Epic #61 | GitHub 只读证据、Git 写边界与审批材料 | `placeholder` | 证据采集、安全边界和命令成本 |
+| Task #85：Skills 切换至统一 Runner | Issue #85；PR：待创建 | Feature #77 / Epic #61 | 统一命令路径、重复移除与 Skill 迁移材料 | `placeholder` | 工作流收敛机制和 Token 优化来源 |
+| Task #86：Task #65 WSL2 candidate merge-pre | Issue #86；业务 Issue #65；实验 PR：待创建 | Feature #77 / Epic #61 | Candidate Token、质量、Guardian、命令与时长 | `placeholder` | 最终 Windows/WSL2 对照和优化结论 |
+| Task #87：Canonical Spec 审计 | Issue #87；PR：待创建 | Feature #78 / Epic #61 | 规格重复、治理来源与 Canonical Spec | `placeholder` | 规格治理和上下文去重 |
+| Task #88：阶段 Context Compiler | Issue #88；PR：待创建 | Feature #78 / Epic #61 | 上下文编译、追溯视图与输入体积材料 | `placeholder` | 上下文优化机制和可追溯性 |
+| Task #89：独立 Review 事实继承契约 | Issue #89；PR：待创建 | Feature #78 / Epic #61 | Review 事实边界、失效与继承规则 | `placeholder` | 独立审查设计和质量边界 |
+| Task #90：固定 Patch Review 对照框架 | Issue #90；PR：待创建 | Feature #78 / Epic #61 | 固定 Patch Review 实验框架 | `placeholder` | Review Token 与质量对照方法 |
+| Task #91：Task #65 Context/Review 输入对照实验 | Issue #91；PR：待创建 | Feature #78 / Epic #61 | Issue、Compiler 与 Review 输入对照数据 | `placeholder` | 第二阶段实验结果与因果分析 |
+| Task #92：质量门禁与风险自适应 Profiles | Issue #92；PR：待创建 | Feature #78 / Epic #61 | 风险分层、质量门禁和 Profile 材料 | `placeholder` | 质量/成本权衡与适应性策略 |
 
 ---
 
@@ -141,11 +170,13 @@
 
 ---
 
-## Task #65 第二轮实验协议与输入冻结
+## Task #80 — 建立第二轮 Task Workflow Token 实验协议并冻结 Task #65 基准
 
 ### 身份
 
-- Task Issue：`待回填`
+- Task Issue：`#80`
+- Parent Feature：`#77`
+- Epic：`#61`
 - PR：`待回填`
 - Protocol ID：`task-65-round-2-v1`，后续 amendment 必须保留版本历史。
 - 产物状态：已进入仓库；GitHub Delivery/Review 身份待在本清单补齐。
@@ -178,17 +209,19 @@
 
 ### 待办
 
-- [ ] 回填 Task Issue、PR、Delivery HEAD、reviewed HEAD 和 Review verdict。
+- [ ] 回填 PR、Delivery HEAD、reviewed HEAD 和 Review verdict。
 - [ ] Candidate 前记录 business base、candidate control-plane SHA 和 composite base amendment。
 - [ ] 任何协议更新都创建新版本，不覆盖本版 manifest。
 
 ---
 
-## Task — 采集 Task #65 当前 Windows Task Workflow merge-pre 基准
+## Task #81 — 采集 Task #65 当前 Windows Task Workflow merge-pre 基准
 
 ### 身份
 
-- 元 Task Issue：`待回填`
+- Task Issue：`#81`
+- Parent Feature：`#77`
+- Epic：`#61`
 - 关联业务 Issue：`#65`
 - 正式实验 PR：`#99`，Draft/Open，`Refs #65`
 - Formal Run ID：`task65-current-windows-20260801T110435Z`
@@ -203,10 +236,9 @@
 ### 正式样本材料
 
 - [x] 六份完整 rollout：Preparation root/Guardian、Delivery root/Guardian、Review root/Guardian。
-- [x] 完整 rollout 目录
-  仓库外路径：`Task — 采集 Task #65 当前 Windows Task Workflow merge-pre 基准/rollouts/`
-  内容等同于未压缩的 `rollouts(1).zip`；原压缩包 SHA-256：
-  `fc6dd9843b6cf0af9b5f98aff8b71913c9d135c258b3933431d781d92413190d`
+- [x] 完整 rollout 包
+  逻辑文件：`rollouts(1).zip`
+  SHA-256：`fc6dd9843b6cf0af9b5f98aff8b71913c9d135c258b3933431d781d92413190d`
 - [x] Formal merge-pre：`8,359,801` Tokens。
 - [x] Preparation：`505,328` Tokens，单独记录，不计入 merge-pre。
 - [x] Delivery：`6,380,740` Tokens。
@@ -233,12 +265,12 @@
 
 - [ ] 为正式 Run 生成统一 `record.json`、metrics/process/token CSV、claim/evidence map 和报告包。
 - [ ] 将六份 rollout 的单文件 SHA、session/parent、actor 和时间范围写入统一 evidence manifest。
-- [ ] 回填元 Task Issue 和归档目录的稳定位置。
+- [ ] 回填归档目录的稳定位置。
 - [ ] PR #99 在 Candidate 冻结和维护者决策前保持未合并。
 
 ---
 
-## Task — 建立可复现的 WSL2 Codex 开发环境与执行能力诊断
+## Task #82 — 建立可复现的 WSL2 Codex 开发环境与执行能力诊断
 
 ### 身份
 
@@ -318,7 +350,7 @@
 
 ---
 
-## Task — 建立 WSL2 Task Workflow Validation Runner 与最小权限 Rules
+## Task #83 — 建立 WSL2 Task Workflow Validation Runner 与最小权限 Rules
 
 ### 身份
 
@@ -358,8 +390,9 @@
   `1e0cc6cd7850457dd83b9be58e0da48a20c99f0cfd3e349f426fc9c3616a8caa`。
   Raw result remains ignored under `.agents/validation.local/`.
 - [x] 决策、失败、恢复和反直觉案例：
-  runner tests cover subcommand failure, timeout, interruption, CI drift,
-  result-write failure, wrong cwd and symlink invocation.
+  runner tests cover subcommand failure, process-group timeout/interruption cleanup,
+  trusted Runner/spec/Rules replacement rejection, non-canonical command rejection,
+  CI drift, result-write failure, wrong cwd and symlink invocation.
 - [x] 可编辑图表源：
   本 Task 未新增图表；后续 #85/#86 可基于 runner metrics 生成流程图。
 
@@ -376,6 +409,24 @@
 - [ ] Merge/Closeout 后回填 merge commit、最终 Issue/Project 状态和 branch cleanup。
 - [x] 新 Codex 会话加载 rules 后，仓库外记录 live Guardian、approval、输出大小和时长。
 - [ ] Task #84 处理 `baseRefOid` / GitHub Evidence helper 兼容性。
+
+---
+
+## 已编号的后续 Task
+
+以下 Task 已有正式 Issue 编号，但尚未产生可冻结材料；Task #83 已展开为上方完整登记小节。每个 Task 开始 Delivery 后，应把对应条目扩展为完整登记小节。
+
+| Issue | Task | Parent | 当前材料状态 |
+| --- | --- | --- | --- |
+| `#84` | 建立只读 GitHub Evidence Runner 与 Git 操作审批边界 | Feature `#77` | `placeholder` |
+| `#85` | 将 Task Workflow Skills 切换到统一 Runner 并移除重复命令路径 | Feature `#77` | `placeholder` |
+| `#86` | 采集 Task #65 WSL2 优化候选 merge-pre 基准并评估效果 | Feature `#77` | `placeholder` |
+| `#87` | 审计 Task Workflow 规格与治理上下文重复并定义 Canonical Spec | Feature `#78` | `placeholder` |
+| `#88` | 实现 Task Workflow 阶段 Context Compiler 与可追溯上下文视图 | Feature `#78` | `placeholder` |
+| `#89` | 定义独立 Review 事实继承契约与审查失效规则 | Feature `#78` | `placeholder` |
+| `#90` | 建立 Task Workflow 固定 Patch Review 对照实验框架 | Feature `#78` | `placeholder` |
+| `#91` | 基于 Task #65 完成 Issue、Context Compiler 与 Review 输入对照实验 | Feature `#78` | `placeholder` |
+| `#92` | 审计 Task Workflow 质量门禁并定义风险自适应 Profiles | Feature `#78` | `placeholder` |
 
 ---
 

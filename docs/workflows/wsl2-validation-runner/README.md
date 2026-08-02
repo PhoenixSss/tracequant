@@ -52,7 +52,7 @@ The runner:
 
 - accepts no shell string, command flag, path flag, arbitrary pytest argument, or
   trailing argument;
-- uses fixed argv arrays from the canonical profile spec;
+- uses fixed argv arrays from the canonical profile spec and verifies each command ID/argv against an in-runner canonical allowlist;
 - starts only from the repository root;
 - rejects `/mnt/<drive>` repository paths;
 - rejects symlink invocation and wrong Git roots;
@@ -61,11 +61,27 @@ The runner:
 - prints only a compact JSON digest on success;
 - propagates subcommand failures, timeouts, interruptions, and result write
   failures as non-zero exits;
-- records runner, profile spec, and rules SHA-256 at runtime;
+- starts every validation command in a dedicated POSIX session and terminates the complete process group on timeout or interruption, preventing `uv` descendants from surviving the Runner;
+- verifies the Runner, profile spec, and Rules against their tracked `HEAD` blobs before any validation subcommand executes, rejecting staged, unstaged, symlinked, untracked, or replaced trusted files;
+- records the verified Runner, profile spec, and Rules SHA-256 in the result;
 - redacts common token, cookie, private-key, and secret patterns.
 
 The runner does not modify business code, Git history, branches, GitHub state,
 Project state, labels, Issues, Pull Requests, or credentials.
+
+## Trusted-file and process-tree boundary
+
+Before creating a run directory or executing a validation command, the Runner verifies these files against their exact tracked `HEAD` blobs:
+
+```text
+tools/agent_workflow/wsl2_validation_runner.py
+tools/agent_workflow/wsl2_validation_profiles.json
+.codex/rules/quant-system-wsl-validation.rules
+```
+
+Any staged or unstaged change fails closed. The profile spec is then loaded from the already verified bytes, and every command ID and argv must match the Runner's canonical command allowlist. This prevents a writable profile JSON from turning an allowed Runner invocation into an arbitrary command launcher. Intentional Runner, profile, or Rules changes must be committed and reviewed before the fixed entry can run again.
+
+Each child command uses a new POSIX session. On timeout the Runner signals the complete process group, waits for a bounded grace period, and escalates to `SIGKILL` if required. The same bounded process-group cleanup applies to interruption.
 
 ## Rules
 

@@ -14,6 +14,22 @@ SCRIPT = ROOT / "tools" / "agent_workflow" / "wsl2_validation_runner.py"
 SPEC = ROOT / "tools" / "agent_workflow" / "wsl2_validation_profiles.json"
 RULES = ROOT / ".codex" / "rules" / "quant-system-wsl-validation.rules"
 PYTHON = os.environ.get("WORKFLOW_TEST_PYTHON", sys.executable)
+TRUSTED_RELATIVE_PATHS = (
+    "tools/agent_workflow/wsl2_validation_runner.py",
+    "tools/agent_workflow/wsl2_validation_profiles.json",
+    ".codex/rules/quant-system-wsl-validation.rules",
+)
+
+
+def _snapshot_trusted_files(repo: Path) -> None:
+    snapshot_root = repo / ".fake-head"
+    if snapshot_root.exists():
+        shutil.rmtree(snapshot_root)
+    for relative_path in TRUSTED_RELATIVE_PATHS:
+        source = repo / relative_path
+        destination = snapshot_root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
 
 
 def _copy_runner_repo(tmp_path: Path, *, name: str = "repo") -> Path:
@@ -47,6 +63,7 @@ jobs:
 """,
         encoding="utf-8",
     )
+    _snapshot_trusted_files(repo)
     return repo
 
 
@@ -58,29 +75,57 @@ def _write_fake_tools(
     dirty: bool = False,
     fail_id: str | None = None,
     sleep_id: str | None = None,
+    grandchild_marker: Path | None = None,
 ) -> Path:
-    suffix = f"{branch}-{fail_id or 'pass'}-{sleep_id or 'nosleep'}-{dirty}"
+    suffix = (
+        f"{branch}-{fail_id or 'pass'}-{sleep_id or 'nosleep'}-"
+        f"{dirty}-{grandchild_marker.name if grandchild_marker else 'nochild'}"
+    )
     bin_dir = tmp_path / f"bin-{repo.name}-{suffix}"
     bin_dir.mkdir()
     git = bin_dir / "git"
     git.write_text(
         f"""#!{PYTHON}
+from pathlib import Path
 import sys
 args = sys.argv[1:]
-repo = {str(repo)!r}
+repo = Path({str(repo)!r})
 branch = {branch!r}
 dirty = {dirty!r}
 fail = {fail_id!r}
+def snapshot(relative):
+    return repo / '.fake-head' / relative
 if args == ['rev-parse', '--show-toplevel']:
     print(repo)
 elif args == ['branch', '--show-current']:
     print(branch)
 elif args == ['rev-parse', 'HEAD']:
     print('a' * 40)
-elif args == ['rev-parse', 'refs/remotes/origin/main']:
+elif args in (
+    ['rev-parse', 'refs/remotes/origin/main'],
+    ['rev-parse', '--verify', 'refs/remotes/origin/main'],
+):
     print('a' * 40)
 elif args[:2] == ['status', '--short']:
     print(' M file.txt' if dirty else '')
+elif len(args) == 4 and args[:3] == ['diff', '--quiet', '--']:
+    relative = args[3]
+    current = repo / relative
+    expected = snapshot(relative)
+    if not expected.exists() or not current.exists() or current.read_bytes() != expected.read_bytes():
+        sys.exit(1)
+elif len(args) == 5 and args[:4] == ['diff', '--cached', '--quiet', '--']:
+    relative = args[4]
+    current = repo / relative
+    expected = snapshot(relative)
+    if not expected.exists() or not current.exists() or current.read_bytes() != expected.read_bytes():
+        sys.exit(1)
+elif len(args) == 2 and args[0] == 'show' and args[1].startswith('HEAD:'):
+    relative = args[1].split(':', 1)[1]
+    expected = snapshot(relative)
+    if not expected.exists():
+        sys.exit(128)
+    sys.stdout.buffer.write(expected.read_bytes())
 elif args == ['diff', '--check']:
     if fail == 'git-diff-check':
         print('diff failure ' + 'x' * 9000)
@@ -94,12 +139,22 @@ sys.exit(0)
     uv = bin_dir / "uv"
     uv.write_text(
         f"""#!{PYTHON}
-import sys, time
+import subprocess
+import sys
+import time
 args = sys.argv[1:]
 key = '-'.join(args)
 fail = {fail_id!r}
 sleep = {sleep_id!r}
+marker = {str(grandchild_marker) if grandchild_marker else None!r}
 if sleep and sleep in key:
+    if marker:
+        child_code = (
+            "import signal, time; from pathlib import Path; "
+            + "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            + "time.sleep(4); Path(" + repr(marker) + ").write_text('survived')"
+        )
+        subprocess.Popen([{PYTHON!r}, '-c', child_code])
     time.sleep(30)
 if fail and fail in key:
     print('failure stdout secret=top-secret-token ' + 'x' * 9000)
@@ -240,10 +295,16 @@ def test_timeout_and_sigint_are_explicit(tmp_path: Path) -> None:
     (repo / "tools/agent_workflow/wsl2_validation_profiles.json").write_text(
         json.dumps(spec), encoding="utf-8"
     )
-    bin_dir = _write_fake_tools(tmp_path, repo, sleep_id="pytest")
+    _snapshot_trusted_files(repo)
+    marker = tmp_path / "grandchild-survived.txt"
+    bin_dir = _write_fake_tools(
+        tmp_path, repo, sleep_id="pytest", grandchild_marker=marker
+    )
     timeout = _run(repo, bin_dir, "targeted")
     assert timeout.returncode == 1
     assert json.loads(timeout.stdout)["failed_command"]["timed_out"]
+    time.sleep(4.5)
+    assert not marker.exists(), "timed-out grandchild survived process-group kill"
 
     proc_env = os.environ.copy()
     proc_env["PATH"] = f"{bin_dir}{os.pathsep}{proc_env.get('PATH', '')}"
@@ -298,19 +359,38 @@ def test_repository_root_cwd_space_and_symlink_checks(tmp_path: Path) -> None:
     assert symlinked.returncode == 2
 
 
-def test_ci_drift_and_integrity_change_are_observable(tmp_path: Path) -> None:
+def test_ci_drift_and_trusted_file_mutation_fail_closed(tmp_path: Path) -> None:
     repo = _copy_runner_repo(tmp_path)
     bin_dir = _write_fake_tools(tmp_path, repo)
     first = _run(repo, bin_dir, "targeted")
-    original = json.loads((repo / json.loads(first.stdout)["result_path"]).read_text())
-    runner_path = repo / "tools" / "agent_workflow" / SCRIPT.name
-    runner_path.write_text(runner_path.read_text(encoding="utf-8") + "\n# changed\n")
-    second = _run(repo, bin_dir, "targeted")
-    changed = json.loads((repo / json.loads(second.stdout)["result_path"]).read_text())
-    assert (
-        original["integrity"]["runner_sha256"] != changed["integrity"]["runner_sha256"]
-    )
+    assert first.returncode == 0
+    stored = json.loads((repo / json.loads(first.stdout)["result_path"]).read_text())
+    assert stored["integrity"]["verification"] == "tracked-head-pre-execution"
 
+    runner_path = repo / "tools/agent_workflow" / SCRIPT.name
+    runner_path.write_text(runner_path.read_text(encoding="utf-8") + "\n# changed\n")
+    changed_runner = _run(repo, bin_dir, "targeted")
+    assert changed_runner.returncode == 2
+    assert "differs from HEAD" in changed_runner.stderr
+
+    shutil.copy2(SCRIPT, runner_path)
+    spec_path = repo / "tools/agent_workflow" / SPEC.name
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    spec["profiles"]["targeted"]["commands"][0]["argv"] = [
+        "python3", "-c", "print('untrusted')"
+    ]
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    changed_spec = _run(repo, bin_dir, "targeted")
+    assert changed_spec.returncode == 2
+    assert "differs from HEAD" in changed_spec.stderr
+
+    _snapshot_trusted_files(repo)
+    committed_bad_spec = _run(repo, bin_dir, "targeted")
+    assert committed_bad_spec.returncode == 2
+    assert "does not match canonical command" in committed_bad_spec.stderr
+
+    shutil.copy2(SPEC, spec_path)
+    _snapshot_trusted_files(repo)
     workflow = repo / ".github" / "workflows" / "ci.yml"
     workflow.write_text(
         workflow.read_text(encoding="utf-8").replace("pytest", "pytest -q")
@@ -318,6 +398,30 @@ def test_ci_drift_and_integrity_change_are_observable(tmp_path: Path) -> None:
     drift = _run(repo, bin_dir, "targeted")
     assert drift.returncode == 2
     assert "drifted" in drift.stderr
+
+
+def test_invalid_or_duplicate_command_ids_fail_before_execution(tmp_path: Path) -> None:
+    repo = _copy_runner_repo(tmp_path)
+    bin_dir = _write_fake_tools(tmp_path, repo)
+    spec_path = repo / "tools/agent_workflow" / SPEC.name
+
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    spec["profiles"]["targeted"]["commands"][0]["id"] = "../../escape"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    _snapshot_trusted_files(repo)
+    invalid = _run(repo, bin_dir, "targeted")
+    assert invalid.returncode == 2
+    assert "invalid profile command id" in invalid.stderr
+
+    shutil.copy2(SPEC, spec_path)
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    command = spec["profiles"]["targeted"]["commands"][0]
+    spec["profiles"]["targeted"]["commands"] = [command, command]
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    _snapshot_trusted_files(repo)
+    duplicate = _run(repo, bin_dir, "targeted")
+    assert duplicate.returncode == 2
+    assert "duplicate profile command id" in duplicate.stderr
 
 
 def test_result_write_failure_does_not_report_success(tmp_path: Path) -> None:
