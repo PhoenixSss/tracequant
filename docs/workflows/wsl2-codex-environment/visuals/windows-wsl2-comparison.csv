@@ -1,6 +1,6 @@
 dimension,windows_observation,wsl2_observation,classification,source_windows,source_wsl2
 Python launcher,WindowsApps alias not reliably usable in sandbox,/usr/bin/python3 directly available and project Python managed by uv,improved,environment-current-windows.md,current-diagnostic.json
-uv,WinGet user-private executable path not reliably usable,WSL-native uv 0.11.28 available while cache remains approval-required,improved,environment-current-windows.md,current-diagnostic.json
+uv,WinGet user-private executable path not reliably usable,WSL-native uv 0.12.1 available while cache remains approval-required,improved,environment-current-windows.md,current-diagnostic.json
 Repository filesystem,Windows NTFS workspace,ext4 under /home/<user>/code,improved,environment-current-windows.md,current-diagnostic.json
 Temporary Git,normal development writes frequently required elevated execution,complete /tmp temporary Git flow direct,improved,environment-current-windows.md,capability-matrix.md
 Formal Git metadata,approval or elevated required,approval required,same-safety-boundary,environment-current-windows.md,capability-matrix.md

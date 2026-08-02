@@ -162,7 +162,7 @@ def _repository_slug(
         return None
     value = read_json_text(result.stdout, field="gh repo view")
     if isinstance(value, dict) and isinstance(value.get("nameWithOwner"), str):
-        return value["nameWithOwner"]
+        return str(value["nameWithOwner"])
     return None
 
 
@@ -550,11 +550,9 @@ def _pr_view(
     files: list[str] = []
     raw_files = value.get("files", [])
     if isinstance(raw_files, list):
-        files = [
-            item.get("path")
-            for item in raw_files
-            if isinstance(item, dict) and isinstance(item.get("path"), str)
-        ]
+        for item in raw_files:
+            if isinstance(item, dict) and isinstance(item.get("path"), str):
+                files.append(str(item["path"]))
     commits: list[dict[str, Any]] = []
     raw_commits = value.get("commits", [])
     if isinstance(raw_commits, list):
@@ -1179,6 +1177,7 @@ def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, 
     warnings: list[dict[str, Any]] = []
     repository = _repository_slug(runner, args.repository, warnings)
     limitations: list[str] = []
+    observed: dict[str, Any]
     if repository is None:
         limitations.append("repository identity unavailable")
         observed = {
@@ -1208,7 +1207,7 @@ def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, 
         )
         gates["worktree_clean"] = _gate("pass" if git.get("clean") is True else "fail")
     trusted = {
-        "trusted_sha": observed.get("git", {}).get("origin_main_sha"),
+        "trusted_sha": observed["git"].get("origin_main_sha"),
         "runner": _runner_source(runner, warnings),
     }
     return _base_snapshot(
@@ -1382,6 +1381,7 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
     repository = _repository_slug(runner, args.repository, warnings)
     limitations: list[str] = []
     git = _git_snapshot(runner, warnings)
+    observed: dict[str, Any]
     if repository is None:
         limitations.append("repository identity unavailable")
         observed = {
@@ -1396,7 +1396,10 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
         relationships = _relationship_snapshot(
             runner, repository, args.feature, warnings
         )
-        child_items = relationships.get("sub_issues", {}).get("items", [])
+        sub_issues = relationships.get("sub_issues")
+        child_items = (
+            sub_issues.get("items", []) if isinstance(sub_issues, dict) else []
+        )
         children: list[dict[str, Any]] = []
         for child in child_items[:MAX_CHILDREN]:
             if not isinstance(child, dict) or not isinstance(child.get("number"), int):
@@ -1428,10 +1431,9 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
                         )
                         if pull is None:
                             continue
-                        checks = (
-                            pull.get("checks")
-                            if isinstance(pull.get("checks"), dict)
-                            else {}
+                        raw_checks = pull.get("checks")
+                        checks: dict[str, Any] = (
+                            raw_checks if isinstance(raw_checks, dict) else {}
                         )
                         pull_summaries.append(
                             {
@@ -1477,18 +1479,24 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
             "pass" if relationships.get("sub_issues_complete") is True else "unknown",
             "direct-child inventory must be complete",
         )
+    direct_children = observed.get("direct_children")
+    direct_children_items = (
+        direct_children.get("items", []) if isinstance(direct_children, dict) else []
+    )
+    relationships_value = observed.get("relationships")
+    relationships_digest_source = (
+        relationships_value if isinstance(relationships_value, dict) else {}
+    )
     direct_numbers = [
         child.get("number")
-        for child in observed.get("direct_children", {}).get("items", [])
+        for child in direct_children_items
         if isinstance(child, dict) and isinstance(child.get("number"), int)
     ]
-    observed["direct_child_set_digest"] = observed.get("relationships", {}).get(
+    observed["direct_child_set_digest"] = relationships_digest_source.get(
         "sub_issue_set_digest"
     ) or sha256_json(sorted(direct_numbers))
-    observed["direct_child_evidence_digest"] = sha256_json(
-        observed.get("direct_children", {}).get("items", [])
-    )
-    observed["relationships_digest"] = sha256_json(observed.get("relationships", {}))
+    observed["direct_child_evidence_digest"] = sha256_json(direct_children_items)
+    observed["relationships_digest"] = sha256_json(relationships_digest_source)
     trusted = {
         "trusted_sha": git.get("origin_main_sha"),
         "runner": _runner_source(runner, warnings),
@@ -1562,20 +1570,21 @@ def _stability_projection(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     observed = snapshot.get("observed", {})
     if not isinstance(observed, dict):
         return {}
-    pr = observed.get("pr") if isinstance(observed.get("pr"), dict) else {}
-    issue = (
-        observed.get("issue")
-        if isinstance(observed.get("issue"), dict)
-        else observed.get("feature")
-        if isinstance(observed.get("feature"), dict)
+    raw_pr = observed.get("pr")
+    pr: dict[str, Any] = raw_pr if isinstance(raw_pr, dict) else {}
+    raw_issue = observed.get("issue")
+    raw_feature = observed.get("feature")
+    issue: dict[str, Any] = (
+        raw_issue
+        if isinstance(raw_issue, dict)
+        else raw_feature
+        if isinstance(raw_feature, dict)
         else {}
     )
-    git = observed.get("git") if isinstance(observed.get("git"), dict) else {}
-    threads = (
-        observed.get("review_threads")
-        if isinstance(observed.get("review_threads"), dict)
-        else {}
-    )
+    raw_git = observed.get("git")
+    git: dict[str, Any] = raw_git if isinstance(raw_git, dict) else {}
+    raw_threads = observed.get("review_threads")
+    threads: dict[str, Any] = raw_threads if isinstance(raw_threads, dict) else {}
     return {
         "repository": snapshot.get("repository"),
         "subject": snapshot.get("subject"),

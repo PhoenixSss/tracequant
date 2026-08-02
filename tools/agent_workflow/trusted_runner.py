@@ -17,7 +17,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 SHA: Final = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
 FILES: Final = {
@@ -58,7 +58,7 @@ def _run_git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
 
 def _extract(
     repo_root: Path, trusted_sha: str, tool: str
-) -> tuple[Path, dict[str, str]]:
+) -> tuple[Path, dict[str, Any]]:
     if ".agents/evidence.local/" not in _gitignore_patterns(repo_root):
         raise RuntimeError(".agents/evidence.local/ must be exactly Git ignored")
     verified = _run_git(repo_root, "rev-parse", "--verify", f"{trusted_sha}^{{commit}}")

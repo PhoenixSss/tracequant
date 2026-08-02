@@ -26,9 +26,9 @@ Task Workflow Skills，也不执行 Task #65 候选基准。
 | 仓库位置 | `/home/<user>/code/quant-system`，Linux 文件系统；不使用 `/mnt/<drive>` |
 | 系统 Python | Ubuntu 原生 `python3`；裸 `python` 命令不是要求 |
 | 项目 Python | `.python-version` 固定为 Python 3.11，与 CI 一致 |
-| uv | `0.11.28`，与 CI 一致 |
+| uv | `0.12.1`，与 CI 一致 |
 | Git | WSL 内原生 `/usr/bin/git` |
-| GitHub CLI | WSL 内原生 `/usr/bin/gh`，WSL 内独立登录 |
+| GitHub CLI | WSL 内原生 `$HOME/.local/bin/gh`，WSL 内独立登录 |
 | 网络 | 当前可靠路径为批准执行下的代理连接；无代理路径只部分可用 |
 | Merge | 维护者人工执行 |
 
@@ -67,7 +67,7 @@ sudo apt install --yes ca-certificates curl git gh python3
 安装项目与 CI 使用的版本：
 
 ```bash
-curl -LsSf https://astral.sh/uv/0.11.28/install.sh | sh
+curl -LsSf https://astral.sh/uv/0.12.1/install.sh | sh
 exec "$SHELL" -l
 uv --version
 ```
@@ -75,7 +75,7 @@ uv --version
 预期：
 
 ```text
-uv 0.11.28
+uv 0.12.1
 ```
 
 不要依赖 Windows WinGet 的 `uv.exe` 或 Windows 用户私有目录。

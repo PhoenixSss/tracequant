@@ -29,7 +29,7 @@ Codex 中需要 approval。需要审批不是失败；它是后续最小权限 R
 | 维度 | 原生 Windows 观察 | WSL2 观察 | 结论 |
 | --- | --- | --- | --- |
 | Python | WindowsApps alias 在 sandbox 中不可稳定使用 | `/usr/bin/python3` 可直接使用；项目使用 uv | improved |
-| uv | WinGet 用户私有路径不可稳定使用 | WSL 原生 uv 0.11.28 可用；cache 仍需 approval | improved |
+| uv | WinGet 用户私有路径不可稳定使用 | WSL 原生 uv 0.12.1 可用；cache 仍需 approval | improved |
 | 仓库位置 | Windows NTFS 工作区 | WSL ext4 `/home/<user>/code/...` | improved |
 | 临时 Git | 正式环境中大量写操作触发 elevated | `/tmp` 临时 Git 全流程 direct | improved |
 | 正式 Git metadata | 需要 elevated | 仍需 approval | same safety boundary |
