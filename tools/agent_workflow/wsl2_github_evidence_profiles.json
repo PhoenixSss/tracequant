@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "runner_version": "1.0.0",
+  "repository": "PhoenixSss/quant-system",
+  "profiles": {
+    "delivery": {
+      "operation": "delivery-preflight",
+      "required_arguments": [
+        "task",
+        "expected_main_sha"
+      ],
+      "description": "Task and synchronized-main preflight before Delivery writes."
+    },
+    "delivery-readiness": {
+      "operation": "delivery-readiness",
+      "required_arguments": [
+        "task",
+        "pr",
+        "expected_base_sha",
+        "expected_head_sha"
+      ],
+      "description": "Delivery handoff snapshot for a review-ready Task PR."
+    },
+    "review": {
+      "operation": "pr-review-snapshot",
+      "required_arguments": [
+        "task",
+        "pr",
+        "expected_base_sha",
+        "expected_head_sha"
+      ],
+      "description": "Independent review snapshot from the trusted control plane."
+    },
+    "pre-merge": {
+      "operation": "pr-review-snapshot",
+      "required_arguments": [
+        "task",
+        "pr",
+        "expected_base_sha",
+        "expected_head_sha"
+      ],
+      "description": "Final read-only identity, checks, threads, and drift snapshot before manual merge."
+    },
+    "closeout-readonly": {
+      "operation": "closeout-plan",
+      "required_arguments": [
+        "task",
+        "pr",
+        "expected_head_sha",
+        "expected_merge_sha"
+      ],
+      "description": "Read-only post-merge Task/PR/main convergence evidence."
+    },
+    "recheck": {
+      "operation": "recheck",
+      "required_arguments": [
+        "snapshot_id"
+      ],
+      "description": "Recollect a stored snapshot using its supported stability recheck operation."
+    }
+  }
+}

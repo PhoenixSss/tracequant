@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "task": 84,
+  "evidence_type": "task84-external-live-evidence-manifest",
+  "status": "not-measured",
+  "generated_at_utc": null,
+  "repository_summary_files": [
+    "docs/workflows/wsl2-github-evidence-runner/live-profile-evidence.json",
+    "docs/workflows/wsl2-github-evidence-runner/live-recheck-evidence.json",
+    "docs/workflows/wsl2-github-evidence-runner/rules-live-evidence.json",
+    "docs/workflows/wsl2-github-evidence-runner/environment-capability.json"
+  ],
+  "external_artifacts": [
+    {
+      "logical_name": "review-profile-result",
+      "path_policy": ".agents/evidence.local/",
+      "sha256": null,
+      "bytes": null,
+      "committed": false
+    },
+    {
+      "logical_name": "recheck-result",
+      "path_policy": ".agents/evidence.local/",
+      "sha256": null,
+      "bytes": null,
+      "committed": false
+    },
+    {
+      "logical_name": "codex-live-probe-rollout",
+      "path_policy": "external-rollout-storage",
+      "sha256": null,
+      "bytes": null,
+      "committed": false
+    }
+  ],
+  "sensitive_content_committed": false
+}

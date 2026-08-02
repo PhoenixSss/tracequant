@@ -24,6 +24,7 @@ Validation：命令编排、退出码、有限摘要
 ```text
 tools/agent_workflow/workflow_common.py
 tools/agent_workflow/workflow_evidence.py
+tools/agent_workflow/wsl2_github_evidence_runner.py
 tools/agent_workflow/workflow_validation.py
 tools/agent_workflow/trusted_runner.py
 ```
@@ -91,6 +92,35 @@ python -X utf8 tools/agent_workflow/workflow_evidence.py `
 Recheck 会重新取证，再比较 base/head、effective diff、checks、threads、main 或 direct
 child set。旧 snapshot 只作为比较基线，不作为当前事实。Feature snapshot 还会为 direct
 child 的 closing PR 记录 merge SHA 与 check-run 摘要；该元数据不替代当前-main 语义审计。
+
+## WSL2 固定 GitHub Evidence Runner
+
+Task 工作流的固定只读入口为：
+
+```bash
+tools/agent_workflow/wsl2_github_evidence_runner.py --help
+```
+
+它提供 `delivery`、`delivery-readiness`、`review`、`pre-merge`、
+`closeout-readonly` 和 `recheck` profiles。Runner 固定仓库、profile 与参数
+schema，不接受任意 repo、REST/GraphQL path、`gh`/Git 参数、Shell 字符串、输出路径或
+工作目录。
+
+Runner 通过 `WORKFLOW_EVIDENCE_READ_ONLY=1` 调用本文件中的 Evidence CLI，因此不会
+执行 `git fetch`；本地 ref 只读快照会附加 `local_main_sha` 和
+`origin_refresh=skipped-read-only`。Runner 再使用固定 `git ls-remote --heads` 比较
+current remote `main` 和 PR head branch。未知、权限不足、限流或截断返回 `partial`
+(exit `3`)，不能当作 `pass`。
+
+完整说明见：
+
+```text
+docs/workflows/wsl2-github-evidence-runner/README.md
+docs/workflows/wsl2-github-evidence-runner/git-approval-boundary.md
+```
+
+Task #85 决定 Skills 的正式切换；Task #84 不删除当前 Evidence CLI 或改变独立 Review
+语义。
 
 ## Validation Runner
 

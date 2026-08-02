@@ -46,6 +46,18 @@ closeout-plan            closeout-final
 feature-audit-snapshot   feature-audit-recheck
 ```
 
+The WSL2 fixed front door is:
+
+```text
+tools/agent_workflow/wsl2_github_evidence_runner.py
+```
+
+It maps named Task workflow profiles to the operations above, validates complete
+argv and repository identity, disables `git fetch`, compares fixed remote refs
+with `git ls-remote`, and preserves partial/fail semantics. Task #85 controls
+whether and when workflow Skills replace their current invocation paths with this
+runner.
+
 Each snapshot must be deterministic, machine-readable, bounded, and include:
 
 - repository and subject identity;

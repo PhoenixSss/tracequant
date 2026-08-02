@@ -42,6 +42,7 @@ if args[:2] == ['fetch','--prune']:
 elif args[:3] == ['remote','get-url','origin']: out('https://github.com/owner/repo.git')
 elif args[:2] == ['branch','--show-current']: out(state.get('branch','main'))
 elif args[:2] == ['rev-parse','HEAD']: out(state.get('git_head','a'*40))
+elif args[:2] == ['rev-parse','refs/heads/main']: out(state.get('local_main',state.get('origin_main','b'*40)))
 elif args[:2] == ['rev-parse','refs/remotes/origin/main']: out(state.get('origin_main','b'*40))
 elif args[:2] == ['status','--short']: out('\\n'.join(state.get('status',[])))
 elif args[:3] == ['diff','--cached','--name-only']: out('\\n'.join(state.get('staged',[])))
@@ -380,6 +381,21 @@ def test_review_recheck_detects_head_and_diff_drift(tmp_path: Path) -> None:
     assert "head_sha" in value["stability"]["changed_fields"]["items"]
     assert "effective_diff_sha256" in value["stability"]["changed_fields"]["items"]
     assert value["gates"]["snapshot_stability"]["status"] == "fail"
+
+
+def test_read_only_mode_skips_fetch_and_reports_local_main(tmp_path: Path) -> None:
+    state = _base_state()
+    state["fetch_ok"] = False
+    state["local_main"] = "8" * 40
+    repo, _, env = _write_repo(tmp_path, state)
+    env["WORKFLOW_EVIDENCE_READ_ONLY"] = "1"
+    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    git = value["observed"]["git"]
+    assert git["origin_fetch"] == "pass"
+    assert git["origin_refresh"] == "skipped-read-only"
+    assert git["local_main_sha"] == "8" * 40
 
 
 def test_plan_limit_is_distinct_from_success(tmp_path: Path) -> None:

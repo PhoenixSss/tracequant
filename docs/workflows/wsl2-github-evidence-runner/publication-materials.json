@@ -1,0 +1,221 @@
+{
+  "schema_version": "1.1",
+  "task": 84,
+  "parent_feature": 77,
+  "epic": 61,
+  "base_sha": "74a75872078221c38dbd132a1d438b0bb05c1870",
+  "material_set": "wsl2-github-evidence-runner-task-84-v2",
+  "claims": [
+    {
+      "id": "task84-fixed-readonly-entry",
+      "status": "observed",
+      "statement": "The implementation exposes fixed Delivery, Review, pre-merge, closeout-readonly, and recheck profiles without user-provided repository, API, gh, Git, shell, output-path, or working-directory arguments.",
+      "evidence": [
+        "tools/agent_workflow/wsl2_github_evidence_runner.py",
+        "tools/agent_workflow/wsl2_github_evidence_profiles.json",
+        "tests/tools/test_wsl2_github_evidence_runner.py"
+      ]
+    },
+    {
+      "id": "task84-partial-not-pass",
+      "status": "observed",
+      "statement": "Unknown gates, missing permissions, rate limits, endpoint failures, and bounded evidence truncation return partial rather than pass.",
+      "evidence": [
+        "tests/tools/test_wsl2_github_evidence_runner.py",
+        "docs/workflows/wsl2-github-evidence-runner/README.md"
+      ]
+    },
+    {
+      "id": "task84-readonly-git-boundary",
+      "status": "observed",
+      "statement": "The runner suppresses workflow_evidence git fetch, uses fixed read-only Git inspection and ls-remote calls, and leaves Git/GitHub writes approval gated.",
+      "evidence": [
+        "tools/agent_workflow/workflow_evidence.py",
+        ".codex/rules/quant-system-wsl-evidence.rules",
+        "docs/workflows/wsl2-github-evidence-runner/git-approval-boundary.md"
+      ]
+    },
+    {
+      "id": "task84-command-consolidation",
+      "status": "derived",
+      "statement": "A consuming workflow stage can replace a sequence of model-visible GitHub/Git fact queries with one fixed runner invocation while retaining internal operation counts and structured evidence.",
+      "evidence": [
+        "docs/workflows/wsl2-github-evidence-runner/visuals/command-consolidation.csv",
+        "docs/workflows/wsl2-github-evidence-runner/README.md"
+      ]
+    },
+    {
+      "id": "task84-token-effect",
+      "status": "not-measured",
+      "statement": "Task #84 does not establish a Token reduction percentage or Task #65 candidate advantage.",
+      "evidence": [
+        "docs/workflows/wsl2-github-evidence-runner/publication-materials.json"
+      ]
+    },
+    {
+      "id": "task84-historical-command-density",
+      "status": "observed",
+      "statement": "External aggregate reports for Tasks #63 and #64 record 110/98 Git-containing command calls and 54/65 GitHub/gh-containing command calls across Delivery, Review, and Closeout. Categories can overlap and are not additive.",
+      "evidence": [
+        "docs/workflows/wsl2-github-evidence-runner/historical-command-baseline.json",
+        "docs/workflows/wsl2-github-evidence-runner/visuals/historical-git-gh-baseline.csv"
+      ]
+    },
+    {
+      "id": "task84-historical-guardian-context",
+      "status": "observed",
+      "statement": "The same external reports record 54 and 72 Guardian turns and 2,290,161 and 3,259,735 Guardian Tokens for Tasks #63 and #64.",
+      "evidence": [
+        "docs/workflows/wsl2-github-evidence-runner/historical-command-baseline.json"
+      ]
+    },
+    {
+      "id": "task84-environment-capability-record",
+      "status": "observed",
+      "statement": "The committed WSL2 diagnostic and Task #84 live refresh record GitHub CLI 2.97.0, Codex 0.146.0-alpha.9.2, verified WSL-local authentication scopes by name, PR base/head metadata, Project read, quality check success, and Required Checks plan-limited 403.",
+      "evidence": [
+        "docs/workflows/wsl2-github-evidence-runner/environment-capability.json",
+        "docs/workflows/wsl2-github-evidence-runner/live-profile-evidence.json"
+      ]
+    },
+    {
+      "id": "task84-live-capture-contract",
+      "status": "observed",
+      "statement": "Live profile, recheck, Rules, and environment summaries follow versioned templates and keep raw evidence external.",
+      "evidence": [
+        "docs/workflows/wsl2-github-evidence-runner/live-profile-evidence.json",
+        "docs/workflows/wsl2-github-evidence-runner/live-recheck-evidence.json",
+        "docs/workflows/wsl2-github-evidence-runner/rules-live-evidence.json",
+        "docs/workflows/wsl2-github-evidence-runner/external-live-evidence-manifest.json"
+      ]
+    },
+    {
+      "id": "task84-live-review-profile",
+      "status": "observed",
+      "statement": "The real Task #84 PR #102 review profile returned partial with 6 GitHub API calls, 1 runner Git operation, 455 compact stdout bytes, and the only unknown gate being Required Checks configuration.",
+      "evidence": [
+        "docs/workflows/wsl2-github-evidence-runner/live-profile-evidence.json"
+      ]
+    },
+    {
+      "id": "task84-live-recheck-stability",
+      "status": "observed",
+      "statement": "The same-snapshot recheck returned partial and stable, with no changed fields and the same Required Checks configuration unknown gate.",
+      "evidence": [
+        "docs/workflows/wsl2-github-evidence-runner/live-recheck-evidence.json"
+      ]
+    }
+  ],
+  "metrics": {
+    "model_visible_invocations_after": {
+      "value": 1,
+      "status": "expected",
+      "scope": "one fixed evidence profile invocation per stage"
+    },
+    "legacy_model_visible_git_gh_commands": {
+      "value": null,
+      "status": "not-measured",
+      "scope": "requires an external historical rollout count"
+    },
+    "github_api_calls_per_profile": {
+      "value": 6,
+      "status": "observed",
+      "scope": "Task #84 live review profile"
+    },
+    "guardian_turns": {
+      "value": null,
+      "status": "unavailable",
+      "scope": "Codex session/rollout locator not exposed"
+    },
+    "token_count": {
+      "value": null,
+      "status": "not-measured",
+      "scope": "external rollout analysis only"
+    },
+    "compact_stdout_bytes": {
+      "value": 455,
+      "status": "observed",
+      "scope": "record during Task #84 live Delivery probe"
+    },
+    "historical_task63_git_containing_commands": {
+      "value": 110,
+      "status": "observed-external-aggregate",
+      "scope": "Delivery+Review+Closeout; category may overlap GitHub/gh"
+    },
+    "historical_task63_github_gh_containing_commands": {
+      "value": 54,
+      "status": "observed-external-aggregate",
+      "scope": "Delivery+Review+Closeout; category may overlap Git"
+    },
+    "historical_task64_git_containing_commands": {
+      "value": 98,
+      "status": "observed-external-aggregate",
+      "scope": "Delivery+Review+Closeout; category may overlap GitHub/gh"
+    },
+    "historical_task64_github_gh_containing_commands": {
+      "value": 65,
+      "status": "observed-external-aggregate",
+      "scope": "Delivery+Review+Closeout; category may overlap Git"
+    },
+    "historical_task63_guardian_turns": {
+      "value": 54,
+      "status": "observed-external-aggregate",
+      "scope": "whole Task workflow"
+    },
+    "historical_task64_guardian_turns": {
+      "value": 72,
+      "status": "observed-external-aggregate",
+      "scope": "whole Task workflow"
+    },
+    "live_profile_duration_ms": {
+      "value": 6984,
+      "status": "observed",
+      "scope": "Task #84 real review profile"
+    },
+    "live_recheck_api_calls": {
+      "value": 6,
+      "status": "observed",
+      "scope": "Task #84 exact snapshot recheck"
+    },
+    "approval_prompts": {
+      "value": 1,
+      "status": "observed",
+      "scope": "Task #84 live review runner execution"
+    },
+    "elevated_executions": {
+      "value": 1,
+      "status": "observed",
+      "scope": "Task #84 live review runner execution"
+    }
+  },
+  "publication_mapping": {
+    "agent_workflow_design_guide": [
+      "fixed read-only evidence entry",
+      "snapshot and stability recheck",
+      "partial/unknown semantics",
+      "Git and GitHub approval boundary",
+      "credential and rollback guidance"
+    ],
+    "token_optimization_article": [
+      "model-visible command consolidation mechanism",
+      "internal API operation accounting",
+      "compact output and external evidence separation",
+      "limitations pending Task #86 candidate data"
+    ]
+  },
+  "limitations": [
+    "Task #63/#64 aggregate reports are external; only hashes and aggregate metrics are committed.",
+    "Git and GitHub/gh command categories can overlap and must not be summed.",
+    "Task #84 live PR/profile/recheck/execpolicy observations are a single Delivery capture and do not establish workflow-wide savings.",
+    "No Task #65 candidate or Token reduction claim is made.",
+    "Task #85 is responsible for changing workflow Skills to consume the fixed runner."
+  ],
+  "source_documents": [
+    "docs/workflows/wsl2-github-evidence-runner/README.md",
+    "docs/workflows/wsl2-github-evidence-runner/historical-command-baseline.json",
+    "docs/workflows/wsl2-github-evidence-runner/environment-capability.json",
+    "docs/workflows/wsl2-github-evidence-runner/live-evidence-capture-plan.md",
+    "docs/workflows/wsl2-github-evidence-runner/publication-readiness.md",
+    "docs/workflows/wsl2-github-evidence-runner/visuals/"
+  ]
+}

@@ -9,6 +9,7 @@ workflow verdicts remain the responsibility of the governing Skill.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import unicodedata
 from collections.abc import Mapping, Sequence
@@ -170,12 +171,15 @@ def _git_snapshot(
     runner: CommandRunner,
     warnings: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    fetch = runner.run(
-        ["git", "fetch", "--prune", "origin"],
-        command_id="git-fetch-origin",
-    )
-    if fetch.returncode != 0:
-        warnings.append(command_warning(fetch))
+    read_only_local_refs = os.environ.get("WORKFLOW_EVIDENCE_READ_ONLY") == "1"
+    fetch: CommandResult | None = None
+    if not read_only_local_refs:
+        fetch = runner.run(
+            ["git", "fetch", "--prune", "origin"],
+            command_id="git-fetch-origin",
+        )
+        if fetch.returncode != 0:
+            warnings.append(command_warning(fetch))
     branch = _git_value(
         runner,
         ["branch", "--show-current"],
@@ -186,6 +190,12 @@ def _git_snapshot(
         runner,
         ["rev-parse", "HEAD"],
         command_id="git-head",
+        warnings=warnings,
+    )
+    local_main = _git_value(
+        runner,
+        ["rev-parse", "refs/heads/main"],
+        command_id="git-local-main",
         warnings=warnings,
     )
     origin_main = _git_value(
@@ -219,9 +229,19 @@ def _git_snapshot(
         warnings=warnings,
     )
     return {
-        "origin_fetch": "pass" if fetch.returncode == 0 else "unknown",
+        "origin_fetch": (
+            "pass"
+            if read_only_local_refs
+            else "pass"
+            if fetch is not None and fetch.returncode == 0
+            else "unknown"
+        ),
+        "origin_refresh": (
+            "skipped-read-only" if read_only_local_refs else "attempted"
+        ),
         "branch": safe_text(branch),
         "head_sha": head if is_sha(head) else None,
+        "local_main_sha": local_main if is_sha(local_main) else None,
         "origin_main_sha": origin_main if is_sha(origin_main) else None,
         "clean": len(status_lines) == 0,
         "status_entries": len(status_lines),

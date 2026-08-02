@@ -59,8 +59,8 @@
 | Task #80：第二轮实验协议与 Task #65 输入冻结 | Issue #80 / PR：待回填 | Feature #77 / Epic #61 | 协议、冻结输入、统计口径、材料 Schema | `repository-final`、Issue 已完成 | 两份文档的实验方法和权威输入 |
 | Task #81：Windows merge-pre 基准采集 | Issue #81；业务 Issue #65；实验 PR #99 | Feature #77 / Epic #61 | 当前 Windows 正式基准、失败 pilot、rollout | `formal-sample` + `invalid-sample`、Issue 已完成 | 当前基准、失败恢复、Token/命令/Guardian 数据 |
 | Task #82：可复现 WSL2 Codex 环境与能力诊断 | Issue #82 / PR #100 / reviewed head `96b20b5...` / merge `767e995...` | Feature #77 / Epic #61 | 环境指南、诊断工具、能力矩阵、决策与案例 | `repository-final`、已完成 | 指导手册环境章节；Token 文章候选变量与边界 |
-| Task #83：WSL2 Validation Runner 与最小权限 Rules | Issue #83 / PR #101 / Base `767e995...` | Feature #77 / Epic #61 | Runner、Rules、权限与命令成本材料 | `delivery-pending` | 后续优化机制和控制面证据 |
-| Task #84：只读 GitHub Evidence Runner 与 Git 审批边界 | Issue #84；PR：待创建 | Feature #77 / Epic #61 | GitHub 只读证据、Git 写边界与审批材料 | `placeholder` | 证据采集、安全边界和命令成本 |
+| Task #83：WSL2 Validation Runner 与最小权限 Rules | Issue #83 / PR #101 / reviewed head `d162bc9...` / merge `74a7587...` | Feature #77 / Epic #61 | Runner、Rules、权限与命令成本材料 | `repository-final`、已完成 | 后续优化机制和控制面证据 |
+| Task #84：只读 GitHub Evidence Runner 与 Git 审批边界 | Issue #84；PR #102；Base `74a7587...`；live material capture `3814af3...` | Feature #77 / Epic #61 | GitHub 只读证据、Git 写边界与审批材料 | `delivery-review` | 证据采集、安全边界和命令成本 |
 | Task #85：Skills 切换至统一 Runner | Issue #85；PR：待创建 | Feature #77 / Epic #61 | 统一命令路径、重复移除与 Skill 迁移材料 | `placeholder` | 工作流收敛机制和 Token 优化来源 |
 | Task #86：Task #65 WSL2 candidate merge-pre | Issue #86；业务 Issue #65；实验 PR：待创建 | Feature #77 / Epic #61 | Candidate Token、质量、Guardian、命令与时长 | `placeholder` | 最终 Windows/WSL2 对照和优化结论 |
 | Task #87：Canonical Spec 审计 | Issue #87；PR：待创建 | Feature #78 / Epic #61 | 规格重复、治理来源与 Canonical Spec | `placeholder` | 规格治理和上下文去重 |
@@ -360,10 +360,14 @@
 - Epic：`#61`
 - Branch：`83-task-wsl2-validation-runner-rules`
 - Base / workflow / control-plane SHA：`767e995e7872c5eaea46002cf02381cef87f3eab`
-- Delivery HEAD：`待回填`
-- reviewed HEAD / verdict：`待回填`
-- merge commit：`待回填`
-- 生命周期状态：Delivery in progress；Task #65 candidate 未执行。
+- final Delivery / reviewed HEAD：`d162bc9f2846854c3f4bf0dcc6a938102f850d14`
+- Review verdict：`pass`
+- squash merge commit：`74a75872078221c38dbd132a1d438b0bb05c1870`
+- Issue / Project：Issue closed；Project Status `Done`
+- Branch cleanup：completed
+- Post-merge validation：`148 passed`；remote `quality: SUCCESS`
+- Closeout evidence：plan `ev-937d4dbc6ce95774`；validation `val-closeout-3170e0980aa4`；final `ev-902fd5acf87a567f`
+- 生命周期状态：Task #83 已完成；Task #65 candidate 未执行。
 
 ### 已产生材料
 
@@ -419,21 +423,97 @@
 
 ### 待办
 
-- [ ] 当前 checkpoint 提交后回填 Delivery HEAD 和 effective diff identity。
-- [ ] 独立 Review 后回填 reviewed HEAD、Review verdict 和 findings。
-- [ ] Merge/Closeout 后回填 merge commit、最终 Issue/Project 状态和 branch cleanup。
+- [x] final Delivery / reviewed HEAD、Review verdict、merge commit、Issue/Project、branch cleanup 和 post-merge validation 已由 Task #84 回填。
 - [x] 新 Codex 会话加载 rules 后，仓库外记录 live Guardian、approval、输出大小和时长。
-- [ ] Task #84 处理 `baseRefOid` / GitHub Evidence helper 兼容性。
+- [x] `baseRefOid` 环境兼容阻塞通过升级 WSL2 GitHub CLI 消除；Task #84 继续负责固定 Evidence Runner、partial/unknown 和审批边界。
+
+---
+
+## Task #84 — 建立只读 GitHub Evidence Runner 与 Git 操作审批边界
+
+### 身份
+
+- Task Issue：`#84`
+- PR：`#102`
+- Parent Feature：`#77`
+- Epic：`#61`
+- Base / workflow / control-plane SHA：`74a75872078221c38dbd132a1d438b0bb05c1870`
+- Live material capture HEAD：`3814af3d95ece48ef03c59536dd025f5fb5511fb`
+- Current Delivery HEAD：见 PR #102 body 和最终 readiness snapshot
+- reviewed HEAD / verdict：`待回填`
+- merge commit：`待回填`
+- 生命周期状态：PR 已创建并进入 Review；Task #65 candidate 未执行。
+
+### 已产生材料
+
+- [x] 固定 Runner 与 profiles：
+  `tools/agent_workflow/wsl2_github_evidence_runner.py`；
+  `tools/agent_workflow/wsl2_github_evidence_profiles.json`。
+- [x] 最小权限 Rules：
+  `.codex/rules/quant-system-wsl-evidence.rules`。
+- [x] Evidence read-only mode：
+  `tools/agent_workflow/workflow_evidence.py` 支持固定 Runner 使用的
+  `WORKFLOW_EVIDENCE_READ_ONLY=1`，跳过 `git fetch` 并返回 `local_main_sha`。
+- [x] 单元、集成、负向和 Rules 测试：
+  `tests/tools/test_wsl2_github_evidence_runner.py`；
+  `tests/tools/test_wsl2_github_evidence_rules.py`。
+- [x] 使用、安全、凭据、回滚和故障排查：
+  `docs/workflows/wsl2-github-evidence-runner/README.md`；
+  `docs/workflows/wsl2-github-evidence-runner/git-approval-boundary.md`；
+  `docs/workflows/wsl2-github-evidence-runner/security-and-troubleshooting.md`。
+- [x] 指导手册与 Token 文章材料：
+  `docs/workflows/wsl2-github-evidence-runner/publication-materials.json`；
+  `docs/workflows/wsl2-github-evidence-runner/historical-command-baseline.json`；
+  `docs/workflows/wsl2-github-evidence-runner/environment-capability.json`；
+  `docs/workflows/wsl2-github-evidence-runner/live-evidence-capture-plan.md`；
+  `docs/workflows/wsl2-github-evidence-runner/publication-readiness.md`；
+  `docs/workflows/wsl2-github-evidence-runner/templates/`；
+  `docs/workflows/wsl2-github-evidence-runner/visuals/`。
+- [x] Live profile、recheck、execpolicy 和外部 manifest 摘要：
+  `docs/workflows/wsl2-github-evidence-runner/live-profile-evidence.json`；
+  `docs/workflows/wsl2-github-evidence-runner/live-recheck-evidence.json`；
+  `docs/workflows/wsl2-github-evidence-runner/rules-live-evidence.json`；
+  `docs/workflows/wsl2-github-evidence-runner/external-live-evidence-manifest.json`。
+
+### 当前证据边界
+
+- [x] 测试覆盖固定 profiles、Task/PR/schema、partial/unknown、linkage fail、
+  remote-ref drift、snapshot recheck、truncation、敏感信息、错误 origin、
+  symlink、路径含空格、并发输出隔离和无 GitHub 写操作。
+- [x] Rules 测试覆盖固定入口、直接 `gh`/Git/shell 不放行、Git/GitHub 写
+  继续审批，以及 prefix allow + Runner complete-argv reject 的组合边界。
+- [x] Task #63/#64 外部分析报告中的历史 Git/`gh`、Guardian 与 Token
+  聚合数据已以摘要和 source SHA 归档；原始 rollout/report 不提交。
+- [x] Live profile、snapshot recheck、execpolicy 和环境能力的版本化采集
+  契约、JSON 模板与 readiness matrix 已归档。
+- [x] 创建 PR 并提交 trusted files 后，对真实 Task #84 / PR 执行 live profile，
+  记录 API 调用数、stdout、时长、Guardian、approval 和 result SHA-256。
+- [x] 使用同一 snapshot 执行 live recheck，并记录真实
+  execpolicy matrix 和 Runner 尾随参数拒绝。
+- [ ] 外部 Token 指标继续留给 rollout 分析和 Task #86，不在本 Task 推导。
+
+### 最终文档用途
+
+- 指导手册：固定只读 evidence 入口、profile/schema、partial/unknown、
+  snapshot/recheck、凭据、Git/GitHub 审批与回滚。
+- Token 文章：模型可见命令收敛、内部 API operation accounting、紧凑输出、
+  失败案例与未测量 Token 边界。
+
+### 待办
+
+- [x] 创建/更新 PR 后回填 PR、live material capture HEAD 和 effective diff identity。
+- [ ] 独立 Review 后回填 reviewed HEAD、verdict 和 findings。
+- [ ] Merge/Closeout 后回填 merge commit、Issue/Project 和 branch cleanup。
+- [ ] Task #85 切换 Skills 后记录真实前后命令路径差异。
 
 ---
 
 ## 已编号的后续 Task
 
-以下 Task 已有正式 Issue 编号，但尚未产生可冻结材料；Task #83 已展开为上方完整登记小节。每个 Task 开始 Delivery 后，应把对应条目扩展为完整登记小节。
+以下 Task 已有正式 Issue 编号，但尚未产生可冻结材料；Task #83 与 #84 已展开为上方完整登记小节。每个 Task 开始 Delivery 后，应把对应条目扩展为完整登记小节。
 
 | Issue | Task | Parent | 当前材料状态 |
 | --- | --- | --- | --- |
-| `#84` | 建立只读 GitHub Evidence Runner 与 Git 操作审批边界 | Feature `#77` | `placeholder` |
 | `#85` | 将 Task Workflow Skills 切换到统一 Runner 并移除重复命令路径 | Feature `#77` | `placeholder` |
 | `#86` | 采集 Task #65 WSL2 优化候选 merge-pre 基准并评估效果 | Feature `#77` | `placeholder` |
 | `#87` | 审计 Task Workflow 规格与治理上下文重复并定义 Canonical Spec | Feature `#78` | `placeholder` |
