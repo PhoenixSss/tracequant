@@ -71,20 +71,38 @@
     },
     {
       "id": "task84-environment-capability-record",
-      "status": "observed-with-refresh-required",
-      "statement": "The committed WSL2 diagnostic records GitHub CLI 2.97.0 and verified WSL-local authentication. Task #84 live evidence must refresh PR, Project, Rules, and Required Checks capabilities.",
+      "status": "observed",
+      "statement": "The committed WSL2 diagnostic and Task #84 live refresh record GitHub CLI 2.97.0, Codex 0.146.0-alpha.9.2, verified WSL-local authentication scopes by name, PR base/head metadata, Project read, quality check success, and Required Checks plan-limited 403.",
       "evidence": [
         "docs/workflows/wsl2-github-evidence-runner/environment-capability.json",
-        "docs/workflows/wsl2-codex-environment/current-diagnostic.json"
+        "docs/workflows/wsl2-github-evidence-runner/live-profile-evidence.json"
       ]
     },
     {
       "id": "task84-live-capture-contract",
-      "status": "expected",
+      "status": "observed",
       "statement": "Live profile, recheck, Rules, and environment summaries follow versioned templates and keep raw evidence external.",
       "evidence": [
-        "docs/workflows/wsl2-github-evidence-runner/live-evidence-capture-plan.md",
-        "docs/workflows/wsl2-github-evidence-runner/templates/"
+        "docs/workflows/wsl2-github-evidence-runner/live-profile-evidence.json",
+        "docs/workflows/wsl2-github-evidence-runner/live-recheck-evidence.json",
+        "docs/workflows/wsl2-github-evidence-runner/rules-live-evidence.json",
+        "docs/workflows/wsl2-github-evidence-runner/external-live-evidence-manifest.json"
+      ]
+    },
+    {
+      "id": "task84-live-review-profile",
+      "status": "observed",
+      "statement": "The real Task #84 PR #102 review profile returned partial with 6 GitHub API calls, 1 runner Git operation, 455 compact stdout bytes, and the only unknown gate being Required Checks configuration.",
+      "evidence": [
+        "docs/workflows/wsl2-github-evidence-runner/live-profile-evidence.json"
+      ]
+    },
+    {
+      "id": "task84-live-recheck-stability",
+      "status": "observed",
+      "statement": "The same-snapshot recheck returned partial and stable, with no changed fields and the same Required Checks configuration unknown gate.",
+      "evidence": [
+        "docs/workflows/wsl2-github-evidence-runner/live-recheck-evidence.json"
       ]
     }
   ],
@@ -100,14 +118,14 @@
       "scope": "requires an external historical rollout count"
     },
     "github_api_calls_per_profile": {
-      "value": null,
-      "status": "runtime-observed",
-      "scope": "reported by each result under evidence.operations.github_queries"
+      "value": 6,
+      "status": "observed",
+      "scope": "Task #84 live review profile"
     },
     "guardian_turns": {
       "value": null,
-      "status": "not-measured",
-      "scope": "requires a fresh live Codex Rules probe"
+      "status": "unavailable",
+      "scope": "Codex session/rollout locator not exposed"
     },
     "token_count": {
       "value": null,
@@ -115,8 +133,8 @@
       "scope": "external rollout analysis only"
     },
     "compact_stdout_bytes": {
-      "value": null,
-      "status": "not-measured",
+      "value": 455,
+      "status": "observed",
       "scope": "record during Task #84 live Delivery probe"
     },
     "historical_task63_git_containing_commands": {
@@ -150,24 +168,24 @@
       "scope": "whole Task workflow"
     },
     "live_profile_duration_ms": {
-      "value": null,
-      "status": "not-measured",
+      "value": 6984,
+      "status": "observed",
       "scope": "Task #84 real review profile"
     },
     "live_recheck_api_calls": {
-      "value": null,
-      "status": "not-measured",
+      "value": 6,
+      "status": "observed",
       "scope": "Task #84 exact snapshot recheck"
     },
     "approval_prompts": {
-      "value": null,
-      "status": "not-measured",
-      "scope": "fresh live Codex session"
+      "value": 1,
+      "status": "observed",
+      "scope": "Task #84 live review runner execution"
     },
     "elevated_executions": {
-      "value": null,
-      "status": "not-measured",
-      "scope": "fresh live Codex session"
+      "value": 1,
+      "status": "observed",
+      "scope": "Task #84 live review runner execution"
     }
   },
   "publication_mapping": {
@@ -188,7 +206,7 @@
   "limitations": [
     "Task #63/#64 aggregate reports are external; only hashes and aggregate metrics are committed.",
     "Git and GitHub/gh command categories can overlap and must not be summed.",
-    "No Task #84 live PR/profile/recheck/execpolicy observation is included before local Delivery capture.",
+    "Task #84 live PR/profile/recheck/execpolicy observations are a single Delivery capture and do not establish workflow-wide savings.",
     "No Task #65 candidate or Token reduction claim is made.",
     "Task #85 is responsible for changing workflow Skills to consume the fixed runner."
   ],

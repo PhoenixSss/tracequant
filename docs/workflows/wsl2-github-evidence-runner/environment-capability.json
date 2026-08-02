@@ -2,7 +2,7 @@
   "schema_version": "1.0",
   "task": 84,
   "evidence_type": "environment-capability-baseline",
-  "status": "source-derived-with-live-refresh-required",
+  "status": "observed-with-live-refresh",
   "source": {
     "path": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
     "sha256": "e151c535a5d640d7060910dde5a8bf718cb8d8c3efe5f9200c4b7a9fd09e4495",
@@ -34,32 +34,53 @@
       "credential_boundary": "WSL-local, revocable; credential contents are not recorded"
     },
     "codex": {
-      "version": null,
-      "status": "not-captured-in-committed-source",
-      "live_refresh_required": true
+      "version": "0.146.0-alpha.9.2",
+      "status": "observed",
+      "sandbox_execpolicy_warning": "PATH alias creation reported read-only filesystem before returning policy decisions"
     }
   },
   "github_capabilities": {
     "authentication": {
       "status": "verified",
-      "credential_boundary": "WSL-local, revocable; credential contents are not recorded"
+      "credential_boundary": "WSL-local, revocable; credential contents are not recorded",
+      "scope_names": [
+        "gist",
+        "project",
+        "read:org",
+        "repo",
+        "workflow"
+      ]
     },
     "base_head_oid_metadata": {
-      "status": "observed-working-after-github-cli-upgrade",
-      "evidence": [
-        "docs/workflows/publication-materials/task-material-register.md"
-      ],
-      "live_task84_refresh_required": true
+      "status": "observed",
+      "pull_request": 102,
+      "base_ref_oid": "74a75872078221c38dbd132a1d438b0bb05c1870",
+      "head_ref_oid": "3814af3d95ece48ef03c59536dd025f5fb5511fb"
     },
     "project_read": {
-      "status": "live-task84-profile-required",
-      "scopes": null
+      "status": "observed",
+      "task": 84,
+      "project_status": "Review",
+      "scopes": [
+        "project",
+        "read:org",
+        "repo"
+      ]
     },
     "required_checks_configuration": {
       "status": "plan-limited-403-observed",
       "classification": "server-capability-unavailable",
       "check_run_fallback_must_remain_auditable": true,
-      "live_task84_refresh_required": true
+      "http_status": 403,
+      "message": "Upgrade to GitHub Pro or make this repository public to enable this feature."
+    },
+    "review_threads": {
+      "status": "observed",
+      "unresolved_threads": 0
+    },
+    "check_runs": {
+      "status": "observed",
+      "quality": "SUCCESS"
     }
   },
   "security": {
@@ -67,11 +88,13 @@
     "token_value_recorded": false,
     "complete_credential_recorded": false,
     "proxy_credential_recorded": false,
-    "scopes_recorded": false
+    "scopes_recorded": true,
+    "authorization_header_recorded": false,
+    "cookie_recorded": false
   },
   "limitations": [
-    "Codex version is not present in the committed environment diagnostic.",
-    "Current Task #84 Project, thread, and required-check behavior must be refreshed against the real PR.",
-    "No live Guardian, approval, elevated, API-call, duration, or stdout metric is inferred from this baseline."
+    "Required Checks configuration remains unavailable through the GitHub branch protection endpoint because of plan-limited HTTP 403.",
+    "Guardian/session rollout locators were not exposed to this repository run.",
+    "No Token metric is inferred from this environment capability refresh."
   ]
 }
