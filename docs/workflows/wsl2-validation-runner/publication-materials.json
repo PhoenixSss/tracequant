@@ -16,10 +16,11 @@
     {
       "claim_id": "task83-guardian-live-effect",
       "claim_type": "fact",
-      "status": "not-measured",
-      "statement": "Live Guardian turns and approval reductions require a restarted or new Codex session with the project rules loaded.",
+      "status": "observed",
+      "statement": "In the Task #83 live targeted probe, the fixed runner entry executed directly as the first command in a new Codex session with project rules loaded; Guardian turns, approval prompts, and elevated executions were all zero. This observation applies only to the targeted probe and does not measure current-ci-equivalent or post-merge live Guardian behavior.",
       "evidence": [
-        "docs/workflows/wsl2-validation-runner/README.md#live-activation-checkpoint"
+        "docs/workflows/wsl2-validation-runner/live-activation-evidence.json",
+        "docs/workflows/wsl2-validation-runner/README.md#task-83-observed-live-activation"
       ]
     },
     {
@@ -74,14 +75,19 @@
       "basis": "Canonical profile spec."
     },
     "guardian_turns": {
-      "value": null,
-      "status": "not-measured",
-      "basis": "Requires live rules activation checkpoint in a new Codex session."
+      "value": 0,
+      "status": "observed",
+      "basis": "Observed in the Task #83 live targeted activation probe after project rules were loaded in a new Codex session."
+    },
+    "approval_prompts": {
+      "value": 0,
+      "status": "observed",
+      "basis": "Observed in the Task #83 live targeted activation probe."
     },
     "elevated_executions": {
-      "value": null,
-      "status": "not-measured",
-      "basis": "Outer Codex execution route is not observable from inside the runner."
+      "value": 0,
+      "status": "observed",
+      "basis": "Observed externally for the Task #83 live targeted activation probe; not derived from the runner internals."
     },
     "success_stdout_bytes": {
       "value": 346,
@@ -97,6 +103,26 @@
       "value": 11174,
       "status": "observed",
       "basis": "Measured from `current-ci-equivalent` runner digest result `20260802T073329Z-e5d9d709d4e1`."
+    },
+    "live_targeted_duration_ms": {
+      "value": 10284,
+      "status": "observed",
+      "basis": "Observed from the Task #83 live targeted activation probe digest."
+    },
+    "live_targeted_stdout_bytes": {
+      "value": 346,
+      "status": "observed",
+      "basis": "Observed from the Task #83 live targeted activation probe compact stdout."
+    },
+    "live_targeted_stdout_json_bytes": {
+      "value": 345,
+      "status": "observed",
+      "basis": "Observed from the Task #83 live targeted activation probe JSON body."
+    },
+    "live_targeted_model_visible_invocations": {
+      "value": 1,
+      "status": "observed",
+      "basis": "The live probe used one fixed runner invocation: `tools/agent_workflow/wsl2_validation_runner.py targeted`."
     }
   },
   "known_followups": [

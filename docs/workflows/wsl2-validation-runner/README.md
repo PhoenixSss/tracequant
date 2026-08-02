@@ -121,6 +121,31 @@ notes
 
 Do not broaden global rules to avoid this checkpoint.
 
+## Task #83 Observed Live Activation
+
+Task #83 includes one live activation observation from the current WSL2 Codex
+environment after the new project rules were loaded in a new Codex session:
+
+- profile: `targeted`
+- direct execution: yes
+- Guardian turns: `0`
+- approval prompts: `0`
+- elevated executions: `0`
+- duration: `10284 ms`
+- stdout: `346 bytes`
+- raw result remains external/ignored
+
+The committed summary evidence is
+`docs/workflows/wsl2-validation-runner/live-activation-evidence.json`. The raw
+runner result remains below ignored `.agents/validation.local/` and is not a
+repository artifact.
+
+This is an observation for Task #83 in the current environment, not a permanent
+guarantee for every machine or every profile. The `current-ci-equivalent` and
+`post-merge` live Guardian behavior were not measured by this targeted probe.
+Static `execpolicy check` coverage remains separate from this real live
+activation result.
+
 ## Rollback
 
 To roll back Task #83 behavior before adoption by later Skills, remove or ignore

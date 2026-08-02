@@ -38,7 +38,7 @@
 | Task #65 第二轮实验协议与输入冻结 | Issue / PR：待回填 | 协议、冻结输入、统计口径、材料 Schema | `repository-final` | 两份文档的实验方法和权威输入 |
 | Task #65 Windows merge-pre 基准采集 | 元 Task Issue：待回填；业务 Issue #65；实验 PR #99 | 当前 Windows 正式基准、失败 pilot、rollout | `formal-sample` + `invalid-sample` | 当前基准、失败恢复、Token/命令/Guardian 数据 |
 | 可复现 WSL2 Codex 环境与能力诊断 | Issue #82 / PR #100 / Branch `82-task-reproducible-wsl2-codex-environment` / Base `a492f0b334f950f2613b4b2204e96bef413355be` | 环境指南、诊断工具、能力矩阵、决策与案例 | `repository-final`、已完成 | 指导手册环境章节；Token 文章候选变量与边界 |
-| WSL2 Validation Runner 与最小权限 Rules | Issue #83 / PR：待回填 / Branch `83-task-wsl2-validation-runner-rules` / Base `767e995e7872c5eaea46002cf02381cef87f3eab` | Runner、Rules、权限与命令成本材料 | `delivery-pending` | 后续优化机制和控制面证据 |
+| WSL2 Validation Runner 与最小权限 Rules | Issue #83 / PR #101 / Branch `83-task-wsl2-validation-runner-rules` / Base `767e995e7872c5eaea46002cf02381cef87f3eab` | Runner、Rules、权限与命令成本材料 | `delivery-pending` | 后续优化机制和控制面证据 |
 | Task #65 WSL2 candidate merge-pre | 业务 Issue #65；实验 PR：待创建 | Candidate Token、质量、Guardian、命令与时长 | `placeholder` | 最终前后对照和优化结论 |
 
 ---
@@ -323,7 +323,7 @@
 ### 身份
 
 - Task Issue：`#83`
-- PR：`待回填`
+- PR：`#101`
 - Parent Feature：`#77`
 - Epic：`#61`
 - Branch：`83-task-wsl2-validation-runner-rules`
@@ -350,6 +350,13 @@
 - [x] Token/process/quality 指标：
   `docs/workflows/wsl2-validation-runner/publication-materials.json`
   按 `observed`、`derived`、`expected`、`not-measured` 区分。
+- [x] Rules live activation probe：
+  `docs/workflows/wsl2-validation-runner/live-activation-evidence.json`；
+  profile `targeted`；direct execution yes；Guardian turns `0`；approval prompts
+  `0`；elevated executions `0`；duration `10284 ms`；stdout `346 bytes`；
+  result SHA-256
+  `1e0cc6cd7850457dd83b9be58e0da48a20c99f0cfd3e349f426fc9c3616a8caa`。
+  Raw result remains ignored under `.agents/validation.local/`.
 - [x] 决策、失败、恢复和反直觉案例：
   runner tests cover subcommand failure, timeout, interruption, CI drift,
   result-write failure, wrong cwd and symlink invocation.
@@ -364,10 +371,10 @@
 
 ### 待办
 
-- [ ] PR 创建后回填 PR、Delivery HEAD 和 effective diff identity。
+- [ ] 当前 checkpoint 提交后回填 Delivery HEAD 和 effective diff identity。
 - [ ] 独立 Review 后回填 reviewed HEAD、Review verdict 和 findings。
 - [ ] Merge/Closeout 后回填 merge commit、最终 Issue/Project 状态和 branch cleanup。
-- [ ] 新 Codex 会话加载 rules 后，仓库外记录 live Guardian、approval、输出大小和时长。
+- [x] 新 Codex 会话加载 rules 后，仓库外记录 live Guardian、approval、输出大小和时长。
 - [ ] Task #84 处理 `baseRefOid` / GitHub Evidence helper 兼容性。
 
 ---
