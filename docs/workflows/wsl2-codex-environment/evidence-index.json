@@ -1,0 +1,180 @@
+{
+  "schema_version": "1.0",
+  "scope": "WSL2 Codex environment and execution-capability Task",
+  "public_evidence_policy": {
+    "raw_rollouts_committed": false,
+    "raw_credentials_committed": false,
+    "absolute_user_paths_committed": false,
+    "repository_sources_are_public_safe": true,
+    "external_evidence_is_referenced_by_run_id": true
+  },
+  "repository_sources": [
+    {
+      "evidence_id": "repo-current-diagnostic",
+      "kind": "report",
+      "path": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+      "sha256": "304febba94a2b7cc834c134a63a8a9c5d512591b928087065eb0276e4325d08a",
+      "public_status": "public",
+      "supports": [
+        "WSL2 distribution and filesystem",
+        "tool versions and paths",
+        "project validation result",
+        "capability classifications",
+        "network and security boundaries"
+      ]
+    },
+    {
+      "evidence_id": "repo-capability-matrix",
+      "kind": "report",
+      "path": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
+      "sha256": "cfac0f706ade85c6ce8c29d3ea41d59eee60a64fef6493a2c502244d96de91d4",
+      "public_status": "public",
+      "supports": [
+        "direct versus approval-required capability counts",
+        "Windows and WSL2 comparison",
+        "operations that must retain approval"
+      ]
+    },
+    {
+      "evidence_id": "repo-runner-contract",
+      "kind": "config",
+      "path": "docs/workflows/wsl2-codex-environment/runner-environment-contract.md",
+      "sha256": "033ba2d2b7759de515a3c376d765fc720083d8d1cf6e3be0f6ce3af9819b6aca",
+      "public_status": "public",
+      "supports": [
+        "future Runner preconditions",
+        "fail-closed behavior",
+        "credential and evidence boundaries"
+      ]
+    },
+    {
+      "evidence_id": "repo-diagnostic-tool",
+      "kind": "config",
+      "path": "tools/wsl2_codex_diagnostic.py",
+      "sha256": "ca2066c2691882651ea47a6e7c03327d9ca07410eef3ffbeb93cbb11694c1948",
+      "public_status": "public",
+      "supports": [
+        "repeatable local, remote-read and full diagnostic profiles",
+        "explicit confirmation for reversible write probes",
+        "bounded and redacted evidence output"
+      ]
+    },
+    {
+      "evidence_id": "repo-diagnostic-tests",
+      "kind": "validation",
+      "path": "tests/tools/test_wsl2_codex_diagnostic.py",
+      "sha256": "a2720a020a6e64a812b1226301c569039c0cd9fcaf06afc2948d8d8df7eab343",
+      "public_status": "public",
+      "supports": [
+        "diagnostic tool safety and output behavior"
+      ]
+    },
+    {
+      "evidence_id": "repo-windows-baseline",
+      "kind": "report",
+      "path": "docs/workflows/benchmarks/task-65-round-2/environment-current-windows.md",
+      "sha256": "e471431e3dc06c78dbe8349194f750b59805d7629a752ec21e82f29b08038989",
+      "public_status": "public",
+      "supports": [
+        "native Windows environment limitations used in the comparison"
+      ]
+    },
+    {
+      "evidence_id": "repo-experiment-protocol",
+      "kind": "config",
+      "path": "docs/workflows/benchmarks/task-65-round-2/protocol.md",
+      "sha256": "de8423d4b42c7627e2bcdd4c4e3c1ae213cec62e800773d6d0b92c82d752146c",
+      "public_status": "public",
+      "supports": [
+        "publication material categories",
+        "evidence requirements",
+        "Task #65 candidate boundary"
+      ]
+    },
+    {
+      "evidence_id": "repo-python-pin",
+      "kind": "config",
+      "path": ".python-version",
+      "sha256": "49a506dd32096b010d75205acf3430c9ae6c40351888129499e5a5e487126c93",
+      "public_status": "public",
+      "supports": [
+        "project Python 3.11 contract"
+      ]
+    },
+    {
+      "evidence_id": "repo-ci-config",
+      "kind": "config",
+      "path": ".github/workflows/ci.yml",
+      "sha256": "a73b2e12664dca4b52e29d393a771378ab31bbe7b888d0583025deaf42ba6fa6",
+      "public_status": "public",
+      "supports": [
+        "CI toolchain and validation command contract"
+      ]
+    }
+  ],
+  "external_runs": [
+    {
+      "run_id": "20260801T133921Z-66016f44",
+      "normalized_location": ".agents/evidence.local/wsl2-environment-diagnostic/20260801T133921Z-66016f44/",
+      "purpose": "initial environment and capability diagnostic",
+      "public_status": "internal-only",
+      "expected_files": [
+        "environment.json",
+        "commands.jsonl",
+        "capability-matrix.json",
+        "guardian-approval-matrix.json",
+        "network-summary.json",
+        "git-github-summary.json",
+        "validation-summary.json",
+        "windows-wsl2-comparison.json",
+        "diagnostic-report.md"
+      ],
+      "sha256_manifest": null,
+      "finalization_status": "generate-before-merge"
+    },
+    {
+      "run_id": "20260801T145709Z-followup",
+      "normalized_location": ".agents/evidence.local/wsl2-environment-diagnostic/20260801T145709Z-followup/",
+      "purpose": "GitHub authentication, fetch and formal repository write follow-up",
+      "public_status": "internal-only",
+      "expected_files": [
+        "followup-environment.json",
+        "github-auth-fetch.json",
+        "formal-repository-write-probe.json",
+        "followup-validation.json",
+        "followup-report.md"
+      ],
+      "sha256_manifest": null,
+      "finalization_status": "generate-before-merge"
+    },
+    {
+      "run_id": "20260801T152359Z-final-gaps",
+      "normalized_location": ".agents/evidence.local/wsl2-environment-diagnostic/20260801T152359Z-final-gaps/",
+      "purpose": "reversible GitHub write and proxy comparison",
+      "public_status": "internal-only",
+      "expected_files": [
+        "github-write-probe.json",
+        "proxy-comparison.json",
+        "cleanup-verification.json",
+        "final-gap-report.md"
+      ],
+      "sha256_manifest": null,
+      "finalization_status": "generate-before-merge"
+    }
+  ],
+  "delivery_identity": {
+    "task_issue": null,
+    "branch": null,
+    "head_sha": null,
+    "pull_request": null,
+    "reviewed_head_sha": null,
+    "review_verdict": null,
+    "status": "fill-after-delivery-and-independent-review"
+  },
+  "finalization_checks": [
+    "Generate a SHA-256 manifest for each external run without committing raw evidence.",
+    "Record Task issue, branch, final Delivery HEAD and PR number.",
+    "After independent Review, record reviewed HEAD and verdict.",
+    "Recompute repository-source SHA-256 values if any referenced file changes."
+  ]
+}

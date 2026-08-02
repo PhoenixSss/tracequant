@@ -1,99 +1,31 @@
 {
-  "schema_version": 1,
-  "topic": "Migrating a Codex Task Workflow from native Windows to WSL2",
-  "scope": "Environment and execution-capability diagnostics only; no Task #65 candidate results",
-  "claims": [
-    {
-      "claim": "Moving the repository and toolchain into the WSL2 Linux filesystem removed dependence on WindowsApps Python aliases, WinGet-private uv paths, and the Windows host keyring.",
-      "evidence_strength": "observed",
-      "support": [
-        "python3 resolved to /usr/bin/python3",
-        "uv resolved to a WSL-native user path",
-        "git and gh resolved to /usr/bin",
-        "repository was stored on ext4 under /home"
-      ]
-    },
-    {
-      "claim": "WSL2 reduced tool-visibility problems but did not remove Codex sandbox approval boundaries.",
-      "evidence_strength": "observed",
-      "support": [
-        "temporary Git operations under /tmp completed directly",
-        "uv cache access required approval",
-        "formal Git metadata writes required approval",
-        "GitHub network access required approval"
-      ]
-    },
-    {
-      "claim": "An approved proxy-enabled path is reliable enough for the repository workflow, while no-proxy access is only partial.",
-      "evidence_strength": "observed",
-      "support": [
-        "proxy-enabled GitHub, API, gh, and Git operations passed",
-        "without proxy, api.github.com passed but github.com and git ls-remote timed out"
-      ]
-    },
-    {
-      "claim": "Approval-required is a documented safety boundary, not an environment failure.",
-      "evidence_strength": "derived",
-      "support": [
-        "all project CI-equivalent commands passed",
-        "formal repository write probe completed and cleaned",
-        "reversible GitHub write probe completed and left no ref"
-      ]
-    }
-  ],
-  "before_after_rows": [
-    {
-      "dimension": "Python launcher",
-      "windows": "WindowsApps alias was not reliably usable in sandbox",
-      "wsl2": "/usr/bin/python3 was directly available",
-      "classification": "improved"
-    },
-    {
-      "dimension": "uv",
-      "windows": "WinGet user-private executable path was not reliably usable",
-      "wsl2": "native uv 0.11.28 worked; cache access still required approval",
-      "classification": "improved"
-    },
-    {
-      "dimension": "temporary Git",
-      "windows": "write operations frequently required elevated execution",
-      "wsl2": "complete temporary repository flow under /tmp was direct",
-      "classification": "improved"
-    },
-    {
-      "dimension": "formal Git metadata",
-      "windows": "approval required",
-      "wsl2": "approval required",
-      "classification": "same-safety-boundary"
-    },
-    {
-      "dimension": "GitHub credentials",
-      "windows": "host keyring was not reliably visible to sandbox",
-      "wsl2": "independent revocable gh login was verified",
-      "classification": "improved"
-    }
-  ],
-  "success_cases": [
-    "CI-equivalent validation passed on the WSL2 toolchain.",
-    "Disposable formal-repository worktree, add, commit, and branch-switch probe completed and cleaned.",
-    "Temporary GitHub ref was created and deleted with no PR or Issue side effect."
-  ],
-  "failure_cases": [
-    "Initial gh and HTTPS Git access failed before WSL-local authentication was configured.",
-    "Sandbox could not access the local proxy socket or uv cache directly.",
-    "No-proxy github.com and git ls-remote timed out."
-  ],
-  "counterintuitive_cases": [
-    "A successful WSL migration still leaves approval-required operations because the sandbox boundary is separate from the operating-system boundary.",
-    "A missing bare python command is not a missing Python environment when python3 and uv run python are the supported entry points.",
-    "Unapproved sandbox network failures cannot by themselves classify the host WSL network."
-  ],
+  "schema_version": 2,
+  "status": "summary-only",
+  "source_of_truth": "docs/workflows/wsl2-codex-environment/publication-materials.json",
+  "scope": "Environment and execution-capability diagnostics only; no Task #65 candidate result.",
+  "public_claim_boundaries": {
+    "supported": [
+      "WSL2 improved selected Windows-specific tool and credential visibility issues",
+      "Codex approval boundaries remain",
+      "Approved proxy-enabled GitHub path is supported",
+      "Bare python is not required by this repository"
+    ],
+    "not_yet_supported": [
+      "Token reduction",
+      "Guardian-turn reduction",
+      "Runner effectiveness",
+      "Final minimum-permission Rules effectiveness",
+      "Task #65 candidate superiority"
+    ]
+  },
   "chart_data": {
+    "counting_rule": "One row per capability category in capability-matrix.md.",
     "capability_counts": {
-      "direct": 3,
-      "approval_required": 6,
+      "direct": 4,
+      "approval_required": 7,
       "partial": 1,
-      "prohibited_or_manual": 1
+      "prohibited": 1,
+      "total": 13
     },
     "project_validation": {
       "commands_passed": 6,

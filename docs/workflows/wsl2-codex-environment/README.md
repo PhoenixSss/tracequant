@@ -330,3 +330,18 @@ git status --short --branch --untracked-files=all
 
 详细矩阵见 [能力与审批矩阵](capability-matrix.md)，后续 Runner 前置条件见
 [环境契约](runner-environment-contract.md)。
+
+## 最终文档素材归档
+
+面向《代理开发工作流设计指导手册》和《代理工作流 Token 优化技术分享文章》的权威素材入口：
+
+- `../publication-materials/task-material-register.md`：跨 Task 的产出材料来源、状态、用途和归档待办；
+- `publication-materials.json`：六类材料、逐章节映射、claim/source、案例、决策和研究边界；
+- `evidence-index.json`：公开安全的仓库证据 SHA，以及三轮仓库外 evidence 的 Run ID；
+- `publication-readiness.md`：可公开结论、统计口径、迁移成本和合并前最终化清单；
+- `decisions-and-cases.md`：人类可读的方案选择、否决理由、恢复和反直觉案例；
+- `visuals/`：能力矩阵 CSV、Windows/WSL2 对照 CSV 和 Mermaid 可编辑图源。
+
+`article-materials.json` 仅保留为简要摘要；`publication-materials.json` 是公共材料的单一权威来源。
+原始 rollout 和 `.agents/evidence.local/` 不得提交。合并前必须按 `publication-readiness.md`
+完成 external evidence SHA manifest 和 Delivery/Review 身份字段。
