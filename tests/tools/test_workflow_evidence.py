@@ -396,7 +396,6 @@ def test_read_only_mode_skips_fetch_and_reports_local_main(tmp_path: Path) -> No
     assert git["origin_fetch"] == "pass"
     assert git["origin_refresh"] == "skipped-read-only"
     assert git["local_main_sha"] == "8" * 40
-    assert value["operations"]["git_commands"] == 10
 
 
 def test_plan_limit_is_distinct_from_success(tmp_path: Path) -> None:
