@@ -93,14 +93,40 @@ Task #65 WSL2 candidate 实验：
 
 ## Task 来源登记
 
-跨 Task 材料来源以 `../publication-materials/task-material-register.md` 为权威清单。本 Task 合并前必须回填自己的 Issue、PR、Delivery HEAD、reviewed HEAD 和 verdict；后续 Task 产生新材料时应在同一清单新增或更新对应小节。
+跨 Task 材料来源以 `../publication-materials/task-material-register.md` 为权威清单。本 Task
+合并前必须记录稳定 GitHub 身份、外部 evidence manifest 和动态生命周期字段的权威来源；
+后续 Task 产生新材料时应在同一清单新增或更新对应小节。
+
+当前 PR 内可稳定记录：
+
+- Task Issue：`#82`
+- Parent Feature：`#77`
+- Epic：`#61`
+- PR：`#100`
+- Branch：`82-task-reproducible-wsl2-codex-environment`
+- Base SHA：`a492f0b334f950f2613b4b2204e96bef413355be`
+
+以下字段不能要求在当前被审查提交中自我闭合：
+
+- final Delivery HEAD；
+- reviewed HEAD；
+- Review verdict；
+- merge commit；
+- Closeout status；
+- branch cleanup；
+- final Issue/Project status。
+
+independent Review evidence 是 reviewed HEAD、Review verdict、findings 和验证结果的权威来源。
+Merge/Closeout evidence 是 merge commit、最终 Issue/Project 状态、branch cleanup 和 Closeout
+verdict 的权威来源。Task #83 或后续维护提交可回填 Task #82 的最终身份；不得为了回填
+reviewed HEAD 而修改已审查 HEAD。
 
 ## 合并前最终化清单
 
-- [ ] 更新 `../publication-materials/task-material-register.md`，回填本 Task 的 GitHub 和 Review 身份；
-- [ ] 为三轮仓库外 evidence 生成 SHA-256 manifest，但不提交原始 evidence；
-- [ ] 在 `evidence-index.json` 填入 Task Issue、分支、最终 HEAD 和 PR；
-- [ ] 独立 Review 后填入 reviewed HEAD 和 verdict；
+- [x] 更新 `../publication-materials/task-material-register.md`，记录本 Task 的稳定 GitHub 身份和生命周期来源；
+- [x] 为三轮仓库外 evidence 生成 SHA-256 manifest，但不提交原始 evidence；
+- [x] 在 `evidence-index.json` 填入 Task Issue、Parent Feature、Epic、PR、分支和 base SHA；
+- [x] 将 reviewed HEAD、Review verdict、merge commit 和 Closeout 状态声明为由后续 Review/Closeout evidence 解决；
 - [ ] 如引用源文件发生修改，重新计算其 SHA-256；
 - [ ] 确认 `publication-materials.json` 中六类材料均有章节用途；
 - [ ] 确认所有视觉资产有标题、来源、口径和脱敏状态；

@@ -37,7 +37,7 @@
 | Task #64：结构化日志与敏感信息保护 | Issue #64 / PR #71 | 历史完整工作流 Token 与安全实现样本 | `historical-sample`、已完成 | Token 历史基线；敏感信息与 Review 案例 |
 | Task #65 第二轮实验协议与输入冻结 | Issue / PR：待回填 | 协议、冻结输入、统计口径、材料 Schema | `repository-final` | 两份文档的实验方法和权威输入 |
 | Task #65 Windows merge-pre 基准采集 | 元 Task Issue：待回填；业务 Issue #65；实验 PR #99 | 当前 Windows 正式基准、失败 pilot、rollout | `formal-sample` + `invalid-sample` | 当前基准、失败恢复、Token/命令/Guardian 数据 |
-| 可复现 WSL2 Codex 环境与能力诊断 | Issue / PR / HEAD：待回填 | 环境指南、诊断工具、能力矩阵、决策与案例 | `delivery-pending` | 指导手册环境章节；Token 文章候选变量与边界 |
+| 可复现 WSL2 Codex 环境与能力诊断 | Issue #82 / PR #100 / Branch `82-task-reproducible-wsl2-codex-environment` / Base `a492f0b334f950f2613b4b2204e96bef413355be` | 环境指南、诊断工具、能力矩阵、决策与案例 | `review-ready-after-delivery-repair` | 指导手册环境章节；Token 文章候选变量与边界 |
 | WSL2 Validation Runner 与最小权限 Rules | 待创建或待执行 | Runner、Rules、权限与命令成本材料 | `placeholder` | 后续优化机制和控制面证据 |
 | Task #65 WSL2 candidate merge-pre | 业务 Issue #65；实验 PR：待创建 | Candidate Token、质量、Guardian、命令与时长 | `placeholder` | 最终前后对照和优化结论 |
 
@@ -57,26 +57,26 @@
 
 ### 已产生材料
 
-- [x] Task Token Analysis Report v1  
-  逻辑文件：`task-63-token-analysis-v1.md`  
+- [x] Task Token Analysis Report v1
+  逻辑文件：`task-63-token-analysis-v1.md`
   SHA-256：`d9f0e27da5ca1298e284409dea45a948082e3976b2700aa18d4a4bf1129ceee5`
-- [x] Delivery root rollout  
-  `rollout-2026-07-26T14-08-10-019f9d09-c38b-71e2-a7f3-5c99940c4e2e.jsonl`  
+- [x] Delivery root rollout
+  `rollout-2026-07-26T14-08-10-019f9d09-c38b-71e2-a7f3-5c99940c4e2e.jsonl`
   SHA-256：`d5453dccef722a6a47417cca6fc6da776eaab342c555c75abc3809f2b998a7e5`
-- [x] Delivery Guardian rollout  
-  `rollout-2026-07-26T14-08-36-019f9d0a-297a-7111-b74a-422125c93d7c.jsonl`  
+- [x] Delivery Guardian rollout
+  `rollout-2026-07-26T14-08-36-019f9d0a-297a-7111-b74a-422125c93d7c.jsonl`
   SHA-256：`7ec6b500f21482f0e1562d6740264e5ad6e229089561bba73ffc693d6f2fd781`
-- [x] Review/Closeout root rollout  
-  `rollout-2026-07-26T14-27-01-019f9d1b-063b-7d21-8ac8-615e61948ac9.jsonl`  
+- [x] Review/Closeout root rollout
+  `rollout-2026-07-26T14-27-01-019f9d1b-063b-7d21-8ac8-615e61948ac9.jsonl`
   SHA-256：`f2fc85483d03caa6b04610cbc1f74a9137cfac5c8dab354184fdd1fc78c31d2a`
-- [x] Review/Closeout Guardian rollout  
-  `rollout-2026-07-26T14-28-14-019f9d1c-21ee-7460-90e3-c89ddc92a2e7.jsonl`  
+- [x] Review/Closeout Guardian rollout
+  `rollout-2026-07-26T14-28-14-019f9d1c-21ee-7460-90e3-c89ddc92a2e7.jsonl`
   SHA-256：`129232dbc15ae69685e78ecba38fa0f364e45a7cf776461b632a19a718b8a9c8`
-- [x] 正式历史指标  
+- [x] 正式历史指标
   merge-pre：`5,933,126` Tokens；full workflow：`8,692,744` Tokens。
-- [x] 质量守门信息  
+- [x] 质量守门信息
   Validation passed；独立 Review 通过；无 Medium-or-higher finding；无 Review invalidation。
-- [x] 异常材料  
+- [x] 异常材料
   旧 Telemetry closeout 的 `workflow_main_sha` 冲突，可作为“流程完成但旧遥测收尾失败”的恢复案例。
 
 ### 最终文档用途
@@ -106,26 +106,26 @@
 
 ### 已产生材料
 
-- [x] Task Token Analysis Report v1  
-  逻辑文件：`task-64-token-analysis-v1.md`  
+- [x] Task Token Analysis Report v1
+  逻辑文件：`task-64-token-analysis-v1.md`
   SHA-256：`6a7511444caaf190cbeb210c585c147b816c0e81b45a3e8cea906cd69b994f9a`
-- [x] Delivery root rollout  
-  `rollout-2026-07-26T17-40-22-019f9dcc-07c2-7e10-9593-0df7d67c52b4.jsonl`  
+- [x] Delivery root rollout
+  `rollout-2026-07-26T17-40-22-019f9dcc-07c2-7e10-9593-0df7d67c52b4.jsonl`
   SHA-256：`9378990201ffc3e9308247c57411adfacd5c5c8b866903c5a9bbe18aacab437b`
-- [x] Delivery Guardian rollout  
-  `rollout-2026-07-26T17-41-44-019f9dcd-49c1-7a03-9a5c-3f06fa718317.jsonl`  
+- [x] Delivery Guardian rollout
+  `rollout-2026-07-26T17-41-44-019f9dcd-49c1-7a03-9a5c-3f06fa718317.jsonl`
   SHA-256：`7e4587ead70c3e52a1f44908cfd17a01405f37bfe48c9940e960204402570541`
-- [x] Review/Closeout root rollout  
-  `rollout-2026-07-26T18-00-51-019f9dde-c968-7b92-9a27-76a0caaf148d.jsonl`  
+- [x] Review/Closeout root rollout
+  `rollout-2026-07-26T18-00-51-019f9dde-c968-7b92-9a27-76a0caaf148d.jsonl`
   SHA-256：`eea12d05d2802fc3dba2f21e11f5b2571a72d574164fe4091595ad29ad455943`
-- [x] Review/Closeout Guardian rollout  
-  `rollout-2026-07-26T18-02-18-019f9de0-1d2b-74c3-82be-bfba6d9eb8be.jsonl`  
+- [x] Review/Closeout Guardian rollout
+  `rollout-2026-07-26T18-02-18-019f9de0-1d2b-74c3-82be-bfba6d9eb8be.jsonl`
   SHA-256：`9c825f7439aeb46a2a7b65f4b1c0be4f164d7338c458387ff96854b4f8db44dc`
-- [x] 正式历史指标  
+- [x] 正式历史指标
   merge-pre：`8,516,786` Tokens；full workflow：`11,969,449` Tokens。
-- [x] 质量守门信息  
+- [x] 质量守门信息
   Validation passed；独立 Review 通过；无 Medium-or-higher finding；无返工。
-- [x] 异常材料  
+- [x] 异常材料
   有效 Review 前存在一次 zero-Token aborted turn 和一次 rollback；未计入阶段 Token。
 
 ### 最终文档用途
@@ -164,11 +164,11 @@
 
 ### 已产生的仓库外交付材料
 
-- [x] 协议冻结完整包  
-  `quant-system-task65-protocol-freeze.zip`  
+- [x] 协议冻结完整包
+  `quant-system-task65-protocol-freeze.zip`
   SHA-256：`49b761047136e76ab73cb6e4e063d36add60adf08abca987fe845faaf8e3651e`
-- [x] Git Patch  
-  `task65-protocol-freeze.patch`  
+- [x] Git Patch
+  `task65-protocol-freeze.patch`
   SHA-256：`f47b638c281de107d4f885e1dd3c35b6fd2813d470f55ef02087e70d3bfdacc4`
 
 ### 最终文档用途
@@ -203,8 +203,8 @@
 ### 正式样本材料
 
 - [x] 六份完整 rollout：Preparation root/Guardian、Delivery root/Guardian、Review root/Guardian。
-- [x] 完整 rollout 目录  
-  仓库外路径：`Task — 采集 Task #65 当前 Windows Task Workflow merge-pre 基准/rollouts/`  
+- [x] 完整 rollout 目录
+  仓库外路径：`Task — 采集 Task #65 当前 Windows Task Workflow merge-pre 基准/rollouts/`
   内容等同于未压缩的 `rollouts(1).zip`；原压缩包 SHA-256：
   `fc6dd9843b6cf0af9b5f98aff8b71913c9d135c258b3933431d781d92413190d`
 - [x] Formal merge-pre：`8,359,801` Tokens。
@@ -217,8 +217,8 @@
 
 ### 无效 pilot 材料
 
-- [x] Pilot 归档  
-  `task65-current-windows-run-20260801.zip`  
+- [x] Pilot 归档
+  `task65-current-windows-run-20260801.zip`
   SHA-256：`7c771a003bab75c2a7b959f667c70c69b03a4a434d78e72b328f5670b22ff7c2`
 - [x] Pilot report、acceptance matrix、protocol deviations、claim/evidence map、failure timeline、
   metrics、process/token CSV 和 Mermaid 图源。
@@ -242,11 +242,16 @@
 
 ### 身份
 
-- Task Issue：`待回填`
-- PR：`待回填`
-- Delivery HEAD：`待回填`
-- reviewed HEAD / verdict：`待回填`
-- 当前状态：实现和材料已产生，等待正式 Delivery、独立 Review、Merge 与 Closeout。
+- Task Issue：`#82`
+- Parent Feature：`#77`
+- Epic：`#61`
+- PR：`#100`
+- Branch：`82-task-reproducible-wsl2-codex-environment`
+- Base SHA：`a492f0b334f950f2613b4b2204e96bef413355be`
+- final Delivery HEAD：由 PR #100 Delivery handoff / PR body 记录，不要求当前被审查提交自我回填。
+- reviewed HEAD / verdict：由 PR #100 独立 `task-pr-review` evidence 记录。
+- merge commit / Closeout：由 Task #82 closeout evidence 记录。
+- 当前状态：稳定身份已记录，动态生命周期字段等待独立 Review、Merge 与 Closeout 的权威 evidence。
 
 ### 已产生的仓库材料
 
@@ -259,6 +264,7 @@
 - [x] `docs/workflows/wsl2-codex-environment/article-materials.json`
 - [x] `docs/workflows/wsl2-codex-environment/publication-materials.json`
 - [x] `docs/workflows/wsl2-codex-environment/evidence-index.json`
+- [x] `docs/workflows/wsl2-codex-environment/external-evidence-manifest.json`
 - [x] `docs/workflows/wsl2-codex-environment/publication-readiness.md`
 - [x] `docs/workflows/wsl2-codex-environment/decisions-and-cases.md`
 - [x] `docs/workflows/wsl2-codex-environment/external-evidence-manifest.example.json`
@@ -267,25 +273,27 @@
 
 ### 已产生的仓库外环境 evidence
 
-- [x] Initial diagnostic  
+- [x] Initial diagnostic
   Run ID：`20260801T133921Z-66016f44`
-- [x] Authentication/fetch/formal-write follow-up  
+- [x] Authentication/fetch/formal-write follow-up
   Run ID：`20260801T145709Z-followup`
-- [x] GitHub reversible-write/proxy final gaps  
+- [x] GitHub reversible-write/proxy final gaps
   Run ID：`20260801T152359Z-final-gaps`
 - [x] 三轮 JSON/JSONL parse checks 均通过；原始材料保留在 `.agents/evidence.local/`，不得提交。
+- [x] committed manifest：`docs/workflows/wsl2-codex-environment/external-evidence-manifest.json`
+  repository inclusion status：`committed-manifest-only`
 
 ### 仓库外交付与材料补充包
 
-- [x] `quant-system-wsl2-environment-delivery.zip`  
+- [x] `quant-system-wsl2-environment-delivery.zip`
   SHA-256：`47b62d8b00abe18bfb0b7ce4ecbc5c8efbe07f825305ab1e6247a2189a62ab50`
-- [x] `task-wsl2-codex-environment.patch`  
+- [x] `task-wsl2-codex-environment.patch`
   SHA-256：`27874c0bd7d22bd9659c1afa5b020bf2593a48c0d08ac92b3dd6cb80dab7982e`
-- [x] `task-wsl2-codex-environment-manifest.json`  
+- [x] `task-wsl2-codex-environment-manifest.json`
   SHA-256：`21547c5efae4b8eefc6271312309a7471e76308fee6f9bf1de473d70f04abd3c`
-- [x] `wsl2-publication-materials-supplement.zip`  
+- [x] `wsl2-publication-materials-supplement.zip`
   SHA-256：`e1823018b86599f17e124eaa45cd004a0773715ad0df0f74e60bc033c39ba2c7`
-- [x] `wsl2-publication-materials-supplement.patch`  
+- [x] `wsl2-publication-materials-supplement.patch`
   SHA-256：`99e8eb58af992834ce84001f4c8fe10a69b80a244b4ee5be0a70a34d557dae08`
 
 这些交付包用于传递变更，不替代最终 Git commit、PR、Review 和仓库外原始 evidence。
@@ -296,13 +304,15 @@
 - Token 文章：候选环境变量、Windows/WSL2 能力差异、反直觉案例和研究边界。
 - 本 Task **不能**提供 Token 降幅或 Candidate 优于 Windows 的结论。
 
-### 待办
+### 生命周期来源
 
-- [ ] 回填 Issue、PR、Delivery HEAD、reviewed HEAD 和 Review verdict。
-- [ ] 为三轮 `.agents/evidence.local/` 生成仓库外 SHA-256 manifest。
-- [ ] 确认本清单和 `evidence-index.json` 的身份字段一致。
+- [x] Issue、Parent、Epic、PR、Branch 和 Base SHA 已稳定记录。
+- [x] 三轮 `.agents/evidence.local/` 已生成可提交 SHA-256 manifest，未提交原始 evidence。
+- [x] 本清单、`publication-materials.json`、`evidence-index.json` 和 `publication-readiness.md` 的身份模型一致。
 - [ ] 合并前确认所有引用文件 SHA 没有因最终修订而失效。
-- [ ] Merge/Closeout 后登记 merge commit、最终 Issue/Project 状态和 branch cleanup。
+- [ ] independent Review evidence 记录 reviewed HEAD、Review verdict、findings 和验证结果。
+- [ ] Merge/Closeout evidence 记录 merge commit、最终 Issue/Project 状态、branch cleanup 和 Closeout verdict。
+- [ ] 如需回填 Task #82 最终身份，只能由 Task #83 或后续维护提交完成，不修改已审查 HEAD。
 
 ---
 

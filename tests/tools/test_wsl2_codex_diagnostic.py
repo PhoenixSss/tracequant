@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -9,6 +10,7 @@ from pathlib import Path
 from types import ModuleType
 
 SCRIPT = Path(__file__).parents[2] / "tools" / "wsl2_codex_diagnostic.py"
+ROOT = Path(__file__).parents[2]
 
 
 def _load_module() -> ModuleType:
@@ -45,6 +47,14 @@ def _write_fake_uv(bin_dir: Path) -> None:
         encoding="utf-8",
     )
     uv.chmod(0o755)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def test_redact_text_hides_paths_proxy_credentials_and_tokens() -> None:
@@ -233,8 +243,7 @@ def test_formal_write_probe_uses_disposable_worktree_and_cleans_up(
 
 
 def test_committed_wsl2_materials_are_parseable_and_redacted() -> None:
-    root = Path(__file__).parents[2]
-    docs = root / "docs" / "workflows" / "wsl2-codex-environment"
+    docs = ROOT / "docs" / "workflows" / "wsl2-codex-environment"
     diagnostic = json.loads(
         (docs / "current-diagnostic.json").read_text(encoding="utf-8")
     )
@@ -254,3 +263,39 @@ def test_committed_wsl2_materials_are_parseable_and_redacted() -> None:
     assert "ghp_" not in combined
     assert "/home/maple/" not in combined
     assert "password@" not in combined
+
+
+def test_wsl2_evidence_index_hashes_match_repository_files() -> None:
+    docs = ROOT / "docs" / "workflows" / "wsl2-codex-environment"
+    index = json.loads((docs / "evidence-index.json").read_text(encoding="utf-8"))
+
+    for item in index["repository_sources"]:
+        relative = item["path"]
+        assert relative != "docs/workflows/wsl2-codex-environment/evidence-index.json"
+        path = ROOT / relative
+        assert path.is_file(), relative
+        assert item["sha256"] == _sha256(path), relative
+
+    manifest_refs = [run["sha256_manifest"] for run in index["external_runs"]]
+    assert len(manifest_refs) == 3
+    assert all(ref["path"] == manifest_refs[0]["path"] for ref in manifest_refs)
+    manifest_path = ROOT / manifest_refs[0]["path"]
+    assert manifest_path.is_file()
+    assert all(ref["sha256"] == _sha256(manifest_path) for ref in manifest_refs)
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert {run["run_id"] for run in manifest["runs"]} == {
+        run["run_id"] for run in index["external_runs"]
+    }
+    assert manifest["source_policy"]["raw_evidence_committed"] is False
+    assert manifest["source_policy"]["absolute_local_paths_recorded"] is False
+    for run in manifest["runs"]:
+        assert run["file_count"] == len(run["files"])
+        for evidence_file in run["files"]:
+            assert evidence_file["repository_inclusion_status"] == "external-only"
+            assert "/" not in evidence_file["relative_name"]
+            assert evidence_file["sha256"]
+            assert evidence_file["size_bytes"] > 0
+            status = evidence_file["parse_status"]
+            if status["format"] in {"json", "jsonl"}:
+                assert status["status"] == "pass"
