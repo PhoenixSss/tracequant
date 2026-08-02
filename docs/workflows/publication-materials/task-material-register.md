@@ -60,7 +60,7 @@
 | Task #81：Windows merge-pre 基准采集 | Issue #81；业务 Issue #65；实验 PR #99 | Feature #77 / Epic #61 | 当前 Windows 正式基准、失败 pilot、rollout | `formal-sample` + `invalid-sample`、Issue 已完成 | 当前基准、失败恢复、Token/命令/Guardian 数据 |
 | Task #82：可复现 WSL2 Codex 环境与能力诊断 | Issue #82 / PR #100 / reviewed head `96b20b5...` / merge `767e995...` | Feature #77 / Epic #61 | 环境指南、诊断工具、能力矩阵、决策与案例 | `repository-final`、已完成 | 指导手册环境章节；Token 文章候选变量与边界 |
 | Task #83：WSL2 Validation Runner 与最小权限 Rules | Issue #83 / PR #101 / reviewed head `d162bc9...` / merge `74a7587...` | Feature #77 / Epic #61 | Runner、Rules、权限与命令成本材料 | `repository-final`、已完成 | 后续优化机制和控制面证据 |
-| Task #84：只读 GitHub Evidence Runner 与 Git 审批边界 | Issue #84；PR #102；Base `74a7587...`；Head `3814af3...` | Feature #77 / Epic #61 | GitHub 只读证据、Git 写边界与审批材料 | `delivery-review` | 证据采集、安全边界和命令成本 |
+| Task #84：只读 GitHub Evidence Runner 与 Git 审批边界 | Issue #84；PR #102；Base `74a7587...`；live material capture `3814af3...` | Feature #77 / Epic #61 | GitHub 只读证据、Git 写边界与审批材料 | `delivery-review` | 证据采集、安全边界和命令成本 |
 | Task #85：Skills 切换至统一 Runner | Issue #85；PR：待创建 | Feature #77 / Epic #61 | 统一命令路径、重复移除与 Skill 迁移材料 | `placeholder` | 工作流收敛机制和 Token 优化来源 |
 | Task #86：Task #65 WSL2 candidate merge-pre | Issue #86；业务 Issue #65；实验 PR：待创建 | Feature #77 / Epic #61 | Candidate Token、质量、Guardian、命令与时长 | `placeholder` | 最终 Windows/WSL2 对照和优化结论 |
 | Task #87：Canonical Spec 审计 | Issue #87；PR：待创建 | Feature #78 / Epic #61 | 规格重复、治理来源与 Canonical Spec | `placeholder` | 规格治理和上下文去重 |
@@ -438,7 +438,8 @@
 - Parent Feature：`#77`
 - Epic：`#61`
 - Base / workflow / control-plane SHA：`74a75872078221c38dbd132a1d438b0bb05c1870`
-- Delivery HEAD：`3814af3d95ece48ef03c59536dd025f5fb5511fb`
+- Live material capture HEAD：`3814af3d95ece48ef03c59536dd025f5fb5511fb`
+- Current Delivery HEAD：见 PR #102 body 和最终 readiness snapshot
 - reviewed HEAD / verdict：`待回填`
 - merge commit：`待回填`
 - 生命周期状态：PR 已创建并进入 Review；Task #65 candidate 未执行。
@@ -500,7 +501,7 @@
 
 ### 待办
 
-- [x] 创建/更新 PR 后回填 PR、Delivery HEAD 和 effective diff identity。
+- [x] 创建/更新 PR 后回填 PR、live material capture HEAD 和 effective diff identity。
 - [ ] 独立 Review 后回填 reviewed HEAD、verdict 和 findings。
 - [ ] Merge/Closeout 后回填 merge commit、Issue/Project 和 branch cleanup。
 - [ ] Task #85 切换 Skills 后记录真实前后命令路径差异。
