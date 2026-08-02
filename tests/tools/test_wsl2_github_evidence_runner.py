@@ -19,8 +19,9 @@ TRUSTED_FILES = (
     Path("tools/agent_workflow/workflow_evidence.py"),
     Path("tools/agent_workflow/workflow_common.py"),
 )
-REAL_GIT = shutil.which("git")
-assert REAL_GIT is not None
+REAL_GIT_OPTIONAL = shutil.which("git")
+assert REAL_GIT_OPTIONAL is not None
+REAL_GIT: str = REAL_GIT_OPTIONAL
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -106,8 +107,7 @@ def _write_fake_tools(bin_dir: Path, state_path: Path) -> None:
     state = json.loads(state_path.read_text(encoding="utf-8"))
     refs_path.write_text(
         "".join(
-            f"{sha}\trefs/heads/{name}\n"
-            for name, sha in state["remote_refs"].items()
+            f"{sha}\trefs/heads/{name}\n" for name, sha in state["remote_refs"].items()
         ),
         encoding="utf-8",
     )
@@ -207,7 +207,13 @@ def _prepare_repo(
     _git(repo, "commit", "-q", "-m", "main baseline")
     _git(repo, "branch", "-M", "main")
     main_sha = _git(repo, "rev-parse", "HEAD")
-    _git(repo, "remote", "add", "origin", "https://github.com/PhoenixSss/quant-system.git")
+    _git(
+        repo,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/PhoenixSss/quant-system.git",
+    )
     _git(repo, "update-ref", "refs/remotes/origin/main", main_sha)
     _git(repo, "switch", "-q", "-c", "84-task-evidence-runner")
     (repo / "task84.txt").write_text("task 84\n", encoding="utf-8")
@@ -278,7 +284,9 @@ def _sync_remote_files(state_path: Path, state: dict[str, Any]) -> None:
 
 def _result(repo: Path, stdout: str) -> dict[str, Any]:
     digest = json.loads(stdout)
-    return json.loads((repo / digest["result_path"]).read_text(encoding="utf-8"))
+    result = json.loads((repo / digest["result_path"]).read_text(encoding="utf-8"))
+    assert isinstance(result, dict)
+    return result
 
 
 def test_review_profile_returns_required_schema_and_compact_digest(
@@ -315,9 +323,7 @@ def test_review_profile_returns_required_schema_and_compact_digest(
 
 
 @pytest.mark.parametrize("profile", ["delivery-readiness", "review", "pre-merge"])
-def test_task_pr_profiles_are_fixed_and_pass(
-    tmp_path: Path, profile: str
-) -> None:
+def test_task_pr_profiles_are_fixed_and_pass(tmp_path: Path, profile: str) -> None:
     repo, _, env, main_sha, head_sha = _prepare_repo(tmp_path)
     completed = _run(repo, env, *_review_args(main_sha, head_sha, profile))
     assert completed.returncode == 0, completed.stderr
@@ -354,9 +360,10 @@ def test_plan_limit_is_partial_not_success(tmp_path: Path) -> None:
     digest = json.loads(completed.stdout)
     assert digest["status"] == "partial"
     value = _result(repo, completed.stdout)
-    assert "required_checks_configuration" in value["evidence"]["gate_summary"][
-        "unknown_gates"
-    ]
+    assert (
+        "required_checks_configuration"
+        in value["evidence"]["gate_summary"]["unknown_gates"]
+    )
 
 
 def test_missing_issue_and_rate_limit_are_partial_and_redacted(tmp_path: Path) -> None:
@@ -398,9 +405,10 @@ def test_remote_ref_drift_is_fail(tmp_path: Path) -> None:
     completed = _run(repo, env, *_review_args(main_sha, head_sha))
     assert completed.returncode == 4
     value = _result(repo, completed.stdout)
-    assert "origin_main_vs_remote_main" in value["evidence"]["gate_summary"][
-        "remote_ref_conflicts"
-    ]
+    assert (
+        "origin_main_vs_remote_main"
+        in value["evidence"]["gate_summary"]["remote_ref_conflicts"]
+    )
 
 
 def test_remote_query_failure_is_partial(tmp_path: Path) -> None:
@@ -422,27 +430,21 @@ def test_recheck_detects_head_checks_and_thread_drift(tmp_path: Path) -> None:
     state = json.loads(state_path.read_text(encoding="utf-8"))
     new_head = "e" * 40
     state["pr"]["headRefOid"] = new_head
-    state["pr"]["statusCheckRollup"] = [
-        {"name": "quality", "conclusion": "FAILURE"}
-    ]
+    state["pr"]["statusCheckRollup"] = [{"name": "quality", "conclusion": "FAILURE"}]
     state["threads"]["nodes"] = [
         {"isResolved": False, "isOutdated": False, "comments": {"totalCount": 1}}
     ]
     state["remote_refs"]["84-task-evidence-runner"] = new_head
     state_path.write_text(json.dumps(state), encoding="utf-8")
     _sync_remote_files(state_path, state)
-    second = _run(
-        repo, env, "recheck", "--snapshot-id", first_digest["snapshot_id"]
-    )
+    second = _run(repo, env, "recheck", "--snapshot-id", first_digest["snapshot_id"])
     assert second.returncode == 4, second.stderr
     value = _result(repo, second.stdout)
     changed = value["stability"]["changed_fields"]["items"]
     assert "head_sha" in changed
     assert "checks" in changed
     assert "unresolved_threads" in changed
-    assert "snapshot_stability" in value["evidence"]["gate_summary"][
-        "failed_gates"
-    ]
+    assert "snapshot_stability" in value["evidence"]["gate_summary"]["failed_gates"]
 
 
 def test_tampered_recheck_snapshot_fails_before_github(tmp_path: Path) -> None:
@@ -451,9 +453,7 @@ def test_tampered_recheck_snapshot_fails_before_github(tmp_path: Path) -> None:
     assert first.returncode == 0, first.stderr
     digest = json.loads(first.stdout)
     snapshot = (
-        repo
-        / ".agents/evidence.local/snapshots"
-        / f"{digest['snapshot_id']}.json"
+        repo / ".agents/evidence.local/snapshots" / f"{digest['snapshot_id']}.json"
     )
     value = json.loads(snapshot.read_text(encoding="utf-8"))
     value["repository"] = "other/repo"

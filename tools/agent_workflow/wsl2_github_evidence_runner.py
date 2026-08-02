@@ -100,9 +100,10 @@ class RunnerError(RuntimeError):
 def _json_dumps(value: Any, *, pretty: bool = False) -> str:
     if pretty:
         return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ) + "\n"
+    return (
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    )
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -366,9 +367,7 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
     ]
     if profile == "recheck":
         snapshot_path = (
-            repo_root
-            / ".agents/evidence.local/snapshots"
-            / f"{args.snapshot_id}.json"
+            repo_root / ".agents/evidence.local/snapshots" / f"{args.snapshot_id}.json"
         )
         if snapshot_path.is_symlink():
             raise RunnerError("recheck snapshot must not be a symlink")
@@ -400,6 +399,8 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
             ):
                 raise RunnerError("recheck snapshot subject identity is invalid")
         previous_operation = previous.get("operation")
+        if not isinstance(previous_operation, str):
+            raise RunnerError("recheck snapshot operation is invalid")
         recheck_command = RECHECK_COMMANDS.get(previous_operation)
         if recheck_command is None:
             raise RunnerError(
@@ -740,9 +741,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         _atomic_write(result_path, payload)
         result_sha = _sha256_bytes(payload)
         compact = {
-            "api_calls": result.get("evidence", {}).get("operations", {}).get(
-                "github_queries"
-            ),
+            "api_calls": result.get("evidence", {})
+            .get("operations", {})
+            .get("github_queries"),
             "base_sha": result["identity"]["base_sha"],
             "duration_ms": duration_ms,
             "head_sha": result["identity"]["head_sha"],
