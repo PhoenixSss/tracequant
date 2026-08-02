@@ -373,6 +373,11 @@
   `.codex/rules/quant-system-wsl-validation.rules`；
   `docs/workflows/wsl2-validation-runner/README.md`；
   `docs/workflows/wsl2-validation-runner/publication-materials.json`；
+  `docs/workflows/wsl2-validation-runner/live-activation-evidence.json`；
+  `docs/workflows/wsl2-validation-runner/current-ci-equivalent-evidence.json`；
+  `docs/workflows/wsl2-validation-runner/security-hardening-cases.md`；
+  `docs/workflows/wsl2-validation-runner/maintenance-and-adoption.md`；
+  `docs/workflows/wsl2-validation-runner/visuals/`；
   `tests/tools/test_wsl2_validation_runner.py`。
 - [x] 参考 rules 输入：
   `/tmp/quant-system-wsl.rules`，SHA-256
@@ -389,6 +394,9 @@
   result SHA-256
   `1e0cc6cd7850457dd83b9be58e0da48a20c99f0cfd3e349f426fc9c3616a8caa`。
   Raw result remains ignored under `.agents/validation.local/`.
+  该观测使用 Runner `1.0.0`；最终候选为 `1.0.1`，Rules 文件未变化。
+  Live probe 支持 Rules activation / direct routing 结论，`1.0.1`
+  完整性与进程树语义由自动化测试支持。
 - [x] 决策、失败、恢复和反直觉案例：
   runner tests cover subcommand failure, process-group timeout/interruption cleanup,
   trusted Runner/spec/Rules replacement rejection, non-canonical command rejection,

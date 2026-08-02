@@ -1,0 +1,23 @@
+flowchart LR
+    C[Codex session] -->|one fixed argv| R[Project Rules]
+    R -->|allowed profiles only| V[WSL2 Validation Runner]
+    V --> I[Pre-execution HEAD integrity check]
+    I --> P[Canonical profile and argv validation]
+    P --> S1[uv lock --check]
+    P --> S2[pytest]
+    P --> S3[Ruff check]
+    P --> S4[Ruff format check]
+    P --> S5[mypy]
+    P --> S6[git diff --check]
+    S1 --> E[Structured result]
+    S2 --> E
+    S3 --> E
+    S4 --> E
+    S5 --> E
+    S6 --> E
+    E --> D[Compact model-visible digest]
+    E --> L[Ignored full logs]
+
+    X[Direct uv / python / shell / GitHub write] -. not allowed by Task #83 Rules .-> R
+    T[Timeout or interrupt] --> G[Process-group TERM/INT then KILL]
+    G --> E

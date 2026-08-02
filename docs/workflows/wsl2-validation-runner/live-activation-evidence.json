@@ -38,5 +38,13 @@
   "repository_inclusion": {
     "raw_result_committed": false,
     "summary_committed": true
+  },
+  "applicability": {
+    "observed_runner_version": "1.0.0",
+    "current_review_candidate_runner_version": "1.0.1",
+    "rules_file_changed_between_versions": false,
+    "rules_sha256": "f593c3959cc94dc2621a97e468617bb3e98a2dd0332c6ca7ed7ecc9bc1522186",
+    "supported_interpretation": "The live probe demonstrates project Rules activation and direct routing for the fixed targeted entry in the observed session.",
+    "unsupported_interpretation": "The live probe does not independently validate runner 1.0.1 integrity or process-tree semantics; those are covered by automated tests and static review."
   }
 }

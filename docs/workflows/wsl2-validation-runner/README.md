@@ -162,6 +162,20 @@ guarantee for every machine or every profile. The `current-ci-equivalent` and
 Static `execpolicy check` coverage remains separate from this real live
 activation result.
 
+## Publication and maintenance materials
+
+- `security-hardening-cases.md`: controlled pre-review failure cases, root
+  causes, fixes, regression evidence, and residual boundaries.
+- `maintenance-and-adoption.md`: synchronized maintenance points, adoption
+  guidance, costs, reusable principles, and rollback.
+- `current-ci-equivalent-evidence.json`: run-level evidence summary with
+  explicit unavailable raw-result and command-level fields.
+- `live-activation-evidence.json`: targeted Rules activation observation and
+  the runner 1.0.0 versus 1.0.1 applicability boundary.
+- `publication-materials.json`: claim, metric, limitation, and final-document
+  mapping index.
+- `visuals/`: editable CSV and Mermaid sources for the final guide and article.
+
 ## Rollback
 
 To roll back Task #83 behavior before adoption by later Skills, remove or ignore

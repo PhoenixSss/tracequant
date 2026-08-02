@@ -1,0 +1,4 @@
+stage,model_visible_invocations,internal_auditable_commands,status,scope,source
+before-fixed-runner,6,6,expected,Task #83 required validation list,04-task-wsl2-validation-runner-rules.md
+after-fixed-runner-current-ci-equivalent,1,6,expected,runner architecture,tools/agent_workflow/wsl2_validation_profiles.json
+live-targeted-probe,1,1,observed,single Task #83 WSL2 Codex session,docs/workflows/wsl2-validation-runner/live-activation-evidence.json

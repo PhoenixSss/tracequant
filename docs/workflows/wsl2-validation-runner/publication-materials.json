@@ -1,6 +1,6 @@
 {
-  "schema_version": "1.0",
-  "material_set_id": "wsl2-validation-runner-task-83-v1",
+  "schema_version": "1.1",
+  "material_set_id": "wsl2-validation-runner-task-83-v2",
   "scope": "Task #83 local validation runner, static rules checks, safety boundaries, and local behavior evidence only.",
   "claims": [
     {
@@ -50,6 +50,46 @@
       "evidence": [
         "docs/workflows/wsl2-validation-runner/README.md",
         "docs/workflows/publication-materials/task-material-register.md"
+      ]
+    },
+    {
+      "claim_id": "task83-preexecution-integrity-hardening",
+      "claim_type": "fact",
+      "status": "observed",
+      "statement": "A controlled pre-review reproduction showed that a mutable profile specification could turn an allowed runner entry into an unrelated command path. Runner 1.0.1 now verifies trusted HEAD blobs and canonical command IDs/argv before execution.",
+      "evidence": [
+        "docs/workflows/wsl2-validation-runner/security-hardening-cases.md#case-1-mutable-profile-specification-could-become-an-arbitrary-command-launcher",
+        "tests/tools/test_wsl2_validation_runner.py"
+      ]
+    },
+    {
+      "claim_id": "task83-process-group-cleanup",
+      "claim_type": "fact",
+      "status": "observed",
+      "statement": "A controlled pre-review reproduction showed that direct-child-only timeout handling could leave descendants alive. Runner 1.0.1 uses bounded process-group cleanup, with regression coverage for a grandchild process.",
+      "evidence": [
+        "docs/workflows/wsl2-validation-runner/security-hardening-cases.md#case-2-timeout-terminated-the-wrapper-but-could-leave-descendants-alive",
+        "tests/tools/test_wsl2_validation_runner.py"
+      ]
+    },
+    {
+      "claim_id": "task83-live-version-boundary",
+      "claim_type": "fact",
+      "status": "observed",
+      "statement": "The live Rules observation used runner 1.0.0. The unchanged Rules entry supports the routing claim, while runner 1.0.1 runtime hardening is supported by tests rather than that earlier live probe.",
+      "evidence": [
+        "docs/workflows/wsl2-validation-runner/live-activation-evidence.json",
+        "docs/workflows/wsl2-validation-runner/security-hardening-cases.md#case-3-live-rules-evidence-predates-the-final-runner-hardening"
+      ]
+    },
+    {
+      "claim_id": "task83-maintenance-cost",
+      "claim_type": "fact",
+      "status": "observed",
+      "statement": "The fail-closed design requires synchronized updates across CI, profile spec, canonical allowlist, drift tests, Rules tests, and documentation; trusted-file changes must be committed before the fixed runner can execute.",
+      "evidence": [
+        "docs/workflows/wsl2-validation-runner/maintenance-and-adoption.md",
+        "tests/tools/test_wsl2_validation_runner.py"
       ]
     }
   ],
@@ -102,7 +142,7 @@
     "total_execution_time_ms": {
       "value": 11174,
       "status": "observed",
-      "basis": "Measured from `current-ci-equivalent` runner digest result `20260802T073329Z-e5d9d709d4e1`."
+      "basis": "Observed run-level summary recorded in `docs/workflows/wsl2-validation-runner/current-ci-equivalent-evidence.json`; raw result SHA and per-command details were not present in the supplied repository package."
     },
     "live_targeted_duration_ms": {
       "value": 10284,
@@ -123,6 +163,16 @@
       "value": 1,
       "status": "observed",
       "basis": "The live probe used one fixed runner invocation: `tools/agent_workflow/wsl2_validation_runner.py targeted`."
+    },
+    "current_ci_equivalent_guardian_turns": {
+      "value": null,
+      "status": "not-measured",
+      "basis": "The live Rules probe covered targeted only."
+    },
+    "final_runner_live_targeted_probe": {
+      "value": null,
+      "status": "not-measured",
+      "basis": "The recorded live probe used runner 1.0.0. Runner 1.0.1 Rules entry is unchanged; final runtime semantics are covered by automated tests."
     }
   },
   "known_followups": [
@@ -134,5 +184,34 @@
       "task": "#85",
       "description": "Formal Task Workflow Skills are not switched to this runner in Task #83."
     }
-  ]
+  ],
+  "source_documents": [
+    "docs/workflows/wsl2-validation-runner/README.md",
+    "docs/workflows/wsl2-validation-runner/security-hardening-cases.md",
+    "docs/workflows/wsl2-validation-runner/maintenance-and-adoption.md",
+    "docs/workflows/wsl2-validation-runner/live-activation-evidence.json",
+    "docs/workflows/wsl2-validation-runner/current-ci-equivalent-evidence.json",
+    "docs/workflows/wsl2-validation-runner/visuals/"
+  ],
+  "limitations": [
+    "The live Guardian observation covers targeted only.",
+    "The live observation used runner 1.0.0; runner 1.0.1 hardening is test-backed.",
+    "The current-ci-equivalent raw result SHA and per-command details were unavailable in the supplied repository package.",
+    "Task #83 does not measure Token reduction or Task #65 candidate quality."
+  ],
+  "publication_mapping": {
+    "agent_workflow_design_guide": [
+      "fixed profile design",
+      "Rules versus runner responsibility",
+      "pre-execution integrity",
+      "process-group cleanup",
+      "maintenance and rollback"
+    ],
+    "token_optimization_article": [
+      "six model-visible calls consolidated to one expected fixed invocation",
+      "targeted live Guardian/approval/output observation",
+      "bounded evidence and compact digest design",
+      "limitations requiring Task #86 candidate data"
+    ]
+  }
 }
