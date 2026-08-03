@@ -4,7 +4,7 @@
   "parent_feature": 77,
   "epic": 61,
   "base_sha": "e1c3b587a5fa1a61217fb9160015472bc0e36154",
-  "status": "delivery-pending",
+  "status": "delivery-observed",
   "claims": [
     {
       "id": "task85-fixed-runner-normal-path",
@@ -50,6 +50,23 @@
       "evidence": [
         "06-task-switch-skills-to-runners.md"
       ]
+    },
+    {
+      "id": "task85-live-fixed-runner-observation",
+      "status": "observed",
+      "statement": "Task #85 live Delivery validation used one model-visible workflow-delivery Runner call that executed 10 internal validation commands, including 4 Skill validators.",
+      "evidence": [
+        "docs/workflows/task-skill-runner-migration/live-migration-evidence.json",
+        "docs/workflows/task-skill-runner-migration/external-live-evidence-manifest.json"
+      ]
+    },
+    {
+      "id": "task85-readiness-limitation",
+      "status": "observed-with-limitation",
+      "statement": "Delivery readiness observed PR #103 head/base/check/thread/Project facts; Required Checks configuration remained unknown because GitHub returned a plan-limit 403, while the quality check run succeeded.",
+      "evidence": [
+        "docs/workflows/task-skill-runner-migration/live-migration-evidence.json"
+      ]
     }
   ],
   "metrics": {
@@ -79,18 +96,46 @@
     },
     "legacy_command_fragments_after": {
       "value": 0,
-      "status": "observed-static"
+      "status": "observed"
+    },
+    "model_visible_evidence_runner_calls": {
+      "value": 2,
+      "status": "observed"
+    },
+    "model_visible_validation_runner_calls": {
+      "value": 1,
+      "status": "observed"
+    },
+    "model_visible_legacy_full_chain_calls": {
+      "value": 0,
+      "status": "observed"
+    },
+    "runner_internal_api_operations": {
+      "value": 6,
+      "status": "observed"
+    },
+    "runner_internal_validation_commands": {
+      "value": 10,
+      "status": "observed"
+    },
+    "workflow_delivery_stdout_bytes": {
+      "value": 2468,
+      "status": "observed"
+    },
+    "delivery_readiness_stdout_bytes": {
+      "value": 7843,
+      "status": "observed"
     },
     "runtime_guardian_turns": {
-      "value": null,
-      "status": "not-measured"
+      "value": "unavailable",
+      "status": "unavailable"
     },
     "runtime_tokens": {
-      "value": null,
+      "value": "unavailable",
       "status": "not-measured"
     },
     "task65_candidate_result": {
-      "value": null,
+      "value": "unavailable",
       "status": "deferred-to-#86"
     }
   },
@@ -124,7 +169,10 @@
     "docs/workflows/task-skill-runner-migration/examples/",
     "docs/workflows/task-skill-runner-migration/visuals/",
     "docs/workflows/task-skill-runner-migration/live-evidence-capture-plan.md",
+    "docs/workflows/task-skill-runner-migration/live-migration-evidence.json",
+    "docs/workflows/task-skill-runner-migration/external-live-evidence-manifest.json",
     "docs/workflows/task-skill-runner-migration/publication-readiness.md",
+    "docs/workflows/task-skill-runner-migration/visuals/live-migration-metrics.csv",
     "docs/workflows/task-skill-runner-migration/templates/"
   ]
 }

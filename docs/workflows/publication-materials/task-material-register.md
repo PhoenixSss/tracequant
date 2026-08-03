@@ -61,7 +61,7 @@
 | Task #82：可复现 WSL2 Codex 环境与能力诊断 | Issue #82 / PR #100 / reviewed head `96b20b5...` / merge `767e995...` | Feature #77 / Epic #61 | 环境指南、诊断工具、能力矩阵、决策与案例 | `repository-final`、已完成 | 指导手册环境章节；Token 文章候选变量与边界 |
 | Task #83：WSL2 Validation Runner 与最小权限 Rules | Issue #83 / PR #101 / reviewed head `d162bc9...` / merge `74a7587...` | Feature #77 / Epic #61 | Runner、Rules、权限与命令成本材料 | `repository-final`、已完成 | 后续优化机制和控制面证据 |
 | Task #84：只读 GitHub Evidence Runner 与 Git 审批边界 | Issue #84 / PR #102 / final PR head `61a2f0d...` / merge `e1c3b58...` | Feature #77 / Epic #61 | GitHub 只读证据、Git 写边界与审批材料 | `repository-final`、已完成 | 证据采集、安全边界和命令成本 |
-| Task #85：Skills 切换至统一 Runner | Issue #85；PR：待创建；Base `e1c3b58...` | Feature #77 / Epic #61 | 统一命令路径、重复移除与 Skill 迁移材料 | `delivery-pending` | 工作流收敛机制和 Token 优化来源 |
+| Task #85：Skills 切换至统一 Runner | Issue #85；PR #103；Base `e1c3b58...` | Feature #77 / Epic #61 | 统一命令路径、重复移除与 Skill 迁移材料 | `delivery-observed`，Review pending | 工作流收敛机制和 Token 优化来源 |
 | Task #86：Task #65 WSL2 candidate merge-pre | Issue #86；业务 Issue #65；实验 PR：待创建 | Feature #77 / Epic #61 | Candidate Token、质量、Guardian、命令与时长 | `placeholder` | 最终 Windows/WSL2 对照和优化结论 |
 | Task #87：Canonical Spec 审计 | Issue #87；PR：待创建 | Feature #78 / Epic #61 | 规格重复、治理来源与 Canonical Spec | `placeholder` | 规格治理和上下文去重 |
 | Task #88：阶段 Context Compiler | Issue #88；PR：待创建 | Feature #78 / Epic #61 | 上下文编译、追溯视图与输入体积材料 | `placeholder` | 上下文优化机制和可追溯性 |
@@ -516,7 +516,10 @@
 - Parent Feature：`#77`
 - Epic：`#61`
 - Base / workflow / control-plane SHA：`e1c3b587a5fa1a61217fb9160015472bc0e36154`
-- PR / Delivery HEAD / reviewed HEAD / merge：待生命周期产生。
+- PR：`#103`
+- Initial implementation head：`8283089c3f01bacfbc6cec80bb7fdca36002b87b`
+- Material-capture head：`c6954a08007bb24e7db577ad319cb1058cf01146`
+- Material-summary head / final Delivery head / reviewed HEAD / merge：待生命周期产生。
 - Task #65 Candidate：未执行。
 
 ### 已产生材料
@@ -540,8 +543,11 @@
   `docs/workflows/task-skill-runner-migration/rollback-and-compatibility.md`；
   `docs/workflows/task-skill-runner-migration/before-after-command-paths.json`；
   `docs/workflows/task-skill-runner-migration/publication-materials.json`；
+  `docs/workflows/task-skill-runner-migration/live-migration-evidence.json`；
+  `docs/workflows/task-skill-runner-migration/external-live-evidence-manifest.json`；
   `docs/workflows/task-skill-runner-migration/live-evidence-capture-plan.md`；
   `docs/workflows/task-skill-runner-migration/publication-readiness.md`；
+  `docs/workflows/task-skill-runner-migration/visuals/live-migration-metrics.csv`；
   `docs/workflows/task-skill-runner-migration/templates/`；
   `docs/workflows/task-skill-runner-migration/examples/`；
   `docs/workflows/task-skill-runner-migration/visuals/`。
@@ -555,6 +561,10 @@
 - [x] partial/unknown/drift/fail 使用有界展开，不把紧凑 digest 代替失败证据。
 - [x] push、GitHub 写、危险 Git、branch deletion 与人工 Merge 边界保持。
 - [x] Task #85 自身 Review 的 predecessor-control-plane bootstrap exception 已明确，合并后失效。
+- [x] Live `workflow-delivery` 通过：result SHA
+  `17181c206e51a354c973adaa58160dc07eb0fa482693fb6e5962a7f7a38ddb9d`。
+- [x] Live `delivery-readiness` 对 PR #103 返回 `partial`：`quality` check 成功，
+  unresolved threads 为 `0`，Required Checks 配置因 GitHub plan-limit `403` 保持 unknown。
 - [ ] 运行时 Guardian、Token、端到端模型可见命令和质量对照需由 Task #86 Candidate 实验产生。
 
 ### 最终文档用途
@@ -564,7 +574,8 @@
 
 ### 待办
 
-- [ ] Delivery 后回填 PR、最终 head、effective diff 和 live readiness evidence。
+- [x] Delivery 中回填 PR、material-capture head 和 live readiness evidence。
+- [ ] 材料摘要提交后在 PR 正文和最终报告记录 final-head external evidence。
 - [ ] 独立 Review 后回填 reviewed head、verdict 和 findings。
 - [ ] Merge/Closeout 后由 Task #86 或后续维护回填 merge、Issue/Project 和 branch cleanup。
 

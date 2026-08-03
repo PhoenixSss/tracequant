@@ -1,0 +1,135 @@
+{
+  "schema_version": "1.0",
+  "task": 85,
+  "pull_request": 103,
+  "base_sha": "e1c3b587a5fa1a61217fb9160015472bc0e36154",
+  "material_capture_head": "c6954a08007bb24e7db577ad319cb1058cf01146",
+  "status": "observed",
+  "generated_at_utc": "2026-08-03T12:43:34Z",
+  "skill_path_audit": {
+    "status": "pass",
+    "total_lines": 547,
+    "legacy_command_path_count": 0,
+    "fixed_evidence_runner_mentions": 6,
+    "fixed_validation_runner_mentions": 3,
+    "trusted_runner_mentions": 4,
+    "digest": "task-delivery:201/task-pr-review:192/task-closeout:154;legacy=0;evidence=6;validation=3;trusted=4"
+  },
+  "workflow_delivery": {
+    "profile": "workflow-delivery",
+    "status": "pass",
+    "base_sha": "e1c3b587a5fa1a61217fb9160015472bc0e36154",
+    "result_path": ".agents/validation.local/wsl2-runs/20260803T123936Z-8c0e0a4c0de6/result.json",
+    "result_sha256": "17181c206e51a354c973adaa58160dc07eb0fa482693fb6e5962a7f7a38ddb9d",
+    "duration_ms": 33820,
+    "stdout_bytes": 2468,
+    "validation_commands": 10,
+    "skill_validators": 4,
+    "failed_commands": 0,
+    "compact_digest": "pass; command_count=1; internal_validation_commands=10; skill_validators=4"
+  },
+  "delivery_readiness": {
+    "profile": "delivery-readiness",
+    "status": "partial",
+    "partial": true,
+    "snapshot_id": "ev-d9ed8754d964bf55",
+    "snapshot_fingerprint": "fd68273fe087b08ccbb0ee1cc7288a4251eecc5f38aa96ba9fb40756a2def03d",
+    "result_path": ".agents/evidence.local/wsl2-github-runs/20260803T124218Z-a1942763b4bb/result.json",
+    "result_sha256": "53914dce14dddb281911ba059953e6db87813c6581e01b136d7ca6c26375f015",
+    "api_calls": 6,
+    "duration_ms": 8081,
+    "stdout_bytes": 7843,
+    "unknown_gate_count": 1,
+    "unknown_gates": [
+      {
+        "gate": "required_checks_configuration",
+        "reason": "GitHub plan-limit 403"
+      }
+    ],
+    "checks": {
+      "quality": "SUCCESS",
+      "all_success": true,
+      "pending": 0,
+      "failed": 0
+    },
+    "threads": {
+      "unresolved": 0,
+      "available": true
+    },
+    "project_status": "Review"
+  },
+  "model_visible_paths": {
+    "evidence_runner_calls": 2,
+    "validation_runner_calls": 1,
+    "trusted_runner_calls": 2,
+    "legacy_full_chain_calls": 0,
+    "runner_internal_api_operations": 6,
+    "runner_internal_validation_commands": 10
+  },
+  "session": {
+    "guardian_turns": "unavailable",
+    "approval_prompts": "unavailable",
+    "elevated_executions": "unavailable",
+    "codex_version": "codex-cli 0.146.0-alpha.9.2",
+    "session_locator": "unavailable",
+    "environment_note": "codex reported PATH alias creation unavailable because the filesystem was read-only"
+  },
+  "execpolicy": {
+    "status": "observed",
+    "fixed_profiles_allow": true,
+    "arbitrary_tail_policy": "allow-prefix-boundary",
+    "arbitrary_tail_runner": "rejected-before-subcommands",
+    "direct_tools_allow": false,
+    "writes_allow": false,
+    "gh_auth_token": "forbidden"
+  },
+  "failure_partial_drift_evidence": [
+    {
+      "test_file": "tests/tools/test_wsl2_github_evidence_runner.py",
+      "coverage": "partial/unknown and drift gates are represented as non-pass evidence"
+    },
+    {
+      "test_file": "tests/tools/test_wsl2_validation_runner.py",
+      "coverage": "validation failures expose the failed command and bounded diagnostics"
+    },
+    {
+      "test_file": "tests/tools/test_wsl2_validation_rules.py",
+      "coverage": "prefix allow plus runner full-argv rejection and high-risk write boundaries"
+    },
+    {
+      "test_file": "tests/tools/test_wsl2_github_evidence_rules.py",
+      "coverage": "direct GitHub/Git paths and write operations are not read-only allow entries"
+    },
+    {
+      "test_file": "tests/tools/test_workflow_skills.py",
+      "coverage": "Delivery, Review, and Closeout use fixed runner paths and keep semantic/manual gates"
+    }
+  ],
+  "expected_vs_observed": [
+    {
+      "claim": "legacy full-chain calls removed from normal Skill path",
+      "expected": 0,
+      "observed": 0,
+      "classification": "observed"
+    },
+    {
+      "claim": "Task #85 runtime Token reduction",
+      "expected": "not claimed",
+      "observed": "not measured",
+      "classification": "not-measured"
+    },
+    {
+      "claim": "delivery-readiness Required Checks configuration",
+      "expected": "complete or plan-limited unknown",
+      "observed": "GitHub plan-limit 403; quality check succeeded",
+      "classification": "observed-with-limitation"
+    }
+  ],
+  "claim_boundary": {
+    "runtime_token_reduction_claimed": false,
+    "workflow_wide_savings_claimed": false,
+    "task65_candidate_executed": false,
+    "task86_completed": false
+  },
+  "raw_evidence_committed": false
+}

@@ -3,7 +3,7 @@
   "task": 85,
   "base_sha": "e1c3b587a5fa1a61217fb9160015472bc0e36154",
   "measurement": "static-skill-source-comparison",
-  "status": "observed-from-uploaded-base-and-working-tree",
+  "status": "observed-from-base-and-material-capture-head",
   "before": {
     "skills": {
       "task-delivery": {
@@ -140,6 +140,7 @@
   "claim_limits": [
     "Static source counts do not prove runtime Token reduction.",
     "Runner-internal API/subcommand counts remain auditable and are not model-visible command paths.",
-    "Task #86 owns the controlled candidate comparison."
+    "Task #86 owns the controlled candidate comparison.",
+    "Material-capture head c6954a08007bb24e7db577ad319cb1058cf01146 is not the final Delivery head after summary materials are committed."
   ]
 }

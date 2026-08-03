@@ -28,7 +28,7 @@ def test_publication_materials_do_not_claim_runtime_token_reduction() -> None:
     value = _load("publication-materials.json")
     claims = {item["id"]: item for item in value["claims"]}
     assert claims["task85-token-result"]["status"] == "not-measured"
-    assert value["metrics"]["runtime_tokens"]["value"] is None
+    assert value["metrics"]["runtime_tokens"]["value"] == "unavailable"
     assert value["metrics"]["task65_candidate_result"]["status"] == "deferred-to-#86"
 
 
