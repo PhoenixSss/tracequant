@@ -1,0 +1,4 @@
+skill,before_lines,after_lines,line_delta,legacy_fragments_before,legacy_fragments_after,fixed_evidence_frontdoors_after,fixed_validation_frontdoors_after
+task-delivery,232,201,-31,2,0,2,1
+task-pr-review,241,192,-49,0,0,2,1
+task-closeout,212,154,-58,2,0,2,1

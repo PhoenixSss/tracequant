@@ -19,12 +19,16 @@ from pathlib import Path
 from typing import Any, Final
 
 SCHEMA_VERSION: Final = 1
-RUNNER_VERSION: Final = "1.0.1"
+RUNNER_VERSION: Final = "1.1.0"
 OUTPUT_ROOT: Final = ".agents/validation.local/wsl2-runs"
 SPEC_PATH: Final = "tools/agent_workflow/wsl2_validation_profiles.json"
 RUNNER_PATH: Final = "tools/agent_workflow/wsl2_validation_runner.py"
 RULES_PATH: Final = ".codex/rules/quant-system-wsl-validation.rules"
 CI_WORKFLOW_PATH: Final = ".github/workflows/ci.yml"
+WORKFLOW_VALIDATION_PATH: Final = "tools/agent_workflow/workflow_validation.py"
+COMMON_TOOL_PATH: Final = "tools/agent_workflow/workflow_common.py"
+TRUSTED_BUNDLE_ROOT_ENV: Final = "WORKFLOW_TRUSTED_BUNDLE_ROOT"
+TARGET_REPO_ROOT_ENV: Final = "WORKFLOW_TARGET_REPO_ROOT"
 STDIO_LIMIT_BYTES: Final = 4096
 SENSITIVE_PATTERNS: Final = (
     re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
@@ -35,8 +39,15 @@ SENSITIVE_PATTERNS: Final = (
     ),
 )
 
-TRUSTED_PATHS: Final = (RUNNER_PATH, SPEC_PATH, RULES_PATH)
+TRUSTED_PATHS: Final = (
+    RUNNER_PATH,
+    SPEC_PATH,
+    RULES_PATH,
+    WORKFLOW_VALIDATION_PATH,
+    COMMON_TOOL_PATH,
+)
 COMMAND_ID_PATTERN: Final = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?")
+SHA_PATTERN: Final = re.compile(r"^[0-9a-f]{40}$")
 CANONICAL_COMMANDS: Final[dict[str, tuple[str, ...]]] = {
     "uv-lock-check": ("uv", "lock", "--check"),
     "pytest": ("uv", "run", "--frozen", "pytest"),
@@ -58,10 +69,14 @@ CANONICAL_COMMANDS: Final[dict[str, tuple[str, ...]]] = {
         "run",
         "--frozen",
         "pytest",
+        "tests/tools/test_workflow_skills.py",
         "tests/tools/test_workflow_validation.py",
         "tests/tools/test_workflow_evidence.py",
         "tests/tools/test_trusted_runner.py",
         "tests/tools/test_wsl2_validation_runner.py",
+        "tests/tools/test_wsl2_validation_rules.py",
+        "tests/tools/test_wsl2_github_evidence_runner.py",
+        "tests/tools/test_wsl2_github_evidence_rules.py",
     ),
 }
 CANONICAL_PROFILE_COMMAND_IDS: Final[dict[str, tuple[str, ...]]] = {
@@ -99,6 +114,14 @@ CANONICAL_PROFILE_PRECONDITIONS: Final[dict[str, tuple[bool, bool, bool]]] = {
     "targeted:workflow-tests": (False, False, False),
     "post-merge": (True, True, True),
 }
+CANONICAL_WORKFLOW_PROFILES: Final[dict[str, tuple[str, tuple[bool, bool, bool]]]] = {
+    "workflow-delivery": ("delivery", (False, False, False)),
+    "workflow-review": ("review", (False, False, False)),
+    "workflow-closeout": ("closeout", (True, True, True)),
+}
+ALL_PROFILES: Final = tuple(CANONICAL_PROFILE_COMMAND_IDS) + tuple(
+    CANONICAL_WORKFLOW_PROFILES
+)
 CANONICAL_CI_COMMANDS: Final[tuple[tuple[str, ...], ...]] = (
     CANONICAL_COMMANDS["uv-lock-check"],
     CANONICAL_COMMANDS["pytest"],
@@ -116,6 +139,11 @@ ALLOWED_ENV: Final = (
     "PYTHONIOENCODING",
     "NO_COLOR",
     "CI",
+    "CODEX_SKILL_VALIDATOR",
+    "WORKFLOW_TRUSTED_RUNNER_SHA",
+    "WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256",
+    TRUSTED_BUNDLE_ROOT_ENV,
+    TARGET_REPO_ROOT_ENV,
 )
 
 
@@ -229,11 +257,62 @@ def _read_tracked_file(repo_root: Path, relative_path: str) -> bytes:
     return actual
 
 
+def _bundle_root(repo_root: Path) -> Path | None:
+    raw = os.environ.get(TRUSTED_BUNDLE_ROOT_ENV)
+    if raw is None:
+        return None
+    root = Path(raw).resolve()
+    allowed_root = (repo_root / ".agents/evidence.local/trusted").resolve()
+    if not root.is_relative_to(allowed_root):
+        raise RunnerError("trusted bundle must be below .agents/evidence.local/trusted")
+    return root
+
+
+def _read_bundle_inputs(repo_root: Path, bundle_root: Path) -> dict[str, bytes]:
+    manifest_path = bundle_root / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RunnerError("trusted bundle manifest is missing or invalid") from exc
+    expected_sha = os.environ.get("WORKFLOW_TRUSTED_RUNNER_SHA")
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != 2
+        or manifest.get("tool") != "validation-runner"
+        or manifest.get("trusted_sha") != expected_sha
+    ):
+        raise RunnerError("trusted validation-runner bundle identity is invalid")
+    hashes = manifest.get("files")
+    if not isinstance(hashes, dict) or set(hashes) != set(TRUSTED_PATHS):
+        raise RunnerError("trusted validation-runner bundle file set is invalid")
+    payloads: dict[str, bytes] = {}
+    for relative_path in TRUSTED_PATHS:
+        source = bundle_root / relative_path
+        if source.is_symlink():
+            raise RunnerError(
+                f"trusted bundle file must not be a symlink: {relative_path}"
+            )
+        try:
+            payload = source.read_bytes()
+        except FileNotFoundError as exc:
+            raise RunnerError(
+                f"trusted bundle file is missing: {relative_path}"
+            ) from exc
+        if _sha256_bytes(payload) != hashes.get(relative_path):
+            raise RunnerError(f"trusted bundle file digest mismatch: {relative_path}")
+        payloads[relative_path] = payload
+    return payloads
+
+
 def _load_trusted_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str]]:
-    payloads = {
-        relative_path: _read_tracked_file(repo_root, relative_path)
-        for relative_path in TRUSTED_PATHS
-    }
+    bundle_root = _bundle_root(repo_root)
+    if bundle_root is None:
+        payloads = {
+            relative_path: _read_tracked_file(repo_root, relative_path)
+            for relative_path in TRUSTED_PATHS
+        }
+    else:
+        payloads = _read_bundle_inputs(repo_root, bundle_root)
     spec_path = repo_root / SPEC_PATH
     spec = _load_json_bytes(payloads[SPEC_PATH], spec_path)
     hashes = {path: _sha256_bytes(payload) for path, payload in payloads.items()}
@@ -268,10 +347,20 @@ def _command_env() -> dict[str, str]:
 def _find_repo_root(script_path: Path) -> Path:
     if script_path.is_symlink():
         raise RunnerError("runner entry must not be invoked through a symlink")
-    repo_root = script_path.resolve().parents[2]
-    expected = repo_root / RUNNER_PATH
-    if script_path.resolve() != expected.resolve():
-        raise RunnerError("runner entry path is not the trusted repository entry")
+    target_root = os.environ.get(TARGET_REPO_ROOT_ENV)
+    if target_root is None:
+        repo_root = script_path.resolve().parents[2]
+        expected = repo_root / RUNNER_PATH
+        if script_path.resolve() != expected.resolve():
+            raise RunnerError("runner entry path is not the trusted repository entry")
+    else:
+        repo_root = Path(target_root).resolve()
+        bundle_root = _bundle_root(repo_root)
+        if bundle_root is None:
+            raise RunnerError("trusted runner target requires a trusted bundle")
+        expected = bundle_root / RUNNER_PATH
+        if script_path.resolve() != expected.resolve():
+            raise RunnerError("runner entry path is not the trusted bundle entry")
     if Path.cwd().resolve() != repo_root.resolve():
         raise RunnerError("runner must be started from the repository root")
     if repo_root.resolve().as_posix().startswith("/mnt/"):
@@ -361,10 +450,68 @@ def _validate_spec_identity(spec: Mapping[str, Any]) -> None:
     if spec.get("runner_version") != RUNNER_VERSION:
         raise RunnerError("profile spec runner_version does not match the runner")
     profiles = spec.get("profiles")
-    if not isinstance(profiles, dict) or set(profiles) != set(
-        CANONICAL_PROFILE_COMMAND_IDS
-    ):
+    if not isinstance(profiles, dict) or set(profiles) != set(ALL_PROFILES):
         raise RunnerError("profile spec profile set differs from the canonical set")
+
+
+def _validated_workflow_profile(
+    profile_name: str, profile: Mapping[str, Any], base_sha: str | None
+) -> list[dict[str, Any]]:
+    canonical = CANONICAL_WORKFLOW_PROFILES.get(profile_name)
+    if canonical is None:
+        raise RunnerError("workflow profile is not canonical")
+    phase, expected_preconditions = canonical
+    if base_sha is None or SHA_PATTERN.fullmatch(base_sha) is None:
+        raise RunnerError("workflow profile requires a full --base-sha")
+    if profile.get("kind") != "workflow-phase":
+        raise RunnerError(
+            f"profile kind differs from canonical profile: {profile_name}"
+        )
+    if profile.get("phase") != phase:
+        raise RunnerError(
+            f"profile phase differs from canonical profile: {profile_name}"
+        )
+    if profile.get("requires_base_sha") is not True:
+        raise RunnerError(f"profile base-SHA contract drift: {profile_name}")
+    if profile.get("include_skill_validators") is not True:
+        raise RunnerError(f"profile Skill-validator contract drift: {profile_name}")
+    if profile.get("require_skill_validator") is not True:
+        raise RunnerError(f"profile Skill-validator requirement drift: {profile_name}")
+    observed_preconditions = _profile_preconditions(profile)
+    if observed_preconditions != expected_preconditions:
+        raise RunnerError(
+            f"profile preconditions differ from canonical profile: {profile_name}"
+        )
+    target_root = Path(os.environ.get(TARGET_REPO_ROOT_ENV, ".")).resolve()
+    validation_root = _bundle_root(target_root) or target_root
+    argv = [
+        sys.executable,
+        str(validation_root / WORKFLOW_VALIDATION_PATH),
+        "run",
+        "--repo-root",
+        ".",
+        "--phase",
+        phase,
+        "--base-sha",
+        base_sha,
+        "--include-skill-validators",
+        "--require-skill-validator",
+    ]
+    return [{"id": "workflow-validation", "argv": argv}]
+
+
+def _profile_preconditions(profile: Mapping[str, Any]) -> tuple[bool, bool, bool]:
+    values: list[bool] = []
+    for key in (
+        "requires_clean_worktree",
+        "requires_main_branch",
+        "requires_origin_main_identity",
+    ):
+        value = profile.get(key, False)
+        if type(value) is not bool:
+            raise RunnerError(f"profile precondition must be boolean: {key}")
+        values.append(value)
+    return tuple(values)  # type: ignore[return-value]
 
 
 def _validated_commands(
@@ -405,18 +552,7 @@ def _validated_commands(
         raise RunnerError(
             f"profile kind differs from canonical profile: {profile_name}"
         )
-    precondition_keys = (
-        "requires_clean_worktree",
-        "requires_main_branch",
-        "requires_origin_main_identity",
-    )
-    precondition_values: list[bool] = []
-    for key in precondition_keys:
-        value = profile.get(key, False)
-        if type(value) is not bool:
-            raise RunnerError(f"profile precondition must be boolean: {key}")
-        precondition_values.append(value)
-    observed_preconditions = tuple(precondition_values)
+    observed_preconditions = _profile_preconditions(profile)
     if observed_preconditions != CANONICAL_PROFILE_PRECONDITIONS[profile_name]:
         raise RunnerError(
             f"profile preconditions differ from canonical profile: {profile_name}"
@@ -554,7 +690,7 @@ def _run_command(
     }
 
 
-def _run_profile(profile_name: str) -> int:
+def _run_profile(profile_name: str, base_sha: str | None = None) -> int:
     script_path = Path(__file__)
     repo_root = _find_repo_root(script_path)
     spec, trusted_hashes = _load_trusted_inputs(repo_root)
@@ -566,7 +702,12 @@ def _run_profile(profile_name: str) -> int:
     if not isinstance(profile, dict):
         raise RunnerError("unknown profile")
     _verify_drift(repo_root, spec)
-    commands = _validated_commands(profile_name, profile)
+    if profile_name in CANONICAL_WORKFLOW_PROFILES:
+        commands = _validated_workflow_profile(profile_name, profile, base_sha)
+    else:
+        if base_sha is not None:
+            raise RunnerError("--base-sha is allowed only for workflow profiles")
+        commands = _validated_commands(profile_name, profile)
     timeout_value = profile.get("timeout_seconds", 900)
     if type(timeout_value) is not int:
         raise RunnerError("profile timeout_seconds must be an integer")
@@ -615,12 +756,18 @@ def _run_profile(profile_name: str) -> int:
         },
         "integrity": {
             "runner_path": RUNNER_PATH,
-            "verification": "tracked-head-pre-execution",
+            "verification": (
+                "trusted-commit-bundle-pre-execution"
+                if _bundle_root(repo_root) is not None
+                else "tracked-head-pre-execution"
+            ),
             "runner_sha256": trusted_hashes[RUNNER_PATH],
             "profile_spec_path": SPEC_PATH,
             "profile_spec_sha256": trusted_hashes[SPEC_PATH],
             "rules_path": RULES_PATH,
             "rules_sha256": trusted_hashes[RULES_PATH],
+            "workflow_validation_path": WORKFLOW_VALIDATION_PATH,
+            "workflow_validation_sha256": trusted_hashes[WORKFLOW_VALIDATION_PATH],
         },
     }
     result_path = run_dir / "result.json"
@@ -655,16 +802,8 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Run a fixed WSL2 validation profile.",
         allow_abbrev=False,
     )
-    parser.add_argument(
-        "profile",
-        choices=(
-            "current-ci-equivalent",
-            "targeted",
-            "targeted:tools-tests",
-            "targeted:workflow-tests",
-            "post-merge",
-        ),
-    )
+    parser.add_argument("profile", choices=ALL_PROFILES)
+    parser.add_argument("--base-sha", type=str)
     return parser
 
 
@@ -672,11 +811,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     try:
+        args = parser.parse_args(raw_argv)
+        if args.profile in CANONICAL_WORKFLOW_PROFILES:
+            if len(raw_argv) != 3 or raw_argv[1] != "--base-sha":
+                parser.error(
+                    "workflow profiles require exactly: <profile> --base-sha <full-sha>"
+                )
+            normalized_base = str(args.base_sha or "").casefold()
+            if SHA_PATTERN.fullmatch(normalized_base) is None:
+                parser.error("--base-sha must be a full 40-character Git SHA")
+            return _run_profile(args.profile, normalized_base)
         if len(raw_argv) != 1:
             parser.error(
-                "expected exactly one profile argument; trailing arguments are not accepted"
+                "fixed profiles accept exactly one profile argument; "
+                "trailing arguments are not accepted"
             )
-        args = parser.parse_args(raw_argv)
         return _run_profile(args.profile)
     except KeyboardInterrupt:
         print(

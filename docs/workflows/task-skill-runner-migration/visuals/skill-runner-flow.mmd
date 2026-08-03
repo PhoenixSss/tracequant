@@ -1,0 +1,17 @@
+flowchart LR
+    D[Delivery Skill] --> ED[Evidence: delivery/readiness]
+    D --> VD[Validation: targeted/workflow-delivery]
+    R[Fresh Review Skill] --> TB[Trusted base bundle]
+    TB --> ER[Evidence: review/recheck]
+    TB --> VR[Validation: workflow-review]
+    C[Closeout Skill] --> EC[Evidence: closeout-readonly/recheck]
+    C --> VC[Validation: workflow-closeout]
+    ED --> S[Compact success digest]
+    VD --> S
+    ER --> S
+    VR --> S
+    EC --> S
+    VC --> S
+    X[partial / unknown / drift / fail] --> B[Bounded targeted expansion]
+    W[push / GitHub write / dangerous Git / branch delete] --> A[Explicit approval boundary]
+    M[Merge] --> H[Maintainer manual action]

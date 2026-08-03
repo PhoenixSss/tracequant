@@ -167,3 +167,6 @@ Local outputs are stored only in Git-ignored directories:
 
 See `docs/workflows/workflow-evidence.md`. These tools do not replace semantic
 review, independent PR review, manual Merge, or Feature closeout.
+
+- [WSL2 GitHub evidence runner](docs/workflows/wsl2-github-evidence-runner/README.md): fixed read-only profiles, evidence snapshots, Git/GitHub approval boundaries, and live material capture.
+- [Task Skill runner migration](docs/workflows/task-skill-runner-migration/README.md): unified Runner routing, legacy-path removal, trusted Review, rollback, and static comparison materials.

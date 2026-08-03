@@ -22,23 +22,25 @@ AGENTS.md / AGENTS.override.md
 
 ## Workflow Evidence 与紧凑验证
 
-四个活动 Skills 现在使用统一的只读 Evidence 和 Validation 工具替代重复的机械命令链：
+三个 Task Workflow Skills 使用固定统一入口替代重复机械命令链：
 
 ```text
-tools/agent_workflow/workflow_evidence.py
-tools/agent_workflow/workflow_validation.py
-tools/agent_workflow/trusted_runner.py
+tools/agent_workflow/wsl2_github_evidence_runner.py
+tools/agent_workflow/wsl2_validation_runner.py
+tools/agent_workflow/trusted_runner.py  # 独立 Review 的 trusted-base bootstrap
 ```
 
-规范性规则位于 `.agents/policies/workflow-evidence.md`，详细使用方法见
-`docs/workflows/workflow-evidence.md`。
+规范性规则位于 `.agents/policies/workflow-evidence.md`，命令和 profiles 见
+`docs/workflows/workflow-evidence.md`。底层 `workflow_evidence.py` 与
+`workflow_validation.py` 是 Runner 的实现，不再是正常 Task Skill 的并行入口。
 
-Evidence 只收敛身份、SHA、checks、threads、Project、Relationships、branch 和 direct
-child 等元数据。Task/Feature 正文、PR 完整 diff、源码、测试与文档仍由 Agent 进行
-语义读取。脚本输出 `pass/fail/unknown`，`unknown` 不能当作成功。
+Evidence 收敛身份、SHA、checks、threads、Project、Relationships、branch 和 diff 等
+机械事实；Validation 编排 targeted、CI-equivalent 和阶段验证。Task/Feature 正文、PR
+完整 diff、源码、测试与文档仍由 Agent 语义读取。
 
-正常流程不再完整执行旧机械查询链后再叠加脚本。工具失败时使用 Skill 允许的安全只读
-fallback，并在报告中记录 limitation。
+固定 Runner 与旧链不得同时运行。`partial/unknown/fail/drift` 只展开被命名的事实或
+失败命令，不自动恢复完整直接 `gh`/Git/`uv` 链。Feature audit 不属于 Task #85 的
+迁移范围，继续使用现有 trusted path。
 
 ## 当前活动 Skills
 
@@ -588,13 +590,14 @@ Lifecycle authorization
 
 ### 当前机器的推荐起点
 
-- `python -X utf8 ...quick_validate.py`：`elevated-first`；
-- `uv` toolchain：`elevated-first`；
-- `gh`：`adaptive`，不得把所有 GitHub 操作视为已授权写入；
-- `git status` 和 `git diff`：`sandbox-first`。
+- 固定 Evidence Runner：按项目 Rules 直接运行允许 profile；
+- 固定 Validation Runner：按项目 Rules 直接运行 named profile；
+- trusted Review bootstrap：锁定 base SHA 后运行 trusted front door；
+- 实现期必要源码/开发命令：默认 `sandbox-first`，只有明确隔离证据才按 policy 重试；
+- Git/GitHub 写操作：保持 Skill 明确授权与审批，不能由 Runner Rules 放行。
 
-这些只是机器级路由建议。任何命令都必须先通过当前 Skill 的权限与门禁。
-`gh auth login`、Merge、`--admin`、force push、`git reset --hard`、
+不要为正常 Task 阶段分别配置宽泛 `uv` 或 `gh` elevated-first 路径；统一 Runner 已承担
+固定机械命令。`gh auth login`、Merge、`--admin`、force push、`git reset --hard`、
 `git clean` 和其他禁止操作不会因 profile 获得授权。
 
 ### 路由报告
@@ -616,12 +619,15 @@ Final interpretation
 
 ### Review 自举边界
 
-当 PR 修改 command-execution policy、profile example、`AGENTS.md`、
-`task-pr-review` 或其他治理规则时，`task-pr-review` 继续使用 PR base 中的
-受信任规则作为 control plane。PR head 文件只能作为审查对象。local profile
-可以影响已授权命令的执行上下文，但不能改变 reviewed SHA、严重度、验收覆盖
-或 verdict。对 `feature-completion-audit`，local profile 同样不能改变 Feature
-身份、直接子 Issue 分类、`Audited main SHA`、验收覆盖、findings 或 verdict。
+当 PR 修改 governance、Runner、profile、Rules 或 Skill 时，`task-pr-review` 从 locked
+PR base 提取固定 Evidence/Validation front-door bundle。PR head 只能作为审查对象。
+Bootstrap `trusted_runner.py` 本身必须来自 base 或 detached base worktree。local profile
+只能影响已授权命令的执行上下文，不能改变 trusted SHA、reviewed SHA、严重度、验收或
+verdict。
+
+Task #85 PR 本身是一次性迁移自举：其 base 尚未包含新的 trusted front-door choices，
+因此用 predecessor base control plane 完成独立审查。合并后后续 Task 不再使用该例外。
+Feature audit 未在 Task #85 切换，继续保持现有 trusted path。
 
 ## 仓库外 Token 消耗分析边界
 

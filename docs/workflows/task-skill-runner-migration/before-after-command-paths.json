@@ -1,0 +1,145 @@
+{
+  "schema_version": "1.0",
+  "task": 85,
+  "base_sha": "e1c3b587a5fa1a61217fb9160015472bc0e36154",
+  "measurement": "static-skill-source-comparison",
+  "status": "observed-from-uploaded-base-and-working-tree",
+  "before": {
+    "skills": {
+      "task-delivery": {
+        "path": ".agents/skills/task-delivery/SKILL.md",
+        "lines": 232,
+        "bytes": 9344,
+        "legacy_command_fragments": [
+          "python tools/agent_workflow/workflow_evidence.py",
+          "python tools/agent_workflow/workflow_validation.py"
+        ],
+        "raw_evidence_tool_mentions": 2,
+        "raw_validation_tool_mentions": 1,
+        "fixed_evidence_frontdoor_mentions": 0,
+        "fixed_validation_frontdoor_mentions": 0,
+        "trusted_runner_mentions": 0,
+        "sha256": "bd6f42d611c8de1f8a0316137245fb21f9d91a749d5da107dd66d00460d8ad62"
+      },
+      "task-pr-review": {
+        "path": ".agents/skills/task-pr-review/SKILL.md",
+        "lines": 241,
+        "bytes": 9118,
+        "legacy_command_fragments": [],
+        "raw_evidence_tool_mentions": 0,
+        "raw_validation_tool_mentions": 1,
+        "fixed_evidence_frontdoor_mentions": 0,
+        "fixed_validation_frontdoor_mentions": 0,
+        "trusted_runner_mentions": 1,
+        "sha256": "31badff6decf86cf663ddd4785f921b0d09706a6412ae904ff00fa4f1cec5b00"
+      },
+      "task-closeout": {
+        "path": ".agents/skills/task-closeout/SKILL.md",
+        "lines": 212,
+        "bytes": 8224,
+        "legacy_command_fragments": [
+          "python tools/agent_workflow/workflow_evidence.py",
+          "python tools/agent_workflow/workflow_validation.py"
+        ],
+        "raw_evidence_tool_mentions": 2,
+        "raw_validation_tool_mentions": 1,
+        "fixed_evidence_frontdoor_mentions": 0,
+        "fixed_validation_frontdoor_mentions": 0,
+        "trusted_runner_mentions": 0,
+        "sha256": "eb7562d542732dcaa40e1769fe7f52d7b1fedc603f11a430c469619c7658976b"
+      }
+    },
+    "totals": {
+      "lines": 685,
+      "bytes": 26686,
+      "legacy_command_fragment_count": 4
+    }
+  },
+  "after": {
+    "skills": {
+      "task-delivery": {
+        "path": ".agents/skills/task-delivery/SKILL.md",
+        "lines": 201,
+        "bytes": 8581,
+        "legacy_command_fragments": [],
+        "raw_evidence_tool_mentions": 0,
+        "raw_validation_tool_mentions": 0,
+        "fixed_evidence_frontdoor_mentions": 2,
+        "fixed_validation_frontdoor_mentions": 1,
+        "trusted_runner_mentions": 0,
+        "sha256": "229058e31abcfa9ecffb060aa7d2b7051fc6c01ffad952ff500677303bfcd3be"
+      },
+      "task-pr-review": {
+        "path": ".agents/skills/task-pr-review/SKILL.md",
+        "lines": 192,
+        "bytes": 7698,
+        "legacy_command_fragments": [],
+        "raw_evidence_tool_mentions": 0,
+        "raw_validation_tool_mentions": 0,
+        "fixed_evidence_frontdoor_mentions": 2,
+        "fixed_validation_frontdoor_mentions": 1,
+        "trusted_runner_mentions": 4,
+        "sha256": "7f5821970af852376523262ac4bd6acf083c91b09bce78a3a9e20af7289df9e1"
+      },
+      "task-closeout": {
+        "path": ".agents/skills/task-closeout/SKILL.md",
+        "lines": 154,
+        "bytes": 6451,
+        "legacy_command_fragments": [],
+        "raw_evidence_tool_mentions": 0,
+        "raw_validation_tool_mentions": 0,
+        "fixed_evidence_frontdoor_mentions": 2,
+        "fixed_validation_frontdoor_mentions": 1,
+        "trusted_runner_mentions": 0,
+        "sha256": "b7af8ff5f3f3b4f8118f9cb4588b0b05275229dbbebca985e3fb66c86ae520c1"
+      }
+    },
+    "totals": {
+      "lines": 547,
+      "bytes": 22730,
+      "legacy_command_fragment_count": 0
+    }
+  },
+  "derived": {
+    "line_delta": -138,
+    "line_reduction_percent": 20.15,
+    "byte_delta": -3956,
+    "byte_reduction_percent": 14.82,
+    "legacy_fragment_delta": -4
+  },
+  "authority_boundaries": {
+    "delivery": {
+      "evidence": [
+        "delivery",
+        "delivery-readiness"
+      ],
+      "validation": [
+        "targeted named presets",
+        "workflow-delivery"
+      ]
+    },
+    "review": {
+      "evidence": [
+        "trusted base evidence-runner review",
+        "trusted base evidence-runner recheck"
+      ],
+      "validation": [
+        "trusted base validation-runner workflow-review"
+      ]
+    },
+    "closeout": {
+      "evidence": [
+        "closeout-readonly",
+        "recheck"
+      ],
+      "validation": [
+        "workflow-closeout"
+      ]
+    }
+  },
+  "claim_limits": [
+    "Static source counts do not prove runtime Token reduction.",
+    "Runner-internal API/subcommand counts remain auditable and are not model-visible command paths.",
+    "Task #86 owns the controlled candidate comparison."
+  ]
+}

@@ -1,0 +1,130 @@
+{
+  "schema_version": "1.0",
+  "task": 85,
+  "parent_feature": 77,
+  "epic": 61,
+  "base_sha": "e1c3b587a5fa1a61217fb9160015472bc0e36154",
+  "status": "delivery-pending",
+  "claims": [
+    {
+      "id": "task85-fixed-runner-normal-path",
+      "status": "observed-static",
+      "statement": "Delivery, Review, and Closeout Task Skills use fixed Evidence and Validation Runner front doors as their normal mechanical path.",
+      "evidence": [
+        ".agents/skills/task-delivery/SKILL.md",
+        ".agents/skills/task-pr-review/SKILL.md",
+        ".agents/skills/task-closeout/SKILL.md",
+        "tools/agent_workflow/skill_path_audit.py"
+      ]
+    },
+    {
+      "id": "task85-legacy-fragments-removed",
+      "status": "observed-static",
+      "statement": "The audited legacy command-fragment count in the three Task Skills changed from 4 to 0.",
+      "evidence": [
+        "docs/workflows/task-skill-runner-migration/before-after-command-paths.json"
+      ]
+    },
+    {
+      "id": "task85-skill-source-reduction",
+      "status": "derived",
+      "statement": "The three Task Skill sources changed from 685 to 547 lines (20.15% reduction) while retaining semantic and approval gates.",
+      "evidence": [
+        "docs/workflows/task-skill-runner-migration/before-after-command-paths.json",
+        "tests/tools/test_workflow_skills.py"
+      ]
+    },
+    {
+      "id": "task85-trusted-review-frontdoor",
+      "status": "observed-static",
+      "statement": "Review uses Evidence and Validation Runner code extracted from the locked base; Delivery conclusions are not inherited and recheck drift invalidates the verdict.",
+      "evidence": [
+        ".agents/skills/task-pr-review/SKILL.md",
+        "tools/agent_workflow/trusted_runner.py"
+      ]
+    },
+    {
+      "id": "task85-token-result",
+      "status": "not-measured",
+      "statement": "Task #85 does not establish runtime Token reduction; Task #86 owns the controlled Task #65 candidate comparison.",
+      "evidence": [
+        "06-task-switch-skills-to-runners.md"
+      ]
+    }
+  ],
+  "metrics": {
+    "skill_lines_before": {
+      "value": 685,
+      "status": "observed-static"
+    },
+    "skill_lines_after": {
+      "value": 547,
+      "status": "observed-static"
+    },
+    "skill_line_reduction_percent": {
+      "value": 20.15,
+      "status": "derived"
+    },
+    "skill_bytes_before": {
+      "value": 26686,
+      "status": "observed-static"
+    },
+    "skill_bytes_after": {
+      "value": 22730,
+      "status": "observed-static"
+    },
+    "legacy_command_fragments_before": {
+      "value": 4,
+      "status": "observed-static"
+    },
+    "legacy_command_fragments_after": {
+      "value": 0,
+      "status": "observed-static"
+    },
+    "runtime_guardian_turns": {
+      "value": null,
+      "status": "not-measured"
+    },
+    "runtime_tokens": {
+      "value": null,
+      "status": "not-measured"
+    },
+    "task65_candidate_result": {
+      "value": null,
+      "status": "deferred-to-#86"
+    }
+  },
+  "publication_mapping": {
+    "agent_workflow_design_guide": [
+      "authority map",
+      "trusted-base front doors",
+      "bounded expansion",
+      "rollback and version compatibility",
+      "write and manual merge boundaries"
+    ],
+    "token_optimization_article": [
+      "static Skill size comparison",
+      "legacy command path removal",
+      "one fixed mechanical path",
+      "expected versus observed boundary",
+      "Task #86 causal comparison requirement"
+    ]
+  },
+  "limitations": [
+    "Static Skill source metrics do not prove runtime Token or Guardian improvement.",
+    "Task #85 PR uses a one-time predecessor-control-plane review bootstrap exception.",
+    "Feature audit is outside the Task #85 migration.",
+    "Task #86 must execute the controlled candidate before causal conclusions."
+  ],
+  "source_documents": [
+    "docs/workflows/task-skill-runner-migration/README.md",
+    "docs/workflows/task-skill-runner-migration/before-after-command-paths.json",
+    "docs/workflows/task-skill-runner-migration/removed-legacy-paths.md",
+    "docs/workflows/task-skill-runner-migration/rollback-and-compatibility.md",
+    "docs/workflows/task-skill-runner-migration/examples/",
+    "docs/workflows/task-skill-runner-migration/visuals/",
+    "docs/workflows/task-skill-runner-migration/live-evidence-capture-plan.md",
+    "docs/workflows/task-skill-runner-migration/publication-readiness.md",
+    "docs/workflows/task-skill-runner-migration/templates/"
+  ]
+}

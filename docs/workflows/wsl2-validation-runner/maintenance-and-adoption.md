@@ -90,12 +90,13 @@ It is less suitable when:
 
 ## Rollback
 
-Before later Skills depend on the runner, rollback consists of:
+Before Task #85 adoption, rollback consisted of:
 
 1. stop invoking the fixed runner;
 2. remove or disable the project Rules entry;
 3. continue using the existing explicit validation commands;
 4. retain prior evidence and mark the runner adoption as rolled back.
 
-After Skills adopt the runner, rollback must be coordinated with the consuming
-Skill change so that validation is not accidentally skipped.
+After Task #85 adoption, rollback must revert the consuming Skills, runner/profile
+contract, Rules, validators, and documentation together so validation is neither
+skipped nor duplicated.

@@ -74,15 +74,17 @@ successful never changes workflow permissions, gates, validation, findings,
 verdicts, Merge authorization, or Feature completion evidence.
 
 Deterministic workflow fact collection and compact validation are governed by
-`.agents/policies/workflow-evidence.md`. Repository workflow Skills use
-`tools/agent_workflow/workflow_evidence.py` and
-`tools/agent_workflow/workflow_validation.py` to replace repeated mechanical
-command chains, while retaining all semantic review, safety, and lifecycle
-judgment. Local evidence and validation artifacts remain in exact ignored
-`.agents/evidence.local/` and `.agents/validation.local/` directories. A PR that
-changes governance or these tools must be reviewed using the trusted PR base
-control plane through `tools/agent_workflow/trusted_runner.py` or an equivalent
-trusted detached worktree.
+`.agents/policies/workflow-evidence.md`. Task workflow Skills use the fixed
+`tools/agent_workflow/wsl2_github_evidence_runner.py` and
+`tools/agent_workflow/wsl2_validation_runner.py` front doors instead of repeated
+mechanical GitHub/Git/validation chains. The underlying Evidence/Validation CLIs
+are implementation details, not parallel normal paths. Independent Review uses
+fixed front-door bundles extracted from the locked PR base through
+`tools/agent_workflow/trusted_runner.py` or an equivalent trusted detached
+worktree. All semantic review, safety, lifecycle judgment, and manual Merge gates
+remain with the Skills and maintainer. Local evidence and validation artifacts
+remain in exact ignored `.agents/evidence.local/` and
+`.agents/validation.local/` directories.
 
 This root `AGENTS.md` remains the repository-level rule source. Repository Skills
 supplement these rules and do not override system, developer, user, or more

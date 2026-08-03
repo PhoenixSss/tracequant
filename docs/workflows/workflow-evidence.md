@@ -1,205 +1,216 @@
-# Workflow Evidence 与紧凑验证使用指南
+# Workflow Evidence 与统一 Validation Runner
 
 ## 目的
 
-Workflow Evidence 将四个仓库工作流 Skills 中可确定执行的 Git、GitHub、Project、
-Checks、SHA、分支和稳定性事实收敛为有界 JSON。Validation Runner 负责执行当前适用
-检查并压缩成功输出。
+Task 工作流使用两个固定入口替代重复的 `gh`、Git 和验证命令链：
+
+```text
+tools/agent_workflow/wsl2_github_evidence_runner.py
+tools/agent_workflow/wsl2_validation_runner.py
+```
+
+职责边界：
 
 ```text
 Skill：权限、阶段、语义判断、finding、verdict
-Evidence：确定性事实、规范化、snapshot/recheck
-Validation：命令编排、退出码、有限摘要
+Evidence Runner：确定性 Git/GitHub 事实、snapshot/recheck、partial/unknown
+Validation Runner：targeted/CI-equivalent/阶段验证、退出码、有界诊断
+Maintainer：人工 Merge 与 Feature closeout
 ```
 
-规范性规则位于：
+规范性规则：
 
 ```text
 .agents/policies/workflow-evidence.md
 .agents/policies/command-execution.md
 ```
 
-## 文件
-
-```text
-tools/agent_workflow/workflow_common.py
-tools/agent_workflow/workflow_evidence.py
-tools/agent_workflow/wsl2_github_evidence_runner.py
-tools/agent_workflow/workflow_validation.py
-tools/agent_workflow/trusted_runner.py
-```
-
-本地产物：
+本地产物只允许写入并保持 Git ignored：
 
 ```text
 .agents/evidence.local/
 .agents/validation.local/
 ```
 
-两者必须保持 Git ignored。
+## Task Skills 的唯一正常路径
 
-## Evidence CLI
+| 阶段 | Evidence | Validation |
+| --- | --- | --- |
+| Delivery preflight | `delivery` | 按需 named `targeted*` |
+| Delivery final | `delivery-readiness` | `workflow-delivery --base-sha <base>` |
+| Independent Review | trusted-base `review` + `recheck` | trusted-base `workflow-review --base-sha <base>` |
+| Closeout | `closeout-readonly` + `recheck` | `workflow-closeout --base-sha <PR base>` |
+
+新 Runner 必须替代旧路径，而不是叠加。正常 Task Skill 不再直接调用
+`workflow_evidence.py`、`workflow_validation.py`，也不在固定 Runner 之后重复完整
+`gh`/Git 查询链或全套 `uv` 验证。
+
+底层 CLI 仍是 Runner 的版本化实现与测试对象：
+
+```text
+tools/agent_workflow/workflow_evidence.py
+tools/agent_workflow/workflow_validation.py
+```
+
+只有内部工具测试、Task #85 一次性迁移自举，或 Skill 明确授权的单个
+partial/unknown/fail 目标诊断可以直接使用；不得恢复为并行正常路径。
+
+## Evidence Runner
 
 查看帮助：
-
-```powershell
-python -X utf8 tools/agent_workflow/workflow_evidence.py --help
-python -X utf8 tools/agent_workflow/workflow_evidence.py pr-review-snapshot --help
-```
-
-主要操作：
-
-```text
-delivery-preflight
-delivery-readiness
-pr-review-snapshot
-pr-review-recheck
-closeout-plan
-closeout-final
-feature-audit-snapshot
-feature-audit-recheck
-```
-
-示例：
-
-```powershell
-python -X utf8 tools/agent_workflow/workflow_evidence.py `
-  pr-review-snapshot `
-  --task 123 `
-  --pr 124 `
-  --expected-title "[Task] 示例" `
-  --expected-base-sha <base-sha> `
-  --expected-head-sha <head-sha>
-```
-
-stdout 只包含紧凑 JSON。完整 Task/PR 正文、完整 diff 和源码不会写入 snapshot。
-Agent 仍必须在语义审查阶段读取这些内容。
-
-Snapshot 默认写入：
-
-```text
-.agents/evidence.local/snapshots/<snapshot-id>.json
-```
-
-Recheck：
-
-```powershell
-python -X utf8 tools/agent_workflow/workflow_evidence.py `
-  pr-review-recheck `
-  --snapshot-id <snapshot-id>
-```
-
-Recheck 会重新取证，再比较 base/head、effective diff、checks、threads、main 或 direct
-child set。旧 snapshot 只作为比较基线，不作为当前事实。Feature snapshot 还会为 direct
-child 的 closing PR 记录 merge SHA 与 check-run 摘要；该元数据不替代当前-main 语义审计。
-
-## WSL2 固定 GitHub Evidence Runner
-
-Task 工作流的固定只读入口为：
 
 ```bash
 tools/agent_workflow/wsl2_github_evidence_runner.py --help
 ```
 
-它提供 `delivery`、`delivery-readiness`、`review`、`pre-merge`、
-`closeout-readonly` 和 `recheck` profiles。Runner 固定仓库、profile 与参数
-schema，不接受任意 repo、REST/GraphQL path、`gh`/Git 参数、Shell 字符串、输出路径或
-工作目录。
-
-Runner 通过 `WORKFLOW_EVIDENCE_READ_ONLY=1` 调用本文件中的 Evidence CLI，因此不会
-执行 `git fetch`；本地 ref 只读快照会附加 `local_main_sha` 和
-`origin_refresh=skipped-read-only`。Runner 再使用固定 `git ls-remote --heads` 比较
-current remote `main` 和 PR head branch。未知、权限不足、限流或截断返回 `partial`
-(exit `3`)，不能当作 `pass`。
-
-完整说明见：
-
-```text
-docs/workflows/wsl2-github-evidence-runner/README.md
-docs/workflows/wsl2-github-evidence-runner/git-approval-boundary.md
-```
-
-Task #85 决定 Skills 的正式切换；Task #84 不删除当前 Evidence CLI 或改变独立 Review
-语义。
-
-## Validation Runner
-
-```powershell
-python -X utf8 tools/agent_workflow/workflow_validation.py run `
-  --phase delivery
-```
-
-支持阶段：
+Profiles：
 
 ```text
 delivery
+delivery-readiness
 review
-closeout
-feature-audit
+pre-merge
+closeout-readonly
+recheck
 ```
 
-当治理文件发生变化时，可显式要求 Skill validators：
+Delivery 示例：
 
-```powershell
-python -X utf8 tools/agent_workflow/workflow_validation.py run `
-  --phase review `
-  --base-sha <reviewed-base-sha> `
-  --include-skill-validators `
-  --require-skill-validator
+```bash
+tools/agent_workflow/wsl2_github_evidence_runner.py delivery \
+  --task 85 \
+  --expected-main-sha <main-sha>
 ```
 
-`--base-sha` 使 runner 使用 `<base-sha>...HEAD` 识别 PR 中的治理变更；不提供时只
-检查当前工作树相对 `HEAD` 的变化。Review 应传入 locked PR base SHA。
+Readiness 示例：
 
-Runner 根据当前 `uv.lock`、`pyproject.toml`、测试目录和治理变化选择命令。成功时
-只输出命令 ID、exit code、duration 和结果摘要；失败时输出有界诊断。经过脱敏和大小
-限制的日志位于：
-
-```text
-.agents/validation.local/<run-id>/
-```
-
-Delivery、Review、Closeout 和 Feature Audit 仍分别运行验证，不能跨阶段复用旧结果。
-
-## Trusted Runner
-
-PR 修改 governance、Evidence 或 Validation 时，PR head 中的工具不能控制自己的审查。
-应从 locked base 获取并运行 `trusted_runner.py`，或直接使用 detached base worktree。
-
-```powershell
-python -X utf8 tools/agent_workflow/trusted_runner.py `
-  --trusted-sha <base-sha> `
-  --tool evidence -- `
-  pr-review-snapshot `
-  --task 123 `
-  --pr 124 `
-  --expected-base-sha <base-sha> `
+```bash
+tools/agent_workflow/wsl2_github_evidence_runner.py delivery-readiness \
+  --task 85 \
+  --pr <pr> \
+  --expected-base-sha <base-sha> \
   --expected-head-sha <head-sha>
 ```
 
-重要：上面被执行的 `trusted_runner.py` 本身也必须来自 trusted base/main，不得用 PR
-head 版本为同一 PR 建立信任。
+Closeout 示例：
 
-Validation 也可从同一 trusted commit 执行：
-
-```powershell
-python -X utf8 <trusted-base>/tools/agent_workflow/trusted_runner.py `
-  --trusted-sha <base-sha> `
-  --tool validation -- `
-  run --phase review --base-sha <base-sha> --include-skill-validators
+```bash
+tools/agent_workflow/wsl2_github_evidence_runner.py closeout-readonly \
+  --task 85 \
+  --pr <pr> \
+  --expected-head-sha <reviewed-head> \
+  --expected-merge-sha <merge-sha>
 ```
 
-Trusted Runner 将同一 commit 中的工具提取到 ignored evidence 目录，并在输出中记录：
+Recheck：
+
+```bash
+tools/agent_workflow/wsl2_github_evidence_runner.py \
+  recheck --snapshot-id <snapshot-id>
+```
+
+Runner 固定仓库、profile、参数 schema、GitHub 查询和只读 Git 操作；不接受
+任意 repo、REST/GraphQL path、`gh`/Git 参数、Shell 字符串、cwd 或输出路径。
+它在 read-only mode 下不执行 `git fetch`，使用固定 `git ls-remote --heads`
+核验远端 refs。
+
+退出码：
 
 ```text
-trusted SHA
-runner source SHA
-runner content SHA-256
+0 = pass
+3 = partial
+4 = evidence fail
+2 = invocation / integrity / schema error
 ```
 
-## Gate 语义
+`partial`、`unknown`、plan-limit `403`、截断或 endpoint 失败不能当作完整成功。
+Snapshot 只保存有界规范化事实，不保存完整 Task/PR body、完整 diff 或源码。
+Agent 仍需读取完整规格和代码做语义判断。
 
-Evidence gate 只有：
+## Validation Runner
+
+查看帮助：
+
+```bash
+tools/agent_workflow/wsl2_validation_runner.py --help
+```
+
+通用 profiles：
+
+```text
+current-ci-equivalent
+targeted
+targeted:tools-tests
+targeted:workflow-tests
+post-merge
+```
+
+Task Skill 阶段 profiles：
+
+```text
+workflow-delivery --base-sha <base>
+workflow-review --base-sha <base>
+workflow-closeout --base-sha <PR base>
+```
+
+示例：
+
+```bash
+tools/agent_workflow/wsl2_validation_runner.py \
+  workflow-delivery --base-sha <task-base-sha>
+```
+
+阶段 profile 只通过一个固定入口调用底层 workflow validator，执行当前
+CI-equivalent checks，并根据 `base...HEAD` 检测治理变化，强制运行全部 Skill
+validators。`workflow-closeout` 还要求：
+
+```text
+branch == main
+working tree clean
+local main == origin/main
+```
+
+成功 stdout 只有紧凑 digest。完整脱敏结果和有界失败诊断位于：
+
+```text
+.agents/validation.local/wsl2-runs/<run-id>/
+```
+
+Targeted 结果不得冒充 CI-equivalent。Delivery、Review、Closeout 分别运行，不能
+跨阶段复用旧结果。
+
+## Trusted Review front door
+
+Independent Review 不能使用 PR head 的治理工具证明自身。Bootstrap
+`trusted_runner.py` 必须来自 locked base 或 detached trusted-base worktree。
+
+正常 post-Task-85 Review：
+
+```bash
+tools/agent_workflow/trusted_runner.py \
+  --tool evidence-runner \
+  --trusted-sha <base-sha> -- \
+  review --task <task> --pr <pr> \
+  --expected-base-sha <base-sha> \
+  --expected-head-sha <head-sha>
+
+tools/agent_workflow/trusted_runner.py \
+  --tool validation-runner \
+  --trusted-sha <base-sha> -- \
+  workflow-review --base-sha <base-sha>
+```
+
+`trusted_runner.py` 从同一个 commit 提取完整 Runner、profiles、Rules 和底层工具
+bundle，验证 manifest/digest，再对目标 worktree 执行。输出记录 trusted SHA、
+entry digest 和 bundle files。
+
+Task #85 自身 PR 的 base 尚不支持新 front-door tool choices，因此使用 predecessor
+base raw trusted control plane 做一次性独立审查。这是迁移自举，不是永久 fallback；
+Task #85 合并后后续 Task 必须使用固定 trusted front doors。
+
+## Gate 与失败展开
+
+Evidence gate：
 
 ```text
 pass
@@ -207,33 +218,65 @@ fail
 unknown
 ```
 
-- `pass`：当前规范化事实满足机械门禁；
-- `fail`：当前事实明确不满足；
-- `unknown`：endpoint、权限、套餐限制、数据缺失或冲突导致不能证明。
+固定 Runner 还可能返回：
 
-`unknown` 不得当作成功。GitHub plan-limit `403`、未配置 Required Checks 和普通
-check runs 会分别记录，不合并为同一种状态。
+```text
+partial
+drift
+schema/version/integrity blocked
+```
+
+处理原则：
+
+1. 保留原始 snapshot/result identity 和状态；
+2. 只展开命名的 unknown/fail/truncated/conflicting fact 或 failed command；
+3. 记录 fallback 与 limitation；
+4. 不执行完整旧链；
+5. 未解决时停止 dependent write/verdict。
+
+Runner unavailable、schema/version mismatch 或 trusted bundle failure 是 control-plane
+门禁失败，不是自动恢复 legacy path 的理由。回滚必须是维护者授权的仓库变更。
+
+## 写操作边界
+
+Evidence/Validation Runner 都是只读或仅写 ignored local artifacts。以下行为始终
+留在 Skill 的明确权限和审批门禁中：
+
+```text
+Project / label / Issue / PR writes
+git fetch / switch / add / commit / push
+branch deletion
+worktree creation/removal
+manual Merge
+```
+
+`task-pr-review` 始终只读。人工 Merge 约束不变。
 
 ## Compact report
 
-只有在无 finding、无失败/未知关键门禁、无 drift、无 fallback 且验证全通过时，Skill
-才使用紧凑成功报告。异常路径继续输出详细证据。
+只有在所需 evidence/validation 完整通过、无 drift、finding、fallback、冲突或待
+决策时，Skill 才输出紧凑成功报告。报告仍需包含 identity、URL、branch/SHA、scope、
+validation/checks、lifecycle、threads、limitations、未执行操作和下一步。
 
-Handoff 不复制完整正文、diff、验证 stdout 或上一阶段完整报告。独立 Review 必须重新
-取证，不能把 Delivery handoff 作为正确性证据。
+异常路径输出详细报告。Handoff 不复制完整正文、diff、成功日志或上一阶段报告；
+Delivery handoff 不是 Review evidence。
+
+## 回滚与兼容
+
+回滚顺序：
+
+1. 停止新 Skill 调用；
+2. 在单独维护 Task 中恢复 predecessor Skills/policy；
+3. 同步 compatible Runner/profile/Rules versions；
+4. 完整验证后合并；
+5. 不在运行中静默并行旧路径。
+
+兼容门禁至少检查 Runner version、profile set、schema、trusted bundle manifest 和
+Codex Rules activation。任何不匹配都 fail closed。
 
 ## 仓库外 Token 分析
 
-Workflow Evidence 和 Validation 不执行运行期 Token 测量，也不写入跨阶段 usage
-事件。维护者可在仓库外使用 Codex rollout 日志和 Task 元数据生成版本化分析报告。
-不得为了外部分析额外运行 Evidence、GitHub 查询或验证；原始 rollout 日志和外部
-分析报告不得提交本仓库，分析是否可用也不影响 Skill verdict。
-
-## Closeout 与 Feature Audit 说明
-
-`closeout-plan` 以只读方式验证 merge commit 是否可从当前 `origin/main` 到达，不要求
-`origin/main` 仍精确等于 merge commit，因此不会因后续正常 merge 产生虚假失败。它只
-报告精确分支清理门禁，不删除分支。
-
-`feature-audit-snapshot` 固定 audited `origin/main`、direct child set 与 child closing-PR
-摘要；Agent 仍需逐项完成 acceptance coverage、current-main 集成和安全判断。
+Runner 记录调用点、内部 operation counts、duration 和 output size，但不执行运行期
+Token 测量。Token 分析继续由维护者在仓库外使用 rollout JSONL 和 Task metadata
+完成。Task #85 只归档静态命令路径收敛与机制材料；Task #86 负责受控 Candidate
+对照和 Token 结论。

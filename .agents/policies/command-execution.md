@@ -96,6 +96,30 @@ Never convert a profile error into `elevated-first`.
 Report a profile failure when it changes or prevents the expected route. A
 missing optional profile is a normal safe fallback and may be summarized once.
 
+## Task workflow fixed-runner routing
+
+For `task-delivery`, `task-pr-review`, and `task-closeout`, the normal mechanical
+read and final validation commands are the fixed WSL2 Evidence and Validation
+Runner entries defined by `workflow-evidence.md`.
+
+Execution routing must not turn a fixed-runner call into two paths:
+
+- do not retry a successful fixed Runner through its raw implementation CLI;
+- do not follow final phase validation with a second full direct `uv` chain;
+- do not repeat all direct `gh`/Git reads after a valid snapshot;
+- route a bounded diagnostic or exact missing-fact fallback as a distinct command
+  only when the governing Skill authorizes it.
+
+A fixed Runner `partial`, `unknown`, `fail`, drift, schema mismatch, or version
+mismatch is a real workflow condition, not execution-isolation evidence. It does
+not justify elevated retry with broader argv or automatic legacy fallback.
+
+Independent Review uses `trusted_runner.py --tool evidence-runner` and
+`--tool validation-runner` from the locked base control plane. The extracted
+front door may operate on the reviewed target worktree, but execution routing
+cannot change the trusted SHA, bundle, Runner profile, target repository, or
+reviewed base/head.
+
 ## Profile schema
 
 The supported top-level fields are:
@@ -212,13 +236,14 @@ be routed according to a valid profile:
   `task-closeout`;
 - exact branch operations already authorized by `task-closeout` after all of its
   branch-safety gates pass;
-- read-only `workflow_evidence.py`, fixed
-  `wsl2_github_evidence_runner.py`, and `trusted_runner.py` operations plus exact
-  sanitized local writes below `.agents/evidence.local/` authorized by
+- fixed `wsl2_github_evidence_runner.py` and
+  `wsl2_validation_runner.py` profiles, plus trusted-base front-door operations
+  through `trusted_runner.py`, with exact sanitized local writes authorized by
   `.agents/policies/workflow-evidence.md`;
-- `workflow_validation.py` checks plus exact sanitized local writes below
-  `.agents/validation.local/` authorized by
-  `.agents/policies/workflow-evidence.md`;
+- underlying `workflow_evidence.py` and `workflow_validation.py` commands only
+  when the governing policy explicitly authorizes an internal/tool test,
+  predecessor migration bootstrap, or bounded named fallback; they are not the
+  normal Task Skill path;
 - other non-destructive commands explicitly authorized by the current Skill.
 
 For writes, route selection happens only after the Skill's complete write gate
@@ -355,7 +380,11 @@ review command. It cannot change:
 - the Review Skill's strict read-only permission boundary.
 
 If base control plane and head review object cannot remain isolated, stop the
-review without a passing verdict.
+review without a passing verdict. A normal post-Task-85 review extracts the fixed
+Evidence/Validation front-door bundle from the base. The Task #85 migration PR
+itself is reviewed with the predecessor base control plane because the base
+cannot authorize tools first introduced by its head; that exception expires
+when the migration merges.
 
 ## Feature completion audit boundary
 

@@ -202,9 +202,9 @@ are also `forbidden` as defense in depth.
 Direct `gh`, direct raw API calls, direct Git commands, Python/shell wrappers,
 and write operations are not allow-listed by the evidence Rules.
 
-## Skill integration for Task #85
+## Skill integration adopted by Task #85
 
-A consuming Skill should:
+The Task Skills now:
 
 1. authorize the lifecycle action and exact profile;
 2. invoke one fixed runner command;
@@ -255,9 +255,6 @@ result path. Raw local evidence remains ignored.
 
 ## Rollback
 
-Before Task #85 adopts the runner, rollback is simply to stop invoking it and
-remove or disable its project Rules. Existing Skills continue to use the current
-workflow evidence paths.
-
-After Skill adoption, rollback must be coordinated with the corresponding Skill
-change so evidence collection is not skipped.
+After Task #85 adoption, rollback must revert the Skill routing, runner/profile/
+Rules versions, validators, and documentation together. Do not run the fixed
+runner and the former complete mechanical query chain in parallel.

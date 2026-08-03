@@ -198,12 +198,13 @@ activation result.
 
 ## Rollback
 
-To roll back Task #83 behavior before adoption by later Skills, remove or ignore
-the project rules file and stop invoking `tools/agent_workflow/wsl2_validation_runner.py`.
-The existing `workflow_validation.py` and Task Skills remain unchanged by this
-Task.
+Task #85 adopts this runner in the Task lifecycle Skills. Rollback must revert the
+Skill routing, runner/profile/Rules version, validators, and documentation as one
+compatible change; do not append the old direct validation chain beneath the fixed
+runner call.
 
-## Known Follow-Up
+## Skill adoption
 
-GitHub Evidence helper compatibility, including current `baseRefOid` behavior
-and fallback queries, is deferred to Task #84.
+Task #85 adds `workflow-delivery`, `workflow-review`, and `workflow-closeout`
+profiles and switches the Task Skills to these fixed paths. Runtime Token and
+Guardian comparison remains deferred to Task #86.

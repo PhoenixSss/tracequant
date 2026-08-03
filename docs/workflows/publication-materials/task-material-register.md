@@ -60,8 +60,8 @@
 | Task #81：Windows merge-pre 基准采集 | Issue #81；业务 Issue #65；实验 PR #99 | Feature #77 / Epic #61 | 当前 Windows 正式基准、失败 pilot、rollout | `formal-sample` + `invalid-sample`、Issue 已完成 | 当前基准、失败恢复、Token/命令/Guardian 数据 |
 | Task #82：可复现 WSL2 Codex 环境与能力诊断 | Issue #82 / PR #100 / reviewed head `96b20b5...` / merge `767e995...` | Feature #77 / Epic #61 | 环境指南、诊断工具、能力矩阵、决策与案例 | `repository-final`、已完成 | 指导手册环境章节；Token 文章候选变量与边界 |
 | Task #83：WSL2 Validation Runner 与最小权限 Rules | Issue #83 / PR #101 / reviewed head `d162bc9...` / merge `74a7587...` | Feature #77 / Epic #61 | Runner、Rules、权限与命令成本材料 | `repository-final`、已完成 | 后续优化机制和控制面证据 |
-| Task #84：只读 GitHub Evidence Runner 与 Git 审批边界 | Issue #84；PR #102；Base `74a7587...`；live material capture `3814af3...` | Feature #77 / Epic #61 | GitHub 只读证据、Git 写边界与审批材料 | `delivery-review` | 证据采集、安全边界和命令成本 |
-| Task #85：Skills 切换至统一 Runner | Issue #85；PR：待创建 | Feature #77 / Epic #61 | 统一命令路径、重复移除与 Skill 迁移材料 | `placeholder` | 工作流收敛机制和 Token 优化来源 |
+| Task #84：只读 GitHub Evidence Runner 与 Git 审批边界 | Issue #84 / PR #102 / final PR head `61a2f0d...` / merge `e1c3b58...` | Feature #77 / Epic #61 | GitHub 只读证据、Git 写边界与审批材料 | `repository-final`、已完成 | 证据采集、安全边界和命令成本 |
+| Task #85：Skills 切换至统一 Runner | Issue #85；PR：待创建；Base `e1c3b58...` | Feature #77 / Epic #61 | 统一命令路径、重复移除与 Skill 迁移材料 | `delivery-pending` | 工作流收敛机制和 Token 优化来源 |
 | Task #86：Task #65 WSL2 candidate merge-pre | Issue #86；业务 Issue #65；实验 PR：待创建 | Feature #77 / Epic #61 | Candidate Token、质量、Guardian、命令与时长 | `placeholder` | 最终 Windows/WSL2 对照和优化结论 |
 | Task #87：Canonical Spec 审计 | Issue #87；PR：待创建 | Feature #78 / Epic #61 | 规格重复、治理来源与 Canonical Spec | `placeholder` | 规格治理和上下文去重 |
 | Task #88：阶段 Context Compiler | Issue #88；PR：待创建 | Feature #78 / Epic #61 | 上下文编译、追溯视图与输入体积材料 | `placeholder` | 上下文优化机制和可追溯性 |
@@ -439,10 +439,10 @@
 - Epic：`#61`
 - Base / workflow / control-plane SHA：`74a75872078221c38dbd132a1d438b0bb05c1870`
 - Live material capture HEAD：`3814af3d95ece48ef03c59536dd025f5fb5511fb`
-- Current Delivery HEAD：见 PR #102 body 和最终 readiness snapshot
-- reviewed HEAD / verdict：`待回填`
-- merge commit：`待回填`
-- 生命周期状态：PR 已创建并进入 Review；Task #65 candidate 未执行。
+- Final PR head：`61a2f0d085e411bf5ed614f0d8703a9c0f122fa2`
+- reviewed HEAD / verdict：独立 Review evidence 未包含在本次 Task #85 输入中，保持外部生命周期事实
+- Squash merge commit：`e1c3b587a5fa1a61217fb9160015472bc0e36154`
+- 生命周期状态：Issue `CLOSED`；Project `Done`；branch cleanup completed；Task #65 candidate 未执行。
 
 ### 已产生材料
 
@@ -502,9 +502,71 @@
 ### 待办
 
 - [x] 创建/更新 PR 后回填 PR、live material capture HEAD 和 effective diff identity。
-- [ ] 独立 Review 后回填 reviewed HEAD、verdict 和 findings。
-- [ ] Merge/Closeout 后回填 merge commit、Issue/Project 和 branch cleanup。
-- [ ] Task #85 切换 Skills 后记录真实前后命令路径差异。
+- [ ] reviewed HEAD、verdict 和 findings 继续由独立 Review lifecycle evidence 回填。
+- [x] Merge/Closeout：merge `e1c3b587...`；Issue `CLOSED`；Project `Done`；branch cleanup completed；post-merge `218 passed, 1 skipped`，`quality` pass。
+- [x] Task #85 已建立静态前后命令路径、Skill 行数、移除清单和统一 authority map；运行时 Candidate 指标仍留给 #86。
+
+---
+
+## Task #85 — 将 Task Workflow Skills 切换到统一 Runner 并移除重复命令路径
+
+### 身份
+
+- Task Issue：`#85`
+- Parent Feature：`#77`
+- Epic：`#61`
+- Base / workflow / control-plane SHA：`e1c3b587a5fa1a61217fb9160015472bc0e36154`
+- PR / Delivery HEAD / reviewed HEAD / merge：待生命周期产生。
+- Task #65 Candidate：未执行。
+
+### 已产生材料
+
+- [x] 更新 Task Skills：
+  `.agents/skills/task-delivery/SKILL.md`；
+  `.agents/skills/task-pr-review/SKILL.md`；
+  `.agents/skills/task-closeout/SKILL.md`。
+- [x] 统一 Runner 与 trusted front-door：
+  `tools/agent_workflow/wsl2_validation_runner.py`；
+  `tools/agent_workflow/wsl2_github_evidence_runner.py`；
+  `tools/agent_workflow/trusted_runner.py`；
+  对应 profiles 和最小权限 Rules。
+- [x] 去重与契约测试：
+  `tools/agent_workflow/skill_path_audit.py`；
+  `tests/tools/test_workflow_skills.py`；
+  Runner、Rules、trusted bundle 和 Skill validator 测试。
+- [x] 使用、回滚和材料：
+  `docs/workflows/task-skill-runner-migration/README.md`；
+  `docs/workflows/task-skill-runner-migration/removed-legacy-paths.md`；
+  `docs/workflows/task-skill-runner-migration/rollback-and-compatibility.md`；
+  `docs/workflows/task-skill-runner-migration/before-after-command-paths.json`；
+  `docs/workflows/task-skill-runner-migration/publication-materials.json`；
+  `docs/workflows/task-skill-runner-migration/live-evidence-capture-plan.md`；
+  `docs/workflows/task-skill-runner-migration/publication-readiness.md`；
+  `docs/workflows/task-skill-runner-migration/templates/`；
+  `docs/workflows/task-skill-runner-migration/examples/`；
+  `docs/workflows/task-skill-runner-migration/visuals/`。
+
+### 当前证据边界
+
+- [x] 三个 Task Skills 的静态总行数从 `685` 降为 `547`，减少 `138` 行（`20.15%`）。
+- [x] 审计定义的 legacy command fragments 从 `4` 降为 `0`。
+- [x] Delivery、Review、Closeout 的 Evidence/Validation 权威来源和 recheck 规则已固定。
+- [x] 成功路径禁止同时运行 fixed Runner 和完整 legacy mechanical chain。
+- [x] partial/unknown/drift/fail 使用有界展开，不把紧凑 digest 代替失败证据。
+- [x] push、GitHub 写、危险 Git、branch deletion 与人工 Merge 边界保持。
+- [x] Task #85 自身 Review 的 predecessor-control-plane bootstrap exception 已明确，合并后失效。
+- [ ] 运行时 Guardian、Token、端到端模型可见命令和质量对照需由 Task #86 Candidate 实验产生。
+
+### 最终文档用途
+
+- 指导手册：统一 authority map、trusted Review、bounded expansion、回滚与兼容。
+- Token 文章：Skill 静态精简、legacy path 去除和统一调用机制；不单独声称 Token 降幅。
+
+### 待办
+
+- [ ] Delivery 后回填 PR、最终 head、effective diff 和 live readiness evidence。
+- [ ] 独立 Review 后回填 reviewed head、verdict 和 findings。
+- [ ] Merge/Closeout 后由 Task #86 或后续维护回填 merge、Issue/Project 和 branch cleanup。
 
 ---
 
@@ -514,7 +576,6 @@
 
 | Issue | Task | Parent | 当前材料状态 |
 | --- | --- | --- | --- |
-| `#85` | 将 Task Workflow Skills 切换到统一 Runner 并移除重复命令路径 | Feature `#77` | `placeholder` |
 | `#86` | 采集 Task #65 WSL2 优化候选 merge-pre 基准并评估效果 | Feature `#77` | `placeholder` |
 | `#87` | 审计 Task Workflow 规格与治理上下文重复并定义 Canonical Spec | Feature `#78` | `placeholder` |
 | `#88` | 实现 Task Workflow 阶段 Context Compiler 与可追溯上下文视图 | Feature `#78` | `placeholder` |
