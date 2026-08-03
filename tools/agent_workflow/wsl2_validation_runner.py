@@ -140,6 +140,8 @@ ALLOWED_ENV: Final = (
     "NO_COLOR",
     "CI",
     "CODEX_SKILL_VALIDATOR",
+)
+TRUSTED_ENV: Final = (
     "WORKFLOW_TRUSTED_RUNNER_SHA",
     "WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256",
     TRUSTED_BUNDLE_ROOT_ENV,
@@ -221,7 +223,7 @@ def _run_bytes(
         cwd=repo_root,
         check=False,
         capture_output=True,
-        env=_command_env(),
+        env=_command_env(include_trusted=True),
     )
 
 
@@ -330,14 +332,13 @@ def _run_quiet(
         text=True,
         encoding="utf-8",
         errors="replace",
-        env=_command_env(),
+        env=_command_env(include_trusted=True),
     )
 
 
-def _command_env() -> dict[str, str]:
-    env = {
-        key: value for key in ALLOWED_ENV if (value := os.environ.get(key)) is not None
-    }
+def _command_env(*, include_trusted: bool = False) -> dict[str, str]:
+    allowed = ALLOWED_ENV + (TRUSTED_ENV if include_trusted else ())
+    env = {key: value for key in allowed if (value := os.environ.get(key)) is not None}
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("NO_COLOR", "1")
@@ -636,7 +637,7 @@ def _run_command(
         text=True,
         encoding="utf-8",
         errors="replace",
-        env=_command_env(),
+        env=_command_env(include_trusted=command_id == "workflow-validation"),
         start_new_session=True,
     )
     timed_out = False
