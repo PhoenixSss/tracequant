@@ -64,6 +64,7 @@ def _state(main_sha: str, head_sha: str) -> dict[str, Any]:
             "url": "https://github.com/PhoenixSss/quant-system/issues/84",
             "closedAt": None,
             "closedByPullRequestsReferences": [],
+            "timelineItems": {"nodes": [], "pageInfo": {"hasPreviousPage": False}},
         },
         "relationships": {
             "number": 84,
@@ -178,6 +179,8 @@ elif args[:2] == ['api','graphql']:
         dump({{'data':{{'repository':{{'pullRequest':{{
             'reviewThreads':state['threads']
         }}}}}}}})
+    elif 'timelineItems' in joined:
+        dump({{'data':{{'repository':{{'issue':state['issue']}}}}}})
     else:
         dump({{'data':{{'repository':{{'issue':state['relationships']}}}}}})
 elif (
@@ -323,6 +326,39 @@ def _sync_remote_files(state_path: Path, state: dict[str, Any]) -> None:
     state_path.with_name("remote-error.txt").write_text(
         str(state.get("remote_error") or ""), encoding="utf-8"
     )
+
+
+def _mark_issue_closed_by_pr(
+    state: dict[str, Any],
+    *,
+    pr_number: int = 102,
+    closed_at: str = "2026-08-02T16:00:00Z",
+) -> None:
+    url = f"https://github.com/PhoenixSss/quant-system/pull/{pr_number}"
+    pr_ref = {
+        "number": pr_number,
+        "state": "MERGED",
+        "merged": True,
+        "mergedAt": closed_at,
+        "url": url,
+        "repository": {"nameWithOwner": "PhoenixSss/quant-system"},
+    }
+    state["issue"]["state"] = "CLOSED"
+    state["issue"]["closedAt"] = closed_at
+    state["issue"]["closedByPullRequestsReferences"] = [pr_ref]
+    state["issue"]["timelineItems"] = {
+        "nodes": [
+            {
+                "__typename": "ClosedEvent",
+                "createdAt": closed_at,
+                "closer": {
+                    "__typename": "PullRequest",
+                    **pr_ref,
+                },
+            }
+        ],
+        "pageInfo": {"hasPreviousPage": False},
+    }
 
 
 def _result(repo: Path, stdout: str) -> dict[str, Any]:
@@ -630,17 +666,8 @@ def test_closeout_readonly_profile(tmp_path: Path) -> None:
     merge_sha = _git(repo, "rev-parse", "HEAD")
     _git(repo, "update-ref", "refs/remotes/origin/main", merge_sha)
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["issue"]["state"] = "CLOSED"
     state["issue"]["projectItems"] = [{"status": {"name": "Done"}}]
-    state["issue"]["closedAt"] = "2026-08-02T16:00:00Z"
-    state["issue"]["closedByPullRequestsReferences"] = [
-        {
-            "number": 102,
-            "state": "MERGED",
-            "mergedAt": "2026-08-02T16:00:00Z",
-            "url": "https://github.com/PhoenixSss/quant-system/pull/102",
-        }
-    ]
+    _mark_issue_closed_by_pr(state)
     state["pr"].update(
         state="MERGED",
         mergeCommit={"oid": merge_sha},
@@ -680,17 +707,8 @@ def test_closeout_plan_limit_cleanup_eligibility_digest_remains_partial(
     _git(repo, "update-ref", "refs/remotes/origin/main", merge_sha)
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["required_checks_mode"] = "plan-limit-403"
-    state["issue"]["state"] = "CLOSED"
     state["issue"]["projectItems"] = [{"status": {"name": "Done"}}]
-    state["issue"]["closedAt"] = "2026-08-02T16:00:00Z"
-    state["issue"]["closedByPullRequestsReferences"] = [
-        {
-            "number": 102,
-            "state": "MERGED",
-            "mergedAt": "2026-08-02T16:00:00Z",
-            "url": "https://github.com/PhoenixSss/quant-system/pull/102",
-        }
-    ]
+    _mark_issue_closed_by_pr(state)
     state["pr"].update(
         state="MERGED",
         mergeCommit={"oid": merge_sha},
@@ -753,11 +771,8 @@ def test_required_checks_403_failure_types_do_not_enable_cleanup(
         _git(repo, "update-ref", "refs/remotes/origin/main", merge_sha)
         state = json.loads(state_path.read_text(encoding="utf-8"))
         state["required_checks_mode"] = mode
-        state["issue"]["state"] = "CLOSED"
         state["issue"]["projectItems"] = [{"status": {"name": "Done"}}]
-        state["issue"]["closedByPullRequestsReferences"] = [
-            {"number": 102, "state": "MERGED", "mergedAt": "2026-08-02T16:00:00Z"}
-        ]
+        _mark_issue_closed_by_pr(state)
         state["pr"].update(
             state="MERGED",
             mergeCommit={"oid": merge_sha},

@@ -95,6 +95,13 @@ elif args[:2] == ['api','graphql']:
     query=' '.join(args)
     if 'pullRequest' in query and 'reviewThreads' in query:
         dump({{'data':{{'repository':{{'pullRequest':{{'reviewThreads':state.get('threads',{{'nodes':[],'pageInfo':{{'hasNextPage':False}}}})}}}}}}}})
+    elif 'timelineItems' in query:
+        number_value=None
+        for arg in args:
+            if arg.startswith('number='):
+                number_value=arg.split('=',1)[1]
+        issue=state.get('issues',{{}}).get(number_value)
+        dump({{'data':{{'repository':{{'issue':issue}}}}}})
     else:
         number_value=None
         for arg in args:
@@ -135,6 +142,7 @@ def _base_state() -> dict[str, Any]:
         "url": "https://github.com/owner/repo/issues/70",
         "closedAt": None,
         "closedByPullRequestsReferences": [],
+        "timelineItems": {"nodes": [], "pageInfo": {"hasPreviousPage": False}},
     }
     child_issue = {
         "number": 63,
@@ -150,8 +158,28 @@ def _base_state() -> dict[str, Any]:
                 "state": "MERGED",
                 "mergedAt": "2026-07-26T00:00:00Z",
                 "url": "https://github.com/owner/repo/pull/67",
+                "merged": True,
+                "repository": {"nameWithOwner": "owner/repo"},
             }
         ],
+        "timelineItems": {
+            "nodes": [
+                {
+                    "__typename": "ClosedEvent",
+                    "createdAt": "2026-07-26T00:00:00Z",
+                    "closer": {
+                        "__typename": "PullRequest",
+                        "number": 67,
+                        "state": "MERGED",
+                        "merged": True,
+                        "mergedAt": "2026-07-26T00:00:00Z",
+                        "url": "https://github.com/owner/repo/pull/67",
+                        "repository": {"nameWithOwner": "owner/repo"},
+                    },
+                }
+            ],
+            "pageInfo": {"hasPreviousPage": False},
+        },
     }
     return {
         "branch": "task-70",
@@ -540,10 +568,30 @@ def _completed_closeout_state() -> dict[str, Any]:
         {
             "number": 71,
             "state": "MERGED",
+            "merged": True,
             "mergedAt": "2026-07-26T00:00:00Z",
             "url": "https://github.com/owner/repo/pull/71",
+            "repository": {"nameWithOwner": "owner/repo"},
         }
     ]
+    state["issues"]["70"]["timelineItems"] = {
+        "nodes": [
+            {
+                "__typename": "ClosedEvent",
+                "createdAt": "2026-07-26T00:00:00Z",
+                "closer": {
+                    "__typename": "PullRequest",
+                    "number": 71,
+                    "state": "MERGED",
+                    "merged": True,
+                    "mergedAt": "2026-07-26T00:00:00Z",
+                    "url": "https://github.com/owner/repo/pull/71",
+                    "repository": {"nameWithOwner": "owner/repo"},
+                },
+            }
+        ],
+        "pageInfo": {"hasPreviousPage": False},
+    }
     state["pr"].update(
         state="MERGED",
         mergeCommit={"oid": "8" * 40},
@@ -625,6 +673,126 @@ def test_closeout_final_plan_limit_cleanup_eligibility_requires_stable_recheck(
     eligibility = value["observed"]["branch_cleanup"]["cleanup_eligibility"]
     assert eligibility["status"] == "eligible-under-capability-limited-policy"
     assert value["gates"]["capability_limited_cleanup_eligibility"]["status"] == "pass"
+
+
+def test_closeout_cleanup_reports_null_closing_pr_metadata_as_unknown(
+    tmp_path: Path,
+) -> None:
+    state = _completed_closeout_state()
+    state["issues"]["70"]["closedByPullRequestsReferences"] = [
+        {
+            "number": 71,
+            "state": None,
+            "merged": None,
+            "mergedAt": None,
+            "url": "https://github.com/owner/repo/pull/71",
+            "repository": {"nameWithOwner": "owner/repo"},
+        }
+    ]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "closeout-plan",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+        "--expected-head-sha",
+        "4" * 40,
+        "--expected-merge-sha",
+        "8" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["issue_closure"]["status"] == "unknown"
+    eligibility = value["observed"]["branch_cleanup"]["cleanup_eligibility"]
+    assert eligibility["status"] == "blocked"
+    reasons = " ".join(eligibility["reasons"]["items"])
+    assert "incomplete-closing-pr-metadata" in reasons
+    assert "Issue closure is not linked to the merged PR" not in reasons
+
+
+def test_closeout_cleanup_blocks_reopened_issue(tmp_path: Path) -> None:
+    state = _completed_closeout_state()
+    state["issues"]["70"]["state"] = "OPEN"
+    state["issues"]["70"]["timelineItems"]["nodes"].append(
+        {"__typename": "ReopenedEvent", "createdAt": "2026-07-26T01:00:00Z"}
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "closeout-plan",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+        "--expected-head-sha",
+        "4" * 40,
+        "--expected-merge-sha",
+        "8" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["issue_state"]["status"] == "fail"
+    assert value["gates"]["issue_closure"]["status"] == "fail"
+    assert "issue-not-closed" in value["gates"]["issue_closure"]["detail"]
+    assert (
+        value["observed"]["branch_cleanup"]["cleanup_eligibility"]["status"]
+        == "blocked"
+    )
+
+
+def test_closeout_cleanup_blocks_issue_closed_by_different_pr(tmp_path: Path) -> None:
+    state = _completed_closeout_state()
+    state["issues"]["70"]["closedByPullRequestsReferences"].append(
+        {
+            "number": 72,
+            "state": "MERGED",
+            "merged": True,
+            "mergedAt": "2026-07-26T02:00:00Z",
+            "url": "https://github.com/owner/repo/pull/72",
+            "repository": {"nameWithOwner": "owner/repo"},
+        }
+    )
+    state["issues"]["70"]["timelineItems"]["nodes"].append(
+        {
+            "__typename": "ClosedEvent",
+            "createdAt": "2026-07-26T02:00:00Z",
+            "closer": {
+                "__typename": "PullRequest",
+                "number": 72,
+                "state": "MERGED",
+                "merged": True,
+                "mergedAt": "2026-07-26T02:00:00Z",
+                "url": "https://github.com/owner/repo/pull/72",
+                "repository": {"nameWithOwner": "owner/repo"},
+            },
+        }
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "closeout-plan",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+        "--expected-head-sha",
+        "4" * 40,
+        "--expected-merge-sha",
+        "8" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["issue_closure"]["status"] == "fail"
+    assert "closer-pr-number-mismatch" in value["gates"]["issue_closure"]["detail"]
+    assert (
+        value["observed"]["branch_cleanup"]["cleanup_eligibility"]["status"]
+        == "blocked"
+    )
 
 
 def test_cleanup_eligibility_blocks_failed_pending_and_missing_checks(

@@ -135,12 +135,14 @@ GitHub Required Checks 配置查询若被明确分类为 plan-limit `403`，Evid
 eligible-under-capability-limited-policy`，但该字段只允许作为精确任务分支清理输入，
 不得用于 Merge、push、Issue、Project、label、Review 或其他写操作。
 
-该资格要求已合并 PR、正确 closing linkage、Task 最终元数据、稳定 final recheck、
-至少一个实际 check run 且全部为成功终态、`main == origin/main == merge SHA`、
-精确 local/remote 分支名和 tip、PR head tree 与 merge tree 相等、工作区干净、目标
-分支未被 worktree 占用，且 cleanup plan 只包含该 Task 分支。认证、scope、权限、
-rate limit、网络、schema、服务或未知错误，以及无 checks、失败/等待/stale checks、
-ref drift、tree drift 或 worktree 冲突，均保持 cleanup blocked。
+该资格要求已合并 PR、正确 PR-declared closing linkage、Issue 侧完整证明 latest
+effective closure 由锁定 PR 触发、反向关联无冲突、Task 最终元数据、稳定 final
+recheck、至少一个实际 check run 且全部为成功终态、`main == origin/main == merge
+SHA`、精确 local/remote 分支名和 tip、PR head tree 与 merge tree 相等、工作区干净、
+目标分支未被 worktree 占用，且 cleanup plan 只包含该 Task 分支。认证、scope、权限、
+rate limit、网络、schema、服务、closing evidence unknown/partial、无 checks、
+失败/等待/stale checks、ref drift、tree drift 或 worktree 冲突，均保持 cleanup
+blocked。
 
 ## Validation Runner
 

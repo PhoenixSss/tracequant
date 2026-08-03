@@ -200,14 +200,17 @@ exact Task branch cleanup. This derived judgment never changes Required Checks
 semantics and must not be reused for Merge, push, Issue, Project, label, review,
 or other writes.
 
-Eligibility requires a merged PR, correct closing linkage, final Task metadata,
-stable recheck, successful observed check runs, synchronized local and remote
-main at the merge SHA, exact local and remote branch names and tips, merge-tree
-equality with the reviewed head, a clean worktree, fixed repository identity, no
-target-branch worktree use, and a cleanup plan containing only the verified Task
-branch. Authentication, scope, permission, rate-limit, network, schema, service,
-unknown Required Checks failures, missing check runs, failed/pending/stale
-checks, ref drift, tree drift, or worktree conflicts keep cleanup blocked.
+Eligibility requires a merged PR, correct PR-declared closing linkage, complete
+Issue-side proof that the latest effective closure was caused by the locked PR,
+non-conflicting reverse linkage, final Task metadata, stable recheck, successful
+observed check runs, synchronized local and remote main at the merge SHA, exact
+local and remote branch names and tips, merge-tree equality with the reviewed
+head, a clean worktree, fixed repository identity, no target-branch worktree use,
+and a cleanup plan containing only the verified Task branch. Authentication,
+scope, permission, rate-limit, network, schema, service, unknown or partial
+closure evidence, unknown Required Checks failures, missing check runs,
+failed/pending/stale checks, ref drift, tree drift, or worktree conflicts keep
+cleanup blocked.
 
 ## Skill integration and reports
 
