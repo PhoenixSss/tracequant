@@ -946,18 +946,30 @@ def _classify_required_checks_failure(result: CommandResult) -> dict[str, Any]:
     elif " 403" in combined or "http 403" in combined or "403" in combined:
         http_status = 403
         if (
-            "resource not accessible by integration" in combined
+            "plan" in combined
             or "upgrade" in combined
-            or "plan" in combined
-            or "branch protection" in combined
-            and "private repositories" in combined
+            or "requires github pro" in combined
+            or "requires github team" in combined
+            or "private repositories require" in combined
+            or (
+                "branch protection" in combined
+                and (
+                    "private repositories" in combined
+                    or "not available" in combined
+                    or "not included" in combined
+                )
+            )
         ):
             category = "plan-limit"
             reason = "github-plan-limit-403"
         elif "rate limit" in combined or "secondary rate" in combined:
             category = "rate-limit"
             reason = "github-rate-limit-403"
-        elif "scope" in combined or "sso" in combined:
+        elif (
+            "resource not accessible by integration" in combined
+            or "scope" in combined
+            or "sso" in combined
+        ):
             category = "scope-or-permission"
             reason = "github-scope-or-sso-403"
         else:

@@ -104,7 +104,12 @@ elif args[:2] == ['api','graphql']:
         dump({{'data':{{'repository':{{'issue':relation}}}}}})
 elif args and args[0] == 'api' and 'required_status_checks' in args[1]:
     mode=state.get('required_checks_mode','available')
-    if mode == '403': sys.stderr.write('HTTP 403 Resource not accessible by integration'); sys.exit(1)
+    if mode == 'plan-limit-403':
+        sys.stderr.write('HTTP 403 Branch protection for private repositories is not included in this GitHub plan')
+        sys.exit(1)
+    if mode == '403':
+        sys.stderr.write('HTTP 403 Resource not accessible by integration')
+        sys.exit(1)
     if mode == '404': sys.stderr.write('HTTP 404 Not Found'); sys.exit(1)
     dump(state.get('required_checks',{{'contexts':['CI']}}))
 else:
@@ -410,7 +415,7 @@ def test_read_only_mode_skips_fetch_and_reports_local_main(tmp_path: Path) -> No
 
 def test_plan_limit_is_distinct_from_success(tmp_path: Path) -> None:
     state = _base_state()
-    state["required_checks_mode"] = "403"
+    state["required_checks_mode"] = "plan-limit-403"
     repo, _, env = _write_repo(tmp_path, state)
     result = _run(repo, env, "pr-review-snapshot", "--task", "70", "--pr", "71")
     assert result.returncode == 0, result.stderr
@@ -528,7 +533,7 @@ def _completed_closeout_state() -> dict[str, Any]:
     state["git_head"] = "8" * 40
     state["local_main"] = "8" * 40
     state["origin_main"] = "8" * 40
-    state["required_checks_mode"] = "403"
+    state["required_checks_mode"] = "plan-limit-403"
     state["issues"]["70"]["state"] = "CLOSED"
     state["issues"]["70"]["projectItems"] = [{"status": {"name": "Done"}}]
     state["issues"]["70"]["closedByPullRequestsReferences"] = [
@@ -688,6 +693,37 @@ def test_cleanup_eligibility_blocks_non_plan_limit_403_and_ref_drift(
         eligibility["reasons"]["items"]
     )
     assert value["gates"]["local_branch_tip"]["status"] == "fail"
+
+
+def test_generic_resource_not_accessible_403_does_not_enable_cleanup(
+    tmp_path: Path,
+) -> None:
+    state = _completed_closeout_state()
+    state["required_checks_mode"] = "403"
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "closeout-plan",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+        "--expected-head-sha",
+        "4" * 40,
+        "--expected-merge-sha",
+        "8" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["observed"]["required_checks"]["configuration"] == "unknown"
+    assert value["observed"]["required_checks"]["failure"]["reason"] == (
+        "github-scope-or-sso-403"
+    )
+    assert (
+        value["observed"]["branch_cleanup"]["cleanup_eligibility"]["status"]
+        == "blocked"
+    )
 
 
 def test_closeout_recheck_blocks_cleanup_eligibility_on_drift(tmp_path: Path) -> None:

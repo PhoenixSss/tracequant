@@ -187,6 +187,12 @@ elif (
     and 'required_status_checks' in args[1]
 ):
     mode=state.get('required_checks_mode')
+    if mode == 'plan-limit-403':
+        sys.stderr.write(
+            'HTTP 403 Branch protection for private repositories '
+            'is not included in this GitHub plan'
+        )
+        sys.exit(1)
     if mode == '403':
         sys.stderr.write('HTTP 403 Resource not accessible by integration')
         sys.exit(1)
@@ -389,7 +395,7 @@ def test_delivery_profile_is_task_only_and_read_only(tmp_path: Path) -> None:
 def test_plan_limit_is_partial_not_success(tmp_path: Path) -> None:
     repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["required_checks_mode"] = "403"
+    state["required_checks_mode"] = "plan-limit-403"
     state_path.write_text(json.dumps(state), encoding="utf-8")
     _sync_remote_files(state_path, state)
     completed = _run(repo, env, *_review_args(main_sha, head_sha))
@@ -673,7 +679,7 @@ def test_closeout_plan_limit_cleanup_eligibility_digest_remains_partial(
     merge_sha = _git(repo, "rev-parse", "HEAD")
     _git(repo, "update-ref", "refs/remotes/origin/main", merge_sha)
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["required_checks_mode"] = "403"
+    state["required_checks_mode"] = "plan-limit-403"
     state["issue"]["state"] = "CLOSED"
     state["issue"]["projectItems"] = [{"status": {"name": "Done"}}]
     state["issue"]["closedAt"] = "2026-08-02T16:00:00Z"
@@ -731,6 +737,7 @@ def test_required_checks_403_failure_types_do_not_enable_cleanup(
 ) -> None:
     for index, (mode, reason) in enumerate(
         (
+            ("403", "github-scope-or-sso-403"),
             ("auth-403", "github-authentication-failure"),
             ("scope-403", "github-scope-or-sso-403"),
             ("permission-403", "github-permission-403"),
