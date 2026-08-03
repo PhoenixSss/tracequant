@@ -23,6 +23,19 @@ TRUSTED_RELATIVE_PATHS = (
     "tools/agent_workflow/workflow_validation.py",
     "tools/agent_workflow/workflow_common.py",
 )
+TRUSTED_ENV_KEYS = (
+    "WORKFLOW_TRUSTED_RUNNER_SHA",
+    "WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256",
+    "WORKFLOW_TRUSTED_BUNDLE_ROOT",
+    "WORKFLOW_TARGET_REPO_ROOT",
+)
+
+
+def _clean_test_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for key in TRUSTED_ENV_KEYS:
+        env.pop(key, None)
+    return env
 
 
 def _snapshot_trusted_files(repo: Path) -> None:
@@ -233,7 +246,7 @@ def _run(
     *args: str,
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
+    env = _clean_test_env()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -391,7 +404,7 @@ def test_timeout_and_sigint_are_explicit(tmp_path: Path) -> None:
     time.sleep(4.5)
     assert not marker.exists(), "timed-out grandchild survived process-group kill"
 
-    proc_env = os.environ.copy()
+    proc_env = _clean_test_env()
     proc_env["PATH"] = f"{bin_dir}{os.pathsep}{proc_env.get('PATH', '')}"
     proc = subprocess.Popen(
         [PYTHON, str(repo / "tools" / "agent_workflow" / SCRIPT.name), "targeted"],
@@ -417,7 +430,7 @@ def test_repository_root_cwd_space_and_symlink_checks(tmp_path: Path) -> None:
 
     subdir = repo / "subdir"
     subdir.mkdir()
-    env = os.environ.copy()
+    env = _clean_test_env()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
     wrong_cwd = subprocess.run(
         [PYTHON, str(repo / "tools" / "agent_workflow" / SCRIPT.name), "targeted"],

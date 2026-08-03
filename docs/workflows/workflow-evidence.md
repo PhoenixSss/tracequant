@@ -127,6 +127,21 @@ Runner 固定仓库、profile、参数 schema、GitHub 查询和只读 Git 操�
 Snapshot 只保存有界规范化事实，不保存完整 Task/PR body、完整 diff 或源码。
 Agent 仍需读取完整规格和代码做语义判断。
 
+### Capability-limited cleanup eligibility
+
+GitHub Required Checks 配置查询若被明确分类为 plan-limit `403`，Evidence 必须继续
+报告 `required_checks_configuration = unknown`，整体结果保持 `partial`。Closeout
+可额外计算 `cleanup_eligibility.status =
+eligible-under-capability-limited-policy`，但该字段只允许作为精确任务分支清理输入，
+不得用于 Merge、push、Issue、Project、label、Review 或其他写操作。
+
+该资格要求已合并 PR、正确 closing linkage、Task 最终元数据、稳定 final recheck、
+至少一个实际 check run 且全部为成功终态、`main == origin/main == merge SHA`、
+精确 local/remote 分支名和 tip、PR head tree 与 merge tree 相等、工作区干净、目标
+分支未被 worktree 占用，且 cleanup plan 只包含该 Task 分支。认证、scope、权限、
+rate limit、网络、schema、服务或未知错误，以及无 checks、失败/等待/stale checks、
+ref drift、tree drift 或 worktree 冲突，均保持 cleanup blocked。
+
 ## Validation Runner
 
 查看帮助：

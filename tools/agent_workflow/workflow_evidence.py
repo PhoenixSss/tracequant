@@ -228,6 +228,11 @@ def _git_snapshot(
         command_id="git-worktrees",
         warnings=warnings,
     )
+    worktree_branches = sorted(
+        line.removeprefix("branch refs/heads/")
+        for line in worktrees
+        if line.startswith("branch refs/heads/")
+    )
     return {
         "origin_fetch": (
             "pass"
@@ -248,6 +253,7 @@ def _git_snapshot(
         "staged_files": bounded_list(staged, item_limit=MAX_FILES),
         "changed_files": bounded_list(changed, item_limit=MAX_FILES),
         "worktree_count": sum(1 for line in worktrees if line.startswith("worktree ")),
+        "worktree_branches": bounded_list(worktree_branches, item_limit=MAX_FILES),
     }
 
 
@@ -740,12 +746,21 @@ def _required_checks(
     )
     if result.returncode != 0:
         combined = f"{result.stderr}\n{result.stdout}".casefold()
-        if "403" in combined:
-            return {"configuration": "plan-limited-403", "contexts": bounded_list([])}
+        failure = _classify_required_checks_failure(result)
+        if failure["category"] == "plan-limit":
+            return {
+                "configuration": "plan-limited-403",
+                "failure": failure,
+                "contexts": bounded_list([]),
+            }
         if "404" in combined:
             return {"configuration": "not-configured", "contexts": bounded_list([])}
         warnings.append(command_warning(result))
-        return {"configuration": "unknown", "contexts": bounded_list([])}
+        return {
+            "configuration": "unknown",
+            "failure": failure,
+            "contexts": bounded_list([]),
+        }
     value = read_json_text(result.stdout, field="required checks")
     contexts: list[str] = []
     if isinstance(value, dict):
@@ -760,6 +775,230 @@ def _required_checks(
     return {
         "configuration": "available" if contexts else "configured-empty",
         "contexts": bounded_list(sorted(set(contexts))),
+    }
+
+
+def _remote_branch_tip(value: str | None) -> str | None:
+    if not value:
+        return None
+    for line in value.splitlines():
+        parts = line.split("\t", 1)
+        if len(parts) == 2 and is_sha(parts[0]):
+            return parts[0]
+    return None
+
+
+def _gate_pass(gates: Mapping[str, Any], name: str) -> bool:
+    value = gates.get(name)
+    return isinstance(value, dict) and value.get("status") == "pass"
+
+
+def _checks_cleanup_status(pr: Mapping[str, Any] | None) -> tuple[bool, str]:
+    if not isinstance(pr, Mapping):
+        return False, "PR metadata unavailable"
+    checks = pr.get("checks")
+    if not isinstance(checks, Mapping):
+        return False, "check run metadata unavailable"
+    if checks.get("count") == 0:
+        return False, "no applicable check runs observed"
+    if checks.get("all_success") is not True:
+        return False, "not all observed check runs reached a successful terminal state"
+    items = checks.get("items")
+    if not isinstance(items, Mapping) or items.get("count", 0) <= 0:
+        return False, "check run item details unavailable"
+    raw_items = items.get("items")
+    check_items = raw_items if isinstance(raw_items, list) else []
+    has_quality_gate = any(
+        isinstance(item, Mapping) and str(item.get("name", "")).casefold() == "quality"
+        for item in check_items
+    )
+    if not has_quality_gate:
+        return False, "expected quality check run was not observed"
+    return True, "all observed check runs successful"
+
+
+def _closeout_cleanup_eligibility(
+    *,
+    repository: str | None,
+    observed: Mapping[str, Any],
+    gates: Mapping[str, Any],
+    branch: str | None,
+    remote_tip: str | None,
+    local_tip: str | None,
+    tree_equal: bool | None,
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    pr = observed.get("pr")
+    issue = observed.get("issue")
+    git = observed.get("git")
+    required = observed.get("required_checks")
+    if "snapshot_stability" not in gates:
+        reasons.append("final evidence recheck stability is not proven")
+    if not repository:
+        reasons.append("repository identity unavailable")
+    if not isinstance(pr, Mapping):
+        reasons.append("PR metadata unavailable")
+    if not isinstance(issue, Mapping):
+        reasons.append("Issue metadata unavailable")
+    if not isinstance(git, Mapping):
+        reasons.append("Git metadata unavailable")
+    if (
+        not isinstance(required, Mapping)
+        or required.get("configuration") != "plan-limited-403"
+    ):
+        reasons.append(
+            "Required Checks failure is not classified as GitHub plan-limit 403"
+        )
+    elif (
+        not isinstance(required.get("failure"), Mapping)
+        or required["failure"].get("reason") != "github-plan-limit-403"
+    ):
+        reasons.append("plan-limit 403 classification detail is unavailable")
+    for name in (
+        "pr_state",
+        "closing_linkage",
+        "head_sha",
+        "merge_sha",
+        "main_contains_merge",
+        "local_main_synced",
+        "project_done",
+        "final_codex_label",
+        "check_runs",
+        "unresolved_threads",
+        "snapshot_stability",
+    ):
+        if name in gates and not _gate_pass(gates, name):
+            reasons.append(f"{name} gate is not pass")
+    checks_ok, checks_detail = _checks_cleanup_status(
+        pr if isinstance(pr, Mapping) else None
+    )
+    if not checks_ok:
+        reasons.append(checks_detail)
+    if isinstance(git, Mapping):
+        merge_sha = pr.get("merge_commit_sha") if isinstance(pr, Mapping) else None
+        if git.get("branch") != "main":
+            reasons.append("current branch is not main")
+        if git.get("clean") is not True:
+            reasons.append("working tree is not clean")
+        if not (
+            isinstance(merge_sha, str)
+            and git.get("local_main_sha") == merge_sha
+            and git.get("origin_main_sha") == merge_sha
+        ):
+            reasons.append("local main, origin/main, and merge SHA are not identical")
+        branches = git.get("worktree_branches")
+        raw_branch_items = (
+            branches.get("items") if isinstance(branches, Mapping) else []
+        )
+        branch_items = raw_branch_items if isinstance(raw_branch_items, list) else []
+        if isinstance(branch, str) and branch in branch_items:
+            reasons.append("target branch is occupied by a worktree")
+    if isinstance(issue, Mapping) and isinstance(pr, Mapping):
+        issue_refs = issue.get("closing_pull_requests")
+        ref_items = issue_refs.get("items") if isinstance(issue_refs, Mapping) else []
+        expected_pr = pr.get("number")
+        if not (
+            isinstance(ref_items, list)
+            and any(
+                isinstance(item, Mapping)
+                and item.get("number") == expected_pr
+                and str(item.get("state", "")).upper() == "MERGED"
+                for item in ref_items
+            )
+        ):
+            reasons.append("Issue closure is not linked to the merged PR")
+    expected_head = pr.get("head_sha") if isinstance(pr, Mapping) else None
+    if not isinstance(branch, str) or not branch:
+        reasons.append("exact PR head branch unavailable")
+    if remote_tip != expected_head:
+        reasons.append("remote branch tip does not match reviewed PR head")
+    if local_tip != expected_head:
+        reasons.append("local branch tip does not match reviewed PR head")
+    if tree_equal is not True:
+        reasons.append("PR head tree does not match merge tree")
+    status = "eligible-under-capability-limited-policy" if not reasons else "blocked"
+    return {
+        "status": status,
+        "limitation_preserved": True,
+        "allowed_scope": "exact-task-branch-cleanup-only",
+        "required_checks_configuration": {
+            "status": "unknown",
+            "reason": "github-plan-limit-403",
+        },
+        "reasons": bounded_list(reasons),
+    }
+
+
+def _classify_required_checks_failure(result: CommandResult) -> dict[str, Any]:
+    combined = f"{result.stderr}\n{result.stdout}".casefold()
+    category = "unknown"
+    reason = "required-checks-query-failed"
+    http_status: int | None = None
+    if (
+        " 401" in combined
+        or "http 401" in combined
+        or "bad credentials" in combined
+        or "requires authentication" in combined
+    ):
+        category = "authentication"
+        reason = "github-authentication-failure"
+        http_status = 401
+    elif " 403" in combined or "http 403" in combined or "403" in combined:
+        http_status = 403
+        if (
+            "plan" in combined
+            or "upgrade" in combined
+            or "requires github pro" in combined
+            or "requires github team" in combined
+            or "private repositories require" in combined
+            or (
+                "branch protection" in combined
+                and (
+                    "private repositories" in combined
+                    or "not available" in combined
+                    or "not included" in combined
+                )
+            )
+        ):
+            category = "plan-limit"
+            reason = "github-plan-limit-403"
+        elif "rate limit" in combined or "secondary rate" in combined:
+            category = "rate-limit"
+            reason = "github-rate-limit-403"
+        elif (
+            "resource not accessible by integration" in combined
+            or "scope" in combined
+            or "sso" in combined
+        ):
+            category = "scope-or-permission"
+            reason = "github-scope-or-sso-403"
+        else:
+            category = "permission"
+            reason = "github-permission-403"
+    elif " 429" in combined or "http 429" in combined or "rate limit" in combined:
+        category = "rate-limit"
+        reason = "github-rate-limit"
+        http_status = 429
+    elif (
+        "could not resolve host" in combined
+        or "connection refused" in combined
+        or "operation timed out" in combined
+        or "network" in combined
+        or "proxyconnect" in combined
+    ):
+        category = "network"
+        reason = "network-failure"
+    elif "parse" in combined or "schema" in combined or "json" in combined:
+        category = "schema-or-parse"
+        reason = "github-schema-or-parse-failure"
+    elif " 5" in combined or "http 5" in combined:
+        category = "service"
+        reason = "github-service-failure"
+    return {
+        "category": category,
+        "reason": reason,
+        "http_status": http_status,
+        "command_id": result.command_id,
     }
 
 
@@ -1369,16 +1608,76 @@ def _closeout_plan(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
                 command_id="git-closeout-remote-branch",
                 warnings=warnings,
             )
+            remote_tip = _remote_branch_tip(remote_exists)
             local_result = runner.run(
                 ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
                 command_id="git-closeout-local-branch",
             )
+            local_tip = _git_value(
+                runner,
+                ["rev-parse", f"refs/heads/{branch}"],
+                command_id="git-closeout-local-branch-tip",
+                warnings=warnings,
+            )
+            tree_equal: bool | None = None
+            if isinstance(args.expected_head_sha, str) and isinstance(merge_sha, str):
+                tree = runner.run(
+                    ["git", "diff", "--quiet", args.expected_head_sha, merge_sha],
+                    command_id="git-closeout-tree-equality",
+                )
+                if tree.returncode == 0:
+                    tree_equal = True
+                elif tree.returncode == 1:
+                    tree_equal = False
+                else:
+                    warnings.append(command_warning(tree))
             observed["branch_cleanup"] = {
                 "exact_branch": safe_text(branch),
                 "remote_exists": bool(remote_exists),
+                "remote_tip": remote_tip,
                 "local_exists": local_result.returncode == 0,
+                "local_tip": local_tip if is_sha(local_tip) else None,
+                "tree_equal": tree_equal,
                 "apply_authorized": False,
+                "cleanup_eligibility": _closeout_cleanup_eligibility(
+                    repository=repository,
+                    observed=observed,
+                    gates=gates,
+                    branch=branch,
+                    remote_tip=remote_tip,
+                    local_tip=local_tip if is_sha(local_tip) else None,
+                    tree_equal=tree_equal,
+                ),
             }
+            expected_head = pr.get("head_sha") if isinstance(pr, dict) else None
+            gates["remote_branch_tip"] = _gate(
+                "pass" if remote_tip == expected_head else "fail"
+            )
+            gates["local_branch_tip"] = _gate(
+                "pass" if local_tip == expected_head else "fail"
+            )
+            gates["head_merge_tree_equal"] = _gate(
+                "pass" if tree_equal is True else "fail"
+            )
+            worktree_branches = git.get("worktree_branches", {})
+            branch_items = (
+                worktree_branches.get("items")
+                if isinstance(worktree_branches, dict)
+                else []
+            )
+            branch_items = branch_items if isinstance(branch_items, list) else []
+            gates["target_branch_not_worktree"] = _gate(
+                "pass" if branch not in branch_items else "fail"
+            )
+            required = observed.get("required_checks")
+            if (
+                isinstance(required, dict)
+                and required.get("configuration") == "plan-limited-403"
+            ):
+                gates["capability_limited_cleanup_eligibility"] = _gate(
+                    "unknown",
+                    "final evidence recheck is required before cleanup eligibility",
+                )
     pr = observed.get("pr")
     trusted_sha = pr.get("merge_commit_sha") if isinstance(pr, dict) else None
     trusted = {"trusted_sha": trusted_sha, "runner": _runner_source(runner, warnings)}
@@ -1571,6 +1870,11 @@ def _collect_for_recheck(
         namespace.pr = subject.get("pr_number")
         if not isinstance(namespace.task, int) or not isinstance(namespace.pr, int):
             raise WorkflowToolError("snapshot Task/PR identity is invalid")
+        observed = previous.get("observed")
+        pr = observed.get("pr") if isinstance(observed, Mapping) else None
+        if isinstance(pr, Mapping):
+            namespace.expected_head_sha = pr.get("head_sha")
+            namespace.expected_merge_sha = pr.get("merge_commit_sha")
         current = _closeout_plan(namespace, repo_root)
         current["operation"] = "closeout-final"
     elif operation == "feature-audit-snapshot":
@@ -1673,6 +1977,44 @@ def _recheck(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
     current["gates"]["snapshot_stability"] = _gate(
         "pass" if not changed else "fail", ", ".join(changed)
     )
+    if current.get("operation") == "closeout-final":
+        observed = current.get("observed")
+        gates = current.get("gates")
+        if isinstance(observed, dict) and isinstance(gates, dict):
+            cleanup = observed.get("branch_cleanup")
+            pr = observed.get("pr")
+            branch = pr.get("head_branch") if isinstance(pr, dict) else None
+            if isinstance(cleanup, dict):
+                cleanup["cleanup_eligibility"] = _closeout_cleanup_eligibility(
+                    repository=current.get("repository")
+                    if isinstance(current.get("repository"), str)
+                    else None,
+                    observed=observed,
+                    gates=gates,
+                    branch=branch,
+                    remote_tip=cleanup.get("remote_tip")
+                    if isinstance(cleanup.get("remote_tip"), str)
+                    else None,
+                    local_tip=cleanup.get("local_tip")
+                    if isinstance(cleanup.get("local_tip"), str)
+                    else None,
+                    tree_equal=cleanup.get("tree_equal")
+                    if isinstance(cleanup.get("tree_equal"), bool)
+                    else None,
+                )
+                eligibility = cleanup["cleanup_eligibility"]
+                required = observed.get("required_checks")
+                if (
+                    isinstance(required, dict)
+                    and required.get("configuration") == "plan-limited-403"
+                ):
+                    gates["capability_limited_cleanup_eligibility"] = _gate(
+                        "pass"
+                        if eligibility["status"]
+                        == "eligible-under-capability-limited-policy"
+                        else "fail",
+                        "exact task branch cleanup only; required checks remain unknown",
+                    )
     current["snapshot_id"] = (
         f"ev-{sha256_json({key: value for key, value in current.items() if key != 'snapshot_id'})[:16]}"
     )

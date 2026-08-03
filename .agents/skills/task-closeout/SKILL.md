@@ -55,6 +55,13 @@ Do not also run the raw Evidence/Validation tools, direct full validation chain,
 or complete legacy GitHub/Git read sequence. Expand only a named
 partial/unknown/fail/truncation/conflict with bounded read-only inspection.
 
+When GitHub returns a recognized Required Checks plan-limit `403`, preserve
+`required_checks_configuration = unknown` and the Evidence status as `partial`.
+The runner may additionally report a separate
+`cleanup_eligibility.status = eligible-under-capability-limited-policy`. That
+derived field is only a branch-cleanup input; it is not a complete Evidence pass
+and never authorizes Merge, push, Issue, Project, label, review, or other writes.
+
 ## Permission boundary
 
 After all exact gates pass, this invocation may fetch current refs, verify
@@ -117,10 +124,38 @@ ownership, expected head, no worktree use, merged result, Issue closure,
 synchronized main, validation/checks, final metadata, and no unrelated/default/
 protected/ambiguous target.
 
+If Required Checks configuration is unavailable only because of a recognized
+GitHub plan-limit `403`, branch cleanup may continue only when the snapshot's
+independent `cleanup_eligibility.status` is exactly
+`eligible-under-capability-limited-policy`, the preserved Required Checks gate is
+still `unknown`, actual observed check runs include at least one quality gate and
+are all successful terminal states, the final recheck is stable, local
+`main == origin/main == merge SHA`, the exact remote and local branch tips equal
+the reviewed PR head, the PR head tree equals the merge tree, the target branch
+is not used by any worktree, and the cleanup plan contains no other branch.
+Any authentication, scope, permission, rate-limit, network, schema, service, or
+unknown Required Checks failure keeps cleanup blocked.
+
 Delete only the exact remote branch and verify absence. For local cleanup, try
 `git branch -d` first. Exact `-D` is allowed only after verified Squash Merge,
 remote absence, local tip equals reviewed head, tree equality with main, no
 worktree use, and all other gates pass. Never use wildcard or broad cleanup.
+
+## Cleanup-only recovery
+
+For a Task whose lifecycle is already complete and whose only deferred action is
+exact task-branch cleanup, the maintainer may request a bounded `cleanup-only`
+resume by providing Task, PR, PR base SHA, reviewed head SHA, merge SHA, and exact
+branch name. This path may read current Task/PR/Project/label/check/thread/SHA/ref
+facts, run `workflow-closeout`, run final `recheck`, compute the same
+capability-limited cleanup eligibility, delete only the exact remote branch, and
+delete only the exact local branch.
+
+`cleanup-only` must not merge, close an Issue, edit Project Status, edit labels,
+create commits, push code, repair business files, reset a Task to `In Progress`
+or `Review`, delete any other branch, perform Feature completion, or rewrite a
+partial Evidence result to pass. Identity drift or missing proof stops at a
+checkpoint.
 
 ## Final stability recheck
 
@@ -148,6 +183,13 @@ On clean success include Task/PR URLs and identity, PR base/head/reviewed head,
 merge method/SHA, Issue/Project/label state, local/origin main, fixed post-merge
 validation and checks, exact branch actions and `-D` use, Parent/sub-issue facts
 without Feature judgment, limitations, and actions not performed.
+
+When cleanup succeeds under the capability-limited policy, report
+`closeout = completed-with-capability-limitation`, `evidence = stable / partial`,
+`required_checks_configuration = unknown`, and
+`cleanup = completed-under-capability-limited-policy`. Do not call it an
+unqualified clean success. Other terminal closeout states include `completed`,
+`partial-cleanup-deferred`, `blocked`, and `invalidated-by-drift`.
 
 Use a detailed report for any fallback, partial/unknown, failure, drift, conflict,
 or maintainer decision. Explicitly state no merge, manual Issue close, repair

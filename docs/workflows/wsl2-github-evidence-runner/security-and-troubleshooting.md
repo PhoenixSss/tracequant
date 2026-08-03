@@ -21,6 +21,16 @@ The snapshot records `plan-limited-403`. Current check runs may still be
 available, but the result remains `partial`; it must not be presented as full
 required-check configuration evidence.
 
+For post-merge Closeout, the runner may also report an independent
+`cleanup_eligibility` object. `eligible-under-capability-limited-policy` only
+means the exact verified Task branch may proceed to the existing branch-deletion
+approval gates after stable recheck. It does not convert Required Checks to pass
+and cannot authorize Merge, push, Issue, Project, label, review, or unrelated
+branch writes.
+
+Other `403` responses are classified separately as authentication,
+scope/permission, rate-limit, or unknown failures and keep cleanup blocked.
+
 ### ProjectV2 or review-thread permission failure
 
 The unavailable field is marked unknown and the result exits `3`. A Skill may

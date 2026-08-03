@@ -23,6 +23,19 @@ REAL_GIT_OPTIONAL = shutil.which("git")
 assert REAL_GIT_OPTIONAL is not None
 REAL_GIT: str = REAL_GIT_OPTIONAL
 PYTHON = os.environ.get("WORKFLOW_TEST_PYTHON", sys.executable)
+TRUSTED_ENV_KEYS = (
+    "WORKFLOW_TRUSTED_RUNNER_SHA",
+    "WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256",
+    "WORKFLOW_TRUSTED_BUNDLE_ROOT",
+    "WORKFLOW_TARGET_REPO_ROOT",
+)
+
+
+def _clean_test_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for key in TRUSTED_ENV_KEYS:
+        env.pop(key, None)
+    return env
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -174,8 +187,26 @@ elif (
     and 'required_status_checks' in args[1]
 ):
     mode=state.get('required_checks_mode')
+    if mode == 'plan-limit-403':
+        sys.stderr.write(
+            'HTTP 403 Branch protection for private repositories '
+            'is not included in this GitHub plan'
+        )
+        sys.exit(1)
     if mode == '403':
         sys.stderr.write('HTTP 403 Resource not accessible by integration')
+        sys.exit(1)
+    if mode == 'auth-403':
+        sys.stderr.write('HTTP 403 Requires authentication')
+        sys.exit(1)
+    if mode == 'scope-403':
+        sys.stderr.write('HTTP 403 missing required scope')
+        sys.exit(1)
+    if mode == 'permission-403':
+        sys.stderr.write('HTTP 403 Forbidden')
+        sys.exit(1)
+    if mode == 'network':
+        sys.stderr.write('proxyconnect tcp: network failure')
         sys.exit(1)
     if mode == '404':
         sys.stderr.write('HTTP 404 Not Found')
@@ -200,6 +231,7 @@ else:
 def _prepare_repo(
     tmp_path: Path, *, with_space: bool = False
 ) -> tuple[Path, Path, dict[str, str], str, str]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     repo = tmp_path / ("repo with space" if with_space else "repo")
     repo.mkdir()
     for relative in TRUSTED_FILES:
@@ -236,7 +268,7 @@ def _prepare_repo(
     state_path.write_text(json.dumps(_state(main_sha, head_sha)), encoding="utf-8")
     bin_dir = tmp_path / "bin"
     _write_fake_tools(bin_dir, state_path)
-    env = os.environ.copy()
+    env = _clean_test_env()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -363,7 +395,7 @@ def test_delivery_profile_is_task_only_and_read_only(tmp_path: Path) -> None:
 def test_plan_limit_is_partial_not_success(tmp_path: Path) -> None:
     repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["required_checks_mode"] = "403"
+    state["required_checks_mode"] = "plan-limit-403"
     state_path.write_text(json.dumps(state), encoding="utf-8")
     _sync_remote_files(state_path, state)
     completed = _run(repo, env, *_review_args(main_sha, head_sha))
@@ -638,6 +670,123 @@ def test_closeout_readonly_profile(tmp_path: Path) -> None:
     assert value["git"]["current_branch"] == "main"
 
 
+def test_closeout_plan_limit_cleanup_eligibility_digest_remains_partial(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, _main_sha, head_sha = _prepare_repo(tmp_path)
+    _git(repo, "switch", "-q", "main")
+    _git(repo, "merge", "--ff-only", "84-task-evidence-runner")
+    merge_sha = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "update-ref", "refs/remotes/origin/main", merge_sha)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["required_checks_mode"] = "plan-limit-403"
+    state["issue"]["state"] = "CLOSED"
+    state["issue"]["projectItems"] = [{"status": {"name": "Done"}}]
+    state["issue"]["closedAt"] = "2026-08-02T16:00:00Z"
+    state["issue"]["closedByPullRequestsReferences"] = [
+        {
+            "number": 102,
+            "state": "MERGED",
+            "mergedAt": "2026-08-02T16:00:00Z",
+            "url": "https://github.com/PhoenixSss/quant-system/pull/102",
+        }
+    ]
+    state["pr"].update(
+        state="MERGED",
+        mergeCommit={"oid": merge_sha},
+        mergedAt="2026-08-02T16:00:00Z",
+        mergeable="UNKNOWN",
+    )
+    state["remote_refs"]["main"] = merge_sha
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    _sync_remote_files(state_path, state)
+    completed = _run(
+        repo,
+        env,
+        "closeout-readonly",
+        "--task",
+        "84",
+        "--pr",
+        "102",
+        "--expected-head-sha",
+        head_sha,
+        "--expected-merge-sha",
+        merge_sha,
+    )
+    assert completed.returncode == 3, completed.stderr
+    digest = json.loads(completed.stdout)
+    assert digest["status"] == "partial"
+    value = _result(repo, completed.stdout)
+    assert (
+        "required_checks_configuration"
+        in value["evidence"]["gate_summary"]["unknown_gates"]
+    )
+    assert value["checks"]["required_configuration"] == "plan-limited-403"
+    eligibility = value["branch_cleanup"]["cleanup_eligibility"]
+    assert eligibility["status"] == "blocked"
+    assert eligibility["limitation_preserved"] is True
+    assert eligibility["allowed_scope"] == "exact-task-branch-cleanup-only"
+    assert (
+        "final evidence recheck stability is not proven"
+        in eligibility["reasons"]["items"]
+    )
+
+
+def test_required_checks_403_failure_types_do_not_enable_cleanup(
+    tmp_path: Path,
+) -> None:
+    for index, (mode, reason) in enumerate(
+        (
+            ("403", "github-scope-or-sso-403"),
+            ("auth-403", "github-authentication-failure"),
+            ("scope-403", "github-scope-or-sso-403"),
+            ("permission-403", "github-permission-403"),
+            ("network", "network-failure"),
+        )
+    ):
+        repo, state_path, env, _main_sha, head_sha = _prepare_repo(
+            tmp_path / str(index)
+        )
+        _git(repo, "switch", "-q", "main")
+        _git(repo, "merge", "--ff-only", "84-task-evidence-runner")
+        merge_sha = _git(repo, "rev-parse", "HEAD")
+        _git(repo, "update-ref", "refs/remotes/origin/main", merge_sha)
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["required_checks_mode"] = mode
+        state["issue"]["state"] = "CLOSED"
+        state["issue"]["projectItems"] = [{"status": {"name": "Done"}}]
+        state["issue"]["closedByPullRequestsReferences"] = [
+            {"number": 102, "state": "MERGED", "mergedAt": "2026-08-02T16:00:00Z"}
+        ]
+        state["pr"].update(
+            state="MERGED",
+            mergeCommit={"oid": merge_sha},
+            mergedAt="2026-08-02T16:00:00Z",
+            mergeable="UNKNOWN",
+        )
+        state["remote_refs"]["main"] = merge_sha
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        _sync_remote_files(state_path, state)
+        completed = _run(
+            repo,
+            env,
+            "closeout-readonly",
+            "--task",
+            "84",
+            "--pr",
+            "102",
+            "--expected-head-sha",
+            head_sha,
+            "--expected-merge-sha",
+            merge_sha,
+        )
+        assert completed.returncode == 3, completed.stderr
+        value = _result(repo, completed.stdout)
+        assert value["checks"]["required_configuration"] == "unknown"
+        assert value["checks"]["required_failure"]["reason"] == reason
+        assert value["branch_cleanup"]["cleanup_eligibility"]["status"] == "blocked"
+
+
 @pytest.mark.skipif(
     os.environ.get("TASK84_LIVE_REPOSITORY") != "PhoenixSss/quant-system",
     reason="set TASK84_LIVE_REPOSITORY and live IDs for an explicit network probe",
@@ -665,7 +814,7 @@ def test_live_task_pr_schema() -> None:
         capture_output=True,
         text=True,
         encoding="utf-8",
-        env=os.environ.copy(),
+        env=_clean_test_env(),
     )
     assert task == "84"
     assert pr.isdigit()

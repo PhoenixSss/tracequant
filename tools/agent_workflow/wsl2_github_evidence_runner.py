@@ -626,6 +626,10 @@ def _compact_result(
     diff = diff if isinstance(diff, dict) else {}
     checks = pr.get("checks")
     checks = checks if isinstance(checks, dict) else {}
+    required_checks = observed.get("required_checks")
+    required_checks = required_checks if isinstance(required_checks, dict) else {}
+    branch_cleanup = observed.get("branch_cleanup")
+    branch_cleanup = branch_cleanup if isinstance(branch_cleanup, dict) else {}
     stability = snapshot.get("stability")
     stability = stability if isinstance(stability, dict) else {}
     source_core = {
@@ -666,6 +670,12 @@ def _compact_result(
             "unresolved_threads": threads.get("unresolved"),
             "threads_available": threads.get("available"),
         },
+        "checks": {
+            "required_configuration": required_checks.get("configuration"),
+            "required_failure": required_checks.get("failure"),
+            "observed_runs": checks,
+        },
+        "branch_cleanup": branch_cleanup,
         "scope": {
             "changed_files": pr.get("changed_files"),
             "commits": pr.get("commits"),

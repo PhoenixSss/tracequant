@@ -76,6 +76,10 @@ def test_closeout_uses_readonly_evidence_and_closeout_validation_only() -> None:
     assert "This Skill never merges" in text
     assert "manual Issue close" in text
     assert "exact verified remote/local Task branch" in text
+    assert "cleanup-only" in text
+    assert "eligible-under-capability-limited-policy" in text
+    assert "not a complete Evidence pass" in text
+    assert "never authorizes Merge, push, Issue, Project, label" in text
 
 
 def test_failure_unknown_and_drift_have_bounded_expansion_contract() -> None:
