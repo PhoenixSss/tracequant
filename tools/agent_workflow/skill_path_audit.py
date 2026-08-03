@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sys
 from pathlib import Path
 from typing import Final
 
@@ -76,32 +75,31 @@ def audit(repo_root: Path) -> tuple[dict[str, object], int]:
             violations.append(f"{name}: missing {', '.join(missing)}")
         if legacy:
             violations.append(f"{name}: legacy path {', '.join(legacy)}")
+        line_count = len(text.splitlines())
+        byte_count = len(text.encode("utf-8"))
+        fixed_evidence_mentions = text.count(
+            "wsl2_github_evidence_runner.py"
+        ) + text.count("--tool evidence-runner")
+        fixed_validation_mentions = text.count(
+            "wsl2_validation_runner.py"
+        ) + text.count("--tool validation-runner")
+        trusted_runner_mentions = text.count("trusted_runner.py")
         entry = {
             "path": relative.as_posix(),
-            "lines": len(text.splitlines()),
-            "bytes": len(text.encode("utf-8")),
+            "lines": line_count,
+            "bytes": byte_count,
             "sha256": _sha256(text),
-            "fixed_evidence_runner_mentions": (
-                text.count("wsl2_github_evidence_runner.py")
-                + text.count("--tool evidence-runner")
-            ),
-            "fixed_validation_runner_mentions": (
-                text.count("wsl2_validation_runner.py")
-                + text.count("--tool validation-runner")
-            ),
-            "trusted_runner_mentions": text.count("trusted_runner.py"),
+            "fixed_evidence_runner_mentions": fixed_evidence_mentions,
+            "fixed_validation_runner_mentions": fixed_validation_mentions,
+            "trusted_runner_mentions": trusted_runner_mentions,
             "legacy_command_paths": legacy,
             "missing_contract_tokens": missing,
         }
         results[name] = entry
-        totals["lines"] += int(entry["lines"])
-        totals["fixed_evidence_runner_mentions"] += int(
-            entry["fixed_evidence_runner_mentions"]
-        )
-        totals["fixed_validation_runner_mentions"] += int(
-            entry["fixed_validation_runner_mentions"]
-        )
-        totals["trusted_runner_mentions"] += int(entry["trusted_runner_mentions"])
+        totals["lines"] += line_count
+        totals["fixed_evidence_runner_mentions"] += fixed_evidence_mentions
+        totals["fixed_validation_runner_mentions"] += fixed_validation_mentions
+        totals["trusted_runner_mentions"] += trusted_runner_mentions
         totals["legacy_command_path_count"] += len(legacy)
 
     output: dict[str, object] = {

@@ -136,9 +136,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     try:
-        bundle_root, entry, manifest = _extract(
-            repo_root, args.trusted_sha, args.tool
-        )
+        bundle_root, entry, manifest = _extract(repo_root, args.trusted_sha, args.tool)
     except RuntimeError as exc:
         print(f"trusted runner error: {exc}", file=sys.stderr)
         return 2

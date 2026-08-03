@@ -30,7 +30,7 @@ def test_trusted_runner_executes_tool_from_locked_commit(tmp_path: Path) -> None
     (repo / ".gitignore").write_text(".agents/evidence.local/\n", encoding="utf-8")
     (tools / "workflow_common.py").write_text("# base common\n", encoding="utf-8")
     (tools / "workflow_evidence.py").write_text(
-        'import json, os\n'
+        "import json, os\n"
         'print(json.dumps({"marker": "base", "source": '
         'os.environ.get("WORKFLOW_TRUSTED_RUNNER_SHA")}))\n',
         encoding="utf-8",
@@ -114,9 +114,7 @@ def test_trusted_runner_executes_fixed_front_door_bundle(tmp_path: Path) -> None
     (repo / ".gitignore").write_text(".agents/evidence.local/\n", encoding="utf-8")
     (tools / "workflow_common.py").write_text("# common\n", encoding="utf-8")
     (tools / "workflow_evidence.py").write_text("# evidence\n", encoding="utf-8")
-    (tools / "wsl2_github_evidence_profiles.json").write_text(
-        "{}\n", encoding="utf-8"
-    )
+    (tools / "wsl2_github_evidence_profiles.json").write_text("{}\n", encoding="utf-8")
     (rules / "quant-system-wsl-evidence.rules").write_text(
         "# rules\n", encoding="utf-8"
     )
@@ -160,9 +158,7 @@ def test_trusted_runner_executes_fixed_front_door_bundle(tmp_path: Path) -> None
     manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["schema_version"] == 2
     assert manifest["tool"] == "evidence-runner"
-    assert manifest["entry"] == (
-        "tools/agent_workflow/wsl2_github_evidence_runner.py"
-    )
+    assert manifest["entry"] == ("tools/agent_workflow/wsl2_github_evidence_runner.py")
 
 
 def test_fixed_front_door_rejects_alternate_repo_root(tmp_path: Path) -> None:
@@ -238,7 +234,7 @@ jobs:
     uv = bin_dir / "uv"
     uv.write_text(
         "#!/bin/sh\n"
-        "case \"$*\" in\n"
+        'case "$*" in\n'
         "  'run --frozen pytest tests/tools') echo '7 passed' ;;\n"
         "  *) echo unexpected >&2; exit 2 ;;\n"
         "esac\n",

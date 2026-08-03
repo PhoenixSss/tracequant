@@ -275,9 +275,7 @@ def _read_bundle_inputs(repo_root: Path, bundle_root: Path) -> dict[str, bytes]:
 def _load_trusted_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str]]:
     bundle_root = _bundle_root(repo_root)
     if bundle_root is None:
-        payloads = {
-            path: _read_tracked_file(repo_root, path) for path in TRUSTED_PATHS
-        }
+        payloads = {path: _read_tracked_file(repo_root, path) for path in TRUSTED_PATHS}
     else:
         payloads = _read_bundle_inputs(repo_root, bundle_root)
     try:

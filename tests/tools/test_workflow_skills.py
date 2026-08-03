@@ -32,13 +32,9 @@ def test_task_skills_use_fixed_runners_without_legacy_command_chain() -> None:
         assert f"name: {name}" in text
         assert ".agents/policies/workflow-evidence.md" in text
         assert (
-            "wsl2_github_evidence_runner.py" in text
-            or "--tool evidence-runner" in text
+            "wsl2_github_evidence_runner.py" in text or "--tool evidence-runner" in text
         )
-        assert (
-            "wsl2_validation_runner.py" in text
-            or "--tool validation-runner" in text
-        )
+        assert "wsl2_validation_runner.py" in text or "--tool validation-runner" in text
         assert len(text) < 12_000
         assert len(text.splitlines()) < 320
         for fragment in forbidden:
