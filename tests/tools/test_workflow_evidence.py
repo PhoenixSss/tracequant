@@ -575,9 +575,50 @@ def test_closeout_plan_limit_cleanup_eligibility_is_separate(
         "github-plan-limit-403"
     )
     eligibility = value["observed"]["branch_cleanup"]["cleanup_eligibility"]
-    assert eligibility["status"] == "eligible-under-capability-limited-policy"
+    assert eligibility["status"] == "blocked"
     assert eligibility["limitation_preserved"] is True
     assert eligibility["allowed_scope"] == "exact-task-branch-cleanup-only"
+    assert (
+        "final evidence recheck stability is not proven"
+        in eligibility["reasons"]["items"]
+    )
+    assert value["gates"]["capability_limited_cleanup_eligibility"]["status"] == (
+        "unknown"
+    )
+
+
+def test_closeout_final_plan_limit_cleanup_eligibility_requires_stable_recheck(
+    tmp_path: Path,
+) -> None:
+    state = _completed_closeout_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    first = _run(
+        repo,
+        env,
+        "closeout-plan",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+        "--expected-head-sha",
+        "4" * 40,
+        "--expected-merge-sha",
+        "8" * 40,
+    )
+    assert first.returncode == 0, first.stderr
+    first_value = json.loads(first.stdout)
+    second = _run(
+        repo,
+        env,
+        "closeout-final",
+        "--snapshot-id",
+        first_value["snapshot_id"],
+    )
+    assert second.returncode == 0, second.stderr
+    value = json.loads(second.stdout)
+    assert value["gates"]["snapshot_stability"]["status"] == "pass"
+    eligibility = value["observed"]["branch_cleanup"]["cleanup_eligibility"]
+    assert eligibility["status"] == "eligible-under-capability-limited-policy"
     assert value["gates"]["capability_limited_cleanup_eligibility"]["status"] == "pass"
 
 
@@ -615,7 +656,7 @@ def test_cleanup_eligibility_blocks_failed_pending_and_missing_checks(
         eligibility = value["observed"]["branch_cleanup"]["cleanup_eligibility"]
         assert eligibility["status"] == "blocked"
         assert value["gates"]["capability_limited_cleanup_eligibility"]["status"] == (
-            "fail"
+            "unknown"
         )
 
 

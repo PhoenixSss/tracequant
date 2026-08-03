@@ -832,6 +832,8 @@ def _closeout_cleanup_eligibility(
     issue = observed.get("issue")
     git = observed.get("git")
     required = observed.get("required_checks")
+    if "snapshot_stability" not in gates:
+        reasons.append("final evidence recheck stability is not proven")
     if not repository:
         reasons.append("repository identity unavailable")
     if not isinstance(pr, Mapping):
@@ -1660,13 +1662,9 @@ def _closeout_plan(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
                 isinstance(required, dict)
                 and required.get("configuration") == "plan-limited-403"
             ):
-                eligibility = observed["branch_cleanup"]["cleanup_eligibility"]
                 gates["capability_limited_cleanup_eligibility"] = _gate(
-                    "pass"
-                    if eligibility["status"]
-                    == "eligible-under-capability-limited-policy"
-                    else "fail",
-                    "exact task branch cleanup only; required checks remain unknown",
+                    "unknown",
+                    "final evidence recheck is required before cleanup eligibility",
                 )
     pr = observed.get("pr")
     trusted_sha = pr.get("merge_commit_sha") if isinstance(pr, dict) else None
@@ -1860,6 +1858,11 @@ def _collect_for_recheck(
         namespace.pr = subject.get("pr_number")
         if not isinstance(namespace.task, int) or not isinstance(namespace.pr, int):
             raise WorkflowToolError("snapshot Task/PR identity is invalid")
+        observed = previous.get("observed")
+        pr = observed.get("pr") if isinstance(observed, Mapping) else None
+        if isinstance(pr, Mapping):
+            namespace.expected_head_sha = pr.get("head_sha")
+            namespace.expected_merge_sha = pr.get("merge_commit_sha")
         current = _closeout_plan(namespace, repo_root)
         current["operation"] = "closeout-final"
     elif operation == "feature-audit-snapshot":

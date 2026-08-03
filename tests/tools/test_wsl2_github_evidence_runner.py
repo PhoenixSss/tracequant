@@ -23,6 +23,19 @@ REAL_GIT_OPTIONAL = shutil.which("git")
 assert REAL_GIT_OPTIONAL is not None
 REAL_GIT: str = REAL_GIT_OPTIONAL
 PYTHON = os.environ.get("WORKFLOW_TEST_PYTHON", sys.executable)
+TRUSTED_ENV_KEYS = (
+    "WORKFLOW_TRUSTED_RUNNER_SHA",
+    "WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256",
+    "WORKFLOW_TRUSTED_BUNDLE_ROOT",
+    "WORKFLOW_TARGET_REPO_ROOT",
+)
+
+
+def _clean_test_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for key in TRUSTED_ENV_KEYS:
+        env.pop(key, None)
+    return env
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -249,7 +262,7 @@ def _prepare_repo(
     state_path.write_text(json.dumps(_state(main_sha, head_sha)), encoding="utf-8")
     bin_dir = tmp_path / "bin"
     _write_fake_tools(bin_dir, state_path)
-    env = os.environ.copy()
+    env = _clean_test_env()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -704,9 +717,13 @@ def test_closeout_plan_limit_cleanup_eligibility_digest_remains_partial(
     )
     assert value["checks"]["required_configuration"] == "plan-limited-403"
     eligibility = value["branch_cleanup"]["cleanup_eligibility"]
-    assert eligibility["status"] == "eligible-under-capability-limited-policy"
+    assert eligibility["status"] == "blocked"
     assert eligibility["limitation_preserved"] is True
     assert eligibility["allowed_scope"] == "exact-task-branch-cleanup-only"
+    assert (
+        "final evidence recheck stability is not proven"
+        in eligibility["reasons"]["items"]
+    )
 
 
 def test_required_checks_403_failure_types_do_not_enable_cleanup(
@@ -790,7 +807,7 @@ def test_live_task_pr_schema() -> None:
         capture_output=True,
         text=True,
         encoding="utf-8",
-        env=os.environ.copy(),
+        env=_clean_test_env(),
     )
     assert task == "84"
     assert pr.isdigit()
