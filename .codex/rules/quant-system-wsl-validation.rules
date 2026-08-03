@@ -2,8 +2,8 @@
 #
 # Scope:
 # - Codex execpolicy currently uses prefix matching.
-# - These rules allow only the fixed repository Validation Runner entry and
-#   named profile prefixes.
+# - These rules allow only the fixed repository Validation Runner entry, named
+#   profile prefixes, and the trusted-base validation front-door bootstrap.
 # - An allow decision here means the fixed entry/profile prefix is authorized;
 #   it is not complete argv semantic acceptance.
 # - The Rules language does not provide exact argv or end-of-command matching.
@@ -85,6 +85,31 @@ prefix_rule(
     ],
 )
 
+
+prefix_rule(
+    pattern = ["tools/agent_workflow/wsl2_validation_runner.py", "workflow-delivery"],
+    decision = "allow",
+    justification = "Allow the fixed Delivery workflow validation profile prefix; runner requires one full base SHA and invokes the versioned workflow validator with required Skill validators.",
+)
+
+prefix_rule(
+    pattern = ["tools/agent_workflow/wsl2_validation_runner.py", "workflow-review"],
+    decision = "allow",
+    justification = "Allow the fixed Review workflow validation profile prefix; trusted review uses the base-extracted front door and complete argv validation.",
+)
+
+prefix_rule(
+    pattern = ["tools/agent_workflow/wsl2_validation_runner.py", "workflow-closeout"],
+    decision = "allow",
+    justification = "Allow the fixed closeout workflow validation profile prefix; runner requires clean synchronized main and a full base SHA.",
+)
+
+prefix_rule(
+    pattern = ["tools/agent_workflow/trusted_runner.py", "--tool", "validation-runner"],
+    decision = "allow",
+    justification = "Allow only the trusted-base fixed Validation Runner bootstrap prefix used by independent Review; trusted_runner validates the commit SHA, current repository root, bundle manifest and delegated runner argv.",
+)
+
 prefix_rule(
     pattern = [
         "tools/agent_workflow/wsl2_validation_runner.py",
@@ -94,6 +119,9 @@ prefix_rule(
             "targeted:tools-tests",
             "targeted:workflow-tests",
             "post-merge",
+            "workflow-delivery",
+            "workflow-review",
+            "workflow-closeout",
         ],
         ["--command", "--shell", "--exec", "--", "|", ">", "$(id)"],
     ],

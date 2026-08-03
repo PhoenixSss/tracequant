@@ -208,7 +208,7 @@
     "Git and GitHub/gh command categories can overlap and must not be summed.",
     "Task #84 live PR/profile/recheck/execpolicy observations are a single Delivery capture and do not establish workflow-wide savings.",
     "No Task #65 candidate or Token reduction claim is made.",
-    "Task #85 is responsible for changing workflow Skills to consume the fixed runner."
+    "Task #85 switches Task Skills to the fixed runner; runtime workflow-wide savings remain unmeasured until Task #86."
   ],
   "source_documents": [
     "docs/workflows/wsl2-github-evidence-runner/README.md",

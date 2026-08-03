@@ -1,14 +1,13 @@
 ---
 name: task-delivery
-description: Deliver one maintainer-specified existing GitHub Task from readiness through implementation, validation, commit, push, PR creation, successful checks, and a compact handoff for an independent review. Do not choose or create Tasks, review the PR independently, merge, close Issues, perform post-merge cleanup, or assess Feature completion.
+description: Deliver one maintainer-specified existing GitHub Task from readiness through implementation, fixed-runner validation, commit, push, PR creation, checks, and a compact handoff for independent review. Do not choose Tasks, review independently, merge, close Issues, clean branches, or assess Feature completion.
 ---
 
 # Task delivery
 
-Use this Skill for the complete pre-merge delivery of one existing Task explicitly
-identified by the maintainer. A normal invocation authorizes only the bounded
-sequence in this Skill through a non-Draft PR ready for a new-session
-`task-pr-review`.
+Use this Skill for one existing Task explicitly identified by the maintainer. A
+normal invocation authorizes only the bounded pre-merge sequence through one
+non-Draft PR ready for a new-session `task-pr-review`.
 
 ## Standard invocation
 
@@ -18,215 +17,185 @@ sequence in this Skill through a non-Draft PR ready for a new-session
 直到 PR 准备好接受独立审查。
 ```
 
-The Issue number is the primary key; the current GitHub Issue title is canonical.
+The Issue number is primary; the current GitHub Issue title is canonical.
 
-## Rules and tools
+## Rules and fixed runners
 
-Before commands, read the applicable `AGENTS.md` / `AGENTS.override.md` and:
+Before commands, read applicable `AGENTS.md` / `AGENTS.override.md` and:
 
 ```text
 .agents/policies/command-execution.md
 .agents/policies/workflow-evidence.md
 ```
 
-Use current Issue, templates, workflows, `pyproject.toml`, and lock files as
-current facts. Historical Tasks and PRs are process evidence only.
+Normal Delivery uses only these fixed front doors for mechanical workflow facts
+and final validation:
 
-Use the shared tools for mechanical reads and validation:
+```bash
+tools/agent_workflow/wsl2_github_evidence_runner.py delivery \
+  --task <TASK> \
+  --expected-main-sha <LOCKED_MAIN_SHA>
 
-```text
-python tools/agent_workflow/workflow_evidence.py delivery-preflight ...
-python tools/agent_workflow/workflow_validation.py run --phase delivery --base-sha <Task base SHA> ...
-python tools/agent_workflow/workflow_evidence.py delivery-readiness ...
+tools/agent_workflow/wsl2_validation_runner.py workflow-delivery \
+  --base-sha <LOCKED_TASK_BASE_SHA>
+
+tools/agent_workflow/wsl2_github_evidence_runner.py delivery-readiness \
+  --task <TASK> \
+  --pr <PR> \
+  --expected-base-sha <LOCKED_TASK_BASE_SHA> \
+  --expected-head-sha <CURRENT_HEAD_SHA>
 ```
 
-Do not repeat the full legacy Git/GitHub query chain after a valid snapshot.
-Read detailed facts manually only when a gate is `unknown`, `fail`, truncated,
-conflicting, or needed for semantic work. Tool failure uses the safe read-only
-fallback defined by the shared policy; no gate may be skipped.
+During implementation, use a named targeted Validation profile only when it
+matches the work:
+
+```text
+targeted
+targeted:tools-tests
+targeted:workflow-tests
+```
+
+The final `workflow-delivery` profile is the authoritative Delivery validation
+observation. It runs current applicable CI-equivalent checks and required Skill
+validators through the fixed front door. Do not also run the replaced raw
+workflow validator or a second full direct `uv` validation chain.
+
+Do not repeat the legacy direct GitHub/Git fact-query chain after a valid
+snapshot. A `partial`, `unknown`, `fail`, schema/version mismatch, truncation, or
+drift is not permission to run the entire old chain. Expand only the exact
+missing or conflicting fact with bounded read-only inspection, report the
+fallback, and preserve the original gate status.
 
 ## Permission boundary
 
-When every preceding gate passes, this invocation may:
+After every preceding gate passes, this invocation may:
 
 1. read Task, repository, Git, GitHub, Project, and Relationship facts;
-2. apply the exact Task lifecycle transitions required for `Ready`,
-   `In Progress`, and `Review`;
+2. apply the exact lifecycle transitions to `Ready`, `In Progress`, and `Review`;
 3. create or safely reuse the exact Task branch;
-4. edit only files within approved Task scope;
-5. run current validation;
-6. explicitly stage approved paths, make one scoped commit, and ordinary push;
+4. edit only approved Task scope;
+5. run targeted and final fixed-runner validation;
+6. stage explicit approved paths, make scoped commits, and ordinary push;
 7. create or reuse one matching non-Draft PR;
 8. wait for and read checks;
 9. produce a compact independent-review handoff.
 
-It never authorizes:
+It never authorizes changing Task scope or hierarchy, unrelated writes, force
+push, `--admin`, protection bypass, `git reset --hard`, `git clean`, GitHub
+Review submission, merge, Issue close, post-merge work, branch deletion, or
+Feature completion assessment.
 
-- changing Task goal, body, Parent, Priority, Size, Phase, Target, or
-  Relationships;
-- unrelated GitHub or repository writes;
-- force push, `--admin`, protection bypass, `git reset --hard`, or `git clean`;
-- GitHub Review submission;
-- merge, Issue close, post-merge validation, or branch deletion;
-- Feature completion assessment.
-
-If the Task specification requires revision, report the exact proposed revision
-and stop unless the maintainer separately authorizes that existing-Issue edit.
+If the Task specification requires revision, report the exact proposed change
+and stop unless the maintainer separately authorizes the Issue edit.
 
 ## Lifecycle state
 
-Keep Codex labels and Project `Status` separate. With the repository's expected
-options, use:
+Keep Codex labels and Project `Status` separate:
 
 | Fact | Codex label | Project Status |
 | --- | --- | --- |
 | specification incomplete | `codex:needs-spec` | `Inbox` / `Specifying` |
-| readiness gate passed | `codex:ready` | `Ready` |
+| readiness passed | `codex:ready` | `Ready` |
 | implementation active | `codex:ready` | `In Progress` |
 | PR or review active | `codex:ready` | `Review` |
-| real unresolved blocker | `codex:blocked` | `Blocked` |
+| real blocker | `codex:blocked` | `Blocked` |
 | verified post-merge completion | `codex:ready` | `Done` |
 
-Implementation requires an open Issue, `Ready` or `In Progress`,
-`codex:ready`, no `codex:blocked`, and this invocation. `codex:ready` alone is
-not an implementation selector. If actual Project options differ, stop before a
-state write.
+Implementation requires an open Task, `Ready` or `In Progress`, `codex:ready`,
+no `codex:blocked`, and this invocation. Stop before a state write if actual
+Project options differ.
 
 ## Phase 1: identity and readiness
 
-Generate one current preflight snapshot. At minimum verify:
+Generate one current fixed `delivery` snapshot. Verify repository/origin,
+current branch and workspace, refs/worktrees, synchronized main identity, Task
+state/type/title/body/comments, Parent/dependencies/Relationships, labels,
+Project fields, blockers, templates, workflows, validation sources, and affected
+architecture.
 
-- repository and remote identity;
-- current branch, full tracked/untracked status, refs, worktrees, and
-  `origin/main`;
-- Task exists, is open, has `type:task`, canonical title matches, and complete
-  body/comments were read;
-- Parent, dependencies, labels, Project fields, and formal Relationships;
-- no unresolved blocker or specification conflict;
-- current templates, workflows, validation sources, and affected architecture.
+The Agent—not the digest—decides whether goal, scope, acceptance criteria,
+exceptions, and out-of-scope work are implementable without guessing. A derived
+ProjectV2 title may lag; Issue `content.title` is canonical.
 
-A derived ProjectV2 `Title` may lag. Use Issue `content.title`; do not attempt to
-update an Issue-backed item's derived title.
-
-The Agent—not the snapshot—must decide that goal, scope, acceptance criteria,
-exceptions, and out-of-scope work are implementable without guessing a key
-architecture decision.
-
-If readiness passes, verify or apply only the exact transition to `Ready`, then
-to `In Progress` when work starts. Re-read each write result.
+Only after readiness passes, apply and re-read the exact state transitions.
 
 ## Phase 2: branch and implementation
 
-Start from clean, synchronized `main` unless verified recovery facts justify a
-later point. Create or reuse one exact Task branch. Existing artifacts are reused
-only after identity, history, scope, and ownership are verified.
+Start from clean synchronized `main` unless current recovery facts prove a valid
+later point. Create or reuse one exact Task branch after verifying identity,
+history, scope, and ownership.
 
-Implement the smallest correct change:
-
-- follow every scoped agent rule;
-- satisfy all acceptance criteria;
-- do not silently expand scope or refactor unrelated code;
-- do not add a production dependency without documented Task justification;
-- preserve financial, credential, UTC, data, and live-trading safety rules;
-- add or update tests and documentation required by changed behavior;
-- never weaken or delete tests merely to pass.
-
-Inspect complete tracked and untracked scope throughout implementation.
+Implement the smallest correct change. Follow scoped rules, preserve safety,
+add required tests/docs, inspect tracked and untracked scope, and never weaken
+tests merely to pass. Necessary source inspection and development commands are
+not replaced by the workflow runners.
 
 ## Phase 3: validation, commit, and push
 
-Run the shared validation runner against current Task-branch facts and the locked
-Task base SHA. Governance changes detected in `base...HEAD` require all applicable
-Skill validators. A compact success summary is
-not permission to omit a command; a failure requires bounded diagnostics and a
-real fix or pause.
+Use matching targeted profiles during development. Before final validation,
+perform semantic acceptance mapping, inspect the full diff and untracked files,
+check generated files/secrets/scope, and ensure ignored evidence/validation
+artifacts are not staged.
 
-Before commit:
+When this Task changes trusted Runner, profile, Rules, Evidence, Validation, or
+Skill files, the fixed runner intentionally cannot validate an uncommitted
+trusted-file change. Run explicit development checks, commit the scoped trusted
+change, then run `workflow-delivery`. If it fails, repair with another scoped
+commit and rerun; never treat pre-commit checks as the final phase observation.
 
-- perform semantic self-check against every acceptance criterion;
-- inspect full diff, untracked files, generated files, secrets, and scope;
-- resolve all Blocking, High, and Medium self-check findings;
-- ensure local ignored execution, evidence, and validation files are
-  not staged.
-
-Stage explicit paths only; never use `git add .`. Make one scoped commit unless a
-recovered history already proves a valid Task-only commit. Push normally without
-force. Re-read branch and commit identity.
+Stage explicit paths only; never use `git add .`. Push normally without force and
+re-read branch/head identity.
 
 ## Phase 4: PR and readiness
 
-Create or recover exactly one non-Draft PR using the current template. The PR
-must:
+Create or recover exactly one non-Draft PR targeting the approved base. It must
+identify Task/branch/head, contain `Closes #<Task>`, describe implementation,
+validation, risks and limitations, and contain only approved files/commits.
 
-- target the approved base branch;
-- identify the exact Task branch and current head;
-- contain `Closes #<Task>`;
-- accurately summarize implementation, validation, risks, and limitations;
-- contain only approved files and commits.
+Set Project Status to `Review` only after the PR exists or review starts. Wait
+for applicable checks. Distinguish configured Required Checks, none configured,
+plan-limit `403`, and actual check runs; never convert pending, failed, stale,
+cancelled, or unknown into success.
 
-Set Project Status to `Review` only after the PR exists or review is actually
-starting. Wait for all applicable check runs to complete. Distinguish configured
-Required Checks, no configured Required Checks, GitHub plan-limit `403`, and
-ordinary check runs; never convert pending, failed, stale, cancelled, or unknown
-checks into success.
+Generate one fixed `delivery-readiness` snapshot. Re-check identity, base/head,
+effective diff, commits/files, linkage, checks, reviews, threads, lifecycle, and
+scope. Read the full PR diff and relevant context for semantic self-review.
 
-Generate `delivery-readiness` after the PR and checks exist. Re-check Task/PR
-identity, base/head SHA, effective diff, commits, files, closing linkage, checks,
-reviews, threads, lifecycle state, and current scope. Read the full PR diff and
-relevant file context for the final semantic self-check.
+Pause on a new commit, drift, failed validation/check, blocking thread, state
+conflict, or unresolved Blocking/High/Medium self-finding.
 
-Pause if a new commit, base/head/diff change, failed validation, blocking thread,
-state conflict, or unresolved Blocking/High/Medium finding appears.
+## Failure expansion and recovery
+
+- `pass`: consume the compact digest and continue semantic work.
+- `partial` / `unknown`: inspect only the named unknown gates; never claim full
+  readiness.
+- `fail` / drift: stop before the dependent write and inspect bounded diagnostics.
+- Runner unavailable, version mismatch, or schema mismatch: report the control
+  plane incompatibility. Do not silently reactivate the complete legacy path.
+
+Resume from the first unverified gate using current facts. Do not repeat a
+correct metadata write, recreate artifacts, or run both old and new paths.
 
 ## Independent-review handoff
 
-The next step is a new session using `task-pr-review`; this Skill must not perform
-or simulate that review.
+This Skill must not perform or simulate independent review. On a clean success
+path output only the compact canonical identity, URLs, branch, base/head,
+changed-file summary, fixed validation/check summary, lifecycle state, thread
+count, limitations, and `Ready for independent review`.
 
-On a clean success path, output a compact handoff containing:
+End with the exact new-session `task-pr-review` prompt including expected
+base/head SHAs. Do not copy complete bodies, diff, successful logs, or the full
+Delivery report.
 
-```text
-Task number / canonical title / URL
-PR number / title / URL
-Task branch
-Base branch and base SHA
-Head SHA
-Changed-file summary
-Local validation summary
-Required-Checks configuration and actual check-run summary
-Project Status and Codex label
-Unresolved-thread count
-Known limitations
-Ready for independent review
-```
+## Mandatory pauses and final report
 
-End with the exact standard next-session prompt, including expected base/head
-SHAs. Do not copy the Task/PR body, complete diff, complete validation output, or
-the complete delivery report.
+Stop before a related write when identity, specification, scope, branch,
+workspace, validation, checks, threads, credentials, permissions, or Runner
+facts are uncertain or conflicting, or when an out-of-scope change, force,
+bypass, destructive cleanup, merge, Issue close, or maintainer design decision
+would be required.
 
-## Mandatory pauses
-
-Stop before the related write when identity, repository, title, Parent,
-dependency, Relationship, specification, scope, branch ownership, workspace,
-validation, check, review-thread, credential, or permission facts are uncertain
-or conflicting. Also stop when the next action would require an out-of-scope
-file, Task revision, unrelated refactor, merge, Issue close, force operation,
-protection bypass, destructive cleanup, or maintainer design decision.
-
-Report completed safe steps, exact failing gate, current state, and the single
-next decision.
-
-## Recovery
-
-Every run reads current facts. Resume from the first unverified gate when a valid
-Task branch, scoped changes, commit, push, PR, or completed checks already exist.
-Never repeat a correct metadata write or recreate a deleted artifact merely to
-follow phase numbering.
-
-
-## Final report
-
-Use the compact success contract from the shared policy. Use a detailed report
-for any finding, failure, fallback, drift, conflict, or maintainer decision.
-Always state actions deliberately not performed, especially independent review,
-Merge, Issue close, post-merge work, and branch deletion.
+Use a compact report only for a clean success. Any fallback, partial/unknown,
+failure, drift, conflict, or decision uses a detailed report. Always state that
+independent Review, Merge, Issue close, post-merge work, branch deletion, and
+Feature completion were not performed.

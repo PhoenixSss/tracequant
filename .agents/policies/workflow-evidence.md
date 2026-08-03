@@ -2,18 +2,56 @@
 
 ## Purpose and responsibility
 
-This is the shared normative source for deterministic evidence, compact
-validation, stability rechecks, and success reports used by the four workflow
-Skills.
+This is the shared normative source for deterministic workflow evidence,
+fixed-runner validation, stability rechecks, failure expansion, and compact
+success reports.
 
 ```text
 Skill       authorization, phases, semantic judgment, findings, verdict
-Evidence    current mechanical facts, normalization, bounded snapshots
-Validation  current applicable checks, bounded results
+Evidence    current mechanical facts, normalization, snapshot/recheck
+Validation  current applicable checks, exit codes, bounded diagnostics
 Maintainer  manual Merge and Feature closeout
 ```
 
-Evidence never authorizes a write or proves semantic correctness.
+Evidence and Validation never authorize repository or GitHub writes and never
+replace semantic correctness review.
+
+## Fixed Task workflow front doors
+
+After Task #85, normal Task Skills invoke these repository entries directly:
+
+```text
+tools/agent_workflow/wsl2_github_evidence_runner.py
+tools/agent_workflow/wsl2_validation_runner.py
+tools/agent_workflow/trusted_runner.py   # independent Review bootstrap only
+```
+
+The underlying implementation CLIs remain versioned components:
+
+```text
+tools/agent_workflow/workflow_evidence.py
+tools/agent_workflow/workflow_validation.py
+```
+
+They are not normal Task Skill entry points. Do not run a fixed Runner and then
+repeat its raw implementation CLI or the legacy direct Git/`gh`/`uv` chain for
+the same phase.
+
+### Authoritative Task mapping
+
+| Skill phase | Evidence profile | Validation profile |
+| --- | --- | --- |
+| Delivery preflight | `delivery` | named `targeted*` only when useful during implementation |
+| Delivery final | `delivery-readiness` | `workflow-delivery --base-sha <base>` |
+| Independent Review | trusted-base `review`, then trusted-base `recheck` | trusted-base `workflow-review --base-sha <base>` |
+| Closeout | `closeout-readonly`, then `recheck` | `workflow-closeout --base-sha <PR base>` |
+
+The phase profile is the authoritative final validation observation. A targeted
+profile is not CI-equivalent. Validation is never reused across Delivery,
+Review, and Closeout.
+
+Feature completion audit is outside Task #85. It keeps its existing trusted raw
+Evidence/Validation path until a separately approved migration.
 
 ## Local data and command routing
 
@@ -25,123 +63,150 @@ Tools may write only below the exact Git-ignored roots:
 ```
 
 Never stage, commit, attach, or treat these files as repository truth. Stored
-metadata and diagnostics must be bounded and must exclude credentials, auth
-headers, cookies, complete environment variables, private keys, complete Issue
-or PR bodies, source, complete diffs, private reasoning, transcripts, unbounded
-command output, and machine-sensitive absolute paths.
+metadata and diagnostics must be bounded and exclude credentials, auth headers,
+cookies, complete environment variables, private keys, complete Issue/PR
+bodies, source, complete diffs, private reasoning, transcripts, unbounded output,
+and machine-sensitive absolute paths.
 
-The active Skill authorizes an operation; `command-execution.md` only selects
-its execution context. Tool failure is not a workflow verdict. A Skill may use
-its safe read-only fallback, but must report the fallback and limitation. Failed
-or incomplete evidence is never `pass`.
+The active Skill authorizes an operation; `command-execution.md` selects only
+its execution context. A Runner failure is not a workflow verdict. Failed,
+partial, unknown, stale, or conflicting evidence is never `pass`.
 
-## Evidence snapshots
+## Evidence profiles and snapshots
 
-Use the phase operation instead of repeating the legacy mechanical query chain:
-
-```text
-delivery-preflight       delivery-readiness
-pr-review-snapshot       pr-review-recheck
-closeout-plan            closeout-final
-feature-audit-snapshot   feature-audit-recheck
-```
-
-The WSL2 fixed front door is:
+The fixed Evidence Runner supports:
 
 ```text
-tools/agent_workflow/wsl2_github_evidence_runner.py
+delivery
+delivery-readiness
+review
+pre-merge
+closeout-readonly
+recheck
 ```
 
-It maps named Task workflow profiles to the operations above, validates complete
-argv and repository identity, disables `git fetch`, compares fixed remote refs
-with `git ls-remote`, and preserves partial/fail semantics. Task #85 controls
-whether and when workflow Skills replace their current invocation paths with this
-runner.
+It validates the complete argv, repository identity, trusted files, fixed GitHub
+queries, and fixed read-only Git operations. It accepts no arbitrary repository,
+REST/GraphQL path, `gh`/Git argument, shell string, output path, or cwd.
 
 Each snapshot must be deterministic, machine-readable, bounded, and include:
 
 - repository and subject identity;
-- trusted SHA, runner source SHA/content digest, and applicable expected and
-  observed base/head/merge/main identities;
-- applicable labels, Project state, relationships, branch facts, checks,
-  threads, and direct-child metadata;
-- explicit truncation markers and aggregate operation counts;
+- expected and observed base/head/merge/main identities;
+- trusted SHA and Runner/tool content digests;
+- applicable labels, Project state, Relationships, branch facts, checks, threads,
+  changed files/commits, and diff digest;
+- explicit truncation and aggregate operation counts;
 - distinct `pass`, `fail`, and `unknown` gates;
-- distinct handling of plan-limit `403`, absent Required Checks, pending or
-  failed checks, endpoint failure, and unavailable facts;
-- a snapshot ID and stability fingerprint.
+- distinct plan-limit `403`, absent Required Checks, pending/failed checks,
+  endpoint failure, and unavailable facts;
+- snapshot ID and stability fingerprint.
 
-The Agent still reads the complete current Task/Feature body, PR diff, and
-relevant source, tests, docs, and governance. Snapshot metadata does not replace
-specification review, code review, acceptance mapping, integration review, or
-safety judgment.
+The Agent still reads complete current specifications, PR diff, source, tests,
+docs, and governance for semantic work. Snapshot metadata does not replace
+acceptance mapping, code review, integration review, or safety judgment.
 
-A snapshot is current only when generated. Rechecks recollect facts and compare
-applicable identity/title, base/head, effective diff, checks, threads, merge,
-`origin/main`, audited main, and direct-child set. Material drift invokes the
-Skill's stop or re-review rule; an old snapshot is never current evidence.
+A snapshot is current only when generated. Recheck recollects current facts and
+compares applicable identity, base/head, diff, checks, threads, merge, refs, and
+branch state. Material drift invokes the Skill's stop/re-review rule; an old
+snapshot is never current evidence.
 
-## Trusted control plane
+## Validation profiles
 
-A reviewed change must not control its own review. If a PR changes applicable
-agent rules, Skills, this policy, command policy, Evidence, Validation,
-or another shared governance dependency, use locked PR-base versions. Feature
-audits use the locked audited-main versions.
-
-The bootstrap must itself come from the trusted commit or a detached trusted
-worktree. Then use `trusted_runner.py` to extract Evidence/Validation from the
-same commit and record trusted SHA, runner source/content digest, reviewed head
-or audited main, and diff/snapshot digest.
+The fixed Validation Runner retains these reusable profiles:
 
 ```text
-python tools/agent_workflow/trusted_runner.py \
-  --trusted-sha <trusted-sha> --tool evidence -- \
-  pr-review-snapshot ...
+current-ci-equivalent
+targeted
+targeted:tools-tests
+targeted:workflow-tests
+post-merge
 ```
 
-A PR-head bootstrap cannot establish trust in that same head. If control-plane
-isolation cannot be proven, stop without a passing verdict.
+Task Skills use the phase profiles added by Task #85:
 
-## Validation
+```text
+workflow-delivery --base-sha <base>
+workflow-review --base-sha <base>
+workflow-closeout --base-sha <PR base>
+```
 
-Run `workflow_validation.py run --phase <phase>`. For PR work pass the locked
-base SHA so governance changes are detected from `base...HEAD`. The runner uses
-current workflows, `pyproject.toml`, lock files, repository structure, and Skill
-validator rules.
+Each phase profile invokes the versioned workflow validator once, runs current
+applicable CI-equivalent commands, detects governance changes from `base...HEAD`,
+and requires all repository Skill validators. `workflow-closeout` additionally
+requires clean local `main == origin/main`.
 
-It must not skip or weaken applicable checks, reuse results across phases or
-SHAs, label a partial set CI-equivalent, or hide a missing required tool.
-Delivery, independent review, closeout, and Feature audit remain separate
-validation observations.
+Success stdout is a compact digest. Failure preserves the failed command, exit
+code, duration, digests, truncation state, and bounded diagnostics in the ignored
+validation directory. A compact success summary is never permission to skip an
+internal command.
 
-Success output is command ID, exit code, duration, status, and short summary.
-Failure includes bounded diagnostics. Sanitized size-limited logs may be written
-only to the ignored validation directory.
+## Trusted independent Review control plane
+
+A reviewed change must not control its own review. The bootstrap
+`trusted_runner.py` must come from the locked PR base or a detached trusted-base
+worktree. It extracts a complete fixed Evidence or Validation front-door bundle
+from that same commit and records the trusted SHA and file digests.
+
+Normal future Review uses:
+
+```text
+--tool evidence-runner
+--tool validation-runner
+```
+
+The extracted front door operates on the reviewed target repository while its
+Runner, profiles, Rules, and underlying tool implementation remain the locked
+base versions. If bootstrap isolation cannot be proven, stop without pass.
+
+The Task #85 migration PR itself is a one-time bootstrap exception: its base
+contains only the predecessor trusted raw-tool choices. Its independent review
+uses that predecessor base control plane to review the migration. After merge,
+this exception expires; later Task reviews use trusted fixed front doors.
+
+## No-duplication and fallback contract
+
+For one phase/fact, there is one authoritative Runner source. Never:
+
+- run both fixed and raw Evidence for the same phase;
+- run the fixed phase Validation profile and a second full direct `uv` chain;
+- repeat all direct `gh`/Git reads after a valid snapshot;
+- treat a Delivery snapshot or conclusion as Review evidence;
+- convert partial/unknown into success through selective fallback.
+
+When a Runner returns `partial`, `unknown`, `fail`, drift, truncation, or a
+schema/version mismatch, expand only the named target:
+
+1. retain the original status and snapshot/result identity;
+2. perform the minimum authorized bounded read or inspect the failed-command log;
+3. record the fallback and limitation;
+4. do not rerun the complete replaced path;
+5. stop before any dependent write or verdict when the gate remains unresolved.
+
+Runner unavailability or incompatibility is a control-plane failure. Rollback to
+the predecessor path is a maintainer-authorized repository change, not an
+implicit runtime fallback.
 
 ## Skill integration and reports
 
-Normal Skills use Evidence/Validation **instead of** the full legacy mechanical
-chain; they do not run both. Skills retain scope, permissions, trusted-control
-plane, identity/specification gates, phase order, stop conditions, exact writes,
-implementation/semantic review, acceptance mapping, severity/verdict, fallback,
-and report contracts.
+Skills retain scope, permissions, trusted-control-plane rules, phase order,
+identity/specification gates, exact writes, semantic implementation/review,
+acceptance mapping, severity/verdict, stop conditions, and report contracts.
+Runners remove duplicate mechanical paths; they do not remove responsibilities.
 
-Compact success reporting is allowed only when required evidence and validation
-pass with no drift, finding, fallback, conflict, or maintainer decision. It still
-includes canonical identity, relevant URLs/branches/SHAs, scope summary,
-validation/checks, lifecycle state, threads, limitations, operations not
-performed, and exact next step. Feature reports additionally include audited
-main, direct-child and acceptance summaries, findings, and one fixed verdict.
+Compact success reporting is allowed only with complete required evidence,
+validation pass, no drift, no finding, no fallback, no conflict, and no pending
+maintainer decision. It still includes canonical identity, URLs/branches/SHAs,
+scope summary, validation/checks, lifecycle state, threads, limitations,
+actions not performed, and exact next step.
 
 Any abnormal path uses a detailed report. Handoffs never copy complete bodies,
-diffs, successful logs, or prior reports. Delivery handoff locates the review
-object and is not review evidence.
+diffs, successful logs, or prior reports. Delivery handoff is not Review proof.
 
 ## External Token analysis boundary
 
-Repository workflow Skills do not start, update, validate, or summarize a runtime
-usage run. Token-consumption analysis is an external maintainer activity based on
-Codex rollout logs and Task metadata. Do not add queries, validation, report fields,
-local writes, fallbacks, or verdict branches solely for that analysis. Raw rollout
-logs and generated analysis reports are not repository artifacts, and missing or
-failed external analysis never changes a Skill verdict.
+Repository Skills do not start, update, validate, or summarize runtime Token
+usage. Token analysis remains an external maintainer activity based on Codex
+rollout logs and Task metadata. Do not add queries, validation, local writes,
+fallbacks, or verdict branches solely for Token analysis. Missing external
+analysis never changes workflow permissions or verdicts.

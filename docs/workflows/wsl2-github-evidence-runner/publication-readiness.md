@@ -45,7 +45,7 @@ Ready material:
 
 Still pending beyond this Task:
 
-- Task #85 real Skill-path consolidation;
+- Task #85 static Skill-path consolidation is complete; runtime candidate evidence remains Task #86;
 - Task #86 controlled candidate Token results.
 
 ## Merge-readiness material gate

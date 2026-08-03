@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Final
 
 SCHEMA_VERSION: Final = 1
-RUNNER_VERSION: Final = "1.0.0"
+RUNNER_VERSION: Final = "1.1.0"
 REPOSITORY: Final = "PhoenixSss/quant-system"
 OUTPUT_ROOT: Final = ".agents/evidence.local/wsl2-github-runs"
 RUNNER_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_runner.py"
@@ -26,6 +26,8 @@ SPEC_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_profiles.json"
 RULES_PATH: Final = ".codex/rules/quant-system-wsl-evidence.rules"
 EVIDENCE_TOOL_PATH: Final = "tools/agent_workflow/workflow_evidence.py"
 COMMON_TOOL_PATH: Final = "tools/agent_workflow/workflow_common.py"
+TRUSTED_BUNDLE_ROOT_ENV: Final = "WORKFLOW_TRUSTED_BUNDLE_ROOT"
+TARGET_REPO_ROOT_ENV: Final = "WORKFLOW_TARGET_REPO_ROOT"
 STDIO_LIMIT_BYTES: Final = 8192
 SHA_PATTERN: Final = re.compile(r"^[0-9a-f]{40}$")
 SNAPSHOT_ID_PATTERN: Final = re.compile(r"^ev-[0-9a-f]{16}$")
@@ -65,6 +67,10 @@ ALLOWED_ENV: Final = (
     "https_proxy",
     "all_proxy",
     "no_proxy",
+    "WORKFLOW_TRUSTED_RUNNER_SHA",
+    "WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256",
+    TRUSTED_BUNDLE_ROOT_ENV,
+    TARGET_REPO_ROOT_ENV,
 )
 CANONICAL_PROFILES: Final[dict[str, tuple[str, tuple[str, ...]]]] = {
     "delivery": ("delivery-preflight", ("task", "expected_main_sha")),
@@ -219,8 +225,59 @@ def _read_tracked_file(repo_root: Path, relative_path: str) -> bytes:
     return actual
 
 
+def _bundle_root(repo_root: Path) -> Path | None:
+    raw = os.environ.get(TRUSTED_BUNDLE_ROOT_ENV)
+    if raw is None:
+        return None
+    root = Path(raw).resolve()
+    allowed_root = (repo_root / ".agents/evidence.local/trusted").resolve()
+    if not root.is_relative_to(allowed_root):
+        raise RunnerError("trusted bundle must be below .agents/evidence.local/trusted")
+    return root
+
+
+def _read_bundle_inputs(repo_root: Path, bundle_root: Path) -> dict[str, bytes]:
+    manifest_path = bundle_root / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RunnerError("trusted bundle manifest is missing or invalid") from exc
+    expected_sha = os.environ.get("WORKFLOW_TRUSTED_RUNNER_SHA")
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != 2
+        or manifest.get("tool") != "evidence-runner"
+        or manifest.get("trusted_sha") != expected_sha
+    ):
+        raise RunnerError("trusted evidence-runner bundle identity is invalid")
+    hashes = manifest.get("files")
+    if not isinstance(hashes, dict) or set(hashes) != set(TRUSTED_PATHS):
+        raise RunnerError("trusted evidence-runner bundle file set is invalid")
+    payloads: dict[str, bytes] = {}
+    for relative_path in TRUSTED_PATHS:
+        source = bundle_root / relative_path
+        if source.is_symlink():
+            raise RunnerError(
+                f"trusted bundle file must not be a symlink: {relative_path}"
+            )
+        try:
+            payload = source.read_bytes()
+        except FileNotFoundError as exc:
+            raise RunnerError(
+                f"trusted bundle file is missing: {relative_path}"
+            ) from exc
+        if _sha256_bytes(payload) != hashes.get(relative_path):
+            raise RunnerError(f"trusted bundle file digest mismatch: {relative_path}")
+        payloads[relative_path] = payload
+    return payloads
+
+
 def _load_trusted_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str]]:
-    payloads = {path: _read_tracked_file(repo_root, path) for path in TRUSTED_PATHS}
+    bundle_root = _bundle_root(repo_root)
+    if bundle_root is None:
+        payloads = {path: _read_tracked_file(repo_root, path) for path in TRUSTED_PATHS}
+    else:
+        payloads = _read_bundle_inputs(repo_root, bundle_root)
     try:
         spec = json.loads(payloads[SPEC_PATH].decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -266,10 +323,20 @@ def _parse_repository_slug(remote: str) -> str | None:
 def _find_repo_root(script_path: Path) -> Path:
     if script_path.is_symlink():
         raise RunnerError("runner entry must not be invoked through a symlink")
-    repo_root = script_path.resolve().parents[2]
-    expected = repo_root / RUNNER_PATH
-    if script_path.resolve() != expected.resolve():
-        raise RunnerError("runner entry path is not the trusted repository entry")
+    target_root = os.environ.get(TARGET_REPO_ROOT_ENV)
+    if target_root is None:
+        repo_root = script_path.resolve().parents[2]
+        expected = repo_root / RUNNER_PATH
+        if script_path.resolve() != expected.resolve():
+            raise RunnerError("runner entry path is not the trusted repository entry")
+    else:
+        repo_root = Path(target_root).resolve()
+        bundle_root = _bundle_root(repo_root)
+        if bundle_root is None:
+            raise RunnerError("trusted runner target requires a trusted bundle")
+        expected = bundle_root / RUNNER_PATH
+        if script_path.resolve() != expected.resolve():
+            raise RunnerError("runner entry path is not the trusted bundle entry")
     if Path.cwd().resolve() != repo_root.resolve():
         raise RunnerError("runner must be started from the repository root")
     if repo_root.resolve().as_posix().startswith("/mnt/"):
@@ -363,7 +430,7 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
     operation = CANONICAL_PROFILES[profile][0]
     base = [
         sys.executable,
-        str(repo_root / EVIDENCE_TOOL_PATH),
+        str((_bundle_root(repo_root) or repo_root) / EVIDENCE_TOOL_PATH),
     ]
     if profile == "recheck":
         snapshot_path = (
@@ -541,6 +608,7 @@ def _compact_result(
     run_id: str,
     result_path: str,
     integrity: Mapping[str, str],
+    trusted_bundle: bool,
     remote_refs: Mapping[str, Any],
     remote_warnings: Sequence[str],
 ) -> dict[str, Any]:
@@ -637,7 +705,11 @@ def _compact_result(
             "raw_api_responses_committed": False,
         },
         "integrity": {
-            "verification": "tracked-head-pre-execution",
+            "verification": (
+                "trusted-commit-bundle-pre-execution"
+                if trusted_bundle
+                else "tracked-head-pre-execution"
+            ),
             "trusted_files": dict(integrity),
         },
     }
@@ -727,6 +799,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             run_id=run_id,
             result_path=result_path.relative_to(repo_root).as_posix(),
             integrity=trusted_hashes,
+            trusted_bundle=_bundle_root(repo_root) is not None,
             remote_refs=remote_refs,
             remote_warnings=remote_warnings,
         )

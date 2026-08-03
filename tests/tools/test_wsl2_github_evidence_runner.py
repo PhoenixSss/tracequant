@@ -22,6 +22,7 @@ TRUSTED_FILES = (
 REAL_GIT_OPTIONAL = shutil.which("git")
 assert REAL_GIT_OPTIONAL is not None
 REAL_GIT: str = REAL_GIT_OPTIONAL
+PYTHON = os.environ.get("WORKFLOW_TEST_PYTHON", sys.executable)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -136,7 +137,7 @@ exec {REAL_GIT!r} "$@"
 
     gh = bin_dir / "gh"
     gh.write_text(
-        f"""#!{sys.executable}
+        f"""#!{PYTHON}
 import json, sys
 from pathlib import Path
 state_path=Path({str(state_path)!r})
@@ -161,10 +162,17 @@ elif args[:2] == ['pr','diff']:
 elif args[:2] == ['api','graphql']:
     joined=' '.join(args)
     if 'reviewThreads' in joined:
-        dump({{'data':{{'repository':{{'pullRequest':{{'reviewThreads':state['threads']}}}}}}}})
+        dump({{'data':{{'repository':{{'pullRequest':{{
+            'reviewThreads':state['threads']
+        }}}}}}}})
     else:
         dump({{'data':{{'repository':{{'issue':state['relationships']}}}}}})
-elif args and args[0] == 'api' and len(args) > 1 and 'required_status_checks' in args[1]:
+elif (
+    args
+    and args[0] == 'api'
+    and len(args) > 1
+    and 'required_status_checks' in args[1]
+):
     mode=state.get('required_checks_mode')
     if mode == '403':
         sys.stderr.write('HTTP 403 Resource not accessible by integration')
@@ -173,7 +181,10 @@ elif args and args[0] == 'api' and len(args) > 1 and 'required_status_checks' in
         sys.stderr.write('HTTP 404 Not Found')
         sys.exit(1)
     if mode == 'rate-limit':
-        sys.stderr.write('HTTP 429 rate limit token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456')
+        sys.stderr.write(
+            'HTTP 429 rate limit token='
+            'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456'
+        )
         sys.exit(1)
     dump(state['required_checks'])
 else:
@@ -660,3 +671,34 @@ def test_live_task_pr_schema() -> None:
     assert pr.isdigit()
     assert completed.returncode in {0, 3}, completed.stderr
     assert json.loads(completed.stdout)["task"] == 84
+
+
+def test_trusted_runner_executes_real_evidence_front_door(tmp_path: Path) -> None:
+    repo, _, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    trusted_runner = ROOT / "tools/agent_workflow/trusted_runner.py"
+    completed = subprocess.run(
+        [
+            PYTHON,
+            str(trusted_runner),
+            "--trusted-sha",
+            main_sha,
+            "--tool",
+            "evidence-runner",
+            "--",
+            *_review_args(main_sha, head_sha),
+        ],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert completed.returncode == 0, completed.stderr
+    digest = json.loads(completed.stdout)
+    stored = json.loads((repo / digest["result_path"]).read_text(encoding="utf-8"))
+    assert stored["integrity"]["verification"] == (
+        "trusted-commit-bundle-pre-execution"
+    )
+    assert digest["base_sha"] == main_sha
+    assert digest["head_sha"] == head_sha

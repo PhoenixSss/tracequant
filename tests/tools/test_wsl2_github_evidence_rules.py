@@ -99,6 +99,23 @@ def _decision(argv: list[str]) -> str:
             SHA,
         ],
         RUNNER + ["recheck", "--snapshot-id", "ev-0123456789abcdef"],
+        [
+            "tools/agent_workflow/trusted_runner.py",
+            "--tool",
+            "evidence-runner",
+            "--trusted-sha",
+            SHA,
+            "--",
+            "review",
+            "--task",
+            "84",
+            "--pr",
+            "102",
+            "--expected-base-sha",
+            SHA,
+            "--expected-head-sha",
+            SHA,
+        ],
     ],
 )
 def test_fixed_evidence_profiles_are_allowed(argv: list[str]) -> None:

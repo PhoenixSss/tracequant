@@ -1,7 +1,8 @@
 # quant-system WSL2 GitHub evidence runner rules
 #
 # Scope:
-# - Allow only the fixed repository Evidence Runner and named profile prefixes.
+# - Allow only the fixed repository Evidence Runner, named profile prefixes,
+#   and the trusted-base evidence front-door bootstrap.
 # - Codex execpolicy uses prefix matching; allow is not complete argv acceptance.
 # - The runner validates the complete argument set, repository identity, trusted
 #   files, fixed GitHub queries, and fixed read-only Git commands before evidence
@@ -48,6 +49,13 @@ prefix_rule(
     pattern = ["tools/agent_workflow/wsl2_github_evidence_runner.py", "recheck"],
     decision = "allow",
     justification = "Allow a fixed stored-snapshot stability recheck prefix; runner validates the snapshot ID and supported prior operation.",
+)
+
+
+prefix_rule(
+    pattern = ["tools/agent_workflow/trusted_runner.py", "--tool", "evidence-runner"],
+    decision = "allow",
+    justification = "Allow only the trusted-base fixed Evidence Runner bootstrap prefix used by independent Review; trusted_runner validates the commit SHA, current repository root, bundle manifest and delegated runner argv.",
 )
 
 prefix_rule(

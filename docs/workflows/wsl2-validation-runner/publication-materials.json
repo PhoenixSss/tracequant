@@ -219,11 +219,11 @@
   "known_followups": [
     {
       "task": "#84",
-      "description": "baseRefOid and GitHub Evidence helper compatibility remain deferred."
+      "description": "Completed by Task #84: fixed read-only Evidence Runner and compatibility/capability evidence."
     },
     {
       "task": "#85",
-      "description": "Formal Task Workflow Skills are not switched to this runner in Task #83."
+      "description": "Completed by Task #85: Task Workflow Skills use unified Validation/Evidence Runner paths."
     }
   ],
   "source_documents": [

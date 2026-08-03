@@ -13,11 +13,15 @@ ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "tools" / "agent_workflow" / "wsl2_validation_runner.py"
 SPEC = ROOT / "tools" / "agent_workflow" / "wsl2_validation_profiles.json"
 RULES = ROOT / ".codex" / "rules" / "quant-system-wsl-validation.rules"
+WORKFLOW_VALIDATION = ROOT / "tools" / "agent_workflow" / "workflow_validation.py"
+WORKFLOW_COMMON = ROOT / "tools" / "agent_workflow" / "workflow_common.py"
 PYTHON = os.environ.get("WORKFLOW_TEST_PYTHON", sys.executable)
 TRUSTED_RELATIVE_PATHS = (
     "tools/agent_workflow/wsl2_validation_runner.py",
     "tools/agent_workflow/wsl2_validation_profiles.json",
     ".codex/rules/quant-system-wsl-validation.rules",
+    "tools/agent_workflow/workflow_validation.py",
+    "tools/agent_workflow/workflow_common.py",
 )
 
 
@@ -40,9 +44,33 @@ def _copy_runner_repo(tmp_path: Path, *, name: str = "repo") -> Path:
     shutil.copy2(SCRIPT, repo / "tools" / "agent_workflow" / SCRIPT.name)
     shutil.copy2(SPEC, repo / "tools" / "agent_workflow" / SPEC.name)
     shutil.copy2(RULES, repo / ".codex" / "rules" / RULES.name)
+    shutil.copy2(
+        WORKFLOW_VALIDATION,
+        repo / "tools" / "agent_workflow" / WORKFLOW_VALIDATION.name,
+    )
+    shutil.copy2(
+        WORKFLOW_COMMON, repo / "tools" / "agent_workflow" / WORKFLOW_COMMON.name
+    )
     (repo / ".gitignore").write_text(
         ".agents/validation.local/\n.agents/evidence.local/\n", encoding="utf-8"
     )
+    (repo / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    (repo / "pyproject.toml").write_text(
+        "[tool.ruff]\nline-length = 88\n[tool.mypy]\npython_version = '3.11'\n",
+        encoding="utf-8",
+    )
+    (repo / "tests").mkdir()
+    for skill in (
+        "task-delivery",
+        "task-pr-review",
+        "task-closeout",
+        "feature-completion-audit",
+    ):
+        skill_dir = repo / ".agents" / "skills" / skill
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {skill}\n---\n", encoding="utf-8"
+        )
     (repo / ".github" / "workflows" / "ci.yml").write_text(
         """name: CI
 jobs:
@@ -112,13 +140,21 @@ elif len(args) == 4 and args[:3] == ['diff', '--quiet', '--']:
     relative = args[3]
     current = repo / relative
     expected = snapshot(relative)
-    if not expected.exists() or not current.exists() or current.read_bytes() != expected.read_bytes():
+    if (
+        not expected.exists()
+        or not current.exists()
+        or current.read_bytes() != expected.read_bytes()
+    ):
         sys.exit(1)
 elif len(args) == 5 and args[:4] == ['diff', '--cached', '--quiet', '--']:
     relative = args[4]
     current = repo / relative
     expected = snapshot(relative)
-    if not expected.exists() or not current.exists() or current.read_bytes() != expected.read_bytes():
+    if (
+        not expected.exists()
+        or not current.exists()
+        or current.read_bytes() != expected.read_bytes()
+    ):
         sys.exit(1)
 elif len(args) == 2 and args[0] == 'show' and args[1].startswith('HEAD:'):
     relative = args[1].split(':', 1)[1]
@@ -183,6 +219,12 @@ sys.exit(0)
         json.dumps({"fail_id": fail_id, "sleep_id": sleep_id}), encoding="utf-8"
     )
     return bin_dir
+
+
+def _fake_skill_validator(tmp_path: Path) -> Path:
+    validator = tmp_path / "quick_validate.py"
+    validator.write_text("import sys\nprint('valid', sys.argv[1])\n", encoding="utf-8")
+    return validator
 
 
 def _run(
@@ -273,7 +315,10 @@ def test_trailing_arguments_fail_before_validation_side_effects(
         tool_path.write_text(
             original.replace(
                 "import sys\n",
-                f"import sys\nfrom pathlib import Path\nPath({str(canary)!r}).write_text({tool!r})\n",
+                (
+                    "import sys\nfrom pathlib import Path\n"
+                    f"Path({str(canary)!r}).write_text({tool!r})\n"
+                ),
                 1,
             ),
             encoding="utf-8",
@@ -294,7 +339,7 @@ def test_trailing_arguments_fail_before_validation_side_effects(
         )
         assert result.stdout == ""
         assert not canary.exists()
-        assert not (repo / ".agents").exists()
+        assert not (repo / ".agents" / "validation.local").exists()
 
 
 def test_failure_propagates_and_summaries_are_bounded_and_redacted(
@@ -470,11 +515,64 @@ def test_result_write_failure_does_not_report_success(tmp_path: Path) -> None:
     repo = _copy_runner_repo(tmp_path)
     bin_dir = _write_fake_tools(tmp_path, repo)
     blocked = repo / ".agents" / "validation.local"
-    blocked.parent.mkdir(parents=True)
+    blocked.parent.mkdir(parents=True, exist_ok=True)
     blocked.write_text("not a directory", encoding="utf-8")
     result = _run(repo, bin_dir, "targeted")
     assert result.returncode == 2
     assert result.stdout == ""
+
+
+def test_workflow_profiles_require_base_sha_and_run_one_bounded_command(
+    tmp_path: Path,
+) -> None:
+    repo = _copy_runner_repo(tmp_path)
+    bin_dir = _write_fake_tools(tmp_path, repo)
+    validator = _fake_skill_validator(tmp_path)
+    base_sha = "b" * 40
+    for profile in ("workflow-delivery", "workflow-review"):
+        missing = _run(repo, bin_dir, profile)
+        assert missing.returncode == 2
+        result = _run(
+            repo,
+            bin_dir,
+            profile,
+            "--base-sha",
+            base_sha,
+            extra_env={"CODEX_SKILL_VALIDATOR": str(validator)},
+        )
+        assert result.returncode == 0, result.stderr
+        digest = json.loads(result.stdout)
+        assert digest["profile"] == profile
+        assert digest["command_count"] == 1
+        stored = json.loads((repo / digest["result_path"]).read_text())
+        assert stored["commands"][0]["id"] == "workflow-validation"
+        assert stored["commands"][0]["exit_code"] == 0
+
+
+def test_workflow_closeout_requires_clean_synchronized_main(tmp_path: Path) -> None:
+    repo = _copy_runner_repo(tmp_path)
+    validator = _fake_skill_validator(tmp_path)
+    base_sha = "b" * 40
+    off_main = _write_fake_tools(tmp_path, repo, branch="feature")
+    result = _run(
+        repo,
+        off_main,
+        "workflow-closeout",
+        "--base-sha",
+        base_sha,
+        extra_env={"CODEX_SKILL_VALIDATOR": str(validator)},
+    )
+    assert result.returncode == 2
+    main = _write_fake_tools(tmp_path, repo, branch="main")
+    result = _run(
+        repo,
+        main,
+        "workflow-closeout",
+        "--base-sha",
+        base_sha,
+        extra_env={"CODEX_SKILL_VALIDATOR": str(validator)},
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_rules_file_contains_positive_and_negative_boundaries() -> None:
@@ -483,6 +581,9 @@ def test_rules_file_contains_positive_and_negative_boundaries() -> None:
         "current-ci-equivalent",
         "targeted",
         "post-merge",
+        "workflow-delivery",
+        "workflow-review",
+        "workflow-closeout",
     ):
         assert allowed in text
     for blocked in (

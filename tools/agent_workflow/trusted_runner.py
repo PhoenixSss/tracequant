@@ -29,11 +29,28 @@ FILES: Final = {
         "tools/agent_workflow/workflow_common.py",
         "tools/agent_workflow/workflow_validation.py",
     ),
+    "evidence-runner": (
+        "tools/agent_workflow/workflow_common.py",
+        "tools/agent_workflow/workflow_evidence.py",
+        "tools/agent_workflow/wsl2_github_evidence_runner.py",
+        "tools/agent_workflow/wsl2_github_evidence_profiles.json",
+        ".codex/rules/quant-system-wsl-evidence.rules",
+    ),
+    "validation-runner": (
+        "tools/agent_workflow/workflow_common.py",
+        "tools/agent_workflow/workflow_validation.py",
+        "tools/agent_workflow/wsl2_validation_runner.py",
+        "tools/agent_workflow/wsl2_validation_profiles.json",
+        ".codex/rules/quant-system-wsl-validation.rules",
+    ),
 }
 ENTRY: Final = {
     "evidence": "tools/agent_workflow/workflow_evidence.py",
     "validation": "tools/agent_workflow/workflow_validation.py",
+    "evidence-runner": "tools/agent_workflow/wsl2_github_evidence_runner.py",
+    "validation-runner": "tools/agent_workflow/wsl2_validation_runner.py",
 }
+FRONT_DOOR_TOOLS: Final = frozenset({"evidence-runner", "validation-runner"})
 
 
 def _gitignore_patterns(repo_root: Path) -> set[str]:
@@ -58,7 +75,7 @@ def _run_git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
 
 def _extract(
     repo_root: Path, trusted_sha: str, tool: str
-) -> tuple[Path, dict[str, Any]]:
+) -> tuple[Path, Path, dict[str, Any]]:
     if ".agents/evidence.local/" not in _gitignore_patterns(repo_root):
         raise RuntimeError(".agents/evidence.local/ must be exactly Git ignored")
     verified = _run_git(repo_root, "rev-parse", "--verify", f"{trusted_sha}^{{commit}}")
@@ -72,13 +89,15 @@ def _extract(
         shown = _run_git(repo_root, "show", f"{full_sha}:{repository_path}")
         if shown.returncode != 0:
             raise RuntimeError(f"trusted commit does not contain {repository_path}")
-        target = root / Path(repository_path).name
+        target = root / repository_path
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(shown.stdout)
         hashes[repository_path] = hashlib.sha256(shown.stdout).hexdigest()
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "trusted_sha": full_sha,
         "tool": tool,
+        "entry": ENTRY[tool],
         "files": hashes,
     }
     (root / "manifest.json").write_text(
@@ -86,12 +105,15 @@ def _extract(
         encoding="utf-8",
         newline="\n",
     )
-    return root / Path(ENTRY[tool]).name, manifest
+    return root, root / ENTRY[tool], manifest
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Execute workflow evidence or validation from a trusted Git commit."
+        description=(
+            "Execute workflow evidence, validation, or their fixed front-door "
+            "runners from a trusted Git commit."
+        )
     )
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--trusted-sha", required=True)
@@ -106,8 +128,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("trusted runner error: invalid trusted SHA", file=sys.stderr)
         return 2
     repo_root = Path(args.repo_root).resolve()
+    if args.tool in FRONT_DOOR_TOOLS and repo_root != Path.cwd().resolve():
+        print(
+            "trusted runner error: fixed front-door runners require the "
+            "current repository root",
+            file=sys.stderr,
+        )
+        return 2
     try:
-        entry, manifest = _extract(repo_root, args.trusted_sha, args.tool)
+        bundle_root, entry, manifest = _extract(repo_root, args.trusted_sha, args.tool)
     except RuntimeError as exc:
         print(f"trusted runner error: {exc}", file=sys.stderr)
         return 2
@@ -117,6 +146,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     env = os.environ.copy()
     env["WORKFLOW_TRUSTED_RUNNER_SHA"] = manifest["trusted_sha"]
     env["WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256"] = manifest["files"][ENTRY[args.tool]]
+    if args.tool in FRONT_DOOR_TOOLS:
+        env["WORKFLOW_TRUSTED_BUNDLE_ROOT"] = str(bundle_root)
+        env["WORKFLOW_TARGET_REPO_ROOT"] = str(repo_root)
     completed = subprocess.run(
         [sys.executable, str(entry), *tool_args],
         cwd=repo_root,
