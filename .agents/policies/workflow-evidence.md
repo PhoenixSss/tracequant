@@ -100,6 +100,9 @@ Each snapshot must be deterministic, machine-readable, bounded, and include:
 - distinct `pass`, `fail`, and `unknown` gates;
 - distinct plan-limit `403`, absent Required Checks, pending/failed checks,
   endpoint failure, and unavailable facts;
+- a separate capability-limited cleanup eligibility field for exact Task branch
+  cleanup when, and only when, a recognized Required Checks plan-limit `403` is
+  preserved as an unknown gate;
 - snapshot ID and stability fingerprint.
 
 The Agent still reads complete current specifications, PR diff, source, tests,
@@ -186,6 +189,25 @@ schema/version mismatch, expand only the named target:
 Runner unavailability or incompatibility is a control-plane failure. Rollback to
 the predecessor path is a maintainer-authorized repository change, not an
 implicit runtime fallback.
+
+## Capability-limited cleanup eligibility
+
+A recognized GitHub Required Checks plan-limit `403` remains
+`required_checks_configuration = unknown` and keeps the Evidence result `partial`.
+Closeout may compute a separate
+`cleanup_eligibility.status = eligible-under-capability-limited-policy` only for
+exact Task branch cleanup. This derived judgment never changes Required Checks
+semantics and must not be reused for Merge, push, Issue, Project, label, review,
+or other writes.
+
+Eligibility requires a merged PR, correct closing linkage, final Task metadata,
+stable recheck, successful observed check runs, synchronized local and remote
+main at the merge SHA, exact local and remote branch names and tips, merge-tree
+equality with the reviewed head, a clean worktree, fixed repository identity, no
+target-branch worktree use, and a cleanup plan containing only the verified Task
+branch. Authentication, scope, permission, rate-limit, network, schema, service,
+unknown Required Checks failures, missing check runs, failed/pending/stale
+checks, ref drift, tree drift, or worktree conflicts keep cleanup blocked.
 
 ## Skill integration and reports
 

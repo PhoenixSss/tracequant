@@ -44,10 +44,17 @@ elif args[:2] == ['branch','--show-current']: out(state.get('branch','main'))
 elif args[:2] == ['rev-parse','HEAD']: out(state.get('git_head','a'*40))
 elif args[:2] == ['rev-parse','refs/heads/main']: out(state.get('local_main',state.get('origin_main','b'*40)))
 elif args[:2] == ['rev-parse','refs/remotes/origin/main']: out(state.get('origin_main','b'*40))
+elif args[:1] == ['rev-parse'] and args[1].startswith('refs/heads/'):
+    branch=args[1].removeprefix('refs/heads/')
+    out(state.get('local_branch_tips',{{}}).get(branch, state.get('pr',{{}}).get('headRefOid','d'*40)))
 elif args[:2] == ['status','--short']: out('\\n'.join(state.get('status',[])))
 elif args[:3] == ['diff','--cached','--name-only']: out('\\n'.join(state.get('staged',[])))
 elif args[:2] == ['diff','--name-only']: out('\\n'.join(state.get('changed',[])))
-elif args[:3] == ['worktree','list','--porcelain']: out('worktree <repo>\\nHEAD '+state.get('git_head','a'*40)+'\\nbranch refs/heads/main')
+elif args[:3] == ['worktree','list','--porcelain']:
+    lines=['worktree <repo>','HEAD '+state.get('git_head','a'*40),'branch refs/heads/main']
+    for branch in state.get('extra_worktree_branches',[]):
+        lines.extend(['worktree <repo-'+branch+'>','HEAD '+state.get('pr',{{}}).get('headRefOid','d'*40),'branch refs/heads/'+branch])
+    out('\\n'.join(lines))
 elif args[:3] == ['log','-1','--format=%H']: out(state.get('runner_source_sha','c'*40))
 elif args[:2] == ['ls-remote','--heads']:
     if state.get('remote_branch_exists',True): out(state.get('pr',{{}}).get('headRefOid','d'*40)+'\\trefs/heads/'+args[-1])
@@ -55,6 +62,8 @@ elif args[:3] == ['show-ref','--verify','--quiet']:
     sys.exit(0 if state.get('local_branch_exists',True) else 1)
 elif args[:2] == ['merge-base','--is-ancestor']:
     sys.exit(0 if state.get('merge_on_main', True) else 1)
+elif args[:2] == ['diff','--quiet']:
+    sys.exit(0 if state.get('tree_equal', True) else 1)
 elif args[:2] == ['diff','--check']: sys.exit(0)
 else:
     sys.stderr.write('unsupported fake git: '+' '.join(args))
@@ -231,6 +240,7 @@ def _base_state() -> dict[str, Any]:
 def _write_repo(
     tmp_path: Path, state: dict[str, Any]
 ) -> tuple[Path, Path, dict[str, str]]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".gitignore").write_text(
@@ -488,6 +498,7 @@ def test_closeout_accepts_merge_reachable_from_later_origin_main(
         state="MERGED",
         mergeCommit={"oid": "8" * 40},
         mergedAt="2026-07-26T00:00:00Z",
+        statusCheckRollup=[{"name": "quality", "conclusion": "SUCCESS"}],
     )
     state["merge_on_main"] = True
     repo, _, env = _write_repo(tmp_path, state)
@@ -509,6 +520,169 @@ def test_closeout_accepts_merge_reachable_from_later_origin_main(
     assert value["gates"]["main_contains_merge"]["status"] == "pass"
     assert value["gates"]["local_main_synced"]["status"] == "pass"
     assert value["limitations"] == ["read-only plan; no branch deletion performed"]
+
+
+def _completed_closeout_state() -> dict[str, Any]:
+    state = _base_state()
+    state["branch"] = "main"
+    state["git_head"] = "8" * 40
+    state["local_main"] = "8" * 40
+    state["origin_main"] = "8" * 40
+    state["required_checks_mode"] = "403"
+    state["issues"]["70"]["state"] = "CLOSED"
+    state["issues"]["70"]["projectItems"] = [{"status": {"name": "Done"}}]
+    state["issues"]["70"]["closedByPullRequestsReferences"] = [
+        {
+            "number": 71,
+            "state": "MERGED",
+            "mergedAt": "2026-07-26T00:00:00Z",
+            "url": "https://github.com/owner/repo/pull/71",
+        }
+    ]
+    state["pr"].update(
+        state="MERGED",
+        mergeCommit={"oid": "8" * 40},
+        mergedAt="2026-07-26T00:00:00Z",
+        statusCheckRollup=[{"name": "quality", "conclusion": "SUCCESS"}],
+    )
+    state["merge_on_main"] = True
+    state["tree_equal"] = True
+    return state
+
+
+def test_closeout_plan_limit_cleanup_eligibility_is_separate(
+    tmp_path: Path,
+) -> None:
+    state = _completed_closeout_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "closeout-plan",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+        "--expected-head-sha",
+        "4" * 40,
+        "--expected-merge-sha",
+        "8" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["required_checks_configuration"]["status"] == "unknown"
+    assert value["observed"]["required_checks"]["failure"]["reason"] == (
+        "github-plan-limit-403"
+    )
+    eligibility = value["observed"]["branch_cleanup"]["cleanup_eligibility"]
+    assert eligibility["status"] == "eligible-under-capability-limited-policy"
+    assert eligibility["limitation_preserved"] is True
+    assert eligibility["allowed_scope"] == "exact-task-branch-cleanup-only"
+    assert value["gates"]["capability_limited_cleanup_eligibility"]["status"] == "pass"
+
+
+def test_cleanup_eligibility_blocks_failed_pending_and_missing_checks(
+    tmp_path: Path,
+) -> None:
+    for index, rollup in enumerate(
+        (
+            [{"name": "CI", "conclusion": "FAILURE"}],
+            [{"name": "quality", "status": "IN_PROGRESS"}],
+            [{"name": "CI", "conclusion": "SUCCESS"}],
+            [],
+        )
+    ):
+        state = _completed_closeout_state()
+        state["pr"]["statusCheckRollup"] = rollup
+        case_dir = tmp_path / str(index)
+        case_dir.mkdir()
+        repo, _, env = _write_repo(case_dir, state)
+        result = _run(
+            repo,
+            env,
+            "closeout-plan",
+            "--task",
+            "70",
+            "--pr",
+            "71",
+            "--expected-head-sha",
+            "4" * 40,
+            "--expected-merge-sha",
+            "8" * 40,
+        )
+        assert result.returncode == 0, result.stderr
+        value = json.loads(result.stdout)
+        eligibility = value["observed"]["branch_cleanup"]["cleanup_eligibility"]
+        assert eligibility["status"] == "blocked"
+        assert value["gates"]["capability_limited_cleanup_eligibility"]["status"] == (
+            "fail"
+        )
+
+
+def test_cleanup_eligibility_blocks_non_plan_limit_403_and_ref_drift(
+    tmp_path: Path,
+) -> None:
+    state = _completed_closeout_state()
+    state["required_checks_mode"] = "available"
+    state["local_branch_tips"] = {"task-70": "5" * 40}
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "closeout-plan",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+        "--expected-head-sha",
+        "4" * 40,
+        "--expected-merge-sha",
+        "8" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    eligibility = value["observed"]["branch_cleanup"]["cleanup_eligibility"]
+    assert eligibility["status"] == "blocked"
+    assert "Required Checks failure is not classified" in " ".join(
+        eligibility["reasons"]["items"]
+    )
+    assert value["gates"]["local_branch_tip"]["status"] == "fail"
+
+
+def test_closeout_recheck_blocks_cleanup_eligibility_on_drift(tmp_path: Path) -> None:
+    state = _completed_closeout_state()
+    repo, state_path, env = _write_repo(tmp_path, state)
+    first = _run(
+        repo,
+        env,
+        "closeout-plan",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+        "--expected-head-sha",
+        "4" * 40,
+        "--expected-merge-sha",
+        "8" * 40,
+    )
+    assert first.returncode == 0, first.stderr
+    first_value = json.loads(first.stdout)
+    state["pr"]["statusCheckRollup"] = [{"name": "CI", "conclusion": "FAILURE"}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    second = _run(
+        repo,
+        env,
+        "closeout-final",
+        "--snapshot-id",
+        first_value["snapshot_id"],
+    )
+    assert second.returncode == 0, second.stderr
+    value = json.loads(second.stdout)
+    assert value["gates"]["snapshot_stability"]["status"] == "fail"
+    assert (
+        value["observed"]["branch_cleanup"]["cleanup_eligibility"]["status"]
+        == "blocked"
+    )
 
 
 def test_missing_github_fact_never_becomes_false_pass(tmp_path: Path) -> None:
