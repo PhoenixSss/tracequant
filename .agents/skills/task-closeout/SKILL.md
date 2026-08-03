@@ -122,7 +122,11 @@ completion.
 Resolve the exact branch from verified PR facts. Before deletion verify branch
 ownership, expected head, no worktree use, merged result, Issue closure,
 synchronized main, validation/checks, final metadata, and no unrelated/default/
-protected/ambiguous target.
+protected/ambiguous target. Treat PR-declared closing linkage, the Issue's
+latest effective closure cause, and the PR merge identity as separate facts:
+unknown or partial closure evidence blocks cleanup, conflicts block cleanup, and
+only complete Issue-side proof that the locked merged PR closed the Task may
+satisfy the closure portion of cleanup eligibility.
 
 If Required Checks configuration is unavailable only because of a recognized
 GitHub plan-limit `403`, branch cleanup may continue only when the snapshot's
@@ -134,7 +138,9 @@ are all successful terminal states, the final recheck is stable, local
 the reviewed PR head, the PR head tree equals the merge tree, the target branch
 is not used by any worktree, and the cleanup plan contains no other branch.
 Any authentication, scope, permission, rate-limit, network, schema, service, or
-unknown Required Checks failure keeps cleanup blocked.
+unknown Required Checks failure keeps cleanup blocked. Missing Issue-side PR
+state, `merged`, or `mergedAt` metadata must be reported as unknown/partial
+closure evidence, not as an explicit not-linked relationship.
 
 Delete only the exact remote branch and verify absence. For local cleanup, try
 `git branch -d` first. Exact `-D` is allowed only after verified Squash Merge,

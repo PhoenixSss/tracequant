@@ -84,6 +84,50 @@ query($owner:String!, $name:String!, $number:Int!) {
 }
 """
 
+ISSUE_CLOSURE_QUERY: Final = r"""
+query($owner:String!, $name:String!, $number:Int!) {
+  repository(owner:$owner, name:$name) {
+    issue(number:$number) {
+      number
+      state
+      closedAt
+      closedByPullRequestsReferences(first:20, includeClosedPrs:true) {
+        nodes {
+          number
+          state
+          merged
+          mergedAt
+          url
+          repository { nameWithOwner }
+        }
+        pageInfo { hasNextPage }
+      }
+      timelineItems(last:50, itemTypes:[CLOSED_EVENT, REOPENED_EVENT]) {
+        nodes {
+          __typename
+          ... on ClosedEvent {
+            createdAt
+            closer {
+              __typename
+              ... on PullRequest {
+                number
+                state
+                merged
+                mergedAt
+                url
+                repository { nameWithOwner }
+              }
+            }
+          }
+          ... on ReopenedEvent { createdAt }
+        }
+        pageInfo { hasPreviousPage }
+      }
+    }
+  }
+}
+"""
+
 
 def _normalize_title(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value)
@@ -263,7 +307,10 @@ def _issue_view(
     number: int,
     warnings: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    fields = "number,title,body,comments,state,labels,projectItems,url,closedAt,closedByPullRequestsReferences"
+    fields = (
+        "number,title,body,comments,state,labels,projectItems,url,closedAt,"
+        "closedByPullRequestsReferences"
+    )
     result = runner.run(
         [
             "gh",
@@ -324,8 +371,12 @@ def _issue_view(
                 {
                     "number": pr.get("number"),
                     "state": safe_text(pr.get("state")),
+                    "merged": pr.get("merged")
+                    if isinstance(pr.get("merged"), bool)
+                    else None,
                     "merged_at": safe_text(pr.get("mergedAt")),
                     "url": safe_text(pr.get("url")),
+                    "repository": _repository_name(pr),
                 }
             )
     body = value.get("body") if isinstance(value.get("body"), str) else None
@@ -347,7 +398,7 @@ def _issue_view(
                 }
             )
     content_facts = {"body": body, "comments": comment_facts}
-    return {
+    issue = {
         "number": value.get("number"),
         "title": safe_text(value.get("title")),
         "content_sha256": sha256_json(content_facts),
@@ -360,6 +411,10 @@ def _issue_view(
         "closed_at": safe_text(value.get("closedAt")),
         "closing_pull_requests": bounded_list(pull_refs),
     }
+    issue["issue_closure"] = _issue_closure_snapshot(
+        runner, repository, number, warnings
+    )
+    return issue
 
 
 def _find_project_status(value: Any) -> str | None:
@@ -431,6 +486,170 @@ def _graphql(
         )
         return None
     return value
+
+
+def _repository_name(value: Mapping[str, Any]) -> str | None:
+    repository = value.get("repository")
+    if isinstance(repository, Mapping):
+        return safe_text(repository.get("nameWithOwner"))
+    return None
+
+
+def _normalize_closing_pr(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return {
+        "number": value.get("number"),
+        "state": safe_text(value.get("state")),
+        "merged": value.get("merged")
+        if isinstance(value.get("merged"), bool)
+        else None,
+        "merged_at": safe_text(value.get("mergedAt")),
+        "url": safe_text(value.get("url")),
+        "repository": _repository_name(value),
+    }
+
+
+def _issue_closure_snapshot(
+    runner: CommandRunner,
+    repository: str,
+    number: int,
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    value = _graphql(
+        runner,
+        repository,
+        number,
+        ISSUE_CLOSURE_QUERY,
+        command_id=f"gh-issue-closure-{number}",
+        warnings=warnings,
+    )
+    if not isinstance(value, dict):
+        return {
+            "status": "unknown",
+            "reason": "issue-closure-query-unavailable",
+            "evidence_status": "partial",
+        }
+    data = value.get("data")
+    repo = data.get("repository") if isinstance(data, Mapping) else None
+    issue = repo.get("issue") if isinstance(repo, Mapping) else None
+    if not isinstance(issue, Mapping):
+        return {
+            "status": "unknown",
+            "reason": "issue-closure-metadata-unavailable",
+            "evidence_status": "partial",
+        }
+
+    refs = issue.get("closedByPullRequestsReferences")
+    if isinstance(refs, Mapping):
+        ref_nodes = refs.get("nodes")
+    elif isinstance(refs, list):
+        ref_nodes = refs
+    else:
+        ref_nodes = []
+    ref_items = (
+        [
+            normalized
+            for normalized in (_normalize_closing_pr(item) for item in ref_nodes)
+            if normalized is not None
+        ]
+        if isinstance(ref_nodes, list)
+        else []
+    )
+    ref_page = refs.get("pageInfo") if isinstance(refs, Mapping) else None
+    refs_truncated = (
+        isinstance(ref_page, Mapping) and ref_page.get("hasNextPage") is True
+    )
+
+    timeline = issue.get("timelineItems")
+    timeline_nodes = timeline.get("nodes") if isinstance(timeline, Mapping) else []
+    timeline_page = timeline.get("pageInfo") if isinstance(timeline, Mapping) else None
+    timeline_truncated = (
+        isinstance(timeline_page, Mapping)
+        and timeline_page.get("hasPreviousPage") is True
+    )
+
+    events: list[dict[str, Any]] = []
+    if isinstance(timeline_nodes, list):
+        for item in timeline_nodes:
+            if not isinstance(item, Mapping):
+                continue
+            typename = safe_text(item.get("__typename"))
+            created_at = safe_text(item.get("createdAt"))
+            if typename == "ClosedEvent":
+                closer = item.get("closer")
+                closer_type = (
+                    safe_text(closer.get("__typename"))
+                    if isinstance(closer, Mapping)
+                    else None
+                )
+                event: dict[str, Any] = {
+                    "type": "closed",
+                    "created_at": created_at,
+                    "closer_type": closer_type,
+                }
+                if closer_type == "PullRequest" and isinstance(closer, Mapping):
+                    event["closer"] = _normalize_closing_pr(closer)
+                events.append(event)
+            elif typename == "ReopenedEvent":
+                events.append({"type": "reopened", "created_at": created_at})
+
+    latest_closure: dict[str, Any] | None = None
+    for event in sorted(events, key=lambda item: str(item.get("created_at") or "")):
+        if event.get("type") == "closed":
+            latest_closure = event
+        elif event.get("type") == "reopened":
+            latest_closure = None
+
+    state = safe_text(issue.get("state"))
+    closed_at = safe_text(issue.get("closedAt"))
+    evidence_status = "complete"
+    reason = "closed-by-pr"
+    status = "closed-by-pr"
+    if refs_truncated:
+        evidence_status = "partial"
+        reason = "closing-pr-references-truncated"
+        status = "unknown"
+    elif timeline_truncated:
+        evidence_status = "partial"
+        reason = "timeline-truncated"
+        status = "unknown"
+    elif state != "CLOSED":
+        reason = "issue-not-closed"
+        status = "not-closed"
+    elif latest_closure is None:
+        evidence_status = "partial"
+        reason = "latest-effective-close-event-unavailable"
+        status = "unknown"
+    elif latest_closure.get("closer_type") != "PullRequest":
+        reason = "latest-closer-is-not-pull-request"
+        status = "not-pr-closer"
+    elif not isinstance(latest_closure.get("closer"), Mapping):
+        evidence_status = "partial"
+        reason = "latest-closer-pr-metadata-unavailable"
+        status = "unknown"
+
+    closer = (
+        latest_closure.get("closer") if isinstance(latest_closure, Mapping) else None
+    )
+    return {
+        "status": status,
+        "reason": reason,
+        "state": state,
+        "closed_at": closed_at,
+        "latest_effective_event": latest_closure,
+        "closer_type": latest_closure.get("closer_type")
+        if isinstance(latest_closure, Mapping)
+        else None,
+        "closer_repository": closer.get("repository")
+        if isinstance(closer, Mapping)
+        else None,
+        "closer_number": closer.get("number") if isinstance(closer, Mapping) else None,
+        "closed_by_pull_requests": bounded_list(ref_items),
+        "evidence_status": evidence_status,
+        "evidence_complete": evidence_status == "complete",
+        "conflict": False,
+    }
 
 
 def _relationship_snapshot(
@@ -857,6 +1076,8 @@ def _closeout_cleanup_eligibility(
     for name in (
         "pr_state",
         "closing_linkage",
+        "issue_closure",
+        "pull_request_merge",
         "head_sha",
         "merge_sha",
         "main_contains_merge",
@@ -894,19 +1115,20 @@ def _closeout_cleanup_eligibility(
         if isinstance(branch, str) and branch in branch_items:
             reasons.append("target branch is occupied by a worktree")
     if isinstance(issue, Mapping) and isinstance(pr, Mapping):
-        issue_refs = issue.get("closing_pull_requests")
-        ref_items = issue_refs.get("items") if isinstance(issue_refs, Mapping) else []
-        expected_pr = pr.get("number")
-        if not (
-            isinstance(ref_items, list)
-            and any(
-                isinstance(item, Mapping)
-                and item.get("number") == expected_pr
-                and str(item.get("state", "")).upper() == "MERGED"
-                for item in ref_items
+        closure_gate = _issue_closure_gate(issue, pr, repository=repository)
+        if closure_gate.get("status") == "unknown":
+            reasons.append(
+                f"issue_closure_linkage unknown: {closure_gate.get('detail')}"
             )
-        ):
-            reasons.append("Issue closure is not linked to the merged PR")
+        elif closure_gate.get("status") == "fail":
+            reasons.append(
+                f"issue_closure_linkage blocked: {closure_gate.get('detail')}"
+            )
+        merge_gate = _pull_request_merge_gate(pr)
+        if merge_gate.get("status") == "unknown":
+            reasons.append(f"pull_request_merge unknown: {merge_gate.get('detail')}")
+        elif merge_gate.get("status") == "fail":
+            reasons.append(f"pull_request_merge blocked: {merge_gate.get('detail')}")
     expected_head = pr.get("head_sha") if isinstance(pr, Mapping) else None
     if not isinstance(branch, str) or not branch:
         reasons.append("exact PR head branch unavailable")
@@ -1257,6 +1479,73 @@ def _closing_linkage_gate(closing_issues: Any, *, task_number: int) -> dict[str,
     return _gate("pass" if exact else "fail", detail)
 
 
+def _pull_request_merge_gate(pr: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(pr, Mapping):
+        return _gate("unknown", "PR metadata unavailable")
+    state = str(pr.get("state", "")).upper()
+    if state != "MERGED":
+        return _gate("fail", f"PR state is {state or 'unknown'}")
+    if not isinstance(pr.get("merged_at"), str):
+        return _gate("unknown", "PR mergedAt unavailable")
+    if not isinstance(pr.get("merge_commit_sha"), str):
+        return _gate("unknown", "PR merge commit unavailable")
+    return _gate("pass")
+
+
+def _issue_closure_gate(
+    issue: Mapping[str, Any] | None,
+    pr: Mapping[str, Any] | None,
+    *,
+    repository: str | None,
+) -> dict[str, Any]:
+    if not isinstance(issue, Mapping):
+        return _gate("unknown", "Issue metadata unavailable")
+    if not isinstance(pr, Mapping):
+        return _gate("unknown", "PR metadata unavailable")
+    closure = issue.get("issue_closure")
+    if not isinstance(closure, Mapping):
+        return _gate("unknown", "issue closure evidence unavailable")
+    if closure.get("evidence_status") != "complete":
+        return _gate("unknown", str(closure.get("reason") or "partial evidence"))
+    if str(issue.get("state", "")).upper() != "CLOSED":
+        return _gate("fail", "issue-not-closed")
+    if closure.get("status") != "closed-by-pr":
+        return _gate("fail", str(closure.get("reason") or "not-closed-by-pr"))
+    if closure.get("closer_repository") != repository:
+        return _gate("fail", "closer-repository-mismatch")
+    if closure.get("closer_number") != pr.get("number"):
+        return _gate("fail", "closer-pr-number-mismatch")
+
+    refs = closure.get("closed_by_pull_requests")
+    ref_items = refs.get("items") if isinstance(refs, Mapping) else []
+    matching_refs = (
+        [
+            item
+            for item in ref_items
+            if isinstance(item, Mapping) and item.get("number") == pr.get("number")
+        ]
+        if isinstance(ref_items, list)
+        else []
+    )
+    if not matching_refs:
+        return _gate("fail", "closed-by-pr-reference-missing")
+    for item in matching_refs:
+        if (
+            item.get("repository") == repository
+            and str(item.get("state", "")).upper() == "MERGED"
+            and item.get("merged") is True
+            and isinstance(item.get("merged_at"), str)
+        ):
+            return _gate("pass")
+        if (
+            item.get("state") is None
+            or item.get("merged") is None
+            or item.get("merged_at") is None
+        ):
+            return _gate("unknown", "incomplete-closing-pr-metadata")
+    return _gate("fail", "closed-by-pr-reference-not-merged")
+
+
 def _pr_gates(
     pr: Mapping[str, Any] | None,
     threads: Mapping[str, Any],
@@ -1557,6 +1846,14 @@ def _closeout_plan(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
         git = observed.get("git", {})
         merge_sha = pr.get("merge_commit_sha") if isinstance(pr, dict) else None
         gates["merge_sha"] = _sha_gate(merge_sha, args.expected_merge_sha, "merge SHA")
+        gates["issue_closure"] = _issue_closure_gate(
+            issue if isinstance(issue, dict) else None,
+            pr if isinstance(pr, dict) else None,
+            repository=repository,
+        )
+        gates["pull_request_merge"] = _pull_request_merge_gate(
+            pr if isinstance(pr, dict) else None
+        )
         if isinstance(merge_sha, str):
             ancestry = runner.run(
                 [
@@ -1915,6 +2212,10 @@ def _stability_projection(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         "issue_number": issue.get("number") if isinstance(issue, dict) else None,
         "issue_title": issue.get("title") if isinstance(issue, dict) else None,
         "issue_state": issue.get("state") if isinstance(issue, dict) else None,
+        "issue_closed_at": issue.get("closed_at") if isinstance(issue, dict) else None,
+        "issue_closure": issue.get("issue_closure")
+        if isinstance(issue, dict)
+        else None,
         "issue_content_sha256": issue.get("content_sha256")
         if isinstance(issue, dict)
         else None,

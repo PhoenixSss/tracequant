@@ -616,6 +616,8 @@ def _compact_result(
     observed = observed if isinstance(observed, dict) else {}
     issue = observed.get("issue")
     issue = issue if isinstance(issue, dict) else {}
+    issue_closure = issue.get("issue_closure")
+    issue_closure = issue_closure if isinstance(issue_closure, dict) else {}
     pr = observed.get("pr")
     pr = pr if isinstance(pr, dict) else {}
     git = observed.get("git")
@@ -659,6 +661,14 @@ def _compact_result(
             "labels": issue.get("labels"),
             "project_status": issue.get("project_status"),
             "content_sha256": issue.get("content_sha256"),
+            "closure": {
+                "status": issue_closure.get("status"),
+                "reason": issue_closure.get("reason"),
+                "evidence_status": issue_closure.get("evidence_status"),
+                "closer_type": issue_closure.get("closer_type"),
+                "closer_repository": issue_closure.get("closer_repository"),
+                "closer_number": issue_closure.get("closer_number"),
+            },
         },
         "pull_request": {
             "available": bool(pr),
