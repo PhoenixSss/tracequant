@@ -86,6 +86,24 @@ Pull requests targeting `main` and pushes to `main` automatically run CI. The wo
 
 Internal datetimes must be timezone-aware and use UTC as the standard timezone. Naive datetimes are explicitly rejected. Time utilities are provided by `quant_system.core.time`.
 
+## Initial domain models
+
+The first Research MVP domain values are available from `quant_system.domain`:
+
+- `InstrumentId`: a normalized single-context instrument identifier containing 1-32 ASCII letters or digits.
+- `TimeRange`: an immutable half-open UTC interval `[start, end)`.
+- `OHLCVBar`: an immutable OHLCV bar for one instrument and one UTC interval.
+
+Each model provides explicit JSON-compatible `to_dict` and `from_dict` methods.
+`OHLCVBar` validates finite numeric values, non-negative volume, and OHLC
+relationships. Prices may currently be zero or negative so research datasets are
+not filtered prematurely.
+
+Shared test data follows a small convention: reusable pytest fixtures live in
+`tests/conftest.py`, while deterministic parameterized factories live in
+`tests/fixtures/domain.py`. Factories use fixed UTC timestamps, no randomness,
+no network, no environment variables, and no file system access.
+
 ## Configuration
 
 Application configuration is loaded explicitly with `quant_system.config.load_settings`.
