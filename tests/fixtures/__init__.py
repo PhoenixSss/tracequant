@@ -1,0 +1,1 @@
+"""Shared deterministic test fixtures."""
