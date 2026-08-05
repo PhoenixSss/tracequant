@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "runner_version": "1.1.0",
+  "runner_version": "1.2.0",
   "ci_workflow": ".github/workflows/ci.yml",
   "ci_validation_commands": [
     [
@@ -162,9 +162,9 @@
             "--frozen",
             "pytest",
             "tests/tools/test_workflow_skills.py",
+            "tests/tools/test_skill_variant_provenance.py",
             "tests/tools/test_workflow_validation.py",
             "tests/tools/test_workflow_evidence.py",
-            "tests/tools/test_trusted_runner.py",
             "tests/tools/test_wsl2_validation_runner.py",
             "tests/tools/test_wsl2_validation_rules.py",
             "tests/tools/test_wsl2_github_evidence_runner.py",
@@ -250,19 +250,19 @@
       "include_skill_validators": true,
       "require_skill_validator": true,
       "timeout_seconds": 1200,
-      "requires_clean_worktree": false,
+      "requires_clean_worktree": true,
       "requires_main_branch": false,
       "requires_origin_main_identity": false
     },
     "workflow-review": {
       "kind": "workflow-phase",
-      "description": "Independent review validation from the trusted base control plane.",
+      "description": "Independent review validation for the locked reviewed head.",
       "phase": "review",
       "requires_base_sha": true,
       "include_skill_validators": true,
       "require_skill_validator": true,
       "timeout_seconds": 1200,
-      "requires_clean_worktree": false,
+      "requires_clean_worktree": true,
       "requires_main_branch": false,
       "requires_origin_main_identity": false
     },

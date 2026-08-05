@@ -39,7 +39,7 @@
       "evidence_id": "repo-runner-contract",
       "kind": "config",
       "path": "docs/workflows/wsl2-codex-environment/runner-environment-contract.md",
-      "sha256": "81799fe8286aa24f8c52c06831e2d1a6ac1b937d1ffd41ed0bbd9e0b5488f670",
+      "sha256": "5240bf0e451d1d479472d63b7992ff02110497910ad7f3b3d267e98bc040c876",
       "public_status": "public",
       "supports": [
         "future Runner preconditions",

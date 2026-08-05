@@ -16,14 +16,14 @@ RULES = ROOT / ".codex" / "rules" / "quant-system-wsl-validation.rules"
 WORKFLOW_VALIDATION = ROOT / "tools" / "agent_workflow" / "workflow_validation.py"
 WORKFLOW_COMMON = ROOT / "tools" / "agent_workflow" / "workflow_common.py"
 PYTHON = os.environ.get("WORKFLOW_TEST_PYTHON", sys.executable)
-TRUSTED_RELATIVE_PATHS = (
+IDENTITY_RELATIVE_PATHS = (
     "tools/agent_workflow/wsl2_validation_runner.py",
     "tools/agent_workflow/wsl2_validation_profiles.json",
     ".codex/rules/quant-system-wsl-validation.rules",
     "tools/agent_workflow/workflow_validation.py",
     "tools/agent_workflow/workflow_common.py",
 )
-TRUSTED_ENV_KEYS = (
+REMOVED_TRUSTED_ENV_KEYS = (
     "WORKFLOW_TRUSTED_RUNNER_SHA",
     "WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256",
     "WORKFLOW_TRUSTED_BUNDLE_ROOT",
@@ -33,7 +33,7 @@ TRUSTED_ENV_KEYS = (
 
 def _clean_test_env() -> dict[str, str]:
     env = os.environ.copy()
-    for key in TRUSTED_ENV_KEYS:
+    for key in REMOVED_TRUSTED_ENV_KEYS:
         env.pop(key, None)
     return env
 
@@ -42,7 +42,7 @@ def _snapshot_trusted_files(repo: Path) -> None:
     snapshot_root = repo / ".fake-head"
     if snapshot_root.exists():
         shutil.rmtree(snapshot_root)
-    for relative_path in TRUSTED_RELATIVE_PATHS:
+    for relative_path in IDENTITY_RELATIVE_PATHS:
         source = repo / relative_path
         destination = snapshot_root / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -76,6 +76,8 @@ def _copy_runner_repo(tmp_path: Path, *, name: str = "repo") -> Path:
     for skill in (
         "task-delivery",
         "task-pr-review",
+        "task-delivery-runner",
+        "task-pr-review-runner",
         "task-closeout",
         "feature-completion-audit",
     ):
@@ -457,40 +459,42 @@ def test_repository_root_cwd_space_and_symlink_checks(tmp_path: Path) -> None:
     assert symlinked.returncode == 2
 
 
-def test_ci_drift_and_trusted_file_mutation_fail_closed(tmp_path: Path) -> None:
+def test_current_content_is_hashed_and_canonical_drift_fails_closed(
+    tmp_path: Path,
+) -> None:
     repo = _copy_runner_repo(tmp_path)
     bin_dir = _write_fake_tools(tmp_path, repo)
     first = _run(repo, bin_dir, "targeted")
     assert first.returncode == 0
     stored = json.loads((repo / json.loads(first.stdout)["result_path"]).read_text())
-    assert stored["integrity"]["verification"] == "tracked-head-pre-execution"
+    assert stored["integrity"]["verification"] == "current-worktree-content"
+    original_hash = stored["integrity"]["runner_sha256"]
 
     runner_path = repo / "tools/agent_workflow" / SCRIPT.name
-    runner_path.write_text(runner_path.read_text(encoding="utf-8") + "\n# changed\n")
+    runner_path.write_text(
+        runner_path.read_text(encoding="utf-8") + "\n# current change\n",
+        encoding="utf-8",
+    )
     changed_runner = _run(repo, bin_dir, "targeted")
-    assert changed_runner.returncode == 2
-    assert "differs from HEAD" in changed_runner.stderr
+    assert changed_runner.returncode == 0, changed_runner.stderr
+    changed_stored = json.loads(
+        (repo / json.loads(changed_runner.stdout)["result_path"]).read_text()
+    )
+    assert changed_stored["integrity"]["runner_sha256"] != original_hash
 
-    shutil.copy2(SCRIPT, runner_path)
     spec_path = repo / "tools/agent_workflow" / SPEC.name
     spec = json.loads(spec_path.read_text(encoding="utf-8"))
     spec["profiles"]["targeted"]["commands"][0]["argv"] = [
         "python3",
         "-c",
-        "print('untrusted')",
+        "print('not canonical')",
     ]
     spec_path.write_text(json.dumps(spec), encoding="utf-8")
-    changed_spec = _run(repo, bin_dir, "targeted")
-    assert changed_spec.returncode == 2
-    assert "differs from HEAD" in changed_spec.stderr
-
-    _snapshot_trusted_files(repo)
-    committed_bad_spec = _run(repo, bin_dir, "targeted")
-    assert committed_bad_spec.returncode == 2
-    assert "does not match canonical command" in committed_bad_spec.stderr
+    bad_spec = _run(repo, bin_dir, "targeted")
+    assert bad_spec.returncode == 2
+    assert "does not match canonical command" in bad_spec.stderr
 
     shutil.copy2(SPEC, spec_path)
-    _snapshot_trusted_files(repo)
     workflow = repo / ".github" / "workflows" / "ci.yml"
     workflow.write_text(
         workflow.read_text(encoding="utf-8").replace("pytest", "pytest -q")
@@ -599,14 +603,43 @@ def test_rules_file_contains_positive_and_negative_boundaries() -> None:
         "workflow-closeout",
     ):
         assert allowed in text
-    for blocked in (
-        "uv run --frozen pytest",
-        "python3 tools/agent_workflow/wsl2_validation_runner.py",
+    for boundary in (
+        "generic Python, uv, shell wrappers",
         "--command",
         "--shell",
-        "gh auth token",
-        "git push",
-        "git reset",
-        "git clean",
+        "gh",
+        "auth",
+        "token",
+        "push",
+        "reset",
+        "clean",
     ):
-        assert blocked in text
+        assert boundary in text
+
+
+def test_workflow_delivery_and_review_require_clean_committed_head(tmp_path: Path) -> None:
+    repo = _copy_runner_repo(tmp_path)
+    validator = _fake_skill_validator(tmp_path)
+    dirty_tools = _write_fake_tools(tmp_path, repo, dirty=True)
+    for profile in ("workflow-delivery", "workflow-review"):
+        result = _run(
+            repo,
+            dirty_tools,
+            profile,
+            "--base-sha",
+            "b" * 40,
+            extra_env={"CODEX_SKILL_VALIDATOR": str(validator)},
+        )
+        assert result.returncode == 2
+        assert "clean working tree" in result.stderr
+
+
+def test_validation_runner_has_no_removed_trusted_version_interface() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    for fragment in (
+        "WORKFLOW_TRUSTED_RUNNER_SHA",
+        "WORKFLOW_TRUSTED_BUNDLE_ROOT",
+        "WORKFLOW_TARGET_REPO_ROOT",
+        "trusted-commit-bundle-pre-execution",
+    ):
+        assert fragment not in text

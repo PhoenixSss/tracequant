@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Final
 
 SCHEMA_VERSION: Final = 1
-RUNNER_VERSION: Final = "1.1.0"
+RUNNER_VERSION: Final = "1.2.0"
 REPOSITORY: Final = "PhoenixSss/quant-system"
 OUTPUT_ROOT: Final = ".agents/evidence.local/wsl2-github-runs"
 RUNNER_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_runner.py"
@@ -26,8 +26,6 @@ SPEC_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_profiles.json"
 RULES_PATH: Final = ".codex/rules/quant-system-wsl-evidence.rules"
 EVIDENCE_TOOL_PATH: Final = "tools/agent_workflow/workflow_evidence.py"
 COMMON_TOOL_PATH: Final = "tools/agent_workflow/workflow_common.py"
-TRUSTED_BUNDLE_ROOT_ENV: Final = "WORKFLOW_TRUSTED_BUNDLE_ROOT"
-TARGET_REPO_ROOT_ENV: Final = "WORKFLOW_TARGET_REPO_ROOT"
 STDIO_LIMIT_BYTES: Final = 8192
 SHA_PATTERN: Final = re.compile(r"^[0-9a-f]{40}$")
 SNAPSHOT_ID_PATTERN: Final = re.compile(r"^ev-[0-9a-f]{16}$")
@@ -42,7 +40,7 @@ SENSITIVE_PATTERNS: Final = (
         r"(?i)(authorization|cookie|api[_-]?key|token|password|secret)\s*[:=]\s*\S+"
     ),
 )
-TRUSTED_PATHS: Final = (
+IDENTITY_PATHS: Final = (
     RUNNER_PATH,
     SPEC_PATH,
     RULES_PATH,
@@ -67,10 +65,6 @@ ALLOWED_ENV: Final = (
     "https_proxy",
     "all_proxy",
     "no_proxy",
-    "WORKFLOW_TRUSTED_RUNNER_SHA",
-    "WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256",
-    TRUSTED_BUNDLE_ROOT_ENV,
-    TARGET_REPO_ROOT_ENV,
 )
 CANONICAL_PROFILES: Final[dict[str, tuple[str, tuple[str, ...]]]] = {
     "delivery": ("delivery-preflight", ("task", "expected_main_sha")),
@@ -185,99 +179,20 @@ def _run(
     )
 
 
-def _run_bytes(
-    argv: Sequence[str], repo_root: Path
-) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(
-        [str(item) for item in argv],
-        cwd=repo_root,
-        check=False,
-        capture_output=True,
-        env=_command_env(),
-    )
-
-
-def _read_tracked_file(repo_root: Path, relative_path: str) -> bytes:
+def _read_current_file(repo_root: Path, relative_path: str) -> bytes:
     path = repo_root / relative_path
     if path.is_symlink():
-        raise RunnerError(f"trusted file must not be a symlink: {relative_path}")
+        raise RunnerError(f"workflow file must not be a symlink: {relative_path}")
     try:
-        actual = path.read_bytes()
+        return path.read_bytes()
     except FileNotFoundError as exc:
-        raise RunnerError(f"required trusted file is missing: {relative_path}") from exc
-    for argv, label in (
-        (("git", "diff", "--quiet", "--", relative_path), "working tree"),
-        (("git", "diff", "--cached", "--quiet", "--", relative_path), "index"),
-    ):
-        result = _run_bytes(argv, repo_root)
-        if result.returncode == 1:
-            raise RunnerError(
-                f"trusted file differs from HEAD in the {label}: {relative_path}"
-            )
-        if result.returncode != 0:
-            error = _redact(result.stderr.decode("utf-8", errors="replace")).strip()
-            raise RunnerError(f"unable to verify trusted file {relative_path}: {error}")
-    head = _run_bytes(("git", "show", f"HEAD:{relative_path}"), repo_root)
-    if head.returncode != 0:
-        raise RunnerError(f"trusted file is not tracked at HEAD: {relative_path}")
-    if actual != head.stdout:
-        raise RunnerError(f"trusted file content does not match HEAD: {relative_path}")
-    return actual
+        raise RunnerError(f"required workflow file is missing: {relative_path}") from exc
 
 
-def _bundle_root(repo_root: Path) -> Path | None:
-    raw = os.environ.get(TRUSTED_BUNDLE_ROOT_ENV)
-    if raw is None:
-        return None
-    root = Path(raw).resolve()
-    allowed_root = (repo_root / ".agents/evidence.local/trusted").resolve()
-    if not root.is_relative_to(allowed_root):
-        raise RunnerError("trusted bundle must be below .agents/evidence.local/trusted")
-    return root
-
-
-def _read_bundle_inputs(repo_root: Path, bundle_root: Path) -> dict[str, bytes]:
-    manifest_path = bundle_root / "manifest.json"
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RunnerError("trusted bundle manifest is missing or invalid") from exc
-    expected_sha = os.environ.get("WORKFLOW_TRUSTED_RUNNER_SHA")
-    if (
-        not isinstance(manifest, dict)
-        or manifest.get("schema_version") != 2
-        or manifest.get("tool") != "evidence-runner"
-        or manifest.get("trusted_sha") != expected_sha
-    ):
-        raise RunnerError("trusted evidence-runner bundle identity is invalid")
-    hashes = manifest.get("files")
-    if not isinstance(hashes, dict) or set(hashes) != set(TRUSTED_PATHS):
-        raise RunnerError("trusted evidence-runner bundle file set is invalid")
-    payloads: dict[str, bytes] = {}
-    for relative_path in TRUSTED_PATHS:
-        source = bundle_root / relative_path
-        if source.is_symlink():
-            raise RunnerError(
-                f"trusted bundle file must not be a symlink: {relative_path}"
-            )
-        try:
-            payload = source.read_bytes()
-        except FileNotFoundError as exc:
-            raise RunnerError(
-                f"trusted bundle file is missing: {relative_path}"
-            ) from exc
-        if _sha256_bytes(payload) != hashes.get(relative_path):
-            raise RunnerError(f"trusted bundle file digest mismatch: {relative_path}")
-        payloads[relative_path] = payload
-    return payloads
-
-
-def _load_trusted_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str]]:
-    bundle_root = _bundle_root(repo_root)
-    if bundle_root is None:
-        payloads = {path: _read_tracked_file(repo_root, path) for path in TRUSTED_PATHS}
-    else:
-        payloads = _read_bundle_inputs(repo_root, bundle_root)
+def _load_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str]]:
+    payloads = {
+        path: _read_current_file(repo_root, path) for path in IDENTITY_PATHS
+    }
     try:
         spec = json.loads(payloads[SPEC_PATH].decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -286,6 +201,21 @@ def _load_trusted_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str
         raise RunnerError("profile specification must be a JSON object")
     _validate_spec(spec)
     return spec, {path: _sha256_bytes(payload) for path, payload in payloads.items()}
+
+
+def _skill_identity(repo_root: Path, profile: str) -> dict[str, str] | None:
+    mapping = {
+        "delivery": ".agents/skills/task-delivery-runner/SKILL.md",
+        "delivery-readiness": ".agents/skills/task-delivery-runner/SKILL.md",
+        "review": ".agents/skills/task-pr-review-runner/SKILL.md",
+        "pre-merge": ".agents/skills/task-pr-review-runner/SKILL.md",
+        "closeout-readonly": ".agents/skills/task-closeout/SKILL.md",
+    }
+    relative_path = mapping.get(profile)
+    if relative_path is None:
+        return None
+    payload = _read_current_file(repo_root, relative_path)
+    return {"path": relative_path, "sha256": _sha256_bytes(payload)}
 
 
 def _validate_spec(spec: Mapping[str, Any]) -> None:
@@ -323,20 +253,10 @@ def _parse_repository_slug(remote: str) -> str | None:
 def _find_repo_root(script_path: Path) -> Path:
     if script_path.is_symlink():
         raise RunnerError("runner entry must not be invoked through a symlink")
-    target_root = os.environ.get(TARGET_REPO_ROOT_ENV)
-    if target_root is None:
-        repo_root = script_path.resolve().parents[2]
-        expected = repo_root / RUNNER_PATH
-        if script_path.resolve() != expected.resolve():
-            raise RunnerError("runner entry path is not the trusted repository entry")
-    else:
-        repo_root = Path(target_root).resolve()
-        bundle_root = _bundle_root(repo_root)
-        if bundle_root is None:
-            raise RunnerError("trusted runner target requires a trusted bundle")
-        expected = bundle_root / RUNNER_PATH
-        if script_path.resolve() != expected.resolve():
-            raise RunnerError("runner entry path is not the trusted bundle entry")
+    repo_root = script_path.resolve().parents[2]
+    expected = repo_root / RUNNER_PATH
+    if script_path.resolve() != expected.resolve():
+        raise RunnerError("runner entry path is not the repository entry")
     if Path.cwd().resolve() != repo_root.resolve():
         raise RunnerError("runner must be started from the repository root")
     if repo_root.resolve().as_posix().startswith("/mnt/"):
@@ -430,7 +350,7 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
     operation = CANONICAL_PROFILES[profile][0]
     base = [
         sys.executable,
-        str((_bundle_root(repo_root) or repo_root) / EVIDENCE_TOOL_PATH),
+        str(repo_root / EVIDENCE_TOOL_PATH),
     ]
     if profile == "recheck":
         snapshot_path = (
@@ -600,6 +520,7 @@ def _remote_refs(
 def _compact_result(
     snapshot: Mapping[str, Any],
     *,
+    repo_root: Path,
     profile: str,
     status: str,
     status_details: Mapping[str, Any],
@@ -608,7 +529,6 @@ def _compact_result(
     run_id: str,
     result_path: str,
     integrity: Mapping[str, str],
-    trusted_bundle: bool,
     remote_refs: Mapping[str, Any],
     remote_warnings: Sequence[str],
 ) -> dict[str, Any]:
@@ -725,12 +645,11 @@ def _compact_result(
             "raw_api_responses_committed": False,
         },
         "integrity": {
-            "verification": (
-                "trusted-commit-bundle-pre-execution"
-                if trusted_bundle
-                else "tracked-head-pre-execution"
-            ),
-            "trusted_files": dict(integrity),
+            "verification": "current-worktree-content",
+            "repository_head_sha": git.get("head_sha"),
+            "repository_clean": git.get("clean"),
+            "files": dict(integrity),
+            "skill": _skill_identity(repo_root, profile),
         },
     }
 
@@ -744,7 +663,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         repo_root = _find_repo_root(Path(__file__))
-        _, trusted_hashes = _load_trusted_inputs(repo_root)
+        _, content_hashes = _load_inputs(repo_root)
         _require_output_root_ignored(repo_root)
         command = _evidence_argv(args, repo_root)
         started_at = datetime.now(UTC)
@@ -811,6 +730,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         duration_ms = round((time.monotonic() - started) * 1000)
         result = _compact_result(
             snapshot,
+            repo_root=repo_root,
             profile=args.profile,
             status=status,
             status_details=status_details,
@@ -818,8 +738,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             duration_ms=duration_ms,
             run_id=run_id,
             result_path=result_path.relative_to(repo_root).as_posix(),
-            integrity=trusted_hashes,
-            trusted_bundle=_bundle_root(repo_root) is not None,
+            integrity=content_hashes,
             remote_refs=remote_refs,
             remote_warnings=remote_warnings,
         )

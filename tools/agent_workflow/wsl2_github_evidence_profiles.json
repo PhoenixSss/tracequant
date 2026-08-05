@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "runner_version": "1.1.0",
+  "runner_version": "1.2.0",
   "repository": "PhoenixSss/quant-system",
   "profiles": {
     "delivery": {
@@ -29,7 +29,7 @@
         "expected_base_sha",
         "expected_head_sha"
       ],
-      "description": "Independent review snapshot from the trusted control plane."
+      "description": "Independent review snapshot for the locked PR base and head."
     },
     "pre-merge": {
       "operation": "pr-review-snapshot",

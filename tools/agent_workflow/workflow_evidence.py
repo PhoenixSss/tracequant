@@ -1297,33 +1297,22 @@ def _runner_source(
 ) -> dict[str, Any]:
     script = Path(__file__).resolve()
     digest = sha256_bytes(script.read_bytes())
-    trusted_source = __import__("os").environ.get("WORKFLOW_TRUSTED_RUNNER_SHA")
-    trusted_digest = __import__("os").environ.get(
-        "WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256"
+    commit = _git_value(
+        runner,
+        [
+            "log",
+            "-1",
+            "--format=%H",
+            "--",
+            "tools/agent_workflow/workflow_evidence.py",
+        ],
+        command_id="git-runner-source-sha",
+        warnings=warnings,
     )
-    commit = None
-    if not is_sha(trusted_source):
-        commit = _git_value(
-            runner,
-            [
-                "log",
-                "-1",
-                "--format=%H",
-                "--",
-                "tools/agent_workflow/workflow_evidence.py",
-            ],
-            command_id="git-runner-source-sha",
-            warnings=warnings,
-        )
     return {
         "path": "tools/agent_workflow/workflow_evidence.py",
-        "source_sha": trusted_source
-        if is_sha(trusted_source)
-        else commit
-        if is_sha(commit)
-        else None,
-        "content_sha256": trusted_digest if isinstance(trusted_digest, str) else digest,
-        "trusted_bootstrap": is_sha(trusted_source),
+        "source_sha": commit if is_sha(commit) else None,
+        "content_sha256": digest,
     }
 
 
@@ -1606,7 +1595,7 @@ def _base_snapshot(
     subject: Mapping[str, Any],
     repository: str | None,
     observed: Mapping[str, Any],
-    trusted: Mapping[str, Any],
+    execution_context: Mapping[str, Any],
     gates: Mapping[str, Any],
     warnings: Sequence[Mapping[str, Any]],
     limitations: Sequence[str],
@@ -1619,7 +1608,7 @@ def _base_snapshot(
         "operation": operation,
         "subject": dict(subject),
         "repository": repository,
-        "trusted_control": dict(trusted),
+        "execution_context": dict(execution_context),
         "observed": dict(observed),
         "gates": dict(sorted(gates.items())),
         "warnings": warning_items,
@@ -1754,8 +1743,8 @@ def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, 
             git.get("origin_main_sha"), args.expected_main_sha, "origin/main SHA"
         )
         gates["worktree_clean"] = _gate("pass" if git.get("clean") is True else "fail")
-    trusted = {
-        "trusted_sha": observed["git"].get("origin_main_sha"),
+    execution_context = {
+        "object_base_sha": observed["git"].get("origin_main_sha"),
         "runner": _runner_source(runner, warnings),
     }
     return _base_snapshot(
@@ -1763,7 +1752,7 @@ def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, 
         subject={"kind": "task", "task_number": args.task},
         repository=repository,
         observed=observed,
-        trusted=trusted,
+        execution_context=execution_context,
         gates=gates,
         warnings=warnings,
         limitations=limitations,
@@ -1803,14 +1792,17 @@ def _task_pr_snapshot(
                 "pass" if project == "Review" else "unknown", str(project)
             )
     pr = observed.get("pr")
-    trusted_sha = pr.get("base_sha") if isinstance(pr, dict) else None
-    trusted = {"trusted_sha": trusted_sha, "runner": _runner_source(runner, warnings)}
+    object_base_sha = pr.get("base_sha") if isinstance(pr, dict) else None
+    execution_context = {
+        "object_base_sha": object_base_sha,
+        "runner": _runner_source(runner, warnings),
+    }
     return _base_snapshot(
         operation=operation,
         subject={"kind": "task-pr", "task_number": args.task, "pr_number": args.pr},
         repository=repository,
         observed=observed,
-        trusted=trusted,
+        execution_context=execution_context,
         gates=gates,
         warnings=warnings,
         limitations=limitations,
@@ -1976,14 +1968,17 @@ def _closeout_plan(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
                     "final evidence recheck is required before cleanup eligibility",
                 )
     pr = observed.get("pr")
-    trusted_sha = pr.get("merge_commit_sha") if isinstance(pr, dict) else None
-    trusted = {"trusted_sha": trusted_sha, "runner": _runner_source(runner, warnings)}
+    object_base_sha = pr.get("merge_commit_sha") if isinstance(pr, dict) else None
+    execution_context = {
+        "object_base_sha": object_base_sha,
+        "runner": _runner_source(runner, warnings),
+    }
     return _base_snapshot(
         operation="closeout-plan",
         subject={"kind": "task-pr", "task_number": args.task, "pr_number": args.pr},
         repository=repository,
         observed=observed,
-        trusted=trusted,
+        execution_context=execution_context,
         gates=gates,
         warnings=warnings,
         limitations=limitations + ["read-only plan; no branch deletion performed"],
@@ -2113,8 +2108,8 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
     ) or sha256_json(sorted(direct_numbers))
     observed["direct_child_evidence_digest"] = sha256_json(direct_children_items)
     observed["relationships_digest"] = sha256_json(relationships_digest_source)
-    trusted = {
-        "trusted_sha": git.get("origin_main_sha"),
+    execution_context = {
+        "object_base_sha": git.get("origin_main_sha"),
         "runner": _runner_source(runner, warnings),
     }
     return _base_snapshot(
@@ -2122,7 +2117,7 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
         subject={"kind": "feature", "feature_number": args.feature},
         repository=repository,
         observed=observed,
-        trusted=trusted,
+        execution_context=execution_context,
         gates=gates,
         warnings=warnings,
         limitations=limitations,

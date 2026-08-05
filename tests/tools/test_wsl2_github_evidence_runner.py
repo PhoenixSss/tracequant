@@ -12,7 +12,7 @@ import pytest
 
 ROOT = Path(__file__).parents[2]
 RUNNER_REL = Path("tools/agent_workflow/wsl2_github_evidence_runner.py")
-TRUSTED_FILES = (
+IDENTITY_FILES = (
     RUNNER_REL,
     Path("tools/agent_workflow/wsl2_github_evidence_profiles.json"),
     Path(".codex/rules/quant-system-wsl-evidence.rules"),
@@ -23,7 +23,7 @@ REAL_GIT_OPTIONAL = shutil.which("git")
 assert REAL_GIT_OPTIONAL is not None
 REAL_GIT: str = REAL_GIT_OPTIONAL
 PYTHON = os.environ.get("WORKFLOW_TEST_PYTHON", sys.executable)
-TRUSTED_ENV_KEYS = (
+REMOVED_TRUSTED_ENV_KEYS = (
     "WORKFLOW_TRUSTED_RUNNER_SHA",
     "WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256",
     "WORKFLOW_TRUSTED_BUNDLE_ROOT",
@@ -33,7 +33,7 @@ TRUSTED_ENV_KEYS = (
 
 def _clean_test_env() -> dict[str, str]:
     env = os.environ.copy()
-    for key in TRUSTED_ENV_KEYS:
+    for key in REMOVED_TRUSTED_ENV_KEYS:
         env.pop(key, None)
     return env
 
@@ -237,10 +237,19 @@ def _prepare_repo(
     tmp_path.mkdir(parents=True, exist_ok=True)
     repo = tmp_path / ("repo with space" if with_space else "repo")
     repo.mkdir()
-    for relative in TRUSTED_FILES:
+    for relative in IDENTITY_FILES:
         target = repo / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, target)
+    for skill in (
+        "task-delivery-runner",
+        "task-pr-review-runner",
+        "task-closeout",
+    ):
+        source = ROOT / ".agents" / "skills" / skill / "SKILL.md"
+        target = repo / ".agents" / "skills" / skill / "SKILL.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
     (repo / ".gitignore").write_text(
         ".agents/evidence.local/\n.agents/validation.local/\n",
         encoding="utf-8",
@@ -282,7 +291,7 @@ def _run(
     repo: Path, env: dict[str, str], *args: str
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [str(repo / RUNNER_REL), *args],
+        [PYTHON, str(repo / RUNNER_REL), *args],
         cwd=repo,
         env=env,
         check=False,
@@ -398,7 +407,14 @@ def test_review_profile_returns_required_schema_and_compact_digest(
     assert value["git"]["remote_head"] == head_sha
     assert value["git"]["origin_refresh"] == "skipped-read-only"
     assert value["stability"]["snapshot_id"].startswith("ev-")
-    assert value["integrity"]["verification"] == "tracked-head-pre-execution"
+    assert value["integrity"]["verification"] == "current-worktree-content"
+    assert value["integrity"]["repository_head_sha"] == head_sha
+    assert value["integrity"]["repository_clean"] is True
+    assert value["integrity"]["skill"]["path"] == (
+        ".agents/skills/task-pr-review-runner/SKILL.md"
+    )
+    assert value["integrity"]["skill"]["sha256"]
+    assert set(value["integrity"]["files"]) == {path.as_posix() for path in IDENTITY_FILES}
 
 
 @pytest.mark.parametrize("profile", ["delivery-readiness", "review", "pre-merge"])
@@ -572,13 +588,27 @@ def test_unknown_or_injected_arguments_fail_before_subprocess(
     assert not (repo / ".agents/evidence.local/wsl2-github-runs").exists()
 
 
-def test_trusted_file_mutation_fails_before_github(tmp_path: Path) -> None:
+def test_current_profile_content_is_accepted_and_hashed(tmp_path: Path) -> None:
     repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
     spec = repo / "tools/agent_workflow/wsl2_github_evidence_profiles.json"
     spec.write_text(spec.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     completed = _run(repo, env, *_review_args(main_sha, head_sha))
+    assert completed.returncode == 0, completed.stderr
+    value = _result(repo, completed.stdout)
+    assert value["integrity"]["verification"] == "current-worktree-content"
+    assert value["integrity"]["files"][spec.relative_to(repo).as_posix()]
+    assert _calls(state_path.with_name("gh-calls.jsonl"))
+
+
+def test_profile_contract_drift_fails_before_github(tmp_path: Path) -> None:
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    spec_path = repo / "tools/agent_workflow/wsl2_github_evidence_profiles.json"
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    spec["profiles"]["review"]["operation"] = "delivery-preflight"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    completed = _run(repo, env, *_review_args(main_sha, head_sha))
     assert completed.returncode == 2
-    assert "differs from HEAD" in completed.stderr
+    assert "profile operation drift" in completed.stderr
     assert _calls(state_path.with_name("gh-calls.jsonl")) == []
 
 
@@ -600,7 +630,7 @@ def test_wrong_origin_and_symlink_entry_fail_closed(tmp_path: Path) -> None:
     link = repo / "evidence-link"
     link.symlink_to(repo / RUNNER_REL)
     linked = subprocess.run(
-        [str(link), *_review_args(main_sha, head_sha)],
+        [PYTHON, str(link), *_review_args(main_sha, head_sha)],
         cwd=repo,
         env=env,
         check=False,
@@ -813,6 +843,7 @@ def test_live_task_pr_schema() -> None:
     head = os.environ["TASK84_LIVE_HEAD_SHA"]
     completed = subprocess.run(
         [
+            PYTHON,
             str(ROOT / RUNNER_REL),
             "review",
             "--task",
@@ -837,32 +868,13 @@ def test_live_task_pr_schema() -> None:
     assert json.loads(completed.stdout)["task"] == 84
 
 
-def test_trusted_runner_executes_real_evidence_front_door(tmp_path: Path) -> None:
-    repo, _, env, main_sha, head_sha = _prepare_repo(tmp_path)
-    trusted_runner = ROOT / "tools/agent_workflow/trusted_runner.py"
-    completed = subprocess.run(
-        [
-            PYTHON,
-            str(trusted_runner),
-            "--trusted-sha",
-            main_sha,
-            "--tool",
-            "evidence-runner",
-            "--",
-            *_review_args(main_sha, head_sha),
-        ],
-        cwd=repo,
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    assert completed.returncode == 0, completed.stderr
-    digest = json.loads(completed.stdout)
-    stored = json.loads((repo / digest["result_path"]).read_text(encoding="utf-8"))
-    assert stored["integrity"]["verification"] == (
-        "trusted-commit-bundle-pre-execution"
-    )
-    assert digest["base_sha"] == main_sha
-    assert digest["head_sha"] == head_sha
+def test_evidence_runner_has_no_removed_trusted_version_interface() -> None:
+    text = (ROOT / RUNNER_REL).read_text(encoding="utf-8")
+    for fragment in (
+        "WORKFLOW_TRUSTED_RUNNER_SHA",
+        "WORKFLOW_TRUSTED_BUNDLE_ROOT",
+        "WORKFLOW_TARGET_REPO_ROOT",
+        "trusted-commit-bundle-pre-execution",
+    ):
+        assert fragment not in text
+    assert not (ROOT / "tools/agent_workflow/trusted_runner.py").exists()

@@ -2,259 +2,89 @@
 
 ## Purpose
 
-`tools/agent_workflow/wsl2_github_evidence_runner.py` is the fixed, read-only
-front door for Task workflow evidence collection in the supported WSL2
-workspace.
+`wsl2_github_evidence_runner.py` is the single read-only mechanical entry for
+Task/PR workflow facts. It validates complete argv, repository and object
+identity, fixed profile/schema, query boundaries, output paths, and snapshot
+stability before returning a compact result.
 
-It consolidates Task, Pull Request, checks, review threads, Project status,
-changed files, commits, diff identity, and local/remote Git facts into one
-bounded invocation. It does not comment, edit labels, update Project fields,
-close Issues, push, merge, fetch, switch branches, or delete branches.
-
-Task #85 may switch workflow Skills to this runner. Task #84 only establishes
-the runner, evidence contract, Rules, approval boundary, tests, and integration
-instructions.
-
-## Fixed repository and trusted files
-
-The runner is restricted to:
-
-```text
-PhoenixSss/quant-system
-```
-
-It must be launched from the repository root on the WSL2 Linux filesystem. It
-rejects `/mnt` workspaces, symlink entry points, wrong origins, unknown profiles,
-unknown arguments, arbitrary repository names, raw REST/GraphQL paths, arbitrary
-`gh`/Git arguments, shell strings, and output paths.
-
-Before any evidence subprocess runs, the following files must match their
-tracked `HEAD` blobs:
-
-```text
-tools/agent_workflow/wsl2_github_evidence_runner.py
-tools/agent_workflow/wsl2_github_evidence_profiles.json
-.codex/rules/quant-system-wsl-evidence.rules
-tools/agent_workflow/workflow_evidence.py
-tools/agent_workflow/workflow_common.py
-```
-
-Intentional changes to these files must be committed before the fixed runner can
-be exercised again.
-
-## Profiles
-
-### Delivery preflight
+## Entry points
 
 ```bash
 tools/agent_workflow/wsl2_github_evidence_runner.py delivery \
-  --task 84 \
-  --expected-main-sha <FULL_MAIN_SHA>
-```
+  --task <TASK> --expected-main-sha <SHA>
 
-Collects Task, relationship, local Git, `origin/main`, and remote `main` facts
-without a PR requirement.
-
-### Delivery readiness
-
-```bash
 tools/agent_workflow/wsl2_github_evidence_runner.py delivery-readiness \
-  --task 84 \
-  --pr <PR_NUMBER> \
-  --expected-base-sha <FULL_BASE_SHA> \
-  --expected-head-sha <FULL_HEAD_SHA>
-```
+  --task <TASK> --pr <PR> \
+  --expected-base-sha <SHA> --expected-head-sha <SHA>
 
-### Independent review
-
-```bash
 tools/agent_workflow/wsl2_github_evidence_runner.py review \
-  --task 84 \
-  --pr <PR_NUMBER> \
-  --expected-base-sha <FULL_BASE_SHA> \
-  --expected-head-sha <FULL_HEAD_SHA>
-```
+  --task <TASK> --pr <PR> \
+  --expected-base-sha <SHA> --expected-head-sha <SHA>
 
-### Pre-merge revalidation
-
-```bash
 tools/agent_workflow/wsl2_github_evidence_runner.py pre-merge \
-  --task 84 \
-  --pr <PR_NUMBER> \
-  --expected-base-sha <FULL_BASE_SHA> \
-  --expected-head-sha <FULL_HEAD_SHA>
-```
+  --task <TASK> --pr <PR> \
+  --expected-base-sha <SHA> --expected-head-sha <SHA>
 
-### Read-only closeout evidence
-
-```bash
 tools/agent_workflow/wsl2_github_evidence_runner.py closeout-readonly \
-  --task 84 \
-  --pr <PR_NUMBER> \
-  --expected-head-sha <FULL_REVIEWED_HEAD_SHA> \
-  --expected-merge-sha <FULL_MERGE_SHA>
-```
+  --task <TASK> --pr <PR> \
+  --expected-head-sha <SHA> --expected-merge-sha <SHA>
 
-This profile plans and verifies closeout facts only. It does not close the Issue,
-update Project fields, fetch, switch, delete branches, or perform cleanup.
-
-### Snapshot recheck
-
-```bash
 tools/agent_workflow/wsl2_github_evidence_runner.py recheck \
-  --snapshot-id ev-0123456789abcdef
+  --snapshot-id <SNAPSHOT_ID>
 ```
 
-Only snapshots created by supported `workflow_evidence.py` Task/PR operations
-can be rechecked. Head, checks, threads, Project/Issue metadata, diff identity,
-and applicable Git identities are recollected. Material drift produces a failed
-result.
+Profiles are fixed in `wsl2_github_evidence_profiles.json`. The Runner invokes
+`workflow_evidence.py` once, stores bounded artifacts below ignored
+`.agents/evidence.local/`, checks current remote refs, and prints one compact
+JSON digest.
 
-## Result and exit contract
+## Execution identity
 
-The model-visible stdout is a compact JSON digest. The full normalized result is
-written below:
+The Runner uses the current repository files. Results record the active Skill,
+Runner, profile specification, Rules, evidence tool, shared helper, repository
+head/worktree state, and content hashes. These values provide reproducibility;
+they are not a main/base version gate.
 
-```text
-.agents/evidence.local/wsl2-github-runs/<RUN_ID>/result.json
-```
+Task base, PR base/head/effective diff, audited main, merge SHA, and snapshot
+fingerprints remain locked as identities of the object being processed.
 
-The result contains:
+## Status model
 
-```yaml
-identity:
-  task:
-  pr:
-  repository:
-  base_sha:
-  head_sha:
-  merge_sha:
-issue:
-  state:
-  labels:
-  project_status:
-pull_request:
-  state:
-  draft:
-  mergeable:
-  checks:
-  unresolved_threads:
-scope:
-  changed_files:
-  commits:
-  diff_digest:
-git:
-  current_branch:
-  working_tree_clean:
-  local_main:
-  origin_main:
-  remote_main:
-  remote_head:
-stability:
-  snapshot_id:
-  snapshot_fingerprint:
-  stable:
-  changed_fields:
-  partial:
-```
+- `pass` / exit `0`: all applicable gates pass and no current evidence warning
+  or truncation remains;
+- `partial` / exit `3`: one or more facts are unknown, unavailable, truncated,
+  or capability-limited without a confirmed failing gate;
+- `fail` / exit `4`: a required identity, linkage, state, check, thread, or
+  stability gate fails;
+- Runner contract/I/O error / exit `2`: invocation, schema, repository, or
+  artifact handling failed.
 
-Exit codes:
+A plan-limit Required Checks `403` remains `partial`; it is never converted into
+full required-check evidence. Other auth, scope, rate-limit, network, and schema
+failures remain separately classified.
 
-| Code | Status | Meaning |
-| --- | --- | --- |
-| `0` | `pass` | Required fixed evidence is complete and no gate failed. |
-| `3` | `partial` | A required fact is unknown, unavailable, truncated, rate-limited, or permission-limited. |
-| `4` | `fail` | Identity, linkage, checks, drift, threads, or Git/remote consistency failed. |
-| `2` | runner error | Invocation, repository, integrity, profile, or local I/O failed closed. |
+## Safety boundary
 
-A `partial` result is useful evidence but is not complete success. For example,
-GitHub plan-limit `403`, unavailable Project/threads data, API rate limits, or
-bounded changed-file truncation remain explicit partial states.
+The Runner:
 
-## Read-only Git behavior
+- accepts only one fixed repository and fixed profile argv;
+- accepts no arbitrary repository, API, GraphQL, Git, shell, cwd, or output
+  argument;
+- performs fixed read-only GitHub and Git observations;
+- never writes Issue, PR, Project, Review, label, Relationship, branch, commit,
+  or merge state;
+- rejects symlink entry, wrong origin/root, injected/trailing argv, and snapshot
+  tampering;
+- bounds lists and output, records truncation, and redacts sensitive values;
+- compares current remote main/head with observed identities without repairing
+  drift.
 
-The underlying workflow evidence tool runs with:
+Rules route only the fixed Runner profile prefixes. The Runner validates the
+complete command and object identities.
 
-```text
-WORKFLOW_EVIDENCE_READ_ONLY=1
-```
+## Bounded fallback
 
-In this mode it does not run `git fetch`. It reads local refs and the worktree,
-while the fixed runner uses `git ls-remote --heads` for current remote `main` and
-PR-head comparison. A local `origin/main` mismatch with remote `main`, or an open
-PR head mismatch with its remote branch, fails evidence consistency.
-
-The runner's local writes are limited to exact Git-ignored evidence directories.
-No raw GitHub token, auth header, cookie, complete environment, Issue/PR body,
-source diff, or unbounded command output is stored.
-
-## Rules and complete argv validation
-
-`.codex/rules/quant-system-wsl-evidence.rules` authorizes only the fixed runner
-and named profile prefixes.
-
-Codex Rules use prefix matching. An execpolicy `allow` therefore authorizes the
-entry/profile prefix, not arbitrary trailing arguments. The runner performs the
-complete argument-count, option, value, repository, and snapshot validation
-before any GitHub or Git subprocess. Known API/shell/command injection options
-are also `forbidden` as defense in depth.
-
-Direct `gh`, direct raw API calls, direct Git commands, Python/shell wrappers,
-and write operations are not allow-listed by the evidence Rules.
-
-## Skill integration adopted by Task #85
-
-The Task Skills now:
-
-1. authorize the lifecycle action and exact profile;
-2. invoke one fixed runner command;
-3. treat exit `3` as partial, not pass;
-4. read the compact digest and referenced normalized result;
-5. preserve semantic review and workflow judgment;
-6. perform a `recheck` before a stability-sensitive decision;
-7. retain all GitHub/Git write gates outside this runner.
-
-Do not run both the fixed runner and the complete legacy mechanical query chain
-unless a reported partial/failure requires a documented read-only fallback.
-
-
-## Publication evidence package
-
-The Task #84 publication package includes:
-
-- `historical-command-baseline.json`: Task #63/#64 aggregate Git, GitHub/`gh`,
-  Guardian, duration, and Token context derived from external reports without
-  committing raw rollout logs;
-- `environment-capability.json`: source-derived WSL2 and GitHub CLI capability
-  baseline with explicit live-refresh fields;
-- `live-evidence-capture-plan.md`: exact capture and claim contract;
-- `templates/`: valid JSON examples for live profile, recheck, Rules, and
-  external evidence manifest files;
-- `publication-readiness.md`: final-document coverage and remaining local gates;
-- `visuals/`: editable historical, live-metric, and capability-drift sources.
-
-The examples are not pass evidence. Local Delivery must copy them to the final
-filenames and replace only fields backed by actual observations.
-
-## Live probe
-
-Task #84 Delivery should perform an explicit real-repository probe after the
-trusted files are committed:
-
-```bash
-tools/agent_workflow/wsl2_github_evidence_runner.py review \
-  --task 84 \
-  --pr <PR_NUMBER> \
-  --expected-base-sha 74a75872078221c38dbd132a1d438b0bb05c1870 \
-  --expected-head-sha <DELIVERY_HEAD>
-```
-
-Record the compact stdout size, duration, API operation count, Guardian turns,
-approvals, elevated executions, status, snapshot ID, result SHA-256, and local
-result path. Raw local evidence remains ignored.
-
-## Rollback
-
-After Task #85 adoption, rollback must revert the Skill routing, runner/profile/
-Rules versions, validators, and documentation together. Do not run the fixed
-runner and the former complete mechanical query chain in parallel.
+For `partial`, `unknown`, `fail`, truncation, schema mismatch, or drift, inspect
+only the named fact or gate. Do not replay the complete Git/GitHub query set.
+Use `recheck` for a stability-sensitive decision rather than reusing an old
+snapshot.

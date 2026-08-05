@@ -148,14 +148,12 @@ raw credentials in log messages.
 
 ## Agent workflow evidence and validation
 
-Repository workflow Skills use compact local tooling for deterministic metadata
-and validation summaries:
+Repository workflow Skills use the current fixed Runner entries for deterministic
+metadata and validation summaries:
 
-```powershell
-python -X utf8 tools/agent_workflow/workflow_evidence.py --help
-tools/agent_workflow/wsl2_github_evidence_runner.py --help
-python -X utf8 tools/agent_workflow/workflow_validation.py --help
-python -X utf8 tools/agent_workflow/trusted_runner.py --help
+```text
+tools/agent_workflow/wsl2_github_evidence_runner.py
+tools/agent_workflow/wsl2_validation_runner.py
 ```
 
 Local outputs are stored only in Git-ignored directories:
@@ -169,4 +167,7 @@ See `docs/workflows/workflow-evidence.md`. These tools do not replace semantic
 review, independent PR review, manual Merge, or Feature closeout.
 
 - [WSL2 GitHub evidence runner](docs/workflows/wsl2-github-evidence-runner/README.md): fixed read-only profiles, evidence snapshots, Git/GitHub approval boundaries, and live material capture.
-- [Task Skill runner migration](docs/workflows/task-skill-runner-migration/README.md): unified Runner routing, legacy-path removal, trusted Review, rollback, and static comparison materials.
+- [Agent workflow Skills](docs/workflows/agent-skills.md): current Runner Skills, Review remediation, Closeout, and Feature audit.
+- [Validation Runner](docs/workflows/wsl2-validation-runner/README.md): fixed validation profiles, compact artifacts, exact argv, and process cleanup.
+- [Skill variants](docs/workflows/task-skill-ab.md): preserved historical Skill family and current Runner Skill family for controlled comparison.
+- [Task Skill runner migration](docs/workflows/task-skill-runner-migration/README.md): historical migration record only; not an operational guide.

@@ -99,23 +99,6 @@ def _decision(argv: list[str]) -> str:
             SHA,
         ],
         RUNNER + ["recheck", "--snapshot-id", "ev-0123456789abcdef"],
-        [
-            "tools/agent_workflow/trusted_runner.py",
-            "--tool",
-            "evidence-runner",
-            "--trusted-sha",
-            SHA,
-            "--",
-            "review",
-            "--task",
-            "84",
-            "--pr",
-            "102",
-            "--expected-base-sha",
-            SHA,
-            "--expected-head-sha",
-            SHA,
-        ],
     ],
 )
 def test_fixed_evidence_profiles_are_allowed(argv: list[str]) -> None:
@@ -187,3 +170,9 @@ def test_git_and_github_writes_remain_approval_gated(argv: list[str]) -> None:
 
 def test_gh_auth_token_is_forbidden() -> None:
     assert _decision(["gh", "auth", "token"]) == "forbidden"
+
+
+def test_rules_do_not_reference_removed_trusted_runner() -> None:
+    text = RULES.read_text(encoding="utf-8")
+    assert "trusted_runner.py" not in text
+    assert "--trusted-sha" not in text

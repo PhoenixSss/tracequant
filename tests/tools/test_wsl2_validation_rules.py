@@ -57,20 +57,6 @@ def _execpolicy_decision(argv: list[str]) -> str:
         (RUNNER_ARGV + ["workflow-delivery", "--base-sha", "a" * 40], "allow"),
         (RUNNER_ARGV + ["workflow-review", "--base-sha", "a" * 40], "allow"),
         (RUNNER_ARGV + ["workflow-closeout", "--base-sha", "a" * 40], "allow"),
-        (
-            [
-                "tools/agent_workflow/trusted_runner.py",
-                "--tool",
-                "validation-runner",
-                "--trusted-sha",
-                "a" * 40,
-                "--",
-                "workflow-review",
-                "--base-sha",
-                "a" * 40,
-            ],
-            "allow",
-        ),
         (RUNNER_ARGV + ["targeted", "tests/tools"], "allow"),
         (RUNNER_ARGV + ["targeted", "arbitrary-value"], "allow"),
         (RUNNER_ARGV + ["targeted", "--command", "pytest"], "forbidden"),
@@ -119,3 +105,9 @@ def test_execpolicy_prefix_boundary_is_runner_enforced() -> None:
     assert (
         _execpolicy_decision(RUNNER_ARGV + ["targeted", "arbitrary-value"]) == "allow"
     )
+
+
+def test_rules_do_not_reference_removed_trusted_runner() -> None:
+    text = RULES.read_text(encoding="utf-8")
+    assert "trusted_runner.py" not in text
+    assert "--trusted-sha" not in text
