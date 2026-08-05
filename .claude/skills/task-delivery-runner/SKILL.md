@@ -32,8 +32,11 @@ Review remediation handoff:
 ```
 
 The Issue number is the primary key; the current Issue title is canonical.
-A request may limit execution to one named Phase. Verify prior Phase facts and
-stop at the requested boundary.
+A request may limit execution to one named Phase. Verify prior Phase facts using
+the Evidence Runner snapshot that Phase would have produced (`delivery` for
+identity/lifecycle, `delivery-readiness` for PR/check facts) — do not substitute
+direct `gh` or `git` queries for Runner snapshots — and stop at the requested
+boundary.
 
 ## Policies and Runner interface
 
@@ -227,8 +230,8 @@ The remediation handoff must identify:
 - maintainer decisions, if any.
 
 Re-read current Task, PR, branch, head, effective diff, checks, reviews, and
-threads. Verify that the PR is open, belongs to the expected Task branch, and
-matches the reviewed head. If the head changed and the change is not already
+threads by regenerating the `delivery-readiness` snapshot. Verify that the PR is
+open, belongs to the expected Task branch, and matches the reviewed head. If the head changed and the change is not already
 explained by current repository facts, stop for clarification.
 
 Classify every handoff item before editing:
@@ -266,8 +269,9 @@ Stop when the updated PR is ready for a new independent review. Report:
 
 ## Recovery and handoff
 
-Resume from the first unverified gate using current facts. Verify completed
-writes instead of repeating them. For remediation, treat the supplied handoff as
+Resume from the first unverified gate by regenerating the Evidence Runner
+snapshot for that gate (`delivery`, `delivery-readiness`, or `recheck` as
+applicable to the Phase). Verify completed writes instead of repeating them. For remediation, treat the supplied handoff as
 an index to independently verified findings and gates, not as permission to
 change Task scope. A Runner result does not replace semantic judgment.
 

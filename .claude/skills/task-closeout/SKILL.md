@@ -21,7 +21,10 @@ PR #<PR编号> 已由我人工 Squash Merge。
 
 Task and PR numbers are primary keys; the current Issue title is canonical.
 A request may limit execution to one named Phase or to the documented
-cleanup-only path.
+cleanup-only path. Verify prior Phase facts using the Evidence Runner snapshot
+that Phase would have produced (`closeout-readonly` for entry gates, `recheck`
+for stability) — do not substitute direct `gh` or `git` queries for Runner
+snapshots — and stop at the requested boundary.
 
 ## Policies and Runner interface
 

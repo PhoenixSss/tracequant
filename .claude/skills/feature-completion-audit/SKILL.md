@@ -28,8 +28,11 @@ Expected main SHA: <当前 main SHA>
 ```
 
 The Feature number is the primary key; the current Issue title is canonical.
-A request may limit execution to one named Phase. Verify prior Phase facts and
-stop at the requested boundary.
+A request may limit execution to one named Phase. Verify prior Phase facts using
+the same audit operations that Phase would have produced
+(`feature-audit-snapshot` for identity/children, `feature-audit-recheck` for
+stability) — do not substitute direct `gh` or `git` queries — and stop at the
+requested boundary.
 
 ## Policies and audit interface
 

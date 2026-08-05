@@ -27,8 +27,10 @@ Expected head SHA: <head SHA>
 ```
 
 Task and PR numbers are primary keys; the current Issue title is canonical.
-A request may limit execution to one named Phase. Verify prior Phase facts and
-stop at the requested boundary.
+A request may limit execution to one named Phase. Verify prior Phase facts using
+the Evidence Runner snapshot that Phase would have produced (`review` for
+identity/lock, `recheck` for stability) — do not substitute direct `gh` or
+`git` queries for Runner snapshots — and stop at the requested boundary.
 
 ## Policies and Runner interface
 
