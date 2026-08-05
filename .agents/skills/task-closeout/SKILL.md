@@ -1,13 +1,13 @@
 ---
 name: task-closeout
-description: Close out one maintainer-specified Task after maintainer manual merge. Use the fixed read-only Evidence Runner and fixed closeout Validation profile, synchronize main, converge exact final metadata, and delete only verified Task branches. Never merge, manually close an Issue, repair code, clean unrelated branches, or assess Feature completion.
+description: Close out one maintainer-specified Task after maintainer manual merge. Verify the exact merge, synchronize main, run post-merge validation, converge final Task metadata, and delete only the verified Task branch. Never merge, manually close an Issue, repair code, clean unrelated branches, or assess Feature completion.
 ---
 
 # Task closeout
 
 Use this Skill only after the maintainer states that a specific PR was manually
-merged and requests post-merge verification and cleanup for its exact Task. The
-statement is an entry request, not proof. This Skill never merges a PR.
+merged and requests closeout for its exact Task. The statement authorizes
+verification; it is not proof of merge. This Skill never merges a PR.
 
 ## Standard invocation
 
@@ -19,9 +19,11 @@ PR #<PR编号> 已由我人工 Squash Merge。
 及 PR #<PR编号> 的合并后核验与分支清理。
 ```
 
-Task and PR numbers are primary keys; current Issue title is canonical.
+Task and PR numbers are primary keys; the current Issue title is canonical.
+A request may limit execution to one named Phase or to the documented
+cleanup-only path.
 
-## Rules and fixed runners
+## Policies and Runner interface
 
 Read applicable agent rules and:
 
@@ -30,7 +32,7 @@ Read applicable agent rules and:
 .agents/policies/workflow-evidence.md
 ```
 
-Normal Closeout uses only these fixed read/validation front doors:
+Use the current repository Runner interfaces:
 
 ```bash
 tools/agent_workflow/wsl2_github_evidence_runner.py closeout-readonly \
@@ -46,157 +48,144 @@ tools/agent_workflow/wsl2_github_evidence_runner.py \
   recheck --snapshot-id <CLOSEOUT_PLAN_SNAPSHOT_ID>
 ```
 
-The Evidence Runner is read-only. It does not synchronize main, mutate metadata,
-or delete branches. The `workflow-closeout` profile requires clean synchronized
-`main`, runs current post-merge CI-equivalent checks and required Skill
-validators, and produces a compact digest.
+The first snapshot is the read-only closeout plan. `workflow-closeout` validates
+the synchronized merged result. `recheck` verifies stability after metadata and
+cleanup operations.
 
-Do not also run the raw Evidence/Validation tools, direct full validation chain,
-or complete legacy GitHub/Git read sequence. Expand only a named
-partial/unknown/fail/truncation/conflict with bounded read-only inspection.
+For `partial`, `unknown`, `fail`, truncation, schema mismatch, or drift, inspect
+only the named facts or failed commands and preserve the original status.
 
-When GitHub returns a recognized Required Checks plan-limit `403`, preserve
-`required_checks_configuration = unknown` and the Evidence status as `partial`.
-The runner may additionally report a separate
-`cleanup_eligibility.status = eligible-under-capability-limited-policy`. That
-derived field is only a branch-cleanup input; it is not a complete Evidence pass
-and never authorizes Merge, push, Issue, Project, label, review, or other writes.
+A recognized Required-Checks plan-limit `403` keeps
+`required_checks_configuration = unknown` and Evidence status `partial`.
+Branch cleanup may still use the separate
+`cleanup_eligibility.status = eligible-under-capability-limited-policy`; that
+field authorizes only exact branch cleanup under the conditions below.
 
 ## Permission boundary
 
-After all exact gates pass, this invocation may fetch current refs, verify
-Task/PR/merge/linkage/state/check/branch facts, fast-forward local `main` to
-`origin/main` only, run fixed post-merge validation, converge only this Task's
-Project Status to `Done` and lifecycle label to `codex:ready`, and delete only
-the exact verified remote/local Task branch.
+After all prerequisite gates pass, this Skill may fetch refs, fast-forward local
+`main` to `origin/main`, run post-merge validation, set this Task's Project
+Status to `Done`, restore lifecycle label `codex:ready`, remove
+`codex:blocked`, and delete only the exact verified Task branch.
 
-It never authorizes merge, manual Issue close, repair, commit/push, hierarchy or
-Relationship changes, unrelated branch/worktree cleanup, Feature completion,
-force push, `--admin`, protection bypass, `git reset --hard`, or `git clean`.
+It does not authorize merge, manual Issue close, repair commits, code push,
+hierarchy/Relationship changes, unrelated cleanup, Feature completion, force
+push, `--admin`, protection bypass, destructive reset, or `git clean`.
 
-## Entry and identity gates
+## Entry gates
 
-Generate one current fixed `closeout-readonly` snapshot. Independently verify
-repository/Task/PR/title, exact closing linkage, actual `MERGED` state, expected
-head and merge SHA, merge method, automatic Issue closure, Project/label facts,
-workspace/worktrees, exact branches, and checks.
+Generate `closeout-readonly`. Verify repository, Task/PR/title, exact closing
+linkage, actual `MERGED` state, reviewed head, merge SHA/method/time, automatic
+Issue closure, Project/label facts, workspace/worktrees, exact branches, and
+checks.
 
-If the Task did not auto-close through the intended PR, stop. Do not manually
-close it. The plan records branch/head/merge/main/check facts and remains
-read-only; it is not deletion permission.
+If the intended PR did not automatically close the Task, stop. Do not close the
+Issue manually.
 
-## Phase 1: synchronize merged result
+## Phase 1: synchronize the merged result
 
-Start clean. Fetch current refs, switch to local `main`, and fast-forward only.
-Stop on divergence, changes, worktree conflict, reset/force/bypass requirement.
-Verify local `main == origin/main`, merge reachability, merged tree/scope, and no
-tracked/staged local execution artifacts. For Squash Merge, use merge facts,
-linkage, reviewed head, changed-file scope, and tree comparison rather than
-inventing ancestry.
+Start from a clean workspace. Fetch refs, switch to local `main`, and
+fast-forward only. Stop on divergence, changes, worktree conflict, or any need
+for reset, force, or bypass.
 
-## Phase 2: post-merge validation and checks
+Verify:
 
-Run only `workflow-closeout` after main synchronization. Do not reuse Delivery
-or Review results. Read remote-main check runs and Required-Checks
-classification. Preserve none-configured, plan-limit `403`, pending, failed,
-cancelled, skipped, stale, and unavailable states. A real failure or unresolved
-required gate stops metadata convergence and cleanup.
+```text
+local main == origin/main
+merge SHA is reachable
+merged tree and scope match the reviewed change
+no tracked or staged execution artifacts exist
+```
+
+For Squash Merge, use merge facts, linkage, reviewed head, changed-file scope,
+and tree comparison rather than ancestry assumptions.
+
+## Phase 2: post-merge validation
+
+Run `workflow-closeout` after synchronization. Read remote-main checks and
+Required-Checks classification. Preserve none-configured, plan-limit `403`,
+pending, failed, cancelled, skipped, stale, and unavailable states. A real
+failure or unresolved required gate blocks metadata convergence and cleanup.
 
 ## Phase 3: final Task metadata
 
-Expected final state:
+The expected final state is:
 
 ```text
-Issue: CLOSED by correct PR linkage
+Issue: CLOSED by the verified PR
 Project Status: Done
 Codex label: codex:ready
 codex:blocked: absent
 ```
 
-Verify existing automation first. Apply only missing exact final Project/lifecycle
+Verify existing automation first. Apply only missing exact Project/lifecycle
 convergence and re-read it. Do not change any other field or infer Feature
 completion.
 
 ## Phase 4: exact branch cleanup
 
-Resolve the exact branch from verified PR facts. Before deletion verify branch
+Resolve the exact branch from verified PR facts. Before deletion confirm branch
 ownership, expected head, no worktree use, merged result, Issue closure,
-synchronized main, validation/checks, final metadata, and no unrelated/default/
-protected/ambiguous target. Treat PR-declared closing linkage, the Issue's
-latest effective closure cause, and the PR merge identity as separate facts:
-unknown or partial closure evidence blocks cleanup, conflicts block cleanup, and
-only complete Issue-side proof that the locked merged PR closed the Task may
-satisfy the closure portion of cleanup eligibility.
+synchronized main, validation/checks, final metadata, and an unambiguous,
+non-default, non-protected target.
 
-If Required Checks configuration is unavailable only because of a recognized
-GitHub plan-limit `403`, branch cleanup may continue only when the snapshot's
-independent `cleanup_eligibility.status` is exactly
-`eligible-under-capability-limited-policy`, the preserved Required Checks gate is
-still `unknown`, actual observed check runs include at least one quality gate and
-are all successful terminal states, the final recheck is stable, local
-`main == origin/main == merge SHA`, the exact remote and local branch tips equal
-the reviewed PR head, the PR head tree equals the merge tree, the target branch
-is not used by any worktree, and the cleanup plan contains no other branch.
-Any authentication, scope, permission, rate-limit, network, schema, service, or
-unknown Required Checks failure keeps cleanup blocked. Missing Issue-side PR
-state, `merged`, or `mergedAt` metadata must be reported as unknown/partial
-closure evidence, not as an explicit not-linked relationship.
+Complete Issue-side proof that the locked merged PR closed the Task is required.
+Unknown, partial, or conflicting closure evidence blocks cleanup.
 
-Delete only the exact remote branch and verify absence. For local cleanup, try
+When Required-Checks configuration is unknown only because of a recognized
+plan-limit `403`, cleanup may proceed only when all of the following hold:
+
+- `cleanup_eligibility.status` is exactly
+  `eligible-under-capability-limited-policy`;
+- observed check runs include at least one quality gate and all are successful
+  terminal states;
+- the final recheck is stable;
+- `local main == origin/main == merge SHA`;
+- local and remote Task branch tips equal the reviewed PR head;
+- PR-head tree equals merge tree;
+- no worktree uses the branch;
+- the cleanup plan contains no other branch.
+
+Authentication, scope, permission, rate-limit, network, schema, service, or
+other unknown failures keep cleanup blocked.
+
+Delete only the exact remote branch and verify absence. For local cleanup, use
 `git branch -d` first. Exact `-D` is allowed only after verified Squash Merge,
-remote absence, local tip equals reviewed head, tree equality with main, no
-worktree use, and all other gates pass. Never use wildcard or broad cleanup.
+remote absence, local tip equal to reviewed head, tree equality with main, no
+worktree use, and all other gates pass.
 
 ## Cleanup-only recovery
 
-For a Task whose lifecycle is already complete and whose only deferred action is
-exact task-branch cleanup, the maintainer may request a bounded `cleanup-only`
-resume by providing Task, PR, PR base SHA, reviewed head SHA, merge SHA, and exact
-branch name. This path may read current Task/PR/Project/label/check/thread/SHA/ref
-facts, run `workflow-closeout`, run final `recheck`, compute the same
-capability-limited cleanup eligibility, delete only the exact remote branch, and
-delete only the exact local branch.
+When lifecycle closeout is complete and only the exact Task branch remains, the
+maintainer may request `cleanup-only` with Task, PR, PR base SHA, reviewed head
+SHA, merge SHA, and exact branch name.
 
-`cleanup-only` must not merge, close an Issue, edit Project Status, edit labels,
-create commits, push code, repair business files, reset a Task to `In Progress`
-or `Review`, delete any other branch, perform Feature completion, or rewrite a
-partial Evidence result to pass. Identity drift or missing proof stops at a
-checkpoint.
+Re-run the same identity, validation, recheck, and cleanup gates. This path may
+delete only the exact Task branch; it may not merge, close an Issue, edit
+metadata, commit, push, repair files, change lifecycle state, delete another
+branch, or assess Feature completion.
 
-## Final stability recheck
+## Stability and report
 
-Run the fixed `recheck` against the stored closeout plan after synchronization,
-metadata, and cleanup. Any merge/state/main/check/branch drift stops success.
+Run `recheck` after synchronization, metadata convergence, and cleanup. Any
+merge, state, main, check, or branch drift blocks success.
 
-## Failure expansion, pauses, and recovery
+On clean success, report Task/PR URLs, PR base/head/reviewed head, merge
+method/SHA, Issue/Project/label state, local/origin main, post-merge validation
+and checks, exact branch actions, Parent/sub-issue facts without Feature
+judgment, limitations, and actions not performed.
 
-- `partial` / `unknown`: inspect only named gates and preserve uncertainty.
-- `fail` / drift: stop before the dependent write or deletion.
-- Runner unavailable or schema/version mismatch: report incompatibility; do not
-  reactivate the entire legacy path.
+When cleanup uses the capability-limited policy, report:
 
-Pause when identity, linkage, merge, auto-close, method, workspace, main/tree,
-validation, checks, Project/label, branch ownership, or deletion facts conflict,
-or when repair, manual close, merge, force, bypass, destructive cleanup, or a
-maintainer decision is required.
+```text
+closeout = completed-with-capability-limitation
+evidence = stable / partial
+required_checks_configuration = unknown
+cleanup = completed-under-capability-limited-policy
+```
 
-Resume from current facts and first unverified gate. Verify completed actions
-rather than repeating them; never recreate a deleted branch.
-
-## Compact closeout report
-
-On clean success include Task/PR URLs and identity, PR base/head/reviewed head,
-merge method/SHA, Issue/Project/label state, local/origin main, fixed post-merge
-validation and checks, exact branch actions and `-D` use, Parent/sub-issue facts
-without Feature judgment, limitations, and actions not performed.
-
-When cleanup succeeds under the capability-limited policy, report
-`closeout = completed-with-capability-limitation`, `evidence = stable / partial`,
-`required_checks_configuration = unknown`, and
-`cleanup = completed-under-capability-limited-policy`. Do not call it an
-unqualified clean success. Other terminal closeout states include `completed`,
-`partial-cleanup-deferred`, `blocked`, and `invalidated-by-drift`.
-
-Use a detailed report for any fallback, partial/unknown, failure, drift, conflict,
-or maintainer decision. Explicitly state no merge, manual Issue close, repair
-commit, unrelated cleanup, or Feature completion action occurred.
+Other terminal states are `completed`, `partial-cleanup-deferred`, `blocked`,
+and `invalidated-by-drift`. Use a detailed report for any fallback,
+`partial`/`unknown`, failure, drift, conflict, or maintainer decision. Explicitly
+state that no merge, manual Issue close, repair commit, unrelated cleanup, or
+Feature completion action occurred.
