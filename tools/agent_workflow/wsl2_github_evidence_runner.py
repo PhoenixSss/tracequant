@@ -186,13 +186,13 @@ def _read_current_file(repo_root: Path, relative_path: str) -> bytes:
     try:
         return path.read_bytes()
     except FileNotFoundError as exc:
-        raise RunnerError(f"required workflow file is missing: {relative_path}") from exc
+        raise RunnerError(
+            f"required workflow file is missing: {relative_path}"
+        ) from exc
 
 
 def _load_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str]]:
-    payloads = {
-        path: _read_current_file(repo_root, path) for path in IDENTITY_PATHS
-    }
+    payloads = {path: _read_current_file(repo_root, path) for path in IDENTITY_PATHS}
     try:
         spec = json.loads(payloads[SPEC_PATH].decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:

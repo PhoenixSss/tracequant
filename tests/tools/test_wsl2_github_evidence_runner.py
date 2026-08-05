@@ -414,7 +414,9 @@ def test_review_profile_returns_required_schema_and_compact_digest(
         ".agents/skills/task-pr-review-runner/SKILL.md"
     )
     assert value["integrity"]["skill"]["sha256"]
-    assert set(value["integrity"]["files"]) == {path.as_posix() for path in IDENTITY_FILES}
+    assert set(value["integrity"]["files"]) == {
+        path.as_posix() for path in IDENTITY_FILES
+    }
 
 
 @pytest.mark.parametrize("profile", ["delivery-readiness", "review", "pre-merge"])

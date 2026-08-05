@@ -617,7 +617,9 @@ def test_rules_file_contains_positive_and_negative_boundaries() -> None:
         assert boundary in text
 
 
-def test_workflow_delivery_and_review_require_clean_committed_head(tmp_path: Path) -> None:
+def test_workflow_delivery_and_review_require_clean_committed_head(
+    tmp_path: Path,
+) -> None:
     repo = _copy_runner_repo(tmp_path)
     validator = _fake_skill_validator(tmp_path)
     dirty_tools = _write_fake_tools(tmp_path, repo, dirty=True)

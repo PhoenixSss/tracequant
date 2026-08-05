@@ -13,7 +13,9 @@ ACTIVE_SKILLS: Final = {
     "task-delivery-runner": Path(".agents/skills/task-delivery-runner/SKILL.md"),
     "task-pr-review-runner": Path(".agents/skills/task-pr-review-runner/SKILL.md"),
     "task-closeout": Path(".agents/skills/task-closeout/SKILL.md"),
-    "feature-completion-audit": Path(".agents/skills/feature-completion-audit/SKILL.md"),
+    "feature-completion-audit": Path(
+        ".agents/skills/feature-completion-audit/SKILL.md"
+    ),
 }
 BASELINE_SKILLS: Final = {
     "task-delivery": Path(".agents/skills/task-delivery/SKILL.md"),

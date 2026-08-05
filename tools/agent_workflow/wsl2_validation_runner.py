@@ -214,7 +214,9 @@ def _read_current_file(repo_root: Path, relative_path: str) -> bytes:
     try:
         return path.read_bytes()
     except FileNotFoundError as exc:
-        raise RunnerError(f"required workflow file is missing: {relative_path}") from exc
+        raise RunnerError(
+            f"required workflow file is missing: {relative_path}"
+        ) from exc
 
 
 def _load_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str]]:
@@ -257,7 +259,9 @@ def _run_quiet(
 
 
 def _command_env() -> dict[str, str]:
-    env = {key: value for key in ALLOWED_ENV if (value := os.environ.get(key)) is not None}
+    env = {
+        key: value for key in ALLOWED_ENV if (value := os.environ.get(key)) is not None
+    }
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("NO_COLOR", "1")
