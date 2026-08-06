@@ -13,7 +13,12 @@
 
       "Bash(git branch --show-current)",
       "Bash(git branch -vv)",
-      "Bash(git ls-remote origin:*)"
+      "Bash(git ls-remote origin:*)",
+
+      "Bash(git remote -v)",
+      "Bash(gh issue view:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh run list:*)"
     ]
   }
 }
