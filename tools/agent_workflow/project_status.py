@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from pathlib import Path
 from typing import Final
 
 _REPO: Final = "PhoenixSss/quant-system"
