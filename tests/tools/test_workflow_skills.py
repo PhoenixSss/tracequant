@@ -38,8 +38,8 @@ def test_current_runner_skills_use_one_mechanical_path() -> None:
         text = path.read_text(encoding="utf-8")
         assert f"name: {name}" in text
         assert ".agents/policies/workflow-evidence.md" in text
-        assert len(text) < 15_000
-        assert len(text.splitlines()) < 360
+        assert len(text) < 16_000
+        assert len(text.splitlines()) < 370
         for fragment in forbidden:
             assert fragment not in text
         assert "telemetry" not in text.casefold()

@@ -667,12 +667,17 @@ def _compact_result(
     }
     subject = snapshot.get("subject")
     subject = subject if isinstance(subject, dict) else {}
+    preflight_disposition = snapshot.get("disposition")
+    preflight_disposition = (
+        preflight_disposition if isinstance(preflight_disposition, dict) else None
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "runner_version": RUNNER_VERSION,
         "profile": profile,
         "status": status,
         "partial": status == "partial",
+        "disposition": preflight_disposition,
         "started_at": started_at.isoformat(),
         "duration_ms": duration_ms,
         "identity": {
@@ -874,6 +879,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             .get("operations", {})
             .get("github_queries"),
             "base_sha": result["identity"]["base_sha"],
+            "disposition": (
+                result["disposition"]["disposition"]
+                if isinstance(result.get("disposition"), dict)
+                else None
+            ),
             "duration_ms": duration_ms,
             "entry_point": subject_value.get("entry_point"),
             "head_sha": result["identity"]["head_sha"],
@@ -886,6 +896,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             "status": status,
             "task": result["identity"]["task"],
             "unknown_gate_count": status_details.get("unknown", 0),
+            "workflow_may_continue": (
+                result["disposition"]["workflow_may_continue"]
+                if isinstance(result.get("disposition"), dict)
+                else None
+            ),
+            "write_actions_allowed": (
+                result["disposition"]["write_actions_allowed"]
+                if isinstance(result.get("disposition"), dict)
+                else None
+            ),
         }
         print(_json_dumps(compact), end="")
         return _exit_code(status)

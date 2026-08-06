@@ -2063,6 +2063,203 @@ def _collect_task_pr(
     return observed, gates
 
 
+def _worktree_state_compatible_gate(
+    git: Mapping[str, Any], *, entry_point: str
+) -> dict[str, Any]:
+    """Gate worktree cleanliness per entry point.
+
+    delivery-start and implementation may accept a dirty worktree when the
+    changes are plausibly owned by the current Task.  final-validation,
+    pr-readiness, and review-remediation require a clean committed head.
+    """
+    clean = bool(git.get("clean"))
+    branch = git.get("branch")
+    staged = git.get("staged_files", {})
+    staged_items = staged.get("items") if isinstance(staged, dict) else []
+    changed = git.get("changed_files", {})
+    changed_items = changed.get("items") if isinstance(changed, dict) else []
+    status_entries = git.get("status_entries")
+
+    dirty_allowed = entry_point in {"delivery-start", "implementation"}
+    blocked: list[dict[str, Any]] = []
+
+    if clean:
+        return {
+            "status": "pass",
+            "observed_clean": True,
+            "detail": f"worktree clean; entry_point={entry_point}",
+        }
+
+    if not dirty_allowed:
+        blocked.append(
+            {
+                "gate": "worktree_state_compatible",
+                "reason": f"entry-point-{entry_point}-requires-clean-committed-head",
+                "detail": (
+                    f"entry_point={entry_point} requires a clean committed head; "
+                    f"observed_clean=False, status_entries={status_entries}"
+                ),
+            }
+        )
+        return {
+            "status": "fail",
+            "observed_clean": False,
+            "dirty_allowed": False,
+            "worktree_disposition": "stop",
+            "detail": blocked[0]["detail"],
+            "blocked": blocked,
+        }
+
+    # dirty but allowed — record full observations
+    staged_list = staged_items if isinstance(staged_items, list) else []
+    changed_list = changed_items if isinstance(changed_items, list) else []
+
+    gate: dict[str, Any] = {
+        "status": "pass",
+        "observed_clean": False,
+        "dirty_allowed": True,
+        "worktree_disposition": "continue-through-implementation",
+        "branch": branch,
+        "staged_files": staged_items,
+        "changed_files": changed_items,
+        "status_entries": status_entries,
+        "detail": (
+            f"dirty worktree allowed for entry_point={entry_point}; "
+            f"staged={len(staged_list)}, changed={len(changed_list)}, "
+            f"status_entries={status_entries}"
+        ),
+    }
+    # flag obviously untracked files for maintainer awareness
+    untracked: list[str] = []
+    status_lines = git.get("status") if isinstance(git, dict) else None
+    if isinstance(status_lines, str):
+        for line in status_lines.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("??"):
+                untracked.append(stripped.removeprefix("??").strip())
+    if untracked:
+        gate["untracked_observed"] = bounded_list(untracked)
+    return gate
+
+
+def _compute_preflight_disposition(
+    gates: Mapping[str, Any], *, entry_point: str
+) -> dict[str, Any]:
+    """Derive a terminal admission disposition from Preflight gates.
+
+    Only pass allows the workflow to proceed to writes.  Any other effective
+    result is a stop disposition that forbids auto-remediation.
+    """
+    failed_gates: list[dict[str, Any]] = []
+    unknown_gates: list[str] = []
+    for name, value in gates.items():
+        if not isinstance(value, dict):
+            continue
+        status = value.get("status")
+        if status == "fail":
+            failed_gates.append(
+                {"gate": name, "reason": value.get("detail", "no detail")}
+            )
+        elif status == "unknown":
+            unknown_gates.append(name)
+
+    # worktree gate may carry its own blocked list
+    worktree_gate = gates.get("worktree_state_compatible")
+    if isinstance(worktree_gate, dict):
+        wt_blocked = worktree_gate.get("blocked")
+        if isinstance(wt_blocked, list):
+            failed_gates.extend(wt_blocked)
+
+    # lifecycle conflict is a hard stop
+    lifecycle = gates.get("lifecycle_labels_exclusive")
+    if isinstance(lifecycle, dict) and lifecycle.get("status") == "fail":
+        failed_gates.append(
+            {
+                "gate": "lifecycle_consistency",
+                "reason": lifecycle.get("detail", "lifecycle-label-conflict"),
+            }
+        )
+
+    # identity conflict is a hard stop
+    for identity_gate in (
+        "origin_main",
+        "branch_base",
+        "branch_head",
+        "pr_identity",
+        "pr_base_sha",
+        "pr_head_sha",
+        "remote_head",
+    ):
+        gate_value = gates.get(identity_gate)
+        if isinstance(gate_value, dict) and gate_value.get("status") == "fail":
+            failed_gates.append(
+                {
+                    "gate": f"identity:{identity_gate}",
+                    "reason": gate_value.get("detail", "identity-mismatch"),
+                }
+            )
+
+    has_fail = bool(failed_gates)
+    has_critical_unknown = bool(unknown_gates)
+    pass_gate_count = sum(
+        1 for v in gates.values() if isinstance(v, dict) and v.get("status") == "pass"
+    )
+    fail_gate_count = sum(
+        1 for v in gates.values() if isinstance(v, dict) and v.get("status") == "fail"
+    )
+    unknown_gate_count = len(unknown_gates)
+
+    if has_fail:
+        return {
+            "status": "fail",
+            "disposition": "stop",
+            "workflow_may_continue": False,
+            "write_actions_allowed": False,
+            "auto_remediation_allowed": False,
+            "maintainer_action_required": True,
+            "failed_gates": failed_gates,
+            "gate_counts": {
+                "pass": pass_gate_count,
+                "fail": fail_gate_count,
+                "unknown": unknown_gate_count,
+            },
+        }
+
+    if has_critical_unknown:
+        return {
+            "status": "partial",
+            "disposition": "stop",
+            "workflow_may_continue": False,
+            "write_actions_allowed": False,
+            "auto_remediation_allowed": False,
+            "maintainer_action_required": True,
+            "failed_gates": [
+                {"gate": name, "reason": "unknown-critical-gate"}
+                for name in unknown_gates
+            ],
+            "gate_counts": {
+                "pass": pass_gate_count,
+                "fail": fail_gate_count,
+                "unknown": unknown_gate_count,
+            },
+        }
+
+    return {
+        "status": "pass",
+        "disposition": "proceed",
+        "workflow_may_continue": True,
+        "write_actions_allowed": True,
+        "auto_remediation_allowed": False,
+        "maintainer_action_required": False,
+        "failed_gates": [],
+        "gate_counts": {
+            "pass": pass_gate_count,
+            "fail": 0,
+            "unknown": 0,
+        },
+    }
+
+
 def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
     _validate_delivery_entry_args(args)
     runner = CommandRunner(repo_root)
@@ -2098,7 +2295,9 @@ def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, 
         gates["origin_main"] = _sha_gate(
             git.get("origin_main_sha"), args.expected_main_sha, "origin/main SHA"
         )
-        gates["worktree_clean"] = _gate("pass" if git.get("clean") is True else "fail")
+        gates["worktree_state_compatible"] = _worktree_state_compatible_gate(
+            git, entry_point=args.entry_point
+        )
         if issue is not None:
             labels = set(issue.get("labels", {}).get("items", []))
             gates["lifecycle_labels_exclusive"] = _lifecycle_labels_gate(
@@ -2129,7 +2328,7 @@ def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, 
         "object_base_sha": observed["git"].get("origin_main_sha"),
         "runner": _runner_source(runner, warnings),
     }
-    return _base_snapshot(
+    snapshot = _base_snapshot(
         operation="delivery-preflight",
         subject=subject,
         repository=repository,
@@ -2140,6 +2339,9 @@ def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, 
         limitations=limitations,
         operations=runner.counters(),
     )
+    disposition = _compute_preflight_disposition(gates, entry_point=args.entry_point)
+    snapshot["disposition"] = disposition
+    return snapshot
 
 
 def _task_pr_snapshot(

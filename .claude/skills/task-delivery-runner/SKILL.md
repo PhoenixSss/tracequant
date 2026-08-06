@@ -175,31 +175,55 @@ write if actual Project options differ.
 `codex:ready` and `codex:needs-spec` are mutually exclusive lifecycle labels.
 Their coexistence is a lifecycle conflict that fails Preflight; do not proceed.
 
-## Preflight gate (required first step)
+## Preflight gate (terminal admission gate, required first step)
 
-Every invocation of this Skill MUST run the `delivery` Preflight as its first
-mechanical gate, before any Git, GitHub, or code write operation.
+Every invocation MUST run the `delivery` Preflight as its first mechanical
+gate, before any Git, GitHub, or code write. Preflight is a **terminal
+admission gate**, not a remediation phase — there is no recovery path through
+a non-pass result.
 
-Choose the entry point matching the requested execution mode.
+Only proceed when ALL hold: valid supported Runner result; identity matches
+Task, repository, entry point, branch, base, head, and PR; `status = pass`;
+`disposition.workflow_may_continue = true`; `disposition.write_actions_allowed = true`.
 
-**Invocation rules:**
+Any valid non-pass — `fail`, `partial`, `unknown`, `blocked`, lifecycle
+conflict, identity conflict, incompatible entry state, or
+maintainer-decision-required — is a **final admission decision**. Stop
+immediately. Only read the compact digest and failing gate evidence, report
+the failure and required maintainer action, and state no writes were performed.
+Do NOT: modify code/config/GitHub state; `git add`/commit/push/stash/reset;
+auto-repair lifecycle; enter implementation/validation/PR/readiness/
+review-remediation; route to a remediation loop; or re-invoke the same profile.
+
+Distinguish: **no valid result** (Runner crash, transport break, unparseable
+schema, no artifact) → one strictly identical bounded retry or report blockage.
+**Valid non-pass** → final; no auto-remediation or retry.
+
+### Worktree compatibility
+
+`worktree_state_compatible` is per-entry-point, not universal:
+
+| Entry point | Dirty worktree | Handling |
+|---|---|---|
+| `delivery-start` | Allowed | Full flow takes custody of existing Task changes |
+| `implementation` | Allowed | Phase continues development, validation, and commit |
+| `final-validation` | Forbidden | Must bind clean committed head |
+| `pr-readiness` | Forbidden | Identity must be stable across local, remote, and PR head |
+| `review-remediation` | Forbidden (fail-closed) | Must start from determinate reviewed head |
+
+When dirty is allowed, Preflight records staged/unstaged/untracked files but
+never stages, commits, stashes, discards, resets, or edits — it only judges.
+Dirty with unrelated, generated, secret-bearing, or prohibited files → fail.
+
+### Invocation lifecycle
 
 - First action of every invocation: run Preflight with the appropriate entry point.
-- Full flow, phase-specific calls, and new-session entry into a phase: each
-  executes the Preflight once.
-- Same invocation subsequent phases: do NOT repeat the full Preflight; check
-  only local preconditions for the next phase plus drift from the Preflight
-  snapshot.
-- Preflight must return `pass` before any Git, GitHub, or code write.
-- `fail`, critical `unknown`, identity conflict, or lifecycle conflict → stop
-  immediately.
-- Phase-specific calls stop at the requested phase boundary.
-
-In a new session without existing handoff or artifact: Preflight may generate
-one minimal read-only snapshot to establish current facts. This is NOT
-re-execution of completed phases. Existing valid handoff/artifact bound to
-same Task, branch, base, and head may be reused; regenerate only when missing,
-expired, contradictory, or insufficient.
+- Full flow, phase-specific, and new-session: execute Preflight once.
+- Same-invocation later phases: check local preconditions + drift; do not repeat.
+- Phase-specific calls stop at the requested boundary.
+- No existing handoff/artifact: generate one minimal read-only snapshot.
+- Valid handoff/artifact bound to same Task/branch/base/head: reuse; regenerate
+  only when missing, expired, contradictory, or insufficient.
 
 ## Phase 1: identity and readiness
 
@@ -351,13 +375,18 @@ Stop when the updated PR is ready for a new independent review. Report:
 
 ## Recovery and handoff
 
-Resume from the first unverified gate by regenerating the `delivery` Preflight
-snapshot for the target entry point (as applicable to the Phase). Verify
-completed writes instead of repeating them. For remediation, treat the supplied
-handoff as an index to independently verified findings and gates, not as
-permission to change Task scope. A Runner result does not replace semantic
-judgment. Stop on lifecycle conflict, identity drift, or entry-point state
-invalidation.
+Recovery rules apply only after Invocation Preflight has passed and never
+authorize remediation of a Preflight result. Preflight is a terminal admission
+gate — a valid non-pass Preflight result is a final disposition, not a
+recoverable state.
+
+Resume from the first unverified gate by checking local preconditions plus
+drift from the Preflight snapshot for the target entry point (as applicable to
+the Phase). Verify completed writes instead of repeating them. For
+remediation, treat the supplied handoff as an index to independently verified
+findings and gates, not as permission to change Task scope. A Runner result
+does not replace semantic judgment. Stop on lifecycle conflict, identity
+drift, or entry-point state invalidation.
 
 This Skill never performs independent review. On a clean path, including after
 remediation, report:

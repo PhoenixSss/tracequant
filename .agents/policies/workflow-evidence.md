@@ -165,6 +165,25 @@ validators. Delivery and Review require a clean committed worktree.
 Success stdout is a compact digest. Full redacted results and bounded failure
 diagnostics remain in the ignored validation directory.
 
+## Preflight disposition and Recovery boundary
+
+Delivery Preflight is a terminal admission gate, not a remediation phase.
+Recovery rules apply only after Invocation Preflight has passed and never
+authorize remediation of a Preflight result. A valid non-pass Preflight
+result (`fail`, `partial`, `unknown`, `blocked`, lifecycle conflict,
+identity conflict, incompatible entry state, or maintainer-decision-required)
+is a final disposition — not a recoverable state.
+
+Preflight pass returns `disposition.workflow_may_continue = true` and
+`disposition.write_actions_allowed = true`. Any other disposition forbids
+all write operations, auto-remediation, state modification, and re-invocation
+of the same profile to obtain `pass`.
+
+The `worktree_state_compatible` gate evaluates worktree cleanliness per
+entry point. `delivery-start` and `implementation` may accept a dirty
+worktree with Task-owned changes; `final-validation`, `pr-readiness`, and
+`review-remediation` require a clean committed head.
+
 ## Failure expansion
 
 `partial`, `unknown`, `fail`, drift, truncation, schema mismatch, or Runner
