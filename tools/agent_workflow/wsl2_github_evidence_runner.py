@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Final
 
 SCHEMA_VERSION: Final = 1
-RUNNER_VERSION: Final = "1.2.0"
+RUNNER_VERSION: Final = "1.3.0"
 REPOSITORY: Final = "PhoenixSss/quant-system"
 OUTPUT_ROOT: Final = ".agents/evidence.local/wsl2-github-runs"
 RUNNER_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_runner.py"
@@ -29,6 +29,51 @@ COMMON_TOOL_PATH: Final = "tools/agent_workflow/workflow_common.py"
 STDIO_LIMIT_BYTES: Final = 8192
 SHA_PATTERN: Final = re.compile(r"^[0-9a-f]{40}$")
 SNAPSHOT_ID_PATTERN: Final = re.compile(r"^ev-[0-9a-f]{16}$")
+BRANCH_NAME_PATTERN: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$")
+DELIVERY_ENTRY_POINTS: Final = (
+    "delivery-start",
+    "implementation",
+    "final-validation",
+    "pr-readiness",
+    "review-remediation",
+)
+DELIVERY_ENTRY_PARAMS: Final = {
+    "delivery-start": frozenset({"task", "expected_main_sha"}),
+    "implementation": frozenset(
+        {"task", "expected_main_sha", "branch", "expected_base_sha"}
+    ),
+    "final-validation": frozenset(
+        {
+            "task",
+            "expected_main_sha",
+            "branch",
+            "expected_base_sha",
+            "expected_head_sha",
+        }
+    ),
+    "pr-readiness": frozenset(
+        {
+            "task",
+            "expected_main_sha",
+            "branch",
+            "expected_base_sha",
+            "expected_head_sha",
+        }
+    ),
+    "review-remediation": frozenset(
+        {"task", "expected_main_sha", "pr", "expected_base_sha", "expected_head_sha"}
+    ),
+}
+DELIVERY_PARAM_SPACE: Final = frozenset(
+    {
+        "task",
+        "expected_main_sha",
+        "branch",
+        "pr",
+        "expected_base_sha",
+        "expected_head_sha",
+    }
+)
 REPOSITORY_PATTERN: Final = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 WINDOWS_PATH_PATTERN: Final = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s\"']+")
 POSIX_PATH_PATTERN: Final = re.compile(r"(?<![:/A-Za-z0-9])/(?!/)[^\s\"']+")
@@ -67,7 +112,18 @@ ALLOWED_ENV: Final = (
     "no_proxy",
 )
 CANONICAL_PROFILES: Final[dict[str, tuple[str, tuple[str, ...]]]] = {
-    "delivery": ("delivery-preflight", ("task", "expected_main_sha")),
+    "delivery": (
+        "delivery-preflight",
+        (
+            "task",
+            "expected_main_sha",
+            "entry_point",
+            "branch",
+            "pr",
+            "expected_base_sha",
+            "expected_head_sha",
+        ),
+    ),
     "delivery-readiness": (
         "delivery-readiness",
         ("task", "pr", "expected_base_sha", "expected_head_sha"),
@@ -317,6 +373,33 @@ def _snapshot_id(value: str) -> str:
     return value
 
 
+def _branch_name(value: str) -> str:
+    if (
+        not BRANCH_NAME_PATTERN.fullmatch(value)
+        or ".." in value
+        or "@{" in value
+        or value.endswith(".")
+        or value.endswith("/")
+        or value.endswith(".lock")
+    ):
+        raise argparse.ArgumentTypeError("must be a valid Git branch name")
+    return value
+
+
+def _validate_delivery_contract(args: argparse.Namespace) -> None:
+    allowed = DELIVERY_ENTRY_PARAMS[args.entry_point]
+    supplied = {
+        name for name in DELIVERY_PARAM_SPACE if getattr(args, name, None) is not None
+    }
+    missing = sorted(allowed - supplied)
+    extra = sorted(supplied - allowed)
+    if missing or extra:
+        raise RunnerError(
+            f"delivery entry-point {args.entry_point} parameter contract violation: "
+            f"missing={missing or 'none'} extra={extra or 'none'}"
+        )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Collect fixed, read-only GitHub and Git workflow evidence."
@@ -326,6 +409,16 @@ def _build_parser() -> argparse.ArgumentParser:
     delivery = sub.add_parser("delivery")
     delivery.add_argument("--task", type=_positive_int, required=True)
     delivery.add_argument("--expected-main-sha", type=_sha, required=True)
+    delivery.add_argument(
+        "--entry-point",
+        default="delivery-start",
+        choices=list(DELIVERY_ENTRY_POINTS),
+        help="stable semantic entry point for this delivery invocation",
+    )
+    delivery.add_argument("--branch", type=_branch_name)
+    delivery.add_argument("--expected-base-sha", type=_sha)
+    delivery.add_argument("--expected-head-sha", type=_sha)
+    delivery.add_argument("--pr", type=_positive_int)
 
     for name in ("delivery-readiness", "review", "pre-merge"):
         item = sub.add_parser(name)
@@ -415,7 +508,22 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
         str(args.task),
     ]
     if profile == "delivery":
-        result.extend(["--expected-main-sha", args.expected_main_sha])
+        result.extend(
+            [
+                "--entry-point",
+                args.entry_point,
+                "--expected-main-sha",
+                args.expected_main_sha,
+            ]
+        )
+        if args.branch is not None:
+            result.extend(["--branch", args.branch])
+        if args.expected_base_sha is not None:
+            result.extend(["--expected-base-sha", args.expected_base_sha])
+        if args.expected_head_sha is not None:
+            result.extend(["--expected-head-sha", args.expected_head_sha])
+        if args.pr is not None:
+            result.extend(["--pr", str(args.pr)])
     elif profile in {"delivery-readiness", "review", "pre-merge"}:
         result.extend(
             [
@@ -662,6 +770,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.profile == "delivery":
+            _validate_delivery_contract(args)
         repo_root = _find_repo_root(Path(__file__))
         _, content_hashes = _load_inputs(repo_root)
         _require_output_root_ignored(repo_root)
@@ -693,12 +803,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise RunnerError("workflow evidence result is not a JSON object")
 
         pr_value = snapshot.get("observed", {}).get("pr")
-        head_branch = (
-            pr_value.get("head_branch") if isinstance(pr_value, dict) else None
-        )
-        remote_refs, remote_warnings = _remote_refs(
-            repo_root, head_branch=head_branch if isinstance(head_branch, str) else None
-        )
+        head_branch: str | None = None
+        if isinstance(pr_value, dict):
+            head_branch = (
+                pr_value.get("head_branch")
+                if isinstance(pr_value.get("head_branch"), str)
+                else None
+            )
+        if head_branch is None and args.profile == "delivery":
+            head_branch = getattr(args, "branch", None)
+            head_branch = head_branch if isinstance(head_branch, str) else None
+        remote_refs, remote_warnings = _remote_refs(repo_root, head_branch=head_branch)
         status, status_details = _derive_status(snapshot)
         status_details = dict(status_details)
         observed_value = snapshot.get("observed")
@@ -752,12 +867,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         payload = _json_dumps(result, pretty=True).encode("utf-8")
         _atomic_write(result_path, payload)
         result_sha = _sha256_bytes(payload)
+        subject_value = snapshot.get("subject")
+        subject_value = subject_value if isinstance(subject_value, dict) else {}
         compact = {
             "api_calls": result.get("evidence", {})
             .get("operations", {})
             .get("github_queries"),
             "base_sha": result["identity"]["base_sha"],
             "duration_ms": duration_ms,
+            "entry_point": subject_value.get("entry_point"),
             "head_sha": result["identity"]["head_sha"],
             "partial": result["partial"],
             "pr": result["identity"]["pr"],

@@ -50,8 +50,11 @@ Use the current repository Runner interfaces:
 
 ```bash
 tools/agent_workflow/wsl2_github_evidence_runner.py delivery \
+  --entry-point <ENTRY_POINT> \
   --task <TASK> \
-  --expected-main-sha <LOCKED_MAIN_SHA>
+  --expected-main-sha <LOCKED_MAIN_SHA> \
+  [--branch <BRANCH> --expected-base-sha <BASE> \
+   [--expected-head-sha <HEAD>] | --pr <PR>]
 
 tools/agent_workflow/wsl2_validation_runner.py workflow-delivery \
   --base-sha <LOCKED_TASK_BASE_SHA>
@@ -62,6 +65,14 @@ tools/agent_workflow/wsl2_github_evidence_runner.py delivery-readiness \
   --expected-base-sha <LOCKED_TASK_BASE_SHA> \
   --expected-head-sha <CURRENT_HEAD_SHA>
 ```
+
+| Entry point | Invoked at | Params beyond `--task`, `--expected-main-sha` |
+|---|---|---|
+| `delivery-start` | Phase 1 before any write | — |
+| `implementation` | Phase 2 before branch/implementation writes | `--branch --expected-base-sha` |
+| `final-validation` | Phase 3 before commit/`workflow-delivery` | `--branch --expected-base-sha --expected-head-sha` |
+| `pr-readiness` | Phase 4 before PR creation/push verification | `--branch --expected-base-sha --expected-head-sha` |
+| `review-remediation` | Review remediation before any repair edit | `--pr --expected-base-sha --expected-head-sha` |
 
 During implementation, use a matching targeted Validation profile only when
 needed:
@@ -160,6 +171,35 @@ Keep lifecycle labels separate from Project `Status`:
 Implementation requires an open Task, `Ready` or `In Progress`,
 `codex:ready`, no `codex:blocked`, and this invocation. Stop before a state
 write if actual Project options differ.
+
+`codex:ready` and `codex:needs-spec` are mutually exclusive lifecycle labels.
+Their coexistence is a lifecycle conflict that fails Preflight; do not proceed.
+
+## Preflight gate (required first step)
+
+Every invocation of this Skill MUST run the `delivery` Preflight as its first
+mechanical gate, before any Git, GitHub, or code write operation.
+
+Choose the entry point matching the requested execution mode.
+
+**Invocation rules:**
+
+- First action of every invocation: run Preflight with the appropriate entry point.
+- Full flow, phase-specific calls, and new-session entry into a phase: each
+  executes the Preflight once.
+- Same invocation subsequent phases: do NOT repeat the full Preflight; check
+  only local preconditions for the next phase plus drift from the Preflight
+  snapshot.
+- Preflight must return `pass` before any Git, GitHub, or code write.
+- `fail`, critical `unknown`, identity conflict, or lifecycle conflict → stop
+  immediately.
+- Phase-specific calls stop at the requested phase boundary.
+
+In a new session without existing handoff or artifact: Preflight may generate
+one minimal read-only snapshot to establish current facts. This is NOT
+re-execution of completed phases. Existing valid handoff/artifact bound to
+same Task, branch, base, and head may be reused; regenerate only when missing,
+expired, contradictory, or insufficient.
 
 ## Phase 1: identity and readiness
 
@@ -269,11 +309,13 @@ Stop when the updated PR is ready for a new independent review. Report:
 
 ## Recovery and handoff
 
-Resume from the first unverified gate by regenerating the Evidence Runner
-snapshot for that gate (`delivery`, `delivery-readiness`, or `recheck` as
-applicable to the Phase). Verify completed writes instead of repeating them. For remediation, treat the supplied handoff as
-an index to independently verified findings and gates, not as permission to
-change Task scope. A Runner result does not replace semantic judgment.
+Resume from the first unverified gate by regenerating the `delivery` Preflight
+snapshot for the target entry point (as applicable to the Phase). Verify
+completed writes instead of repeating them. For remediation, treat the supplied
+handoff as an index to independently verified findings and gates, not as
+permission to change Task scope. A Runner result does not replace semantic
+judgment. Stop on lifecycle conflict, identity drift, or entry-point state
+invalidation.
 
 This Skill never performs independent review. On a clean path, including after
 remediation, report canonical Task/PR URLs, branch, base/head, changed-file

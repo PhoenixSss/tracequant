@@ -429,6 +429,9 @@ def test_task_pr_profiles_are_fixed_and_pass(tmp_path: Path, profile: str) -> No
 
 def test_delivery_profile_is_task_only_and_read_only(tmp_path: Path) -> None:
     repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
     completed = _run(
         repo,
         env,
@@ -880,3 +883,206 @@ def test_evidence_runner_has_no_removed_trusted_version_interface() -> None:
     ):
         assert fragment not in text
     assert not (ROOT / "tools/agent_workflow/trusted_runner.py").exists()
+
+
+# --- Delivery entry-point tests (new) ---
+
+
+def test_delivery_with_entry_point_delivery_start_passes(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert completed.returncode == 0, completed.stderr
+    digest = json.loads(completed.stdout)
+    assert digest["entry_point"] == "delivery-start"
+    assert digest["status"] == "pass"
+
+
+def test_delivery_entry_point_in_compact_digest(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert completed.returncode == 0, completed.stderr
+    digest = json.loads(completed.stdout)
+    assert digest["entry_point"] == "delivery-start"
+
+
+def test_delivery_lifecycle_conflict_ready_and_needs_spec_returns_fail(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["labels"] = [
+        {"name": "type:task"},
+        {"name": "codex:ready"},
+        {"name": "codex:needs-spec"},
+    ]
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert completed.returncode == 4, completed.stderr
+    value = _result(repo, completed.stdout)
+    assert (
+        "lifecycle_labels_exclusive"
+        in value["evidence"]["gate_summary"]["failed_gates"]
+    )
+
+
+def test_delivery_contract_violation_fails_before_github(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "implementation",
+    )
+    assert completed.returncode == 2
+    assert "parameter contract violation" in completed.stderr
+    assert _calls(state_path.with_name("gh-calls.jsonl")) == []
+    assert not (repo / ".agents/evidence.local/wsl2-github-runs").exists()
+
+
+def test_delivery_contract_extra_param_fails_before_github(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "delivery-start",
+        "--pr",
+        "102",
+    )
+    assert completed.returncode == 2
+    assert "parameter contract violation" in completed.stderr
+    assert _calls(state_path.with_name("gh-calls.jsonl")) == []
+    assert not (repo / ".agents/evidence.local/wsl2-github-runs").exists()
+
+
+def test_delivery_blocked_task_returns_fail(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["labels"] = [
+        {"name": "type:task"},
+        {"name": "codex:blocked"},
+    ]
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert completed.returncode == 4, completed.stderr
+    value = _result(repo, completed.stdout)
+    assert (
+        "label-not:codex:blocked" in value["evidence"]["gate_summary"]["failed_gates"]
+    )
+
+
+def test_delivery_project_status_incompatible_returns_fail(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert completed.returncode == 4, completed.stderr
+    value = _result(repo, completed.stdout)
+    assert "project_status_known" in value["evidence"]["gate_summary"]["failed_gates"]
+
+
+def test_delivery_no_github_write_on_fail(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["labels"] = [
+        {"name": "type:task"},
+        {"name": "codex:ready"},
+        {"name": "codex:needs-spec"},
+    ]
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert completed.returncode == 4
+    gh_calls = _calls(state_path.with_name("gh-calls.jsonl"))
+    mutation_tokens = {"edit", "close", "comment", "merge", "delete", "create"}
+    assert all(not mutation_tokens.intersection(call) for call in gh_calls)

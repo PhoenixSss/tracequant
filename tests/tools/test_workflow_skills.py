@@ -48,6 +48,7 @@ def test_current_runner_skills_use_one_mechanical_path() -> None:
 def test_delivery_runner_has_current_profiles_and_remediation_loop() -> None:
     text = ACTIVE_SKILLS["task-delivery-runner"].read_text(encoding="utf-8")
     assert "--expected-main-sha" in text
+    assert "--entry-point" in text
     assert "delivery-readiness" in text
     assert "workflow-delivery" in text
     assert "targeted:workflow-tests" in text
@@ -56,6 +57,7 @@ def test_delivery_runner_has_current_profiles_and_remediation_loop() -> None:
     assert "Low or Nit" in text
     assert "new independent review" in text
     assert "git add ." in text and "do not use" in text
+    assert "lifecycle conflict" in text.casefold()
 
 
 def test_review_runner_is_read_only_and_emits_bounded_remediation_handoff() -> None:

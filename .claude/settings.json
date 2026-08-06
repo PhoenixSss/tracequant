@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tools/agent_workflow/wsl2_github_evidence_runner.py:*)",
+      "Bash(tools/agent_workflow/wsl2_validation_runner.py:*)",
+
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git merge-base:*)",
+      "Bash(git check-ignore:*)",
+
+      "Bash(git branch --show-current)",
+      "Bash(git branch -vv)",
+      "Bash(git ls-remote origin:*)"
+    ]
+  }
+}
