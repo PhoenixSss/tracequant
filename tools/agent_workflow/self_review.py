@@ -9,9 +9,13 @@ constraints.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final
+
+if __name__ != "__main__" or not any(p.endswith("agent_workflow") for p in sys.path):
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from workflow_common import (
     WorkflowToolError,
