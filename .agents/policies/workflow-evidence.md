@@ -65,6 +65,38 @@ When a PR changes Skills, Runners, Rules, profiles, or workflow governance, an
 independent Review directly evaluates those changes, tests, permissions, and
 failure behavior. Runner success is supporting evidence, never self-approval.
 
+## PR resolve/create
+
+The deterministic PR resolve/create helper at
+`tools/agent_workflow/pr_resolve.py` is the canonical path for Delivery PR
+creation and recovery. It is a shared library, not a Runner. It enforces:
+
+- exactly one `gh pr list` → exit-code check → non-empty stdout check → JSON
+  parse → exactly zero or one match;
+- zero matches → `gh pr create` with exit-code/stdout/URL checks;
+- one match → reuse;
+- more than one match → fail-closed;
+- exactly one `gh pr view $URL` identity verification;
+- no stderr suppression, no empty-stdout-to-JSON, no retry with modified
+  `--json` fields, no fallback to text-mode queries.
+
+Delivery Skills use this helper as their single PR create/recovery path.
+
+## Semantic self-review
+
+Delivery Skills produce a structured self-review artifact before the
+`delivery-readiness` snapshot. The artifact schema is defined in
+`tools/agent_workflow/self_review.py`. It binds Task, base SHA, head SHA,
+effective-diff SHA-256, and PR identity.
+
+The self-review artifact is stored in `.agents/evidence.local/self-reviews/`
+(Git-ignored, never committed). It records acceptance-criteria mapping,
+changed-file group review, and evidence references — not source copies or
+complete logs. The model fills in semantic content; the helper validates
+structural completeness and evidence constraints.
+
+The self-review is an internal Delivery gate, not an independent review.
+
 ## Local artifacts
 
 Tools may write only below the exact Git-ignored roots:

@@ -194,19 +194,61 @@ head that passed final validation. Re-read branch and remote-head identity.
 
 ## Phase 4: PR and readiness
 
-Create or recover exactly one non-Draft PR targeting the approved base. The PR
-must identify Task/branch/head, contain `Closes #<Task>`, describe
-implementation, validation, risks, and limitations, and contain only approved
-files and commits.
+### 4a. PR resolve or create
 
-Set Project Status to `Review` only after the PR exists or review begins. Wait
-for applicable checks. Distinguish no configured Required Checks, a recognized
-plan-limit `403`, and actual pending, failed, stale, cancelled, skipped, or
-unavailable checks.
+Use the deterministic `pr_resolve.py` helper in
+`tools/agent_workflow/pr_resolve.py` as the single PR resolve/create path.
+The helper enforces in code (not in Skill prose):
+
+- a single structured query for matching open PRs, `--limit 2`, with exit-code
+  check, non-empty stdout check, and JSON parse before acting on the result;
+- exactly zero matches → one PR creation with exit-code/stdout/URL checks;
+- exactly one match → reuse;
+- more than one match → fail-closed;
+- a single structured identity verification with all required fields, no
+  retry with modified fields;
+- identity mismatch on number, URL, state, draft, base/head branch, or
+  base/head SHA → fail-closed.
+
+The helper never suppresses stderr, never parses empty stdout as JSON, never
+retries with modified fields, and never falls back to a text-mode query.
+
+The PR must contain `Closes #<Task>`, describe implementation, validation,
+risks, and limitations, and contain only approved files and commits. Set
+Project Status to `Review` only after the PR exists.
+
+### 4b. Checks
+
+Wait for applicable checks. Distinguish no configured Required Checks, a
+recognized plan-limit `403`, and actual pending, failed, stale, cancelled,
+skipped, or unavailable checks.
+
+### 4c. Semantic self-review artifact
+
+Before `delivery-readiness`, produce a structured self-review artifact using
+the schema from `tools/agent_workflow/self_review.py`. The artifact must:
+
+- lock Task number, business base SHA, current head SHA, effective diff
+  SHA-256, and PR number at generation time;
+- re-confirm head has not changed before finalizing;
+- map every acceptance criterion to `verified` | `partially_verified` |
+  `not_verified` with implementation and validation evidence;
+- group every changed file into review areas derived from the actual diff;
+- record per area: files, status, key behaviour changes, mapped criteria,
+  mechanical validation results, findings, and remaining risk;
+- enforce that `overall: "verified"` requires every area and criterion to be
+  `verified`, and every verified assertion to have at least one evidence entry;
+- never accept a keyword grep or file-exists check as semantic review;
+- never claim provenance or canonical-state clearance without a corresponding
+  mechanical validator result.
+
+Write to `.agents/evidence.local/self-reviews/` (Git-ignored, not committed).
+The artifact is bound to current head and diff; any new commit makes it stale.
+
+### 4d. Delivery readiness
 
 Generate `delivery-readiness`. Verify Task/PR identity, base/head, effective
 diff, files/commits, linkage, checks, reviews, threads, lifecycle, and scope.
-Read the full PR diff and relevant context for semantic self-review.
 
 Stop on a new commit, drift, validation/check failure, blocking thread, state
 conflict, or unresolved Blocking/High/Medium self-finding.
@@ -273,13 +315,33 @@ scope. A Runner result does not replace semantic judgment. Stop on lifecycle
 conflict, identity drift, or entry-point state invalidation.
 
 This Skill never performs independent review. On a clean path, including after
-remediation, report canonical Task/PR URLs, branch, base/head, changed-file
-summary, final validation/check summary, lifecycle state, thread count,
-limitations, and:
+remediation, report:
+
+- canonical Task/PR URLs, branch, base/head, changed-file summary;
+- final validation/check summary, lifecycle state, thread count, limitations;
+- self-review artifact path, overall verdict (`verified` | `partial` |
+  `not_verified`), and a summary of each area and acceptance criterion with
+  its evidence status;
+- every `partial`/`unknown` from `delivery-readiness` preserved with its
+  original reason (never upgraded to `pass` by omission);
+- mechanical validation conclusions (explicitly separate from semantic
+  self-review conclusions);
+- unverified or partially verified content with explicit gaps;
+
+and:
 
 ```text
 Ready for independent review
 ```
+
+**Reporting contract:**
+
+Every conclusion must trace to a self-review evidence entry or mechanical
+validator result. Only `Verified` may be stated as fact. `Partially verified`
+must state covered scope and gaps. `Not verified` must not be rephrased as a
+pass. Do not expand a grep, file-exists check, or partial validator result
+into "all complete" or "all canonical-state". When `delivery-readiness` is
+`partial`, retain the `partial`/`unknown` reasons.
 
 End with the exact new-session `task-pr-review-runner` prompt and expected
 base/head SHAs. Use a detailed report for any finding, fallback,
