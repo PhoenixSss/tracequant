@@ -259,7 +259,23 @@ def _load_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str]]:
     return spec, {path: _sha256_bytes(payload) for path, payload in payloads.items()}
 
 
-def _skill_identity(repo_root: Path, profile: str) -> dict[str, str] | None:
+ALLOWED_SKILL_ROOTS: Final = (".agents/skills/", ".claude/skills/")
+SKILL_FILENAME: Final = "SKILL.md"
+
+
+def _resolve_skill_identity(
+    repo_root: Path,
+    profile: str,
+    caller_skill_path: str | None,
+) -> dict[str, str] | None:
+    """Resolve the actual Skill identity for this Runner invocation.
+
+    When *caller_skill_path* is provided (the caller's own Skill path), the
+    Runner validates it, re-hashes the content, and records the actual path and
+    platform.  When absent the Runner falls back to the ``.agents`` path for the
+    profile — the historical default for Codex callers that do not yet supply
+    --skill-path.
+    """
     mapping = {
         "delivery": ".agents/skills/task-delivery-runner/SKILL.md",
         "delivery-readiness": ".agents/skills/task-delivery-runner/SKILL.md",
@@ -267,6 +283,25 @@ def _skill_identity(repo_root: Path, profile: str) -> dict[str, str] | None:
         "pre-merge": ".agents/skills/task-pr-review-runner/SKILL.md",
         "closeout-readonly": ".agents/skills/task-closeout/SKILL.md",
     }
+
+    if caller_skill_path is not None:
+        normalized = caller_skill_path.replace("\\", "/")
+        if not normalized.endswith(f"/{SKILL_FILENAME}"):
+            raise RunnerError(
+                f"--skill-path must end with SKILL.md, got: {caller_skill_path!r}"
+            )
+        if ".." in normalized or normalized.startswith("/"):
+            raise RunnerError(
+                f"--skill-path must be a repo-relative path: {caller_skill_path!r}"
+            )
+        if not any(normalized.startswith(root) for root in ALLOWED_SKILL_ROOTS):
+            raise RunnerError(
+                f"--skill-path must start with one of {ALLOWED_SKILL_ROOTS}: "
+                f"{caller_skill_path!r}"
+            )
+        payload = _read_current_file(repo_root, normalized)
+        return {"path": normalized, "sha256": _sha256_bytes(payload)}
+
     relative_path = mapping.get(profile)
     if relative_path is None:
         return None
@@ -421,20 +456,45 @@ def _build_parser() -> argparse.ArgumentParser:
     delivery.add_argument("--pr", type=_positive_int)
 
     for name in ("delivery-readiness", "review", "pre-merge"):
-        item = sub.add_parser(name)
-        item.add_argument("--task", type=_positive_int, required=True)
-        item.add_argument("--pr", type=_positive_int, required=True)
-        item.add_argument("--expected-base-sha", type=_sha, required=True)
-        item.add_argument("--expected-head-sha", type=_sha, required=True)
+        subp = sub.add_parser(name)
+        subp.add_argument("--task", type=_positive_int, required=True)
+        subp.add_argument("--pr", type=_positive_int, required=True)
+        subp.add_argument("--expected-base-sha", type=_sha, required=True)
+        subp.add_argument("--expected-head-sha", type=_sha, required=True)
+        subp.add_argument(
+            "--skill-path",
+            type=str,
+            default=None,
+            help="repo-relative path to the calling Skill's SKILL.md",
+        )
 
     closeout = sub.add_parser("closeout-readonly")
     closeout.add_argument("--task", type=_positive_int, required=True)
     closeout.add_argument("--pr", type=_positive_int, required=True)
     closeout.add_argument("--expected-head-sha", type=_sha, required=True)
     closeout.add_argument("--expected-merge-sha", type=_sha, required=True)
+    closeout.add_argument(
+        "--skill-path",
+        type=str,
+        default=None,
+        help="repo-relative path to the calling Skill's SKILL.md",
+    )
 
     recheck = sub.add_parser("recheck")
     recheck.add_argument("--snapshot-id", type=_snapshot_id, required=True)
+    recheck.add_argument(
+        "--skill-path",
+        type=str,
+        default=None,
+        help="repo-relative path to the calling Skill's SKILL.md",
+    )
+
+    delivery.add_argument(
+        "--skill-path",
+        type=str,
+        default=None,
+        help="repo-relative path to the calling Skill's SKILL.md",
+    )
     return parser
 
 
@@ -630,6 +690,7 @@ def _compact_result(
     *,
     repo_root: Path,
     profile: str,
+    caller_skill_path: str | None,
     status: str,
     status_details: Mapping[str, Any],
     started_at: datetime,
@@ -762,7 +823,7 @@ def _compact_result(
             "repository_head_sha": git.get("head_sha"),
             "repository_clean": git.get("clean"),
             "files": dict(integrity),
-            "skill": _skill_identity(repo_root, profile),
+            "skill": _resolve_skill_identity(repo_root, profile, caller_skill_path),
         },
     }
 
@@ -780,6 +841,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         repo_root = _find_repo_root(Path(__file__))
         _, content_hashes = _load_inputs(repo_root)
         _require_output_root_ignored(repo_root)
+        # Validate --skill-path early (before any GitHub queries)
+        _resolve_skill_identity(repo_root, args.profile, args.skill_path)
         command = _evidence_argv(args, repo_root)
         started_at = datetime.now(UTC)
         started = time.monotonic()
@@ -852,6 +915,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             snapshot,
             repo_root=repo_root,
             profile=args.profile,
+            caller_skill_path=args.skill_path,
             status=status,
             status_details=status_details,
             started_at=started_at,

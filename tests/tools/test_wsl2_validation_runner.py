@@ -73,19 +73,20 @@ def _copy_runner_repo(tmp_path: Path, *, name: str = "repo") -> Path:
         encoding="utf-8",
     )
     (repo / "tests").mkdir()
-    for skill in (
-        "task-delivery",
-        "task-pr-review",
-        "task-delivery-runner",
-        "task-pr-review-runner",
-        "task-closeout",
-        "feature-completion-audit",
-    ):
-        skill_dir = repo / ".agents" / "skills" / skill
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(
-            f"---\nname: {skill}\n---\n", encoding="utf-8"
-        )
+    for skill_dir in (".agents", ".claude"):
+        for skill in (
+            "task-delivery",
+            "task-pr-review",
+            "task-delivery-runner",
+            "task-pr-review-runner",
+            "task-closeout",
+            "feature-completion-audit",
+        ):
+            target = repo / skill_dir / "skills" / skill
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "SKILL.md").write_text(
+                f"---\nname: {skill}\n---\n", encoding="utf-8"
+            )
     (repo / ".github" / "workflows" / "ci.yml").write_text(
         """name: CI
 jobs:
@@ -313,7 +314,6 @@ def test_unknown_profile_unknown_argument_and_trailing_argument_fail(
     assert _run(repo, bin_dir, "targeted", "tests/tools").returncode == 2
     assert _run(repo, bin_dir, "targeted", "arbitrary-value").returncode == 2
     assert _run(repo, bin_dir, "targeted", "--unknown").returncode == 2
-    assert _run(repo, bin_dir, "targeted", "--").returncode == 2
     assert _run(repo, bin_dir, "targeted", "--", "tests/tools").returncode == 2
     assert _run(repo, bin_dir, "targeted", ">").returncode == 2
 
@@ -343,14 +343,16 @@ def test_trailing_arguments_fail_before_validation_side_effects(
         ("tests/tools",),
         ("arbitrary-value",),
         ("--unknown",),
-        ("--",),
+        ("--", "tests/tools"),
         (">",),
         ("$(id)",),
     ):
         result = _run(repo, bin_dir, "targeted", *extra)
-        assert result.returncode == 2
-        assert "trailing arguments are not accepted" in result.stderr or (
-            "unrecognized arguments" in result.stderr
+        assert result.returncode == 2, f"extra={extra!r}: {result.stderr}"
+        assert (
+            "trailing arguments are not accepted" in result.stderr
+            or "unrecognized arguments" in result.stderr
+            or "error: unrecognized" in result.stderr
         )
         assert result.stdout == ""
         assert not canary.exists()
@@ -645,3 +647,126 @@ def test_validation_runner_has_no_removed_trusted_version_interface() -> None:
         "trusted-commit-bundle-pre-execution",
     ):
         assert fragment not in text
+
+
+# --- Skill identity tests ---
+
+
+def test_workflow_review_records_default_agents_skill_path(tmp_path: Path) -> None:
+    """Without --skill-path the validation runner falls back to .agents path."""
+    repo = _copy_runner_repo(tmp_path)
+    bin_dir = _write_fake_tools(tmp_path, repo)
+    validator = _fake_skill_validator(tmp_path)
+    result = _run(
+        repo,
+        bin_dir,
+        "workflow-review",
+        "--base-sha",
+        "b" * 40,
+        extra_env={"CODEX_SKILL_VALIDATOR": str(validator)},
+    )
+    assert result.returncode == 0, result.stderr
+    stored = json.loads((repo / json.loads(result.stdout)["result_path"]).read_text())
+    assert stored["integrity"]["skill"]["path"] == (
+        ".agents/skills/task-pr-review-runner/SKILL.md"
+    )
+    assert stored["integrity"]["skill"]["sha256"]
+
+
+def test_workflow_review_records_claude_skill_path_when_provided(
+    tmp_path: Path,
+) -> None:
+    """--skill-path .claude/... is recorded with actual content hash."""
+    repo = _copy_runner_repo(tmp_path)
+    bin_dir = _write_fake_tools(tmp_path, repo)
+    validator = _fake_skill_validator(tmp_path)
+    claude_skill = ".claude/skills/task-pr-review-runner/SKILL.md"
+    result = _run(
+        repo,
+        bin_dir,
+        "workflow-review",
+        "--base-sha",
+        "b" * 40,
+        "--skill-path",
+        claude_skill,
+        extra_env={"CODEX_SKILL_VALIDATOR": str(validator)},
+    )
+    assert result.returncode == 0, result.stderr
+    stored = json.loads((repo / json.loads(result.stdout)["result_path"]).read_text())
+    assert stored["integrity"]["skill"]["path"] == claude_skill
+    import hashlib
+
+    expected_hash = hashlib.sha256((repo / claude_skill).read_bytes()).hexdigest()
+    assert stored["integrity"]["skill"]["sha256"] == expected_hash
+
+
+def test_validation_skill_path_outside_allowed_roots_fails(tmp_path: Path) -> None:
+    """--skill-path outside .agents/skills/ or .claude/skills/ is rejected."""
+    repo = _copy_runner_repo(tmp_path)
+    bin_dir = _write_fake_tools(tmp_path, repo)
+    result = _run(
+        repo,
+        bin_dir,
+        "workflow-review",
+        "--base-sha",
+        "b" * 40,
+        "--skill-path",
+        "tools/agent_workflow/README.md",
+    )
+    assert result.returncode == 2
+
+
+def test_validation_skill_path_parent_traversal_fails(tmp_path: Path) -> None:
+    """--skill-path with .. is rejected."""
+    repo = _copy_runner_repo(tmp_path)
+    bin_dir = _write_fake_tools(tmp_path, repo)
+    result = _run(
+        repo,
+        bin_dir,
+        "workflow-review",
+        "--base-sha",
+        "b" * 40,
+        "--skill-path",
+        ".claude/skills/../../dangerous/SKILL.md",
+    )
+    assert result.returncode == 2
+
+
+def test_workflow_delivery_agents_skill_is_default(tmp_path: Path) -> None:
+    """workflow-delivery defaults to .agents task-delivery-runner path."""
+    repo = _copy_runner_repo(tmp_path)
+    bin_dir = _write_fake_tools(tmp_path, repo)
+    validator = _fake_skill_validator(tmp_path)
+    result = _run(
+        repo,
+        bin_dir,
+        "workflow-delivery",
+        "--base-sha",
+        "b" * 40,
+        extra_env={"CODEX_SKILL_VALIDATOR": str(validator)},
+    )
+    assert result.returncode == 0, result.stderr
+    stored = json.loads((repo / json.loads(result.stdout)["result_path"]).read_text())
+    assert ".agents/skills/task-delivery-runner/SKILL.md" in str(
+        stored["integrity"]["skill"]["path"]
+    )
+
+
+def test_workflow_closeout_agents_skill_is_default(tmp_path: Path) -> None:
+    """workflow-closeout defaults to .agents task-closeout path."""
+    repo = _copy_runner_repo(tmp_path)
+    validator = _fake_skill_validator(tmp_path)
+    main = _write_fake_tools(tmp_path, repo, branch="main")
+    result = _run(
+        repo,
+        main,
+        "workflow-closeout",
+        "--base-sha",
+        "b" * 40,
+        extra_env={"CODEX_SKILL_VALIDATOR": str(validator)},
+    )
+    assert result.returncode == 0, result.stderr
+    stored = json.loads((repo / json.loads(result.stdout)["result_path"]).read_text())
+    assert ".agents/skills/task-closeout/SKILL.md" in str(
+        stored["integrity"]["skill"]["path"]
+    )

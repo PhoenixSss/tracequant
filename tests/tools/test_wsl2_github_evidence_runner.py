@@ -241,15 +241,17 @@ def _prepare_repo(
         target = repo / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, target)
-    for skill in (
-        "task-delivery-runner",
-        "task-pr-review-runner",
-        "task-closeout",
-    ):
-        source = ROOT / ".agents" / "skills" / skill / "SKILL.md"
-        target = repo / ".agents" / "skills" / skill / "SKILL.md"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+    for skill_dir in (".agents", ".claude"):
+        for skill in (
+            "task-delivery-runner",
+            "task-pr-review-runner",
+            "task-closeout",
+        ):
+            source = ROOT / skill_dir / "skills" / skill / "SKILL.md"
+            target = repo / skill_dir / "skills" / skill / "SKILL.md"
+            if source.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
     (repo / ".gitignore").write_text(
         ".agents/evidence.local/\n.agents/validation.local/\n",
         encoding="utf-8",
@@ -1086,3 +1088,215 @@ def test_delivery_no_github_write_on_fail(
     gh_calls = _calls(state_path.with_name("gh-calls.jsonl"))
     mutation_tokens = {"edit", "close", "comment", "merge", "delete", "create"}
     assert all(not mutation_tokens.intersection(call) for call in gh_calls)
+
+
+# --- Skill identity tests ---
+
+
+def test_review_profile_records_default_agents_skill_path_when_not_provided(
+    tmp_path: Path,
+) -> None:
+    """When --skill-path is omitted the Runner falls back to the .agents path."""
+    repo, _, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    completed = _run(repo, env, *_review_args(main_sha, head_sha))
+    assert completed.returncode == 0, completed.stderr
+    value = _result(repo, completed.stdout)
+    assert value["integrity"]["skill"]["path"] == (
+        ".agents/skills/task-pr-review-runner/SKILL.md"
+    )
+    assert value["integrity"]["skill"]["sha256"]
+
+
+def test_review_profile_records_claude_skill_path_when_provided(
+    tmp_path: Path,
+) -> None:
+    """--skill-path .claude/skills/... is recorded with actual content hash."""
+    repo, _, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    claude_skill_path = ".claude/skills/task-pr-review-runner/SKILL.md"
+    completed = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        claude_skill_path,
+    )
+    assert completed.returncode == 0, completed.stderr
+    value = _result(repo, completed.stdout)
+    assert value["integrity"]["skill"]["path"] == claude_skill_path
+    expected_hash = _sha256_file(repo / claude_skill_path)
+    assert value["integrity"]["skill"]["sha256"] == expected_hash
+
+
+def test_skill_path_outside_allowed_roots_fails_before_github(
+    tmp_path: Path,
+) -> None:
+    """--skill-path must start with .agents/skills/ or .claude/skills/."""
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    completed = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        "tools/agent_workflow/SKILL.md",
+    )
+    assert completed.returncode == 2
+    assert "must start with" in completed.stderr
+    assert _calls(state_path.with_name("gh-calls.jsonl")) == []
+
+
+def test_skill_path_must_end_with_skill_md(
+    tmp_path: Path,
+) -> None:
+    """--skill-path must end with /SKILL.md."""
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    completed = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        ".claude/skills/task-pr-review-runner/README.md",
+    )
+    assert completed.returncode == 2
+    assert "SKILL.md" in completed.stderr
+    assert _calls(state_path.with_name("gh-calls.jsonl")) == []
+
+
+def test_skill_path_with_parent_traversal_fails(
+    tmp_path: Path,
+) -> None:
+    """--skill-path with .. is rejected."""
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    completed = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        ".claude/skills/../skills/task-pr-review-runner/SKILL.md",
+    )
+    assert completed.returncode == 2
+
+
+def test_skill_path_absolute_path_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """--skill-path must be repo-relative, not absolute."""
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    completed = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        "/home/user/.claude/skills/task-pr-review-runner/SKILL.md",
+    )
+    assert completed.returncode == 2
+
+
+def test_recheck_preserves_skill_identity(
+    tmp_path: Path,
+) -> None:
+    """Recheck with --skill-path records the same Skill identity."""
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    claude_skill = ".claude/skills/task-pr-review-runner/SKILL.md"
+    first = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        claude_skill,
+    )
+    assert first.returncode == 0
+    first_digest = json.loads(first.stdout)
+    second = _run(
+        repo,
+        env,
+        "recheck",
+        "--snapshot-id",
+        first_digest["snapshot_id"],
+        "--skill-path",
+        claude_skill,
+    )
+    assert second.returncode == 0, second.stderr
+    value = _result(repo, second.stdout)
+    assert value["integrity"]["skill"]["path"] == claude_skill
+
+
+def test_skill_path_hash_mismatch_detected(
+    tmp_path: Path,
+) -> None:
+    """When Skill content changes, the recorded hash reflects the current file."""
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    skill_path = ".claude/skills/task-pr-review-runner/SKILL.md"
+    skill_file = repo / skill_path
+    original_content = skill_file.read_text(encoding="utf-8")
+    first = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        skill_path,
+    )
+    assert first.returncode == 0
+    first_value = _result(repo, first.stdout)
+    # Modify the Skill file
+    skill_file.write_text(original_content + "\n# drift marker\n", encoding="utf-8")
+    second = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        skill_path,
+    )
+    assert second.returncode == 0
+    second_value = _result(repo, second.stdout)
+    assert (
+        first_value["integrity"]["skill"]["sha256"]
+        != (second_value["integrity"]["skill"]["sha256"])
+    )
+    assert first_value["integrity"]["skill"]["path"] == skill_path
+    assert second_value["integrity"]["skill"]["path"] == skill_path
+
+
+def test_delivery_profile_agents_skill_is_default(
+    tmp_path: Path,
+) -> None:
+    """Delivery profile falls back to .agents path without --skill-path."""
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+    )
+    assert completed.returncode == 0
+    value = _result(repo, completed.stdout)
+    assert ".agents/skills/task-delivery-runner/SKILL.md" in str(
+        value["integrity"]["skill"]["path"]
+    )
+
+
+def test_evidence_partial_has_exit_code_3_not_pass(
+    tmp_path: Path,
+) -> None:
+    """Evidence partial returns exit code 3, distinct from pass (0) and fail (4)."""
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["required_checks_mode"] = "plan-limit-403"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    _sync_remote_files(state_path, state)
+    completed = _run(repo, env, *_review_args(main_sha, head_sha))
+    assert completed.returncode == 3
+    digest = json.loads(completed.stdout)
+    assert digest["status"] == "partial"
+    assert digest["partial"] is True
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()

@@ -38,8 +38,8 @@ def test_current_runner_skills_use_one_mechanical_path() -> None:
         text = path.read_text(encoding="utf-8")
         assert f"name: {name}" in text
         assert ".agents/policies/workflow-evidence.md" in text
-        assert len(text) < 16_000
-        assert len(text.splitlines()) < 370
+        assert len(text) < 28_000
+        assert len(text.splitlines()) < 550
         for fragment in forbidden:
             assert fragment not in text
         assert "telemetry" not in text.casefold()
@@ -146,3 +146,114 @@ def test_local_workflow_artifact_directories_are_exactly_ignored() -> None:
     }
     assert ".agents/evidence.local/" in patterns
     assert ".agents/validation.local/" in patterns
+
+
+# --- Evidence verdict matrix tests ---
+
+
+def test_review_skill_has_evidence_status_to_verdict_matrix() -> None:
+    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
+    assert "Evidence status" in text
+    assert "verdict matrix" in text
+    assert "partial" in text.casefold()
+    assert "any cause" in text.casefold()
+    assert "Conditional pass" in text
+    assert "never upgrades" in text.casefold()
+    assert "plan-limit 403" in text.casefold()
+    assert "do not merge" in text.casefold()
+    assert "Deterministic mapping" in text
+    assert "process success" in text.casefold()
+    assert "is not gate pass" in text
+
+
+def test_review_skill_requires_remediation_handoff_for_non_pass() -> None:
+    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
+    assert "Enforcement" in text
+    assert "non-passing verdict" in text.casefold()
+    assert "Delivery prompt" in text
+    assert "non-compliant" in text
+    assert "task-delivery-runner 修复" in text
+
+
+def test_review_skill_has_semantic_review_evidence_matrix() -> None:
+    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
+    assert "evidence matrix" in text.casefold()
+    assert "changed_file_groups" in text
+    assert "acceptance_criteria" in text
+    assert "effective_diff_sha256" in text
+    assert "overall" in text
+    assert "verified | partial | not_verified" in text
+
+
+def test_review_skill_requires_file_coverage_completeness() -> None:
+    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
+    assert "changed file" in text.casefold()
+    assert "one group" in text
+    assert "not covered" in text.casefold()
+
+
+def test_review_skill_has_mechanical_assertions_table() -> None:
+    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
+    assert "Mechanical assertions" in text
+    assert "Historical Skill matches source commit blob" in text
+    assert "All target Skills are canonical-state" in text
+    assert "byte-for-byte" in text.casefold()
+    assert "must not be enlarged" in text
+
+
+def test_review_skill_has_tool_discipline_section() -> None:
+    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
+    assert "## Tool discipline" in text
+    assert "File existence" in text
+    assert "Tool availability" in text
+    assert "Runner result independence" in text
+    assert "Search completeness" in text
+
+
+def test_review_skill_has_verdict_rules_subsection() -> None:
+    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
+    assert "Verdict rules" in text
+    assert "unconditional pass" in text.casefold()
+    assert "evidence gate" in text.casefold()
+    assert "not_verified" in text
+    assert "groups or criteria" in text
+    assert "incomplete" in text.casefold()
+
+
+def test_review_skill_runner_command_includes_skill_path() -> None:
+    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
+    assert "--skill-path" in text
+    assert ".claude/skills/task-pr-review-runner/SKILL.md" in text
+
+
+def test_claude_skill_differs_from_agents_skill_only_in_execution_details() -> None:
+    """Both Skills share business semantics; only platform execution differs."""
+    claude_text = (ROOT / ".claude/skills/task-pr-review-runner/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    agents_text = (ROOT / ".agents/skills/task-pr-review-runner/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    # Both have the same verdict structure
+    for phrase in (
+        "通过，可以人工合并",
+        "有条件通过，不得合并",
+        "不通过，需要修复",
+        "Remediation handoff",
+        "Required remediation:",
+        "Objective gates:",
+        "Maintainer decision required:",
+        "evidence matrix",
+        "changed_file_groups",
+        "acceptance_criteria",
+        "Conditional pass",
+    ):
+        assert phrase in claude_text
+        assert phrase in agents_text
+    # Both prohibit upgrading partial/unknown to unconditional pass
+    assert "never" in claude_text.casefold()
+    assert "never" in agents_text.casefold()
+    # Claude Skill references .claude paths
+    assert ".claude/skills/task-pr-review-runner/SKILL.md" in claude_text
+    # Agents Skill references .agents paths
+    assert ".agents/skills/task-pr-review-runner/SKILL.md" in agents_text

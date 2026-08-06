@@ -46,14 +46,23 @@ tools/agent_workflow/wsl2_github_evidence_runner.py review \
   --task <TASK> \
   --pr <PR> \
   --expected-base-sha <LOCKED_BASE_SHA> \
-  --expected-head-sha <LOCKED_HEAD_SHA>
+  --expected-head-sha <LOCKED_HEAD_SHA> \
+  --skill-path .agents/skills/task-pr-review-runner/SKILL.md
 
 tools/agent_workflow/wsl2_validation_runner.py workflow-review \
-  --base-sha <LOCKED_BASE_SHA>
+  --base-sha <LOCKED_BASE_SHA> \
+  --skill-path .agents/skills/task-pr-review-runner/SKILL.md
 
 tools/agent_workflow/wsl2_github_evidence_runner.py \
-  recheck --snapshot-id <LOCKED_SNAPSHOT_ID>
+  recheck --snapshot-id <LOCKED_SNAPSHOT_ID> \
+  --skill-path .agents/skills/task-pr-review-runner/SKILL.md
 ```
+
+The `--skill-path` argument records the actual calling Skill identity in every
+artifact. Codex callers pass `.agents/skills/task-pr-review-runner/SKILL.md`;
+Claude Code callers pass `.claude/skills/task-pr-review-runner/SKILL.md`. The
+Runner re-hashes content independently and **fails closed** when the path is
+not within an allowed Skill root (`.agents/skills/` or `.claude/skills/`).
 
 The initial snapshot defines the reviewed identity. `workflow-review` is the
 independent CI-equivalent validation for the locked head. `recheck` verifies
@@ -68,6 +77,27 @@ base/head/diff, and content hashes in the evidence artifacts. When the PR
 changes Skills, Runners, Rules, or workflow governance, review those changes,
 their tests, permissions, and failure behavior explicitly; Runner success alone
 is not proof of correctness.
+
+## Tool discipline
+
+Before every tool invocation the Reviewer must verify:
+
+1. **File existence**: Confirm the target file exists in the changed-file
+   inventory or via a lightweight existence check before reading. A deleted
+   file is an observation, not an error to surface as a tool failure.
+
+2. **Tool availability**: Only use tools the current session environment
+   actually provides. Do not try a tool, observe failure, and then fall back to
+   an alternative; choose the correct tool first.
+
+3. **Runner result independence**: A Runner non-zero exit code does not mean
+   failure — verify whether the Runner produced a valid artifact with a
+   `partial` / `unknown` / `fail` status before rejecting it. Conversely,
+   a valid artifact with `partial` status is not `pass`.
+
+4. **Search completeness**: A keyword grep or `diff --stat` does not satisfy
+   the semantic review gate. The Reviewer must read the actual changed-file
+   content per the evidence matrix requirements in Phase 3.
 
 ## Permission boundary
 
@@ -109,15 +139,93 @@ reviews/threads/checks, workflows, tooling, and safety rules.
 Do not inherit Delivery conclusions or accept comments, test names, or green
 checks without inspecting coverage.
 
-## Phase 3: semantic review
+## Phase 3: semantic review with evidence matrix
 
-Evaluate scope and acceptance, correctness and edge cases, error handling,
-typing/compatibility/public behavior, negative/regression tests, documentation,
-credentials/UTC/data/financial/live-mode safety, dependency and architecture
-decisions, generated/prohibited artifacts, and workflow-governance safety.
+### Evidence matrix
 
-Do not fix findings. Repairs require a separately authorized implementation
-session and a new independent review of the resulting head and effective diff.
+Before evaluating findings, build a structured evidence matrix binding the
+current Task, PR, base SHA, head SHA, and effective diff. This matrix is the
+single source of truth for all deterministic claims in the final report.
+
+The matrix lives alongside the Runner artifacts in the same ignored local
+evidence root. Its digest is recorded in the review report.
+
+```json
+{
+  "task": "<TASK>",
+  "pr": "<PR>",
+  "base_sha": "<LOCKED_BASE_SHA>",
+  "head_sha": "<LOCKED_HEAD_SHA>",
+  "effective_diff_sha256": "<DIFF_DIGEST>",
+  "review_skill": {
+    "path": ".agents/skills/task-pr-review-runner/SKILL.md",
+    "sha256": "<CONTENT_HASH>"
+  },
+  "changed_file_groups": [
+    {
+      "name": "<group-name>",
+      "files": ["<repo-relative-path>"],
+      "status": "verified | partially_verified | not_verified",
+      "evidence": ["<deterministic-tool-reference>"],
+      "findings": ["<finding-id-reference>"],
+      "remaining_risk": "<explanation when not verified>"
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC-<n>",
+      "text": "<criterion text>",
+      "status": "verified | partially_verified | not_verified",
+      "implementation_evidence": ["<file:line or tool reference>"],
+      "validation_evidence": ["<test or Runner reference>"],
+      "remaining_risk": "<explanation when not verified>"
+    }
+  ],
+  "evidence_gates": {
+    "review": "pass | partial | unknown | fail",
+    "validation": "pass | fail",
+    "recheck": "pass | partial | unknown | fail"
+  },
+  "overall": "verified | partial | not_verified"
+}
+```
+
+### File coverage rules
+
+- Every changed file in the `review` snapshot must be assigned to exactly one
+  group.
+- Groups are derived from the actual diff, not guessed.
+- If any file is not covered by at least one group, overall must not be
+  `verified`.
+- Each group must have at least one deterministic evidence reference (file
+  content read, tool output, test result, Runner artifact).
+- Read necessary unchanged related code to verify interface, caller, and
+  failure-path consistency.
+
+### Acceptance criteria mapping
+
+- Extract every acceptance criterion from the Task body.
+- Assign a stable ID (`AC-1`, `AC-2`, …) in the order they appear.
+- Each criterion gets an independent status, evidence, and risk assessment.
+- Multiple criteria may reference the same evidence but must not be compressed
+  into a single "all satisfied" summary.
+- Validation Runner `pass` proves command success, not semantic coverage.
+
+### Mechanical assertions — deterministic standard
+
+| Claim | Required evidence |
+| --- | --- |
+| Historical Skill matches source commit blob | Git `cat-file -p <commit>:<path>` output compared byte-for-byte with current file |
+| All target Skills are canonical-state | All applicable Skill files individually verified with path-audit or equivalent |
+| Trusted-version / deprecated path completely removed | Full-text search of the entire repository worktree |
+| Runner / profile / schema / Rules contract consistent | Runner's spec-validation step passed AND manual verification of each contract pair |
+| Provenance manifest matches actual Git content | Byte-for-byte verification or deterministic manifest tool |
+| Permission configuration has no overly-broad authorization | Read and verify every permission entry in `.claude/settings.json` and `.codex/rules/` |
+
+A file-existence check, partial grep, or inspection of only a subset of Skills
+must not be enlarged into a comprehensive claim. When the deterministic
+evidence is unavailable, mark the assertion `partially_verified` or
+`not_verified` — do not guess.
 
 ## Phase 4: validation
 
@@ -136,6 +244,50 @@ effective diff, files/commits, checks, reviews, and threads. Any new commit or
 base/head/effective-diff change invalidates the review and requires a new
 independent session. Evaluate check/thread-only changes under current gates.
 
+Verify the recheck uses the same Skill identity as the initial review (same
+`--skill-path`). Skill identity drift invalidates the review.
+
+## Evidence status to verdict matrix
+
+The Evidence Runner produces a process exit code and a `status` field
+(`pass`, `partial`, `fail`). Process success (exit code 0) is not gate pass.
+The Reviewer must read the `status` field and map it deterministically.
+
+### Deterministic mapping
+
+| Evidence `status` | Permitted verdict ceiling | Constraints |
+| --- | --- | --- |
+| `pass` | Pass | Only when all other gates also pass. |
+| `partial` (any cause) | Conditional pass — do not merge | Never upgrades to unconditional pass. |
+| `unknown` (plan-limit `403`) | Conditional pass — do not merge | Unless a formally committed fallback policy exists. |
+| `unknown` (other cause) | Review incomplete / failing | Insufficient evidence. |
+| `fail` | Review incomplete / failing | Cannot pass. |
+| Identity drift | Review incomplete / failing | Review identity compromised. |
+| Unsupported schema | Review incomplete / failing | Cannot evaluate. |
+| Lifecycle conflict | Review incomplete / failing | Cannot proceed. |
+
+### Plan-limit 403 — default disposition
+
+```text
+required_checks_configuration = unknown
+reason = github-plan-limit-403
+```
+
+**Default**: `Conditional pass — do not merge`.
+
+The Reviewer must not self-approve a fallback. Only apply a fallback when the
+repository has a formally committed, version-controlled policy that explicitly
+authorizes it, defines conditions and evidence burden deterministically, and
+the current evidence satisfies every condition.
+
+The fact that the `quality` check succeeded is not sufficient to prove the
+required-check configuration.
+
+### Recheck partial
+
+A `recheck` that returns `partial` keeps the evidence ceiling at Conditional.
+A `recheck` that returns `fail` or detects diff drift invalidates the review.
+
 ## Findings and verdicts
 
 Use exactly: Blocking, High, Medium, Low, and Nit. Cite precise files/lines, Task
@@ -148,22 +300,29 @@ Output exactly one:
 通过，可以人工合并
 ```
 
-Only when scope/acceptance, validation, checks, reviews/threads, and stability
-pass with no unresolved Blocking/High/Medium finding.
+Only when all of: semantic review complete, acceptance criteria verified,
+no Blocking/High/Medium findings, all evidence gates pass, no identity drift.
 
 ```text
 有条件通过，不得合并
 ```
 
-When no confirmed Blocking/High/Medium code defect exists but an objective gate
-is pending, unavailable, ambiguous, contradictory, unstable, or not merge-ready.
+When no Blocking/High/Medium code defect exists but an objective gate is
+`partial` or `unknown` under the plan-limit 403 default.
 
 ```text
 不通过，需要修复
 ```
 
-When a Blocking/High/Medium finding remains, scope/acceptance is wrong,
-validation fails, or identity, permission, or safety boundaries fail.
+When a Blocking/High/Medium finding remains, scope/acceptance/validation fails,
+semantic review is incomplete, or identity/permission/safety boundaries fail.
+
+### Verdict rules
+
+- No unconditional pass when any evidence gate is `partial`, `unknown`, or `fail`.
+- No unconditional pass when evidence matrix has `not_verified` groups or criteria.
+- Incomplete evidence matrix → ceiling is `不通过`.
+- Incomplete semantic review → do not claim "no Medium-or-above findings".
 
 ## Remediation handoff
 
@@ -196,8 +355,7 @@ Rules:
 - exclude Low and Nit findings unless the maintainer explicitly made them
   required;
 - state the defect and expected behavior, but do not design the implementation;
-- preserve finding IDs so the next Review can map repairs to the original
-  evidence.
+- preserve finding IDs.
 
 End with this exact remediation prompt populated with current identities:
 
@@ -214,6 +372,9 @@ Review remediation handoff:
 
 A passing verdict does not emit a remediation handoff.
 
+**Enforcement**: Every non-passing verdict must output both handoff and Delivery
+prompt. A partial handoff without the Delivery prompt is non-compliant.
+
 ## Report and recovery
 
 On clean success, report canonical Task/PR URLs, reviewed base/head/diff digest,
@@ -224,6 +385,9 @@ verdict, and:
 ```text
 Reviewed head SHA: <actual SHA>
 ```
+
+Every deterministic claim in the final report must be traceable to an evidence
+matrix entry, a Runner artifact field, or a directly cited file:line.
 
 Use a detailed report for any finding, fallback, `partial`/`unknown`, failure,
 drift, conflict, or maintainer decision. For a conditional or failing verdict,
