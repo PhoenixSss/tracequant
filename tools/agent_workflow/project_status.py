@@ -12,7 +12,7 @@ import subprocess
 import sys
 from typing import Final
 
-_REPO: Final = "PhoenixSss/quant-system"
+_REPO: Final = "PhoenixSss/tracequant"
 _ISSUE_URL_PREFIX: Final = f"https://github.com/{_REPO}/issues/"
 
 

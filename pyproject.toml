@@ -3,11 +3,11 @@ requires = ["uv_build>=0.12.1,<0.13.0"]
 build-backend = "uv_build"
 
 [project]
-name = "quant-system"
+name = "tracequant"
 version = "0.1.0"
-description = "A research-first quantitative trading system for cryptocurrency perpetual futures."
+description = "An auditable research-to-live quantitative trading system for cryptocurrency perpetual futures."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13,<3.14"
 dependencies = []
 
 [dependency-groups]
@@ -18,7 +18,7 @@ dev = [
 ]
 
 [tool.uv.build-backend]
-module-name = "quant_system"
+module-name = "tracequant"
 module-root = "src"
 
 [tool.pytest.ini_options]
@@ -29,7 +29,7 @@ addopts = [
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py313"
 
 [tool.ruff.format]
 indent-style = "space"
@@ -41,5 +41,5 @@ select = ["E4", "E7", "E9", "F", "I", "UP"]
 
 [tool.mypy]
 files = ["src", "tests"]
-python_version = "3.11"
+python_version = "3.13"
 strict = true

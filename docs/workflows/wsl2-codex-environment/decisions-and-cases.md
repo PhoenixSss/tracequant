@@ -13,7 +13,7 @@
 
 ### D-02：仓库路径
 
-- **选择**：`/home/<user>/code/quant-system`。
+- **选择**：`/home/<user>/code/tracequant`。
 - **否决方案**：`/mnt/c`、`/mnt/d` 等 Windows 挂载盘。
 - **理由**：避免跨文件系统权限、大小写、file mode 和 I/O 语义差异。
 - **可逆性**：可逆；通过受控 commit/patch 后重新克隆。

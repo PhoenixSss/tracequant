@@ -19,11 +19,11 @@ from typing import Any, Final
 
 SCHEMA_VERSION: Final = 1
 RUNNER_VERSION: Final = "1.3.0"
-REPOSITORY: Final = "PhoenixSss/quant-system"
+REPOSITORY: Final = "PhoenixSss/tracequant"
 OUTPUT_ROOT: Final = ".agents/evidence.local/wsl2-github-runs"
 RUNNER_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_runner.py"
 SPEC_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_profiles.json"
-RULES_PATH: Final = ".codex/rules/quant-system-wsl-evidence.rules"
+RULES_PATH: Final = ".codex/rules/tracequant-wsl-evidence.rules"
 EVIDENCE_TOOL_PATH: Final = "tools/agent_workflow/workflow_evidence.py"
 COMMON_TOOL_PATH: Final = "tools/agent_workflow/workflow_common.py"
 STDIO_LIMIT_BYTES: Final = 8192

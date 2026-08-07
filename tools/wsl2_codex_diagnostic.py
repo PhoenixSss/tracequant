@@ -332,7 +332,7 @@ def workspace_probe(output_dir: Path, recorder: Recorder) -> Capability:
 
 def temporary_git_probe(recorder: Recorder) -> Capability:
     evidence: list[str] = []
-    with tempfile.TemporaryDirectory(prefix="quant-system-wsl2-git-") as directory:
+    with tempfile.TemporaryDirectory(prefix="tracequant-wsl2-git-") as directory:
         path = Path(directory)
         commands = [
             ("temp-git-init", ["git", "init", "-b", "main"]),
@@ -576,7 +576,7 @@ def formal_write_probe(
     probe_id = f"wsl2-write-probe-{utc_run_id()}"
     probe_branch = f"diagnostic/{probe_id}"
     second_branch = f"diagnostic/{probe_id}-switch"
-    probe_dir = Path(tempfile.gettempdir()) / f"quant-system-{probe_id}"
+    probe_dir = Path(tempfile.gettempdir()) / f"tracequant-{probe_id}"
     evidence: list[str] = []
     cleanup_errors: list[str] = []
     try:

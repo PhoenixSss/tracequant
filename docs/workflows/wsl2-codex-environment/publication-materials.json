@@ -66,7 +66,7 @@
       "material_id": "mat-fact-002",
       "category": "fact",
       "title": "WSL 原生工具链与版本契约",
-      "summary": "系统诊断使用 /usr/bin/python3，项目 Python 固定为 3.11 并由 uv 管理，uv 固定为 0.12.1。",
+      "summary": "系统诊断使用 /usr/bin/python3，项目 Python 固定为 3.13 并由 uv 管理，uv 固定为 0.12.1。",
       "source_refs": [
         {
           "kind": "report",
@@ -973,7 +973,7 @@
       "Record unknown and not-measured fields instead of inferring them"
     ],
     "project_specific_limits": [
-      "uv 0.12.1 and Python 3.11 are current repository contracts",
+      "uv 0.12.1 and Python 3.13 are current repository contracts",
       "The repository currently relies on a machine-local proxy path",
       "Exact Guardian routing is authoritative only in outer Codex rollout evidence"
     ],

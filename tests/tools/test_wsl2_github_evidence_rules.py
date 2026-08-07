@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 ROOT = Path(__file__).parents[2]
-RULES = ROOT / ".codex" / "rules" / "quant-system-wsl-evidence.rules"
+RULES = ROOT / ".codex" / "rules" / "tracequant-wsl-evidence.rules"
 RUNNER = ["tools/agent_workflow/wsl2_github_evidence_runner.py"]
 SHA = "a" * 40
 
@@ -204,7 +204,7 @@ def test_arbitrary_trailing_value_is_prefix_allowed_but_runner_owned() -> None:
 @pytest.mark.parametrize(
     "argv",
     [
-        ["gh", "api", "repos/PhoenixSss/quant-system/pulls/101"],
+        ["gh", "api", "repos/PhoenixSss/tracequant/pulls/101"],
         ["gh", "issue", "view", "84"],
         ["gh", "pr", "view", "101"],
         ["git", "status", "--short"],

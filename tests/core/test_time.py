@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta, timezone, tzinfo
 
 import pytest
 
-from quant_system.core.time import (
+from tracequant.core.time import (
     ensure_aware,
     format_utc,
     is_utc,

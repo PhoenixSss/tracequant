@@ -1,6 +1,6 @@
-﻿# Quant System
+# TraceQuant
 
-A research-first quantitative trading system for cryptocurrency perpetual futures.
+An auditable research-to-live quantitative trading system for cryptocurrency perpetual futures.
 
 ## Initial scope
 
@@ -27,10 +27,21 @@ A research-first quantitative trading system for cryptocurrency perpetual future
 
 ## Repository structure
 
-- `docs/`: architecture, research reports, risk rules, and ADRs.
-- `src/`: application source code.
+TraceQuant is a modular monorepo. The current bootstrap package remains in `src/tracequant/` while product boundaries are established before implementation is moved into them.
+
+- `apps/research/`: research-facing orchestration.
+- `apps/runtime/`: Shadow, Demo, and Live runtime entry points.
+- `apps/console/`: future operator UI/control-plane boundary.
+- `packages/contracts/`: stable cross-boundary schemas and interfaces.
+- `packages/domain/`: core domain models and invariants.
+- `packages/adapters/`: exchange, storage, database, filesystem, and vendor integrations.
+- `deploy/research|staging|live/`: environment-specific deployment assets.
+- `src/tracequant/`: currently implemented bootstrap Python package.
 - `tests/`: unit, integration, and regression tests.
-- `.github/`: Issue templates, Pull Request templates, and CI workflows.
+- `docs/`: architecture, research reports, risk rules, ADRs, and workflow documentation.
+- `.github/`: Issue templates, Pull Request template, and CI workflows.
+
+See [Repository structure](docs/architecture/repository-structure.md) for boundary rules and future extraction criteria.
 
 ## Documentation
 
@@ -49,7 +60,7 @@ The project is in its initial planning and repository setup stage. No live-tradi
 
 ## Development environment
 
-Python 3.11 or newer and [uv](https://docs.astral.sh/uv/) are required. The repository `.python-version` pins the project environment to Python 3.11, matching CI. Create or update the local environment with:
+Python 3.13 and [uv](https://docs.astral.sh/uv/) are required. The repository `.python-version` pins the project environment to Python 3.13, matching CI and the supported TraceQuant runtime baseline. Create or update the local environment with:
 
 ```console
 uv sync --locked --dev
@@ -58,7 +69,7 @@ uv sync --locked --dev
 Verify that the project package is importable with:
 
 ```console
-uv run python -c "import quant_system; print(quant_system.__name__)"
+uv run python -c "import tracequant; print(tracequant.__name__)"
 ```
 
 Run the test suite with:
@@ -88,20 +99,20 @@ Pull requests targeting `main` and pushes to `main` automatically run CI. The wo
 
 ## UTC time handling
 
-Internal datetimes must be timezone-aware and use UTC as the standard timezone. Naive datetimes are explicitly rejected. Time utilities are provided by `quant_system.core.time`.
+Internal datetimes must be timezone-aware and use UTC as the standard timezone. Naive datetimes are explicitly rejected. Time utilities are provided by `tracequant.core.time`.
 
 ## Configuration
 
-Application configuration is loaded explicitly with `quant_system.config.load_settings`.
+Application configuration is loaded explicitly with `tracequant.config.load_settings`.
 Importing the module does not read environment variables, parse `.env` files, create
 directories, or cache a global settings singleton.
 
 Supported environment variables:
 
-- `QUANT_SYSTEM_ENV`: required; one of `development`, `test`, or `production`.
-- `QUANT_SYSTEM_LOG_LEVEL`: optional; one of `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`; defaults to `INFO`.
-- `QUANT_SYSTEM_LOG_FORMAT`: optional; one of `text` or `json`; defaults to `json`. Logging currently supports `json`.
-- `QUANT_SYSTEM_LOG_DIR`: optional; empty or unset disables file logging.
+- `TRACEQUANT_ENV`: required; one of `development`, `test`, or `production`.
+- `TRACEQUANT_LOG_LEVEL`: optional; one of `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`; defaults to `INFO`.
+- `TRACEQUANT_LOG_FORMAT`: optional; one of `text` or `json`; defaults to `json`. Logging currently supports `json`.
+- `TRACEQUANT_LOG_DIR`: optional; empty or unset disables file logging.
 
 Loading priority is:
 
@@ -118,7 +129,7 @@ by Git and are not read automatically by this project.
 Tests can construct isolated settings directly:
 
 ```python
-from quant_system.config import Environment, Settings
+from tracequant.config import Environment, Settings
 
 settings = Settings(environment=Environment.TEST)
 ```
@@ -131,14 +142,14 @@ directory creation.
 
 ## Structured logging
 
-Applications configure logging explicitly with `quant_system.logging.configure_logging(settings)`.
+Applications configure logging explicitly with `tracequant.logging.configure_logging(settings)`.
 Importing the logging module does not configure handlers, create directories, or open
 files. Modules should continue to use `logging.getLogger(__name__)`.
 
 JSON log records are single-line UTF-8 objects with stable `timestamp`, `level`,
 `logger`, and `message` fields. Timestamps are timezone-aware UTC ISO 8601 strings.
 When `settings.log_dir` is set, the exact directory is created and logs are appended
-to `quant-system.jsonl`; when it is empty or unset, only console logging is enabled.
+to `tracequant.jsonl`; when it is empty or unset, only console logging is enabled.
 
 Known sensitive keys are redacted case-insensitively in structured fields and
 exception output: `password`, `secret`, `token`, `api_key`, `apikey`,

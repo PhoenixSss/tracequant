@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-A research-first quantitative trading system for cryptocurrency perpetual futures (Binance USDⓈ-M, starting with BTCUSDT/ETHUSDT). Currently in **Research MVP** stage — no live trading capability exists yet.
+TraceQuant is an auditable research-to-live quantitative trading system for cryptocurrency perpetual futures (Binance USDⓈ-M, starting with BTCUSDT/ETHUSDT). Currently in **Research MVP** stage — no live trading capability exists yet.
 
 The `AGENTS.md` file at the repo root defines issue-driven workflow rules, implementation constraints, financial safety rules, and data correctness requirements. It is the primary behavior rule source; this file supplements it with development commands and architecture context.
 
@@ -20,11 +20,11 @@ The `AGENTS.md` file at the repo root defines issue-driven workflow rules, imple
 ## Commands
 
 ```bash
-# Install dependencies (requires Python 3.11+ and uv)
+# Install dependencies (requires Python 3.13 and uv)
 uv sync --locked --dev
 
 # Verify the package is importable
-uv run python -c "import quant_system; print(quant_system.__name__)"
+uv run python -c "import tracequant; print(tracequant.__name__)"
 
 # Run all tests
 uv run pytest
@@ -49,27 +49,42 @@ CI (`.github/workflows/ci.yml`) runs `pytest`, `ruff check`, `ruff format --chec
 
 ## Architecture
 
-### Package layout
+### Repository and package layout
+
+TraceQuant is a modular monorepo with explicit product boundaries:
 
 ```
-src/quant_system/
-  config.py          # Settings loading, Environment/LogLevel/LogFormat enums, SecretValue
-  logging.py         # Structured JSON logging with secret redaction
-  core/
-    time.py          # UTC datetime utilities (ensure_aware, to_utc, is_utc, parse_utc, format_utc)
+apps/
+  research/
+  runtime/
+  console/
+packages/
+  contracts/
+  domain/
+  adapters/
+deploy/
+  research/
+  staging/
+  live/
+src/tracequant/
+  config.py
+  logging.py
+  core/time.py
 ```
 
-The package currently has **zero runtime dependencies** (only dev dependencies: pytest, ruff, mypy). The `quant_system` namespace is the single source package.
+`src/tracequant/` is the current bootstrap Python package. Existing shared utilities remain there until a behavior-preserving Task has a concrete reason to move them behind a product/package boundary; do not move code merely to satisfy directory aesthetics. See `docs/architecture/repository-structure.md`.
 
-### Configuration system (`quant_system.config`)
+The package currently has **zero runtime dependencies** (only dev dependencies: pytest, ruff, mypy). The canonical Python namespace is `tracequant`.
 
-Settings are loaded explicitly via `load_settings()`. Importing the config module does **not** read env vars, parse `.env` files, create directories, or cache a global singleton. Loading priority: explicit arguments > `QUANT_SYSTEM_*` environment variables > defaults. Required env var: `QUANT_SYSTEM_ENV` (one of `development`, `test`, `production`). `SecretValue` provides redacted `repr`/`str` for display safety — it is not encryption.
+### Configuration system (`tracequant.config`)
 
-### Logging (`quant_system.logging`)
+Settings are loaded explicitly via `load_settings()`. Importing the config module does **not** read env vars, parse `.env` files, create directories, or cache a global singleton. Loading priority: explicit arguments > `TRACEQUANT_*` environment variables > defaults. Required env var: `TRACEQUANT_ENV` (one of `development`, `test`, `production`). `SecretValue` provides redacted `repr`/`str` for display safety — it is not encryption.
+
+### Logging (`tracequant.logging`)
 
 JSON log records with stable `timestamp`, `level`, `logger`, `message` fields. Timestamps are timezone-aware UTC ISO 8601. Configured explicitly via `configure_logging(settings)` — importing the module does not configure handlers. Known sensitive keys (`password`, `secret`, `token`, `api_key`, `apikey`, `authorization`, `cookie`) are recursively redacted. File logging only when `settings.log_dir` is set.
 
-### UTC time handling (`quant_system.core.time`)
+### UTC time handling (`tracequant.core.time`)
 
 All internal datetimes must be timezone-aware UTC. Naive datetimes are explicitly rejected. Re-exports `datetime.UTC` for convenience. Key functions: `ensure_aware()`, `to_utc()`, `is_utc()`, `parse_utc()`, `format_utc()`.
 
@@ -107,7 +122,7 @@ Claude Code 权限控制（与 Codex 的 `.codex/rules/` 并存）。当前 allo
 - **Exchange code behind adapters**: Keep exchange-specific logic behind adapters so strategy code doesn't couple to a specific venue.
 - **No import-time side effects**: Modules must not perform I/O, read env vars, create directories, or cache global singletons on import.
 - **Live trading disabled by default**: Must require explicit configuration and fail closed.
-- **Strict typing**: `mypy --strict` passes on `src` and `tests`. Python 3.11+.
+- **Strict typing**: `mypy --strict` passes on `src` and `tests`. Python 3.13.
 - **Financial time-series validation only**: Never use random train/test splits. Chronological walk-forward with purging and embargo required.
 - **Raw data immutability**: Raw data must never be overwritten by cleaned or aggregated results.
 - **Gross and net results reported separately**: Fees, funding, slippage, and fill assumptions must be modeled.
@@ -129,7 +144,7 @@ Prohibited without an approved architecture Issue: microservices, Kubernetes, di
 
 ## Issue-driven development
 
-All work is tracked in GitHub Issues (the `PhoenixSss/quant-system` repo). Before changing code:
+All work is tracked in GitHub Issues (the `PhoenixSss/tracequant` repo). Before changing code:
 1. Read the complete assigned Issue and confirm it has the `codex:ready` label
 2. Read parent/blocking Issues, linked docs, and ADRs
 3. Treat Issue scope, acceptance criteria, and out-of-scope sections as binding

@@ -23,9 +23,9 @@ Task Workflow Skills，也不执行 Task #65 候选基准。
 | 项目 | 目标或已验证值 |
 | --- | --- |
 | WSL 发行版 | Ubuntu 24.04 LTS，发行版名 `Ubuntu-24.04` |
-| 仓库位置 | `/home/<user>/code/quant-system`，Linux 文件系统；不使用 `/mnt/<drive>` |
+| 仓库位置 | `/home/<user>/code/tracequant`，Linux 文件系统；不使用 `/mnt/<drive>` |
 | 系统 Python | Ubuntu 原生 `python3`；裸 `python` 命令不是要求 |
-| 项目 Python | `.python-version` 固定为 Python 3.11，与 CI 一致 |
+| 项目 Python | `.python-version` 固定为 Python 3.13，与 CI 一致 |
 | uv | `0.12.1`，与 CI 一致 |
 | Git | WSL 内原生 `/usr/bin/git` |
 | GitHub CLI | WSL 内原生 `$HOME/.local/bin/gh`，WSL 内独立登录 |
@@ -82,10 +82,10 @@ uv 0.12.1
 
 ### 4. 固定项目 Python
 
-仓库的 `.python-version` 固定为 `3.11`。让 uv 安装并选择项目解释器：
+仓库的 `.python-version` 固定为 `3.13`。让 uv 安装并选择项目解释器：
 
 ```bash
-uv python install 3.11
+uv python install 3.13
 uv sync --locked --dev
 uv run python --version
 ```
@@ -126,7 +126,7 @@ GitHub 写操作继续属于 approval 边界。
 3. 确认左下角显示 `WSL: Ubuntu-24.04`。
 4. 在 WSL 扩展主机中安装/启用 Codex/OpenAI 扩展。
 5. 在 WSL 窗口中完成 Codex 登录。
-6. 确认终端中的 `pwd` 位于 `/home/<user>/code/quant-system`。
+6. 确认终端中的 `pwd` 位于 `/home/<user>/code/tracequant`。
 
 Windows 和 WSL 的 VS Code 设置作用域必须分开检查。不要通过复制完整认证目录来“同步”
 登录状态。
@@ -199,7 +199,7 @@ python3 tools/wsl2_codex_diagnostic.py \
 ```bash
 python3 tools/wsl2_codex_diagnostic.py \
   --profile remote-read \
-  --github-repo PhoenixSss/quant-system \
+  --github-repo PhoenixSss/tracequant \
   --formal-fetch \
   --json
 ```
@@ -209,7 +209,7 @@ python3 tools/wsl2_codex_diagnostic.py \
 ```bash
 python3 tools/wsl2_codex_diagnostic.py \
   --profile full \
-  --github-repo PhoenixSss/quant-system \
+  --github-repo PhoenixSss/tracequant \
   --formal-fetch \
   --json
 ```
@@ -226,7 +226,7 @@ GitHub 可逆写探针只创建并删除唯一临时远程 ref：
 
 ```bash
 python3 tools/wsl2_codex_diagnostic.py \
-  --github-repo PhoenixSss/quant-system \
+  --github-repo PhoenixSss/tracequant \
   --github-write-probe \
   --confirm-github-write-probe DELETE_REMOTE_REF
 ```
@@ -303,7 +303,7 @@ PR 和 checks 的只读诊断。
 
 ### 仓库位于 `/mnt/<drive>`
 
-停止正式开发，重新克隆到 `/home/<user>/code/quant-system`。不要直接移动包含未提交修改的
+停止正式开发，重新克隆到 `/home/<user>/code/tracequant`。不要直接移动包含未提交修改的
 工作区；先保存 patch 或创建受控提交。
 
 ### CRLF、file mode 或大小写变化

@@ -12,7 +12,7 @@
 | OS | WSL2 Ubuntu 24.04 LTS 或经独立验证的兼容 Linux |
 | 文件系统 | 仓库位于 Linux 文件系统，不在 `/mnt/<drive>` |
 | Python 引导 | `python3` 可用；不要求裸 `python` |
-| 项目 Python | `.python-version` 的 Python 3.11，由 uv 管理 |
+| 项目 Python | `.python-version` 的 Python 3.13，由 uv 管理 |
 | uv | 精确 `0.12.1` |
 | Git | WSL 原生 Git，支持 worktree 与普通分支操作 |
 | gh | WSL 原生 GitHub CLI `2.97.0`，独立、可撤销登录 |

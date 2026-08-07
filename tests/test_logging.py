@@ -11,9 +11,9 @@ from uuid import uuid4
 
 import pytest
 
-from quant_system.config import Environment, LogFormat, LogLevel, SecretValue, Settings
-from quant_system.core.time import parse_utc
-from quant_system.logging import (
+from tracequant.config import Environment, LogFormat, LogLevel, SecretValue, Settings
+from tracequant.core.time import parse_utc
+from tracequant.logging import (
     LOG_FILE_NAME,
     REDACTED_VALUE,
     LoggingConfigError,
@@ -26,7 +26,7 @@ CANARY_SECRET = "canary-secret-task-64-never-log"
 
 @pytest.fixture
 def logger() -> Generator[logging.Logger]:
-    test_logger = logging.getLogger(f"quant_system.tests.logging.{uuid4().hex}")
+    test_logger = logging.getLogger(f"tracequant.tests.logging.{uuid4().hex}")
     test_logger.handlers.clear()
     test_logger.propagate = False
     yield test_logger
@@ -43,7 +43,7 @@ def test_import_logging_module_has_no_side_effects(
     logger.addHandler(logging.NullHandler())
     before_handlers = list(logger.handlers)
 
-    module = importlib.import_module("quant_system.logging")
+    module = importlib.import_module("tracequant.logging")
 
     assert module.FIELD_TIMESTAMP == "timestamp"
     assert logger.handlers == before_handlers
@@ -92,7 +92,7 @@ def test_empty_log_dir_does_not_create_file_handler(logger: logging.Logger) -> N
         handler
         for handler in logger.handlers
         if handler.formatter is not None
-        and handler.formatter.__class__.__module__ == "quant_system.logging"
+        and handler.formatter.__class__.__module__ == "tracequant.logging"
     ]
     assert len(project_handlers) == 1
     assert not any(
@@ -154,7 +154,7 @@ def test_repeated_initialization_replaces_only_project_handlers(
         handler
         for handler in logger.handlers
         if handler.formatter is not None
-        and handler.formatter.__class__.__module__ == "quant_system.logging"
+        and handler.formatter.__class__.__module__ == "tracequant.logging"
     ]
     assert len(project_handlers) == 1
 

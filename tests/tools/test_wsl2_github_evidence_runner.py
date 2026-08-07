@@ -15,7 +15,7 @@ RUNNER_REL = Path("tools/agent_workflow/wsl2_github_evidence_runner.py")
 IDENTITY_FILES = (
     RUNNER_REL,
     Path("tools/agent_workflow/wsl2_github_evidence_profiles.json"),
-    Path(".codex/rules/quant-system-wsl-evidence.rules"),
+    Path(".codex/rules/tracequant-wsl-evidence.rules"),
     Path("tools/agent_workflow/workflow_evidence.py"),
     Path("tools/agent_workflow/workflow_common.py"),
 )
@@ -61,7 +61,7 @@ def _state(main_sha: str, head_sha: str) -> dict[str, Any]:
             "state": "OPEN",
             "labels": [{"name": "type:task"}, {"name": "codex:ready"}],
             "projectItems": [{"status": {"name": "Review"}}],
-            "url": "https://github.com/PhoenixSss/quant-system/issues/84",
+            "url": "https://github.com/PhoenixSss/tracequant/issues/84",
             "closedAt": None,
             "closedByPullRequestsReferences": [],
             "timelineItems": {"nodes": [], "pageInfo": {"hasPreviousPage": False}},
@@ -82,7 +82,7 @@ def _state(main_sha: str, head_sha: str) -> dict[str, Any]:
             "body": "Closes #84",
             "state": "OPEN",
             "isDraft": False,
-            "url": "https://github.com/PhoenixSss/quant-system/pull/102",
+            "url": "https://github.com/PhoenixSss/tracequant/pull/102",
             "baseRefName": "main",
             "baseRefOid": main_sha,
             "headRefName": "84-task-evidence-runner",
@@ -93,7 +93,7 @@ def _state(main_sha: str, head_sha: str) -> dict[str, Any]:
             "reviewDecision": "",
             "files": [
                 {"path": "tools/agent_workflow/wsl2_github_evidence_runner.py"},
-                {"path": ".codex/rules/quant-system-wsl-evidence.rules"},
+                {"path": ".codex/rules/tracequant-wsl-evidence.rules"},
             ],
             "commits": [{"oid": head_sha, "messageHeadline": "Implement Task #84"}],
             "statusCheckRollup": [{"name": "quality", "conclusion": "SUCCESS"}],
@@ -269,7 +269,7 @@ def _prepare_repo(
         "remote",
         "add",
         "origin",
-        "https://github.com/PhoenixSss/quant-system.git",
+        "https://github.com/PhoenixSss/tracequant.git",
     )
     _git(repo, "update-ref", "refs/remotes/origin/main", main_sha)
     _git(repo, "switch", "-q", "-c", "84-task-evidence-runner")
@@ -345,14 +345,14 @@ def _mark_issue_closed_by_pr(
     pr_number: int = 102,
     closed_at: str = "2026-08-02T16:00:00Z",
 ) -> None:
-    url = f"https://github.com/PhoenixSss/quant-system/pull/{pr_number}"
+    url = f"https://github.com/PhoenixSss/tracequant/pull/{pr_number}"
     pr_ref = {
         "number": pr_number,
         "state": "MERGED",
         "merged": True,
         "mergedAt": closed_at,
         "url": url,
-        "repository": {"nameWithOwner": "PhoenixSss/quant-system"},
+        "repository": {"nameWithOwner": "PhoenixSss/tracequant"},
     }
     state["issue"]["state"] = "CLOSED"
     state["issue"]["closedAt"] = closed_at
@@ -394,7 +394,7 @@ def test_review_profile_returns_required_schema_and_compact_digest(
     assert value["identity"] == {
         "task": 84,
         "pr": 102,
-        "repository": "PhoenixSss/quant-system",
+        "repository": "PhoenixSss/tracequant",
         "base_sha": main_sha,
         "head_sha": head_sha,
         "merge_sha": None,
@@ -632,7 +632,7 @@ def test_wrong_origin_and_symlink_entry_fail_closed(tmp_path: Path) -> None:
         "remote",
         "set-url",
         "origin",
-        "https://github.com/PhoenixSss/quant-system.git",
+        "https://github.com/PhoenixSss/tracequant.git",
     )
     link = repo / "evidence-link"
     link.symlink_to(repo / RUNNER_REL)
@@ -840,7 +840,7 @@ def test_required_checks_403_failure_types_do_not_enable_cleanup(
 
 
 @pytest.mark.skipif(
-    os.environ.get("TASK84_LIVE_REPOSITORY") != "PhoenixSss/quant-system",
+    os.environ.get("TASK84_LIVE_REPOSITORY") != "PhoenixSss/tracequant",
     reason="set TASK84_LIVE_REPOSITORY and live IDs for an explicit network probe",
 )
 def test_live_task_pr_schema() -> None:

@@ -29,7 +29,7 @@
       "status": "observed",
       "statement": "Static execpolicy checks cover allowed runner profiles plus negative cases for interpreters, shells, GitHub writes, dangerous Git operations, unknown profiles, known injection prefixes, and the observed prefix-matching boundary for arbitrary trailing argv.",
       "evidence": [
-        ".codex/rules/quant-system-wsl-validation.rules",
+        ".codex/rules/tracequant-wsl-validation.rules",
         "tests/tools/test_wsl2_validation_rules.py",
         "tests/tools/test_wsl2_validation_runner.py"
       ]
@@ -41,7 +41,7 @@
       "statement": "Current execpolicy returns allow for the fixed targeted profile followed by arbitrary trailing values such as `tests/tools` or `arbitrary-value`; this records prefix matching behavior only.",
       "evidence": [
         "tests/tools/test_wsl2_validation_rules.py",
-        ".codex/rules/quant-system-wsl-validation.rules"
+        ".codex/rules/tracequant-wsl-validation.rules"
       ]
     },
     {
@@ -70,7 +70,7 @@
       "status": "not-claimed",
       "statement": "Task #83 does not claim that Rules alone provide exact argv or end-of-command matching.",
       "evidence": [
-        ".codex/rules/quant-system-wsl-validation.rules",
+        ".codex/rules/tracequant-wsl-validation.rules",
         "docs/workflows/wsl2-validation-runner/README.md"
       ]
     },

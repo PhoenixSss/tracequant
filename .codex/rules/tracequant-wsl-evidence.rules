@@ -1,4 +1,4 @@
-# quant-system WSL2 GitHub Evidence Runner rules
+# tracequant WSL2 GitHub Evidence Runner rules
 #
 # Allow only the fixed repository Evidence Runner and named profile prefixes.
 # The Runner validates exact argv, repository identity, fixed GitHub queries,

@@ -1,13 +1,14 @@
-# 量化系统技术基线
+# TraceQuant 技术基线
 
 - **版本：** 1.0
 - **日期：** 2026-07-19
-- **适用仓库：** `PhoenixSss/quant-system`
+- **适用仓库：** `PhoenixSss/tracequant`
 - **状态：** 当前有效设计基线
 **目标读者：** 项目维护者、Codex、代码审查者
 
 > **文档定位：** 本文档是当前技术选型基线。项目阶段、Issue 结构和当前实施入口见
 > [项目路线图](../planning/project-roadmap.md)，历史研究依据见 [research 目录](../research/)。
+> 仓库物理边界与 modular monorepo 规则见 [Repository structure](repository-structure.md)。
 > 对已经实施的事实，仍以 ADR、已合并 PR 及对应代码为准；规划职责以当前 GitHub Issue 为准。
 
 ---
@@ -516,7 +517,7 @@ Binance 期货 post-only / GTX 等真实场所语义必须进入测试和回测�
 
 所有实现必须：
 
-- Python 3.11；
+- Python 3.13；
 - 完整类型标注；
 - mypy strict；
 - pytest；
