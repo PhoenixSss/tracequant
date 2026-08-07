@@ -39,7 +39,7 @@
       "evidence_id": "repo-runner-contract",
       "kind": "config",
       "path": "docs/workflows/wsl2-codex-environment/runner-environment-contract.md",
-      "sha256": "5240bf0e451d1d479472d63b7992ff02110497910ad7f3b3d267e98bc040c876",
+      "sha256": "df1c191d9c320f91dc926007211e5799b89f94bee2dd2f9e19d1814b83f1e1bb",
       "public_status": "public",
       "supports": [
         "future Runner preconditions",
@@ -51,7 +51,7 @@
       "evidence_id": "repo-diagnostic-tool",
       "kind": "config",
       "path": "tools/wsl2_codex_diagnostic.py",
-      "sha256": "d812c0c7fdd90229fd657830ec383cdecafad9860d27332738d4bfea80bca2c8",
+      "sha256": "9a87e10b3d1c23bfb5c4641ab694088c12727e44df57496951964b17448febbb",
       "public_status": "public",
       "supports": [
         "repeatable local, remote-read and full diagnostic profiles",
@@ -95,17 +95,17 @@
       "evidence_id": "repo-python-pin",
       "kind": "config",
       "path": ".python-version",
-      "sha256": "49a506dd32096b010d75205acf3430c9ae6c40351888129499e5a5e487126c93",
+      "sha256": "02e735b3dfe1c32833eb550b7ff8ffa17f5f2bc3fa1e7bae61a8f5a3883ce398",
       "public_status": "public",
       "supports": [
-        "project Python 3.11 contract"
+        "project Python 3.13 contract"
       ]
     },
     {
       "evidence_id": "repo-ci-config",
       "kind": "config",
       "path": ".github/workflows/ci.yml",
-      "sha256": "c804628c3d53c8c1584de1a964f8e8dc56feaaff410efdd08f27c51f1ec2a9c9",
+      "sha256": "2c8443a2a135a6b8f79eff17596dd217a3f198a490d2e9395e93a7d9e27d601c",
       "public_status": "public",
       "supports": [
         "CI toolchain and validation command contract"

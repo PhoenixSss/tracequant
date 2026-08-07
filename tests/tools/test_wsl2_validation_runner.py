@@ -12,14 +12,14 @@ from pathlib import Path
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "tools" / "agent_workflow" / "wsl2_validation_runner.py"
 SPEC = ROOT / "tools" / "agent_workflow" / "wsl2_validation_profiles.json"
-RULES = ROOT / ".codex" / "rules" / "quant-system-wsl-validation.rules"
+RULES = ROOT / ".codex" / "rules" / "tracequant-wsl-validation.rules"
 WORKFLOW_VALIDATION = ROOT / "tools" / "agent_workflow" / "workflow_validation.py"
 WORKFLOW_COMMON = ROOT / "tools" / "agent_workflow" / "workflow_common.py"
 PYTHON = os.environ.get("WORKFLOW_TEST_PYTHON", sys.executable)
 IDENTITY_RELATIVE_PATHS = (
     "tools/agent_workflow/wsl2_validation_runner.py",
     "tools/agent_workflow/wsl2_validation_profiles.json",
-    ".codex/rules/quant-system-wsl-validation.rules",
+    ".codex/rules/tracequant-wsl-validation.rules",
     "tools/agent_workflow/workflow_validation.py",
     "tools/agent_workflow/workflow_common.py",
 )

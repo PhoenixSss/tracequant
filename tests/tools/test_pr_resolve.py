@@ -18,7 +18,7 @@ from pr_resolve import PrResolveError, resolve_or_create_pr  # type: ignore[impo
 from workflow_common import CommandRunner  # type: ignore[import-not-found]  # noqa: E402
 
 PYTHON = sys.executable
-REPO = "PhoenixSss/quant-system"
+REPO = "PhoenixSss/tracequant"
 
 
 def _write_fake_gh(bin_dir: Path, state_path: Path) -> None:

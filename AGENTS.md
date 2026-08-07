@@ -2,7 +2,7 @@
 
 ## Project purpose
 
-This repository implements a research-first cryptocurrency quantitative trading system.
+TraceQuant is an auditable research-to-live quantitative trading system for cryptocurrency perpetual futures.
 
 Correctness, reproducibility, risk control, and auditability have higher priority than performance, abstraction, or feature count.
 

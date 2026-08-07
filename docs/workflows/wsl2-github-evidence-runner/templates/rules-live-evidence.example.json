@@ -5,7 +5,7 @@
   "status": "not-measured",
   "observed_at_utc": null,
   "codex_version": null,
-  "rules_path": ".codex/rules/quant-system-wsl-evidence.rules",
+  "rules_path": ".codex/rules/tracequant-wsl-evidence.rules",
   "cases": [
     {
       "id": "fixed-review-profile",

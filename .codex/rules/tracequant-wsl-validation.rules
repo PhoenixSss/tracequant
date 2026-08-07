@@ -1,4 +1,4 @@
-# quant-system WSL2 Validation Runner rules
+# tracequant WSL2 Validation Runner rules
 #
 # Codex execpolicy uses prefix matching. These rules allow only named fixed
 # Runner profile prefixes. The Runner validates exact argv, cwd, repository,

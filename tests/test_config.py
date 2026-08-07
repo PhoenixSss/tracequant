@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from quant_system.config import (
+from tracequant.config import (
     ENV_VAR_NAMES,
     ConfigError,
     Environment,
@@ -17,7 +17,7 @@ from quant_system.config import (
 
 
 def test_load_settings_uses_environment_and_defaults() -> None:
-    settings = load_settings(environ={"QUANT_SYSTEM_ENV": "development"})
+    settings = load_settings(environ={"TRACEQUANT_ENV": "development"})
 
     assert settings == Settings(
         environment=Environment.DEVELOPMENT,
@@ -30,10 +30,10 @@ def test_load_settings_uses_environment_and_defaults() -> None:
 def test_load_settings_supports_all_configured_environment_variables() -> None:
     settings = load_settings(
         environ={
-            "QUANT_SYSTEM_ENV": "production",
-            "QUANT_SYSTEM_LOG_LEVEL": "warning",
-            "QUANT_SYSTEM_LOG_FORMAT": "json",
-            "QUANT_SYSTEM_LOG_DIR": "logs/app",
+            "TRACEQUANT_ENV": "production",
+            "TRACEQUANT_LOG_LEVEL": "warning",
+            "TRACEQUANT_LOG_FORMAT": "json",
+            "TRACEQUANT_LOG_DIR": "logs/app",
         }
     )
 
@@ -50,10 +50,10 @@ def test_explicit_arguments_take_precedence_over_process_environment() -> None:
         log_format=LogFormat.JSON,
         log_dir=Path("explicit-logs"),
         environ={
-            "QUANT_SYSTEM_ENV": "production",
-            "QUANT_SYSTEM_LOG_LEVEL": "DEBUG",
-            "QUANT_SYSTEM_LOG_FORMAT": "text",
-            "QUANT_SYSTEM_LOG_DIR": "env-logs",
+            "TRACEQUANT_ENV": "production",
+            "TRACEQUANT_LOG_LEVEL": "DEBUG",
+            "TRACEQUANT_LOG_FORMAT": "text",
+            "TRACEQUANT_LOG_DIR": "env-logs",
         },
     )
 
@@ -66,37 +66,37 @@ def test_explicit_arguments_take_precedence_over_process_environment() -> None:
 
 
 def test_load_settings_rejects_missing_required_environment() -> None:
-    with pytest.raises(ConfigError, match="^QUANT_SYSTEM_ENV is required$"):
+    with pytest.raises(ConfigError, match="^TRACEQUANT_ENV is required$"):
         load_settings(environ={})
 
 
 def test_load_settings_rejects_empty_required_environment() -> None:
-    with pytest.raises(ConfigError, match="^QUANT_SYSTEM_ENV must not be empty$"):
-        load_settings(environ={"QUANT_SYSTEM_ENV": ""})
+    with pytest.raises(ConfigError, match="^TRACEQUANT_ENV must not be empty$"):
+        load_settings(environ={"TRACEQUANT_ENV": ""})
 
 
 @pytest.mark.parametrize("value", ["staging", "prod", ""])
 def test_load_settings_rejects_invalid_environment(value: str) -> None:
-    with pytest.raises(ConfigError, match="QUANT_SYSTEM_ENV"):
-        load_settings(environ={"QUANT_SYSTEM_ENV": value})
+    with pytest.raises(ConfigError, match="TRACEQUANT_ENV"):
+        load_settings(environ={"TRACEQUANT_ENV": value})
 
 
 def test_load_settings_rejects_invalid_log_level() -> None:
-    with pytest.raises(ConfigError, match="QUANT_SYSTEM_LOG_LEVEL"):
+    with pytest.raises(ConfigError, match="TRACEQUANT_LOG_LEVEL"):
         load_settings(
             environ={
-                "QUANT_SYSTEM_ENV": "test",
-                "QUANT_SYSTEM_LOG_LEVEL": "verbose",
+                "TRACEQUANT_ENV": "test",
+                "TRACEQUANT_LOG_LEVEL": "verbose",
             }
         )
 
 
 def test_load_settings_rejects_invalid_log_format() -> None:
-    with pytest.raises(ConfigError, match="QUANT_SYSTEM_LOG_FORMAT"):
+    with pytest.raises(ConfigError, match="TRACEQUANT_LOG_FORMAT"):
         load_settings(
             environ={
-                "QUANT_SYSTEM_ENV": "test",
-                "QUANT_SYSTEM_LOG_FORMAT": "xml",
+                "TRACEQUANT_ENV": "test",
+                "TRACEQUANT_LOG_FORMAT": "xml",
             }
         )
 
@@ -104,20 +104,20 @@ def test_load_settings_rejects_invalid_log_format() -> None:
 def test_log_dir_empty_string_disables_file_logging() -> None:
     settings = load_settings(
         environ={
-            "QUANT_SYSTEM_ENV": "test",
-            "QUANT_SYSTEM_LOG_DIR": "",
+            "TRACEQUANT_ENV": "test",
+            "TRACEQUANT_LOG_DIR": "",
         }
     )
 
     assert settings.log_dir is None
 
 
-@pytest.mark.parametrize("value", ["logs\\app", "logs/app", "/tmp/quant-system-logs"])
+@pytest.mark.parametrize("value", ["logs\\app", "logs/app", "/tmp/tracequant-logs"])
 def test_log_dir_uses_pathlib_without_creating_directory(value: str) -> None:
     settings = load_settings(
         environ={
-            "QUANT_SYSTEM_ENV": "test",
-            "QUANT_SYSTEM_LOG_DIR": value,
+            "TRACEQUANT_ENV": "test",
+            "TRACEQUANT_LOG_DIR": value,
         }
     )
 
@@ -126,17 +126,17 @@ def test_log_dir_uses_pathlib_without_creating_directory(value: str) -> None:
 
 
 def test_settings_are_immutable() -> None:
-    settings = load_settings(environ={"QUANT_SYSTEM_ENV": "test"})
+    settings = load_settings(environ={"TRACEQUANT_ENV": "test"})
 
     with pytest.raises(AttributeError):
         settings.environment = Environment.PRODUCTION  # type: ignore[misc]
 
 
-def test_unknown_quant_system_environment_variables_are_ignored() -> None:
+def test_unknown_tracequant_environment_variables_are_ignored() -> None:
     settings = load_settings(
         environ={
-            "QUANT_SYSTEM_ENV": "test",
-            "QUANT_SYSTEM_UNKNOWN": "ignored",
+            "TRACEQUANT_ENV": "test",
+            "TRACEQUANT_UNKNOWN": "ignored",
         }
     )
 
@@ -146,12 +146,12 @@ def test_unknown_quant_system_environment_variables_are_ignored() -> None:
 def test_config_module_import_does_not_read_environment_or_create_files(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("QUANT_SYSTEM_ENV", "production")
+    monkeypatch.setenv("TRACEQUANT_ENV", "production")
     monkeypatch.chdir(tmp_path)
 
-    module = importlib.reload(importlib.import_module("quant_system.config"))
+    module = importlib.reload(importlib.import_module("tracequant.config"))
 
-    assert "QUANT_SYSTEM_ENV" in os.environ
+    assert "TRACEQUANT_ENV" in os.environ
     assert module.ENV_VAR_NAMES == ENV_VAR_NAMES
     assert list(tmp_path.iterdir()) == []
 
@@ -172,8 +172,8 @@ def test_secret_value_rejects_empty_string_without_leaking_value() -> None:
 
 def test_environment_variable_names_are_centralized() -> None:
     assert ENV_VAR_NAMES == (
-        "QUANT_SYSTEM_ENV",
-        "QUANT_SYSTEM_LOG_LEVEL",
-        "QUANT_SYSTEM_LOG_FORMAT",
-        "QUANT_SYSTEM_LOG_DIR",
+        "TRACEQUANT_ENV",
+        "TRACEQUANT_LOG_LEVEL",
+        "TRACEQUANT_LOG_FORMAT",
+        "TRACEQUANT_LOG_DIR",
     )

@@ -45,7 +45,7 @@ run from the committed current head so the recorded identity is reproducible.
 ## Checklist
 
 1. Run from the repository root under `/home`, not `/mnt`.
-2. Confirm `origin` is `PhoenixSss/quant-system`.
+2. Confirm `origin` is `PhoenixSss/tracequant`.
 3. Confirm Task/PR/base/head arguments are current and exact.
 4. Confirm the output roots are ignored and writable.
 5. Check `gh auth status` only when the active workflow authorizes it; never

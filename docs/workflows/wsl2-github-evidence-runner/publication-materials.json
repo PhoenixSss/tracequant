@@ -31,7 +31,7 @@
       "statement": "The runner suppresses workflow_evidence git fetch, uses fixed read-only Git inspection and ls-remote calls, and leaves Git/GitHub writes approval gated.",
       "evidence": [
         "tools/agent_workflow/workflow_evidence.py",
-        ".codex/rules/quant-system-wsl-evidence.rules",
+        ".codex/rules/tracequant-wsl-evidence.rules",
         "docs/workflows/wsl2-github-evidence-runner/git-approval-boundary.md"
       ]
     },

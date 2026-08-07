@@ -53,10 +53,10 @@ class LogFormat(StrEnum):
 class EnvVarName(StrEnum):
     """Centralized environment variable names read by the config loader."""
 
-    ENVIRONMENT = "QUANT_SYSTEM_ENV"
-    LOG_LEVEL = "QUANT_SYSTEM_LOG_LEVEL"
-    LOG_FORMAT = "QUANT_SYSTEM_LOG_FORMAT"
-    LOG_DIR = "QUANT_SYSTEM_LOG_DIR"
+    ENVIRONMENT = "TRACEQUANT_ENV"
+    LOG_LEVEL = "TRACEQUANT_LOG_LEVEL"
+    LOG_FORMAT = "TRACEQUANT_LOG_FORMAT"
+    LOG_DIR = "TRACEQUANT_LOG_DIR"
 
 
 ENV_VAR_NAMES: Final[tuple[str, ...]] = tuple(name.value for name in EnvVarName)

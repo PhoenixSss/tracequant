@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 ROOT = Path(__file__).parents[2]
-RULES = ROOT / ".codex" / "rules" / "quant-system-wsl-validation.rules"
+RULES = ROOT / ".codex" / "rules" / "tracequant-wsl-validation.rules"
 RUNNER_ARGV = ["tools/agent_workflow/wsl2_validation_runner.py"]
 
 

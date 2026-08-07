@@ -13,8 +13,8 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Final, TextIO, cast
 
-from quant_system.config import LogFormat, SecretValue, Settings
-from quant_system.core.time import UTC, format_utc
+from tracequant.config import LogFormat, SecretValue, Settings
+from tracequant.core.time import UTC, format_utc
 
 __all__ = [
     "FIELD_LEVEL",
@@ -34,10 +34,10 @@ FIELD_LOGGER: Final = "logger"
 FIELD_MESSAGE: Final = "message"
 FIELD_EXCEPTION: Final = "exception"
 FIELD_EXTRA: Final = "extra"
-LOG_FILE_NAME: Final = "quant-system.jsonl"
+LOG_FILE_NAME: Final = "tracequant.jsonl"
 REDACTED_VALUE: Final = "<redacted>"
 
-_HANDLER_MARKER: Final = "_quant_system_logging_handler"
+_HANDLER_MARKER: Final = "_tracequant_logging_handler"
 _SENSITIVE_KEYS: Final[frozenset[str]] = frozenset(
     {"password", "secret", "token", "api_key", "apikey", "authorization", "cookie"}
 )

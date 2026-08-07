@@ -1,5 +1,5 @@
-import quant_system
+import tracequant
 
 
 def test_package_name() -> None:
-    assert quant_system.__name__ == "quant_system"
+    assert tracequant.__name__ == "tracequant"
