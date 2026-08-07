@@ -182,3 +182,7 @@ review, independent PR review, manual Merge, or Feature closeout.
 - [Validation Runner](docs/workflows/wsl2-validation-runner/README.md): fixed validation profiles, compact artifacts, exact argv, and process cleanup.
 - [Skill variants](docs/workflows/task-skill-ab.md): preserved historical Skill family and current Runner Skill family for controlled comparison.
 - [Task Skill runner migration](docs/workflows/task-skill-runner-migration/README.md): historical migration record only; not an operational guide.
+
+## License
+
+TraceQuant is publicly accessible but is not currently distributed under an open-source license. All rights are reserved. See `LICENSE`.
