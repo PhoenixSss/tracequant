@@ -1,71 +1,21 @@
-# quant-system WSL2 GitHub evidence runner rules
+# quant-system WSL2 GitHub Evidence Runner rules
 #
-# Scope:
-# - Allow only the fixed repository Evidence Runner, named profile prefixes,
-#   and the trusted-base evidence front-door bootstrap.
-# - Codex execpolicy uses prefix matching; allow is not complete argv acceptance.
-# - The runner validates the complete argument set, repository identity, trusted
-#   files, fixed GitHub queries, and fixed read-only Git commands before evidence
-#   collection.
-# - No user-provided repository, REST path, GraphQL, gh argv, Git argv, shell,
-#   output path, or working directory is accepted.
-# - Known dangerous options below are defense-in-depth. Arbitrary trailing argv
-#   remains a runner fail-closed responsibility before GitHub/Git subprocesses.
-# - Direct gh, Git writes, fetch, authentication-token output, shells, Python,
-#   push, branch deletion, reset, clean, merge, and history modification are not
-#   allowed by these evidence rules.
+# Allow only the fixed repository Evidence Runner and named profile prefixes.
+# The Runner validates exact argv, repository identity, fixed GitHub queries,
+# fixed read-only Git operations, snapshot identity, and ignored output paths.
+# It accepts no arbitrary repository, API path, raw gh/Git argv, shell, cwd, or
+# output path.
 
 prefix_rule(
-    pattern = ["tools/agent_workflow/wsl2_github_evidence_runner.py", "delivery"],
+    pattern = ["tools/agent_workflow/wsl2_github_evidence_runner.py", ["delivery", "delivery-readiness", "review", "pre-merge", "closeout-readonly", "recheck"]],
     decision = "allow",
-    justification = "Allow the fixed Task Delivery preflight evidence profile prefix; runner validates complete argv and uses only fixed read-only queries.",
+    justification = "Allow named fixed read-only Evidence Runner profiles; the Runner validates complete argv and object identities.",
 )
 
 prefix_rule(
-    pattern = ["tools/agent_workflow/wsl2_github_evidence_runner.py", "delivery-readiness"],
-    decision = "allow",
-    justification = "Allow the fixed Delivery readiness evidence profile prefix; runner validates Task, PR, SHAs and complete argv.",
-)
-
-prefix_rule(
-    pattern = ["tools/agent_workflow/wsl2_github_evidence_runner.py", "review"],
-    decision = "allow",
-    justification = "Allow the fixed independent Review evidence profile prefix; no GitHub write path is exposed.",
-)
-
-prefix_rule(
-    pattern = ["tools/agent_workflow/wsl2_github_evidence_runner.py", "pre-merge"],
-    decision = "allow",
-    justification = "Allow the fixed pre-merge read-only revalidation profile prefix; manual merge remains outside the rule.",
-)
-
-prefix_rule(
-    pattern = ["tools/agent_workflow/wsl2_github_evidence_runner.py", "closeout-readonly"],
-    decision = "allow",
-    justification = "Allow only the read-only closeout evidence profile prefix; Issue, Project and branch cleanup writes remain approval gated.",
-)
-
-prefix_rule(
-    pattern = ["tools/agent_workflow/wsl2_github_evidence_runner.py", "recheck"],
-    decision = "allow",
-    justification = "Allow a fixed stored-snapshot stability recheck prefix; runner validates the snapshot ID and supported prior operation.",
-)
-
-
-prefix_rule(
-    pattern = ["tools/agent_workflow/trusted_runner.py", "--tool", "evidence-runner"],
-    decision = "allow",
-    justification = "Allow only the trusted-base fixed Evidence Runner bootstrap prefix used by independent Review; trusted_runner validates the commit SHA, current repository root, bundle manifest and delegated runner argv.",
-)
-
-prefix_rule(
-    pattern = [
-        "tools/agent_workflow/wsl2_github_evidence_runner.py",
-        ["delivery", "delivery-readiness", "review", "pre-merge", "closeout-readonly", "recheck"],
-        ["--repo", "--repository", "--api", "--graphql", "--gh-arg", "--git-arg", "--shell", "--exec", "--", "|", ">", "$(id)"],
-    ],
+    pattern = ["tools/agent_workflow/wsl2_github_evidence_runner.py", ["delivery", "delivery-readiness", "review", "pre-merge", "closeout-readonly", "recheck"], ["--repo", "--repository", "--api", "--graphql", "--gh-arg", "--git-arg", "--shell", "--exec", "--", "|", ">", "$(id)"]],
     decision = "forbidden",
-    justification = "Defense-in-depth against repository/API/command injection and shell metacharacter forms; the runner remains the complete argv gate.",
+    justification = "Block repository/API/command injection and shell metacharacter forms.",
 )
 
 prefix_rule(
@@ -77,11 +27,11 @@ prefix_rule(
 prefix_rule(
     pattern = ["git", ["add", "commit", "switch", "checkout", "fetch", "push", "branch", "reset", "clean", "merge", "rebase", "cherry-pick", "revert"]],
     decision = "prompt",
-    justification = "Git writes, ref refresh, branch operations, history changes and destructive commands remain explicit workflow approvals.",
+    justification = "Git writes, ref refresh, branch operations, history changes, and destructive commands require explicit workflow approval.",
 )
 
 prefix_rule(
     pattern = ["gh", ["issue", "pr", "project", "api"]],
     decision = "prompt",
-    justification = "Direct GitHub CLI and raw API calls remain explicit approvals; the fixed Evidence Runner is the only allow entry.",
+    justification = "Direct GitHub CLI and API calls require explicit approval; the fixed Evidence Runner is the normal read-only entry.",
 )

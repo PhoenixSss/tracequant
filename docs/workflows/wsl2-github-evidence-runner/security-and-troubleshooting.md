@@ -1,93 +1,56 @@
-# Security, Failure Cases, and Troubleshooting
+# Evidence Runner security and troubleshooting
 
-## Security controls
+## Fixed boundaries
 
-- fixed repository and origin identity;
-- fixed profile names and option contracts;
-- no arbitrary REST path, GraphQL, `gh`, Git, shell, or filesystem argument;
-- tracked-`HEAD` integrity checks before subprocess execution;
-- no `git fetch` in the fixed read-only profile;
-- current remote refs queried with fixed `git ls-remote --heads` argv;
-- normalized bounded snapshots and compact stdout;
-- ignored local evidence only;
-- sensitive token/header/cookie/private-key patterns redacted;
-- GitHub and Git writes remain outside the allow rules.
+The Evidence Runner validates exact argv, current repository entry/origin,
+profile schema, object SHA arguments, snapshot IDs, ignored output paths, and
+bounded response structure. Current Skill/Runner/tool hashes are recorded in the
+result.
 
-## Failure and partial cases
+## Common outcomes
 
-### Required Checks plan-limit 403
+### Required Checks plan-limit `403`
 
-The snapshot records `plan-limited-403`. Current check runs may still be
-available, but the result remains `partial`; it must not be presented as full
-required-check configuration evidence.
+The result remains `partial` with
+`required_checks_configuration = unknown`. Closeout may separately report
+`eligible-under-capability-limited-policy` for exact branch cleanup only when all
+of that policy's independent gates pass. It never authorizes Merge or other
+writes.
 
-For post-merge Closeout, the runner may also report an independent
-`cleanup_eligibility` object. `eligible-under-capability-limited-policy` only
-means the exact verified Task branch may proceed to the existing branch-deletion
-approval gates after stable recheck. It does not convert Required Checks to pass
-and cannot authorize Merge, push, Issue, Project, label, review, or unrelated
-branch writes.
+### Project or review-thread permission failure
 
-Other `403` responses are classified separately as authentication,
-scope/permission, rate-limit, or unknown failures and keep cleanup blocked.
+The affected fact is `unknown` and the result is `partial`. Use only a separately
+authorized bounded read fallback and report it.
 
-### ProjectV2 or review-thread permission failure
+### Authentication, rate limit, network, or service failure
 
-The unavailable field is marked unknown and the result exits `3`. A Skill may
-use a separately authorized read-only fallback, but must report that fallback.
+Preserve the classified warning and exit `3`. Do not substitute stale evidence.
 
-### API rate limit or network failure
+### Task/PR linkage, base/head, or remote-ref mismatch
 
-Warnings are bounded and redacted. The result exits `3`. Old evidence cannot be
-substituted as current evidence.
+The relevant gate fails. The Runner does not fetch, repair, edit, or reinterpret
+the mismatch.
 
-### Task/PR linkage mismatch
+### Large result set
 
-A PR that does not close the expected Task produces a failed gate and exit `4`.
+Lists include count and truncation metadata. Truncation makes the result partial;
+use the stored result to inspect only the required bounded subset.
 
-### Remote-ref drift
+### Profile or Runner change
 
-The runner compares local `origin/main` with current remote `main`, and an open
-PR's GitHub head SHA with the remote head branch. A mismatch fails evidence
-consistency. The runner does not repair the mismatch or fetch.
+The current file is hashed and used directly. Non-canonical profile/schema or
+argv drift fails before GitHub evidence is accepted. Final workflow use should
+run from the committed current head so the recorded identity is reproducible.
 
-### Large changed-file set
+## Checklist
 
-Bounded lists carry `count` and `truncated`. Truncation makes the result partial;
-the full diff remains outside model-visible output.
-
-### Trusted file changed after approval
-
-Any staged, unstaged, symlinked, untracked, or replaced runner/spec/Rules/shared
-Evidence file is rejected before GitHub queries. Commit and review the intended
-change, then run again.
-
-### Rules allow a profile prefix plus trailing argv
-
-This is the known Codex prefix-matching boundary, not semantic acceptance. The
-runner's argparse contract rejects arbitrary trailing values before evidence
-collection. Tests must verify policy behavior and runner behavior separately.
-
-
-### GitHub CLI capability drift
-
-A previous trusted review recollection was blocked when the installed GitHub
-CLI did not expose a required PR JSON field. Upgrading the WSL2 GitHub CLI
-restored the metadata path and stable recheck.
-
-The reusable lesson is not "always upgrade blindly." Record the tool version,
-probe the actual required fields, and keep unsupported or unavailable facts
-explicitly partial. Task #84 therefore records environment capability alongside
-runner results. A future incompatibility must not be hidden by stale evidence.
-
-## Troubleshooting checklist
-
-1. Confirm the command is run from the repository root under `/home`, not `/mnt`.
-2. Confirm `origin` resolves to `PhoenixSss/quant-system`.
-3. Confirm all trusted files are committed and the working/index copies match `HEAD`.
-4. Run `gh auth status` outside the runner when the active workflow authorizes it.
-5. Check that Project read permission is present when Project fields are needed.
-6. Treat exit `3` as partial and inspect the referenced normalized result.
-7. Do not "fix" partial evidence by adding broad direct `gh api` or Git allow rules.
-8. Re-run the fixed profile after network, permission, or rate-limit recovery.
-9. Use `recheck` before a stability-sensitive decision instead of reusing an old snapshot.
+1. Run from the repository root under `/home`, not `/mnt`.
+2. Confirm `origin` is `PhoenixSss/quant-system`.
+3. Confirm Task/PR/base/head arguments are current and exact.
+4. Confirm the output roots are ignored and writable.
+5. Check `gh auth status` only when the active workflow authorizes it; never
+   print `gh auth token`.
+6. Treat exit `3` as partial and inspect the named gate.
+7. Do not add broad direct `gh api`, Git, Python, or shell allow rules.
+8. Re-run the fixed profile after capability recovery.
+9. Use `recheck` immediately before a stability-sensitive verdict or action.

@@ -22,12 +22,15 @@ Before changing code:
 GitHub Issues are the source of truth for planned work.
 Repository documentation is the source of truth for current implemented behavior.
 
-When the user specifies an already-created GitHub Task and requests the complete
-pre-merge workflow through a Pull Request that is ready for independent review,
-first read `.agents/skills/task-delivery/SKILL.md`.
+When the user explicitly invokes `task-delivery-runner`, first read
+`.agents/skills/task-delivery-runner/SKILL.md`. When the user explicitly invokes
+`task-pr-review-runner`, first read
+`.agents/skills/task-pr-review-runner/SKILL.md`.
 
-When the user requests an independent read-only review of a Task Pull Request in
-a new session, first read `.agents/skills/task-pr-review/SKILL.md`.
+Historical `.agents/skills/task-delivery/SKILL.md` and
+`.agents/skills/task-pr-review/SKILL.md` are retained only as explicit benchmark
+baselines. Never select, combine, or fall back to them unless the maintainer
+names that exact Skill.
 
 When the user states that a Pull Request was manually merged and requests
 post-merge verification, state convergence, validation, or Task-branch cleanup,
@@ -37,54 +40,53 @@ When the user requests an independent read-only completion audit of a specified
 open GitHub Feature before maintainer closeout, first read
 `.agents/skills/feature-completion-audit/SKILL.md`.
 
-The three Task workflow Skills start only after the user identifies an existing
-Task or Task Pull Request. They do not identify, split, plan, draft, choose, or
-create new Tasks. They do not assess, recommend, or perform Feature completion.
-No Task workflow Skill may merge a Pull Request.
+Workflow Skills start only after the user identifies an existing Task, Task PR,
+or Feature. They do not identify, split, plan, draft, choose, or create new
+Tasks. No workflow Skill may merge a Pull Request.
 
-Feature completion is audited only through a separately invoked, independent,
-strictly read-only `feature-completion-audit` session. That Skill may recommend
-completion gaps but does not create Tasks, close the Feature, set Project `Done`,
-or assess Epic completion. Feature closeout remains a maintainer manual gate.
+Independent PR Review must run in a fresh session that did not participate in
+implementation or remediation of the reviewed head. It is strictly read-only,
+does not submit a GitHub Review, does not fix findings, does not change
+Issue/PR/Project state, and does not merge. A non-passing Review may emit a
+bounded remediation handoff for `task-delivery-runner`; any new commit requires
+a new independent Review session.
 
-The independent PR Review Skill must run in a session that did not participate
-in implementation or modification of the PR. It is strictly read-only, does not
-submit a GitHub Review, does not fix findings, does not change Issue/PR/Project
-state, and does not merge.
+When the user provides both a number and title, treat the number as the primary
+key and the current GitHub title as canonical. Stop before writes when they
+clearly identify different work.
 
-When the user provides both a Task number and title, treat the Issue number as
-the primary key and the current GitHub Issue title as the canonical title. Stop
-before writes when the supplied title and numbered Issue clearly identify
-different work.
+A final merge decision requires a passing `task-pr-review-runner` result for the
+current PR head, followed by maintainer manual merge.
 
-A final merge decision requires an independent read-only Pull Request review in
-a separate session through `task-pr-review`, followed by maintainer manual merge.
+Before a repository workflow Skill executes a command, it must read
+`.agents/policies/command-execution.md` and may read the optional ignored
+`.agents/execution-profile.local.toml`. The local profile selects an execution
+context only after the active Skill authorizes a command; it never expands
+workflow permissions.
 
-Before a repository workflow Skill listed above executes a command, it must read
-`.agents/policies/command-execution.md` and may read the optional local
-`.agents/execution-profile.local.toml`. The local profile is ignored by Git and
-must not be committed. It may select an execution context only after the active
-Skill authorizes the command; it never expands lifecycle or GitHub permissions.
+The repository does not run Task workflow Token telemetry. Token analysis is
+performed outside this repository from Codex rollout logs and maintainer-supplied
+Task metadata. Raw rollout logs and external Token reports must not be committed.
+External analysis never changes permissions, gates, findings, verdicts, Merge
+authorization, or completion evidence.
 
-The repository does not run Task workflow Token telemetry. Token-consumption
-analysis is performed outside this repository from Codex rollout logs plus
-maintainer-supplied Task metadata. Raw rollout logs and generated external Token
-reports must not be committed. Whether external analysis is available or
-successful never changes workflow permissions, gates, validation, findings,
-verdicts, Merge authorization, or Feature completion evidence.
+Deterministic workflow facts and compact validation are governed by
+`.agents/policies/workflow-evidence.md`. Runner Skills use the current repository
+front doors:
 
-Deterministic workflow fact collection and compact validation are governed by
-`.agents/policies/workflow-evidence.md`. Task workflow Skills use the fixed
-`tools/agent_workflow/wsl2_github_evidence_runner.py` and
-`tools/agent_workflow/wsl2_validation_runner.py` front doors instead of repeated
-mechanical GitHub/Git/validation chains. The underlying Evidence/Validation CLIs
-are implementation details, not parallel normal paths. Independent Review uses
-fixed front-door bundles extracted from the locked PR base through
-`tools/agent_workflow/trusted_runner.py` or an equivalent trusted detached
-worktree. All semantic review, safety, lifecycle judgment, and manual Merge gates
-remain with the Skills and maintainer. Local evidence and validation artifacts
-remain in exact ignored `.agents/evidence.local/` and
-`.agents/validation.local/` directories.
+```text
+tools/agent_workflow/wsl2_github_evidence_runner.py
+tools/agent_workflow/wsl2_validation_runner.py
+```
+
+The executed Skill, Runner, profile/schema, repository head, and content hashes
+are recorded for reproducibility. Workflow object identities remain locked as
+required: Task base, PR base/head/effective diff, audited main, and merge SHA.
+There is no requirement to load a Skill or Runner from `main`, a PR base, or
+another commit.
+
+Local evidence and validation artifacts remain in exact ignored
+`.agents/evidence.local/` and `.agents/validation.local/` directories.
 
 This root `AGENTS.md` remains the repository-level rule source. Repository Skills
 supplement these rules and do not override system, developer, user, or more

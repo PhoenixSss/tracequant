@@ -31,7 +31,7 @@ Runner 开始前至少验证：
 5. `uv --version` 为 `0.12.1`；
 6. 输出路径被 Git ignore；
 7. 网络、Git/GitHub 写入已经由当前 Skill 授权；
-8. trusted control-plane 要求由现有 workflow evidence policy 处理。
+8. Skill/Runner 内容身份与 workflow 对象 SHA 锁定由现有 workflow evidence policy 处理。
 
 任一关键事实未知时 fail closed，不得自动安装、登录、修改代理或放宽 Rules。
 

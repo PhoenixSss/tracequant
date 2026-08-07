@@ -138,7 +138,7 @@ def _base_state() -> dict[str, Any]:
         "title": "[Task] Optimize workflow",
         "state": "OPEN",
         "labels": [{"name": "type:task"}, {"name": "codex:ready"}],
-        "projectItems": [{"status": {"name": "Review"}}],
+        "projectItems": [{"status": {"name": "Ready"}}],
         "url": "https://github.com/owner/repo/issues/70",
         "closedAt": None,
         "closedByPullRequestsReferences": [],
@@ -432,7 +432,15 @@ def test_read_only_mode_skips_fetch_and_reports_local_main(tmp_path: Path) -> No
     state["local_main"] = "8" * 40
     repo, _, env = _write_repo(tmp_path, state)
     env["WORKFLOW_EVIDENCE_READ_ONLY"] = "1"
-    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        "2222222222222222222222222222222222222222",
+    )
     assert result.returncode == 0, result.stderr
     value = json.loads(result.stdout)
     git = value["observed"]["git"]
@@ -934,7 +942,15 @@ def test_missing_github_fact_never_becomes_false_pass(tmp_path: Path) -> None:
     state = _base_state()
     del state["issues"]["70"]
     repo, _, env = _write_repo(tmp_path, state)
-    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        "2222222222222222222222222222222222222222",
+    )
     assert result.returncode == 0, result.stderr
     value = json.loads(result.stdout)
     assert value["gates"]["issue_available"]["status"] == "unknown"
@@ -945,7 +961,15 @@ def test_relationship_unavailable_keeps_blocker_gate_unknown(tmp_path: Path) -> 
     state = _base_state()
     state["relationships"] = None
     repo, _, env = _write_repo(tmp_path, state)
-    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        "2222222222222222222222222222222222222222",
+    )
     assert result.returncode == 0, result.stderr
     value = json.loads(result.stdout)
     assert value["gates"]["formal_blockers"]["status"] == "unknown"
@@ -954,7 +978,15 @@ def test_relationship_unavailable_keeps_blocker_gate_unknown(tmp_path: Path) -> 
 def test_no_formal_blockers_passes(tmp_path: Path) -> None:
     state = _base_state()
     repo, _, env = _write_repo(tmp_path, state)
-    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        "2222222222222222222222222222222222222222",
+    )
     assert result.returncode == 0, result.stderr
     gate = json.loads(result.stdout)["gates"]["formal_blockers"]
     assert gate["status"] == "pass"
@@ -967,7 +999,15 @@ def test_closed_formal_blocker_is_resolved(tmp_path: Path) -> None:
         {"number": 72, "title": "[Task] Dependency", "state": "CLOSED"}
     ]
     repo, _, env = _write_repo(tmp_path, state)
-    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        "2222222222222222222222222222222222222222",
+    )
     assert result.returncode == 0, result.stderr
     gate = json.loads(result.stdout)["gates"]["formal_blockers"]
     assert gate["status"] == "pass"
@@ -980,7 +1020,15 @@ def test_open_formal_blocker_fails(tmp_path: Path) -> None:
         {"number": 72, "title": "[Task] Dependency", "state": "OPEN"}
     ]
     repo, _, env = _write_repo(tmp_path, state)
-    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        "2222222222222222222222222222222222222222",
+    )
     assert result.returncode == 0, result.stderr
     gate = json.loads(result.stdout)["gates"]["formal_blockers"]
     assert gate["status"] == "fail"
@@ -995,7 +1043,15 @@ def test_mixed_formal_blockers_fail_when_any_is_open(tmp_path: Path) -> None:
         {"number": 73, "title": "[Task] Unresolved", "state": "OPEN"},
     ]
     repo, _, env = _write_repo(tmp_path, state)
-    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        "2222222222222222222222222222222222222222",
+    )
     assert result.returncode == 0, result.stderr
     gate = json.loads(result.stdout)["gates"]["formal_blockers"]
     assert gate["status"] == "fail"
@@ -1009,7 +1065,15 @@ def test_unknown_formal_blocker_state_does_not_pass(tmp_path: Path) -> None:
         {"number": 72, "title": "[Task] Dependency", "state": "UNKNOWN"}
     ]
     repo, _, env = _write_repo(tmp_path, state)
-    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        "2222222222222222222222222222222222222222",
+    )
     assert result.returncode == 0, result.stderr
     gate = json.loads(result.stdout)["gates"]["formal_blockers"]
     assert gate["status"] == "unknown"
@@ -1023,7 +1087,15 @@ def test_truncated_formal_blockers_do_not_pass(tmp_path: Path) -> None:
         "pageInfo": {"hasNextPage": True},
     }
     repo, _, env = _write_repo(tmp_path, state)
-    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        "2222222222222222222222222222222222222222",
+    )
     assert result.returncode == 0, result.stderr
     gate = json.loads(result.stdout)["gates"]["formal_blockers"]
     assert gate["status"] == "unknown"
@@ -1124,7 +1196,15 @@ def test_fetch_failure_is_explicit_unknown_gate(tmp_path: Path) -> None:
     state = _base_state()
     state["fetch_ok"] = False
     repo, _, env = _write_repo(tmp_path, state)
-    result = _run(repo, env, "delivery-preflight", "--task", "70")
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        "2222222222222222222222222222222222222222",
+    )
     assert result.returncode == 0, result.stderr
     value = json.loads(result.stdout)
     assert value["gates"]["origin_fetch"]["status"] == "unknown"
@@ -1133,3 +1213,756 @@ def test_fetch_failure_is_explicit_unknown_gate(tmp_path: Path) -> None:
     assert "C:/Users" not in serialized
     assert "/home/maple" not in serialized
     assert "<absolute-path-redacted>" in serialized
+
+
+# --- Delivery Preflight tests (new) ---
+
+SHA40 = "2" * 40
+
+
+def test_delivery_preflight_delivery_start_passes_with_ready_status(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state["issues"]["70"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["operation"] == "delivery-preflight"
+    assert value["subject"]["entry_point"] == "delivery-start"
+    assert value["gates"]["lifecycle_labels_exclusive"]["status"] == "pass"
+    assert value["gates"]["project_status_known"]["status"] == "pass"
+    assert value["gates"]["parent_blocking"]["status"] == "pass"
+
+
+def test_delivery_preflight_lifecycle_conflict_ready_and_needs_spec(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state["issues"]["70"]["labels"] = [
+        {"name": "type:task"},
+        {"name": "codex:ready"},
+        {"name": "codex:needs-spec"},
+    ]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["lifecycle_labels_exclusive"]["status"] == "fail"
+    assert "codex:needs-spec" in value["gates"]["lifecycle_labels_exclusive"]["detail"]
+    assert "codex:ready" in value["gates"]["lifecycle_labels_exclusive"]["detail"]
+
+
+def test_delivery_preflight_blocked_task_fails(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state["issues"]["70"]["labels"] = [
+        {"name": "type:task"},
+        {"name": "codex:blocked"},
+    ]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["label-not:codex:blocked"]["status"] == "fail"
+    assert value["gates"]["lifecycle_labels_exclusive"]["status"] == "fail"
+
+
+def test_delivery_preflight_project_status_incompatible(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state["issues"]["70"]["projectItems"] = [{"status": {"name": "Review"}}]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["project_status_known"]["status"] == "fail"
+    assert "Review" in value["gates"]["project_status_known"]["detail"]
+    assert "delivery-start" in value["gates"]["project_status_known"]["detail"]
+
+
+def test_delivery_preflight_closed_parent_blocks(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state["relationships"]["parent"] = {
+        "number": 62,
+        "title": "[Feature] Closed parent",
+        "state": "CLOSED",
+    }
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["parent_blocking"]["status"] == "fail"
+    assert "CLOSED" in value["gates"]["parent_blocking"]["detail"]
+
+
+def test_delivery_preflight_entry_point_contract_violation_extra_params(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+        "--pr",
+        "71",
+    )
+    assert result.returncode == 2
+    assert "parameter contract violation" in result.stderr
+    assert "extra=['pr']" in result.stderr
+
+
+def test_delivery_preflight_entry_point_contract_violation_missing_params(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "implementation",
+    )
+    assert result.returncode == 2
+    assert "parameter contract violation" in result.stderr
+    assert "missing=['branch'" in result.stderr
+
+
+def test_delivery_preflight_subject_includes_entry_point(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "pr-readiness",
+        "--branch",
+        "task-70",
+        "--expected-base-sha",
+        SHA40,
+        "--expected-head-sha",
+        "4" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["subject"]["entry_point"] == "pr-readiness"
+    assert value["subject"]["branch"] == "task-70"
+
+
+def test_delivery_preflight_unknown_project_status(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state["issues"]["70"]["projectItems"] = [{"status": {"name": "BogusStatus"}}]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["project_status_known"]["status"] == "fail"
+    assert "BogusStatus" in value["gates"]["project_status_known"]["detail"]
+
+
+def test_delivery_preflight_no_lifecycle_labels(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state["issues"]["70"]["labels"] = [{"name": "type:task"}]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["lifecycle_labels_exclusive"]["status"] == "fail"
+    assert "none" in value["gates"]["lifecycle_labels_exclusive"]["detail"]
+
+
+def test_delivery_readiness_has_lifecycle_gates(tmp_path: Path) -> None:
+    state = _base_state()
+    state["issues"]["70"]["projectItems"] = [{"status": {"name": "Review"}}]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-readiness",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert "lifecycle_labels_exclusive" in value["gates"]
+    assert "project_status_known" in value["gates"]
+    assert value["gates"]["project_status_review"]["status"] == "pass"
+
+
+def test_delivery_readiness_lifecycle_conflict_returns_fail(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state["issues"]["70"]["labels"] = [
+        {"name": "type:task"},
+        {"name": "codex:ready"},
+        {"name": "codex:needs-spec"},
+    ]
+    state["issues"]["70"]["projectItems"] = [{"status": {"name": "Review"}}]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-readiness",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["lifecycle_labels_exclusive"]["status"] == "fail"
+    assert "codex:needs-spec" in value["gates"]["lifecycle_labels_exclusive"]["detail"]
+
+
+def test_pr_review_snapshot_does_not_have_lifecycle_gates(
+    tmp_path: Path,
+) -> None:
+    """Independent review boundary must not include lifecycle label gates."""
+    state = _base_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "pr-review-snapshot",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert "lifecycle_labels_exclusive" not in value["gates"]
+    assert "project_status_known" not in value["gates"]
+
+
+# --- Preflight disposition tests ---
+
+
+def test_preflight_pass_disposition_allows_continuation(tmp_path: Path) -> None:
+    """Pass disposition must set workflow_may_continue and write_actions_allowed."""
+    state = _base_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    d = json.loads(result.stdout)["disposition"]
+    assert d["status"] == "pass"
+    assert d["disposition"] == "proceed"
+    assert d["workflow_may_continue"] is True
+    assert d["write_actions_allowed"] is True
+    assert d["auto_remediation_allowed"] is False
+    assert d["maintainer_action_required"] is False
+    assert d["failed_gates"] == []
+
+
+def test_preflight_fail_disposition_forbids_writes(tmp_path: Path) -> None:
+    """Lifecycle conflict produces fail disposition with no write permission."""
+    state = _base_state()
+    state["issues"]["70"]["labels"] = [
+        {"name": "type:task"},
+        {"name": "codex:ready"},
+        {"name": "codex:needs-spec"},
+    ]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    d = json.loads(result.stdout)["disposition"]
+    assert d["status"] == "fail"
+    assert d["disposition"] == "stop"
+    assert d["workflow_may_continue"] is False
+    assert d["write_actions_allowed"] is False
+    assert d["auto_remediation_allowed"] is False
+    assert d["maintainer_action_required"] is True
+    assert len(d["failed_gates"]) >= 1
+    assert any("lifecycle" in g["gate"] for g in d["failed_gates"])
+
+
+def test_preflight_identity_conflict_forbids_writes(tmp_path: Path) -> None:
+    """identity mismatch produces fail disposition with no write permission."""
+    state = _base_state()
+    state["issues"]["70"]["projectItems"] = [{"status": {"name": "Review"}}]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    d = json.loads(result.stdout)["disposition"]
+    assert d["status"] == "fail"
+    assert d["workflow_may_continue"] is False
+    assert d["write_actions_allowed"] is False
+
+
+# --- Worktree compatibility tests ---
+
+
+def _dirty_state(status_entries: list[str] | None = None) -> dict[str, Any]:
+    state = _base_state()
+    if status_entries is None:
+        status_entries = [" M tools/agent_workflow/workflow_evidence.py"]
+    state["status"] = status_entries
+    return state
+
+
+def test_worktree_delivery_start_allows_task_dirty(tmp_path: Path) -> None:
+    """delivery-start with Task-owned dirty worktree → pass."""
+    state = _dirty_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    gate = value["gates"]["worktree_state_compatible"]
+    assert gate["status"] == "pass"
+    assert gate["observed_clean"] is False
+    assert gate["dirty_allowed"] is True
+    assert gate["worktree_disposition"] == "continue-through-implementation"
+    assert value["disposition"]["status"] == "pass"
+    assert value["disposition"]["workflow_may_continue"] is True
+
+
+def test_worktree_implementation_allows_task_dirty(tmp_path: Path) -> None:
+    """implementation with Task-owned dirty worktree → pass."""
+    state = _dirty_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "implementation",
+        "--branch",
+        "task-70",
+        "--expected-base-sha",
+        SHA40,
+    )
+    assert result.returncode == 0, result.stderr
+    gate = json.loads(result.stdout)["gates"]["worktree_state_compatible"]
+    assert gate["status"] == "pass"
+    assert gate["dirty_allowed"] is True
+
+
+def test_worktree_final_validation_rejects_dirty(tmp_path: Path) -> None:
+    """final-validation + dirty worktree → fail (stop)."""
+    state = _dirty_state()
+    state["local_branch_tips"] = {"task-70": "4" * 40}
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "final-validation",
+        "--branch",
+        "task-70",
+        "--expected-base-sha",
+        SHA40,
+        "--expected-head-sha",
+        "4" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    gate = value["gates"]["worktree_state_compatible"]
+    assert gate["status"] == "fail"
+    assert gate["dirty_allowed"] is False
+    assert "clean committed head" in gate["detail"].casefold()
+    assert value["disposition"]["workflow_may_continue"] is False
+
+
+def test_worktree_pr_readiness_rejects_dirty(tmp_path: Path) -> None:
+    """pr-readiness + dirty worktree → fail (stop)."""
+    state = _dirty_state()
+    state["local_branch_tips"] = {"task-70": "4" * 40}
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "pr-readiness",
+        "--branch",
+        "task-70",
+        "--expected-base-sha",
+        SHA40,
+        "--expected-head-sha",
+        "4" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    gate = json.loads(result.stdout)["gates"]["worktree_state_compatible"]
+    assert gate["status"] == "fail"
+    assert gate["dirty_allowed"] is False
+
+
+def test_worktree_review_remediation_rejects_dirty(tmp_path: Path) -> None:
+    """review-remediation + dirty worktree → fail-closed."""
+    state = _dirty_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "review-remediation",
+        "--pr",
+        "71",
+        "--expected-base-sha",
+        SHA40,
+        "--expected-head-sha",
+        "4" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    gate = json.loads(result.stdout)["gates"]["worktree_state_compatible"]
+    assert gate["status"] == "fail"
+    assert gate["dirty_allowed"] is False
+
+
+def test_worktree_clean_passes_all_entry_points(tmp_path: Path) -> None:
+    """Clean worktree always passes regardless of entry point."""
+    for index, entry_point in enumerate(
+        (
+            "delivery-start",
+            "implementation",
+            "final-validation",
+            "pr-readiness",
+            "review-remediation",
+        ),
+    ):
+        extra: list[str] = []
+        if entry_point in ("implementation", "final-validation", "pr-readiness"):
+            extra = ["--branch", "task-70", "--expected-base-sha", SHA40]
+        if entry_point in ("final-validation", "pr-readiness"):
+            extra.extend(["--expected-head-sha", "4" * 40])
+        if entry_point == "review-remediation":
+            extra = [
+                "--pr",
+                "71",
+                "--expected-base-sha",
+                SHA40,
+                "--expected-head-sha",
+                "4" * 40,
+            ]
+        state = _base_state()
+        case_dir = tmp_path / str(index)
+        case_dir.mkdir()
+        repo, _, env = _write_repo(case_dir, state)
+        result = _run(
+            repo,
+            env,
+            "delivery-preflight",
+            "--task",
+            "70",
+            "--expected-main-sha",
+            SHA40,
+            "--entry-point",
+            entry_point,
+            *extra,
+        )
+        assert result.returncode == 0, result.stderr
+        gate = json.loads(result.stdout)["gates"]["worktree_state_compatible"]
+        assert gate["status"] == "pass", f"unexpected fail for {entry_point}"
+        assert gate["observed_clean"] is True
+
+
+def test_worktree_disposition_includes_detailed_observations(
+    tmp_path: Path,
+) -> None:
+    """Dirty-allowed Preflight records staged/changed/untracked details."""
+    state = _dirty_state()
+    state["staged"] = ["staged_file.py"]
+    state["changed"] = ["changed_file.py"]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    gate = json.loads(result.stdout)["gates"]["worktree_state_compatible"]
+    assert "staged_files" in gate
+    assert "changed_files" in gate
+
+
+def test_preflight_has_no_legacy_worktree_clean_gate(tmp_path: Path) -> None:
+    """worktree_clean gate must be replaced by worktree_state_compatible."""
+    state = _base_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    gates = json.loads(result.stdout)["gates"]
+    assert "worktree_clean" not in gates
+    assert "worktree_state_compatible" in gates
+
+
+def test_preflight_disposition_partial_on_unknown_gate(tmp_path: Path) -> None:
+    """Unknown critical gate (e.g. missing issue) → partial disposition stop."""
+    state = _base_state()
+    del state["issues"]["70"]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    d = json.loads(result.stdout)["disposition"]
+    assert d["disposition"] == "stop"
+    assert d["workflow_may_continue"] is False
+    assert d["write_actions_allowed"] is False
+
+
+def test_preflight_blocked_label_forbids_continuation(tmp_path: Path) -> None:
+    """codex:blocked label → fail disposition."""
+    state = _base_state()
+    state["issues"]["70"]["labels"] = [
+        {"name": "type:task"},
+        {"name": "codex:blocked"},
+    ]
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    d = json.loads(result.stdout)["disposition"]
+    assert d["workflow_may_continue"] is False
+    assert d["write_actions_allowed"] is False
+
+
+def test_preflight_closed_parent_forbids_continuation(tmp_path: Path) -> None:
+    """Closed parent → fail disposition forbidding writes."""
+    state = _base_state()
+    state["relationships"]["parent"] = {
+        "number": 62,
+        "title": "[Feature] Closed",
+        "state": "CLOSED",
+    }
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    d = json.loads(result.stdout)["disposition"]
+    assert d["workflow_may_continue"] is False
+    assert d["write_actions_allowed"] is False
+
+
+def test_preflight_compact_digest_includes_disposition(
+    tmp_path: Path,
+) -> None:
+    """Compact digest schema includes explicit disposition field."""
+    state = _base_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert "disposition" in value
+    d = value["disposition"]
+    for key in (
+        "status",
+        "disposition",
+        "workflow_may_continue",
+        "write_actions_allowed",
+        "auto_remediation_allowed",
+        "maintainer_action_required",
+        "failed_gates",
+    ):
+        assert key in d, f"disposition missing key: {key}"

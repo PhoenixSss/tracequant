@@ -28,15 +28,17 @@ Expected main SHA: <当前 main SHA>
 ```
 
 The Feature number is the primary key; the current Issue title is canonical.
-A request may limit execution to one named Phase. Verify prior Phase facts and
-stop at the requested boundary.
+A request may limit execution to one named Phase. Verify prior Phase facts using
+the same audit operations that Phase would have produced
+(`feature-audit-snapshot` for identity/children, `feature-audit-recheck` for
+stability) — do not substitute direct `gh` or `git` queries — and stop at the
+requested boundary.
 
 ## Policies and audit interface
 
 Read applicable `AGENTS.md` / `AGENTS.override.md` and:
 
 ```text
-.agents/policies/command-execution.md
 .agents/policies/workflow-evidence.md
 ```
 
@@ -57,6 +59,47 @@ completion proof.
 
 For `partial`, `unknown`, `fail`, truncation, schema mismatch, or drift, inspect
 only the named facts or failed commands and preserve the original status.
+
+## Execution model
+
+Claude Code executes commands directly in the user's shell environment — there
+is no sandbox isolation layer. Git, `gh`, Python, subprocess, network, and
+filesystem access all work natively. The Codex Guardian sandbox/elevated routing
+model does not apply.
+
+Runner commands are deterministic Python CLI tools invoked from the repository
+root on the WSL2 Linux filesystem. Each Runner call is a single Bash tool
+invocation.
+
+The Bash tool itself may prompt for user approval on first use. To suppress
+these prompts for the documented Runner invocations, pre-authorize in
+`.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(tools/agent_workflow/wsl2_github_evidence_runner.py *)",
+      "Bash(tools/agent_workflow/wsl2_validation_runner.py *)"
+    ]
+  }
+}
+```
+
+Runner commands can fail, but not because of sandbox restrictions. Read the
+Runner's own output to classify:
+
+- `pass`: all commands succeeded, inspect the compact digest.
+- `fail`: one or more commands returned non-zero. Read the named failure
+  artifact before deciding how to proceed.
+- `blocked`: a Runner precondition failed (e.g. unclean worktree, wrong branch,
+  wrong cwd, identity mismatch). Fix the precondition; do not retry with
+  different arguments.
+- `partial` / `unknown`: bounded diagnostics in the artifact — inspect only the
+  named gates.
+
+Never fall back to an equivalent direct command chain after a Runner result.
+Never retry a Runner command with modified arguments to work around a failure.
 
 ## Permission boundary
 

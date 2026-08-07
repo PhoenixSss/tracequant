@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Final
 
 SCHEMA_VERSION: Final = 1
-RUNNER_VERSION: Final = "1.1.0"
+RUNNER_VERSION: Final = "1.3.0"
 REPOSITORY: Final = "PhoenixSss/quant-system"
 OUTPUT_ROOT: Final = ".agents/evidence.local/wsl2-github-runs"
 RUNNER_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_runner.py"
@@ -26,11 +26,54 @@ SPEC_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_profiles.json"
 RULES_PATH: Final = ".codex/rules/quant-system-wsl-evidence.rules"
 EVIDENCE_TOOL_PATH: Final = "tools/agent_workflow/workflow_evidence.py"
 COMMON_TOOL_PATH: Final = "tools/agent_workflow/workflow_common.py"
-TRUSTED_BUNDLE_ROOT_ENV: Final = "WORKFLOW_TRUSTED_BUNDLE_ROOT"
-TARGET_REPO_ROOT_ENV: Final = "WORKFLOW_TARGET_REPO_ROOT"
 STDIO_LIMIT_BYTES: Final = 8192
 SHA_PATTERN: Final = re.compile(r"^[0-9a-f]{40}$")
 SNAPSHOT_ID_PATTERN: Final = re.compile(r"^ev-[0-9a-f]{16}$")
+BRANCH_NAME_PATTERN: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$")
+DELIVERY_ENTRY_POINTS: Final = (
+    "delivery-start",
+    "implementation",
+    "final-validation",
+    "pr-readiness",
+    "review-remediation",
+)
+DELIVERY_ENTRY_PARAMS: Final = {
+    "delivery-start": frozenset({"task", "expected_main_sha"}),
+    "implementation": frozenset(
+        {"task", "expected_main_sha", "branch", "expected_base_sha"}
+    ),
+    "final-validation": frozenset(
+        {
+            "task",
+            "expected_main_sha",
+            "branch",
+            "expected_base_sha",
+            "expected_head_sha",
+        }
+    ),
+    "pr-readiness": frozenset(
+        {
+            "task",
+            "expected_main_sha",
+            "branch",
+            "expected_base_sha",
+            "expected_head_sha",
+        }
+    ),
+    "review-remediation": frozenset(
+        {"task", "expected_main_sha", "pr", "expected_base_sha", "expected_head_sha"}
+    ),
+}
+DELIVERY_PARAM_SPACE: Final = frozenset(
+    {
+        "task",
+        "expected_main_sha",
+        "branch",
+        "pr",
+        "expected_base_sha",
+        "expected_head_sha",
+    }
+)
 REPOSITORY_PATTERN: Final = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 WINDOWS_PATH_PATTERN: Final = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s\"']+")
 POSIX_PATH_PATTERN: Final = re.compile(r"(?<![:/A-Za-z0-9])/(?!/)[^\s\"']+")
@@ -42,7 +85,7 @@ SENSITIVE_PATTERNS: Final = (
         r"(?i)(authorization|cookie|api[_-]?key|token|password|secret)\s*[:=]\s*\S+"
     ),
 )
-TRUSTED_PATHS: Final = (
+IDENTITY_PATHS: Final = (
     RUNNER_PATH,
     SPEC_PATH,
     RULES_PATH,
@@ -67,13 +110,20 @@ ALLOWED_ENV: Final = (
     "https_proxy",
     "all_proxy",
     "no_proxy",
-    "WORKFLOW_TRUSTED_RUNNER_SHA",
-    "WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256",
-    TRUSTED_BUNDLE_ROOT_ENV,
-    TARGET_REPO_ROOT_ENV,
 )
 CANONICAL_PROFILES: Final[dict[str, tuple[str, tuple[str, ...]]]] = {
-    "delivery": ("delivery-preflight", ("task", "expected_main_sha")),
+    "delivery": (
+        "delivery-preflight",
+        (
+            "task",
+            "expected_main_sha",
+            "entry_point",
+            "branch",
+            "pr",
+            "expected_base_sha",
+            "expected_head_sha",
+        ),
+    ),
     "delivery-readiness": (
         "delivery-readiness",
         ("task", "pr", "expected_base_sha", "expected_head_sha"),
@@ -185,99 +235,20 @@ def _run(
     )
 
 
-def _run_bytes(
-    argv: Sequence[str], repo_root: Path
-) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(
-        [str(item) for item in argv],
-        cwd=repo_root,
-        check=False,
-        capture_output=True,
-        env=_command_env(),
-    )
-
-
-def _read_tracked_file(repo_root: Path, relative_path: str) -> bytes:
+def _read_current_file(repo_root: Path, relative_path: str) -> bytes:
     path = repo_root / relative_path
     if path.is_symlink():
-        raise RunnerError(f"trusted file must not be a symlink: {relative_path}")
+        raise RunnerError(f"workflow file must not be a symlink: {relative_path}")
     try:
-        actual = path.read_bytes()
+        return path.read_bytes()
     except FileNotFoundError as exc:
-        raise RunnerError(f"required trusted file is missing: {relative_path}") from exc
-    for argv, label in (
-        (("git", "diff", "--quiet", "--", relative_path), "working tree"),
-        (("git", "diff", "--cached", "--quiet", "--", relative_path), "index"),
-    ):
-        result = _run_bytes(argv, repo_root)
-        if result.returncode == 1:
-            raise RunnerError(
-                f"trusted file differs from HEAD in the {label}: {relative_path}"
-            )
-        if result.returncode != 0:
-            error = _redact(result.stderr.decode("utf-8", errors="replace")).strip()
-            raise RunnerError(f"unable to verify trusted file {relative_path}: {error}")
-    head = _run_bytes(("git", "show", f"HEAD:{relative_path}"), repo_root)
-    if head.returncode != 0:
-        raise RunnerError(f"trusted file is not tracked at HEAD: {relative_path}")
-    if actual != head.stdout:
-        raise RunnerError(f"trusted file content does not match HEAD: {relative_path}")
-    return actual
+        raise RunnerError(
+            f"required workflow file is missing: {relative_path}"
+        ) from exc
 
 
-def _bundle_root(repo_root: Path) -> Path | None:
-    raw = os.environ.get(TRUSTED_BUNDLE_ROOT_ENV)
-    if raw is None:
-        return None
-    root = Path(raw).resolve()
-    allowed_root = (repo_root / ".agents/evidence.local/trusted").resolve()
-    if not root.is_relative_to(allowed_root):
-        raise RunnerError("trusted bundle must be below .agents/evidence.local/trusted")
-    return root
-
-
-def _read_bundle_inputs(repo_root: Path, bundle_root: Path) -> dict[str, bytes]:
-    manifest_path = bundle_root / "manifest.json"
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RunnerError("trusted bundle manifest is missing or invalid") from exc
-    expected_sha = os.environ.get("WORKFLOW_TRUSTED_RUNNER_SHA")
-    if (
-        not isinstance(manifest, dict)
-        or manifest.get("schema_version") != 2
-        or manifest.get("tool") != "evidence-runner"
-        or manifest.get("trusted_sha") != expected_sha
-    ):
-        raise RunnerError("trusted evidence-runner bundle identity is invalid")
-    hashes = manifest.get("files")
-    if not isinstance(hashes, dict) or set(hashes) != set(TRUSTED_PATHS):
-        raise RunnerError("trusted evidence-runner bundle file set is invalid")
-    payloads: dict[str, bytes] = {}
-    for relative_path in TRUSTED_PATHS:
-        source = bundle_root / relative_path
-        if source.is_symlink():
-            raise RunnerError(
-                f"trusted bundle file must not be a symlink: {relative_path}"
-            )
-        try:
-            payload = source.read_bytes()
-        except FileNotFoundError as exc:
-            raise RunnerError(
-                f"trusted bundle file is missing: {relative_path}"
-            ) from exc
-        if _sha256_bytes(payload) != hashes.get(relative_path):
-            raise RunnerError(f"trusted bundle file digest mismatch: {relative_path}")
-        payloads[relative_path] = payload
-    return payloads
-
-
-def _load_trusted_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str]]:
-    bundle_root = _bundle_root(repo_root)
-    if bundle_root is None:
-        payloads = {path: _read_tracked_file(repo_root, path) for path in TRUSTED_PATHS}
-    else:
-        payloads = _read_bundle_inputs(repo_root, bundle_root)
+def _load_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str]]:
+    payloads = {path: _read_current_file(repo_root, path) for path in IDENTITY_PATHS}
     try:
         spec = json.loads(payloads[SPEC_PATH].decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -286,6 +257,56 @@ def _load_trusted_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str
         raise RunnerError("profile specification must be a JSON object")
     _validate_spec(spec)
     return spec, {path: _sha256_bytes(payload) for path, payload in payloads.items()}
+
+
+ALLOWED_SKILL_ROOTS: Final = (".agents/skills/", ".claude/skills/")
+SKILL_FILENAME: Final = "SKILL.md"
+
+
+def _resolve_skill_identity(
+    repo_root: Path,
+    profile: str,
+    caller_skill_path: str | None,
+) -> dict[str, str] | None:
+    """Resolve the actual Skill identity for this Runner invocation.
+
+    When *caller_skill_path* is provided (the caller's own Skill path), the
+    Runner validates it, re-hashes the content, and records the actual path and
+    platform.  When absent the Runner falls back to the ``.agents`` path for the
+    profile — the historical default for Codex callers that do not yet supply
+    --skill-path.
+    """
+    mapping = {
+        "delivery": ".agents/skills/task-delivery-runner/SKILL.md",
+        "delivery-readiness": ".agents/skills/task-delivery-runner/SKILL.md",
+        "review": ".agents/skills/task-pr-review-runner/SKILL.md",
+        "pre-merge": ".agents/skills/task-pr-review-runner/SKILL.md",
+        "closeout-readonly": ".agents/skills/task-closeout/SKILL.md",
+    }
+
+    if caller_skill_path is not None:
+        normalized = caller_skill_path.replace("\\", "/")
+        if not normalized.endswith(f"/{SKILL_FILENAME}"):
+            raise RunnerError(
+                f"--skill-path must end with SKILL.md, got: {caller_skill_path!r}"
+            )
+        if ".." in normalized or normalized.startswith("/"):
+            raise RunnerError(
+                f"--skill-path must be a repo-relative path: {caller_skill_path!r}"
+            )
+        if not any(normalized.startswith(root) for root in ALLOWED_SKILL_ROOTS):
+            raise RunnerError(
+                f"--skill-path must start with one of {ALLOWED_SKILL_ROOTS}: "
+                f"{caller_skill_path!r}"
+            )
+        payload = _read_current_file(repo_root, normalized)
+        return {"path": normalized, "sha256": _sha256_bytes(payload)}
+
+    relative_path = mapping.get(profile)
+    if relative_path is None:
+        return None
+    payload = _read_current_file(repo_root, relative_path)
+    return {"path": relative_path, "sha256": _sha256_bytes(payload)}
 
 
 def _validate_spec(spec: Mapping[str, Any]) -> None:
@@ -323,20 +344,10 @@ def _parse_repository_slug(remote: str) -> str | None:
 def _find_repo_root(script_path: Path) -> Path:
     if script_path.is_symlink():
         raise RunnerError("runner entry must not be invoked through a symlink")
-    target_root = os.environ.get(TARGET_REPO_ROOT_ENV)
-    if target_root is None:
-        repo_root = script_path.resolve().parents[2]
-        expected = repo_root / RUNNER_PATH
-        if script_path.resolve() != expected.resolve():
-            raise RunnerError("runner entry path is not the trusted repository entry")
-    else:
-        repo_root = Path(target_root).resolve()
-        bundle_root = _bundle_root(repo_root)
-        if bundle_root is None:
-            raise RunnerError("trusted runner target requires a trusted bundle")
-        expected = bundle_root / RUNNER_PATH
-        if script_path.resolve() != expected.resolve():
-            raise RunnerError("runner entry path is not the trusted bundle entry")
+    repo_root = script_path.resolve().parents[2]
+    expected = repo_root / RUNNER_PATH
+    if script_path.resolve() != expected.resolve():
+        raise RunnerError("runner entry path is not the repository entry")
     if Path.cwd().resolve() != repo_root.resolve():
         raise RunnerError("runner must be started from the repository root")
     if repo_root.resolve().as_posix().startswith("/mnt/"):
@@ -397,6 +408,33 @@ def _snapshot_id(value: str) -> str:
     return value
 
 
+def _branch_name(value: str) -> str:
+    if (
+        not BRANCH_NAME_PATTERN.fullmatch(value)
+        or ".." in value
+        or "@{" in value
+        or value.endswith(".")
+        or value.endswith("/")
+        or value.endswith(".lock")
+    ):
+        raise argparse.ArgumentTypeError("must be a valid Git branch name")
+    return value
+
+
+def _validate_delivery_contract(args: argparse.Namespace) -> None:
+    allowed = DELIVERY_ENTRY_PARAMS[args.entry_point]
+    supplied = {
+        name for name in DELIVERY_PARAM_SPACE if getattr(args, name, None) is not None
+    }
+    missing = sorted(allowed - supplied)
+    extra = sorted(supplied - allowed)
+    if missing or extra:
+        raise RunnerError(
+            f"delivery entry-point {args.entry_point} parameter contract violation: "
+            f"missing={missing or 'none'} extra={extra or 'none'}"
+        )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Collect fixed, read-only GitHub and Git workflow evidence."
@@ -406,22 +444,57 @@ def _build_parser() -> argparse.ArgumentParser:
     delivery = sub.add_parser("delivery")
     delivery.add_argument("--task", type=_positive_int, required=True)
     delivery.add_argument("--expected-main-sha", type=_sha, required=True)
+    delivery.add_argument(
+        "--entry-point",
+        default="delivery-start",
+        choices=list(DELIVERY_ENTRY_POINTS),
+        help="stable semantic entry point for this delivery invocation",
+    )
+    delivery.add_argument("--branch", type=_branch_name)
+    delivery.add_argument("--expected-base-sha", type=_sha)
+    delivery.add_argument("--expected-head-sha", type=_sha)
+    delivery.add_argument("--pr", type=_positive_int)
 
     for name in ("delivery-readiness", "review", "pre-merge"):
-        item = sub.add_parser(name)
-        item.add_argument("--task", type=_positive_int, required=True)
-        item.add_argument("--pr", type=_positive_int, required=True)
-        item.add_argument("--expected-base-sha", type=_sha, required=True)
-        item.add_argument("--expected-head-sha", type=_sha, required=True)
+        subp = sub.add_parser(name)
+        subp.add_argument("--task", type=_positive_int, required=True)
+        subp.add_argument("--pr", type=_positive_int, required=True)
+        subp.add_argument("--expected-base-sha", type=_sha, required=True)
+        subp.add_argument("--expected-head-sha", type=_sha, required=True)
+        subp.add_argument(
+            "--skill-path",
+            type=str,
+            default=None,
+            help="repo-relative path to the calling Skill's SKILL.md",
+        )
 
     closeout = sub.add_parser("closeout-readonly")
     closeout.add_argument("--task", type=_positive_int, required=True)
     closeout.add_argument("--pr", type=_positive_int, required=True)
     closeout.add_argument("--expected-head-sha", type=_sha, required=True)
     closeout.add_argument("--expected-merge-sha", type=_sha, required=True)
+    closeout.add_argument(
+        "--skill-path",
+        type=str,
+        default=None,
+        help="repo-relative path to the calling Skill's SKILL.md",
+    )
 
     recheck = sub.add_parser("recheck")
     recheck.add_argument("--snapshot-id", type=_snapshot_id, required=True)
+    recheck.add_argument(
+        "--skill-path",
+        type=str,
+        default=None,
+        help="repo-relative path to the calling Skill's SKILL.md",
+    )
+
+    delivery.add_argument(
+        "--skill-path",
+        type=str,
+        default=None,
+        help="repo-relative path to the calling Skill's SKILL.md",
+    )
     return parser
 
 
@@ -430,7 +503,7 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
     operation = CANONICAL_PROFILES[profile][0]
     base = [
         sys.executable,
-        str((_bundle_root(repo_root) or repo_root) / EVIDENCE_TOOL_PATH),
+        str(repo_root / EVIDENCE_TOOL_PATH),
     ]
     if profile == "recheck":
         snapshot_path = (
@@ -495,7 +568,22 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
         str(args.task),
     ]
     if profile == "delivery":
-        result.extend(["--expected-main-sha", args.expected_main_sha])
+        result.extend(
+            [
+                "--entry-point",
+                args.entry_point,
+                "--expected-main-sha",
+                args.expected_main_sha,
+            ]
+        )
+        if args.branch is not None:
+            result.extend(["--branch", args.branch])
+        if args.expected_base_sha is not None:
+            result.extend(["--expected-base-sha", args.expected_base_sha])
+        if args.expected_head_sha is not None:
+            result.extend(["--expected-head-sha", args.expected_head_sha])
+        if args.pr is not None:
+            result.extend(["--pr", str(args.pr)])
     elif profile in {"delivery-readiness", "review", "pre-merge"}:
         result.extend(
             [
@@ -600,7 +688,9 @@ def _remote_refs(
 def _compact_result(
     snapshot: Mapping[str, Any],
     *,
+    repo_root: Path,
     profile: str,
+    caller_skill_path: str | None,
     status: str,
     status_details: Mapping[str, Any],
     started_at: datetime,
@@ -608,7 +698,6 @@ def _compact_result(
     run_id: str,
     result_path: str,
     integrity: Mapping[str, str],
-    trusted_bundle: bool,
     remote_refs: Mapping[str, Any],
     remote_warnings: Sequence[str],
 ) -> dict[str, Any]:
@@ -639,12 +728,17 @@ def _compact_result(
     }
     subject = snapshot.get("subject")
     subject = subject if isinstance(subject, dict) else {}
+    preflight_disposition = snapshot.get("disposition")
+    preflight_disposition = (
+        preflight_disposition if isinstance(preflight_disposition, dict) else None
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "runner_version": RUNNER_VERSION,
         "profile": profile,
         "status": status,
         "partial": status == "partial",
+        "disposition": preflight_disposition,
         "started_at": started_at.isoformat(),
         "duration_ms": duration_ms,
         "identity": {
@@ -725,12 +819,11 @@ def _compact_result(
             "raw_api_responses_committed": False,
         },
         "integrity": {
-            "verification": (
-                "trusted-commit-bundle-pre-execution"
-                if trusted_bundle
-                else "tracked-head-pre-execution"
-            ),
-            "trusted_files": dict(integrity),
+            "verification": "current-worktree-content",
+            "repository_head_sha": git.get("head_sha"),
+            "repository_clean": git.get("clean"),
+            "files": dict(integrity),
+            "skill": _resolve_skill_identity(repo_root, profile, caller_skill_path),
         },
     }
 
@@ -743,9 +836,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.profile == "delivery":
+            _validate_delivery_contract(args)
         repo_root = _find_repo_root(Path(__file__))
-        _, trusted_hashes = _load_trusted_inputs(repo_root)
+        _, content_hashes = _load_inputs(repo_root)
         _require_output_root_ignored(repo_root)
+        # Validate --skill-path early (before any GitHub queries)
+        _resolve_skill_identity(repo_root, args.profile, args.skill_path)
         command = _evidence_argv(args, repo_root)
         started_at = datetime.now(UTC)
         started = time.monotonic()
@@ -774,12 +871,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise RunnerError("workflow evidence result is not a JSON object")
 
         pr_value = snapshot.get("observed", {}).get("pr")
-        head_branch = (
-            pr_value.get("head_branch") if isinstance(pr_value, dict) else None
-        )
-        remote_refs, remote_warnings = _remote_refs(
-            repo_root, head_branch=head_branch if isinstance(head_branch, str) else None
-        )
+        head_branch: str | None = None
+        if isinstance(pr_value, dict):
+            head_branch = (
+                pr_value.get("head_branch")
+                if isinstance(pr_value.get("head_branch"), str)
+                else None
+            )
+        if head_branch is None and args.profile == "delivery":
+            head_branch = getattr(args, "branch", None)
+            head_branch = head_branch if isinstance(head_branch, str) else None
+        remote_refs, remote_warnings = _remote_refs(repo_root, head_branch=head_branch)
         status, status_details = _derive_status(snapshot)
         status_details = dict(status_details)
         observed_value = snapshot.get("observed")
@@ -811,15 +913,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         duration_ms = round((time.monotonic() - started) * 1000)
         result = _compact_result(
             snapshot,
+            repo_root=repo_root,
             profile=args.profile,
+            caller_skill_path=args.skill_path,
             status=status,
             status_details=status_details,
             started_at=started_at,
             duration_ms=duration_ms,
             run_id=run_id,
             result_path=result_path.relative_to(repo_root).as_posix(),
-            integrity=trusted_hashes,
-            trusted_bundle=_bundle_root(repo_root) is not None,
+            integrity=content_hashes,
             remote_refs=remote_refs,
             remote_warnings=remote_warnings,
         )
@@ -833,12 +936,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         payload = _json_dumps(result, pretty=True).encode("utf-8")
         _atomic_write(result_path, payload)
         result_sha = _sha256_bytes(payload)
+        subject_value = snapshot.get("subject")
+        subject_value = subject_value if isinstance(subject_value, dict) else {}
         compact = {
             "api_calls": result.get("evidence", {})
             .get("operations", {})
             .get("github_queries"),
             "base_sha": result["identity"]["base_sha"],
+            "disposition": (
+                result["disposition"]["disposition"]
+                if isinstance(result.get("disposition"), dict)
+                else None
+            ),
             "duration_ms": duration_ms,
+            "entry_point": subject_value.get("entry_point"),
             "head_sha": result["identity"]["head_sha"],
             "partial": result["partial"],
             "pr": result["identity"]["pr"],
@@ -849,6 +960,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             "status": status,
             "task": result["identity"]["task"],
             "unknown_gate_count": status_details.get("unknown", 0),
+            "workflow_may_continue": (
+                result["disposition"]["workflow_may_continue"]
+                if isinstance(result.get("disposition"), dict)
+                else None
+            ),
+            "write_actions_allowed": (
+                result["disposition"]["write_actions_allowed"]
+                if isinstance(result.get("disposition"), dict)
+                else None
+            ),
         }
         print(_json_dumps(compact), end="")
         return _exit_code(status)

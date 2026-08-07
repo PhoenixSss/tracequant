@@ -12,7 +12,7 @@ import pytest
 
 ROOT = Path(__file__).parents[2]
 RUNNER_REL = Path("tools/agent_workflow/wsl2_github_evidence_runner.py")
-TRUSTED_FILES = (
+IDENTITY_FILES = (
     RUNNER_REL,
     Path("tools/agent_workflow/wsl2_github_evidence_profiles.json"),
     Path(".codex/rules/quant-system-wsl-evidence.rules"),
@@ -23,7 +23,7 @@ REAL_GIT_OPTIONAL = shutil.which("git")
 assert REAL_GIT_OPTIONAL is not None
 REAL_GIT: str = REAL_GIT_OPTIONAL
 PYTHON = os.environ.get("WORKFLOW_TEST_PYTHON", sys.executable)
-TRUSTED_ENV_KEYS = (
+REMOVED_TRUSTED_ENV_KEYS = (
     "WORKFLOW_TRUSTED_RUNNER_SHA",
     "WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256",
     "WORKFLOW_TRUSTED_BUNDLE_ROOT",
@@ -33,7 +33,7 @@ TRUSTED_ENV_KEYS = (
 
 def _clean_test_env() -> dict[str, str]:
     env = os.environ.copy()
-    for key in TRUSTED_ENV_KEYS:
+    for key in REMOVED_TRUSTED_ENV_KEYS:
         env.pop(key, None)
     return env
 
@@ -237,10 +237,21 @@ def _prepare_repo(
     tmp_path.mkdir(parents=True, exist_ok=True)
     repo = tmp_path / ("repo with space" if with_space else "repo")
     repo.mkdir()
-    for relative in TRUSTED_FILES:
+    for relative in IDENTITY_FILES:
         target = repo / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, target)
+    for skill_dir in (".agents", ".claude"):
+        for skill in (
+            "task-delivery-runner",
+            "task-pr-review-runner",
+            "task-closeout",
+        ):
+            source = ROOT / skill_dir / "skills" / skill / "SKILL.md"
+            target = repo / skill_dir / "skills" / skill / "SKILL.md"
+            if source.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
     (repo / ".gitignore").write_text(
         ".agents/evidence.local/\n.agents/validation.local/\n",
         encoding="utf-8",
@@ -282,7 +293,7 @@ def _run(
     repo: Path, env: dict[str, str], *args: str
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [str(repo / RUNNER_REL), *args],
+        [PYTHON, str(repo / RUNNER_REL), *args],
         cwd=repo,
         env=env,
         check=False,
@@ -398,7 +409,16 @@ def test_review_profile_returns_required_schema_and_compact_digest(
     assert value["git"]["remote_head"] == head_sha
     assert value["git"]["origin_refresh"] == "skipped-read-only"
     assert value["stability"]["snapshot_id"].startswith("ev-")
-    assert value["integrity"]["verification"] == "tracked-head-pre-execution"
+    assert value["integrity"]["verification"] == "current-worktree-content"
+    assert value["integrity"]["repository_head_sha"] == head_sha
+    assert value["integrity"]["repository_clean"] is True
+    assert value["integrity"]["skill"]["path"] == (
+        ".agents/skills/task-pr-review-runner/SKILL.md"
+    )
+    assert value["integrity"]["skill"]["sha256"]
+    assert set(value["integrity"]["files"]) == {
+        path.as_posix() for path in IDENTITY_FILES
+    }
 
 
 @pytest.mark.parametrize("profile", ["delivery-readiness", "review", "pre-merge"])
@@ -411,6 +431,9 @@ def test_task_pr_profiles_are_fixed_and_pass(tmp_path: Path, profile: str) -> No
 
 def test_delivery_profile_is_task_only_and_read_only(tmp_path: Path) -> None:
     repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
     completed = _run(
         repo,
         env,
@@ -572,13 +595,27 @@ def test_unknown_or_injected_arguments_fail_before_subprocess(
     assert not (repo / ".agents/evidence.local/wsl2-github-runs").exists()
 
 
-def test_trusted_file_mutation_fails_before_github(tmp_path: Path) -> None:
+def test_current_profile_content_is_accepted_and_hashed(tmp_path: Path) -> None:
     repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
     spec = repo / "tools/agent_workflow/wsl2_github_evidence_profiles.json"
     spec.write_text(spec.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     completed = _run(repo, env, *_review_args(main_sha, head_sha))
+    assert completed.returncode == 0, completed.stderr
+    value = _result(repo, completed.stdout)
+    assert value["integrity"]["verification"] == "current-worktree-content"
+    assert value["integrity"]["files"][spec.relative_to(repo).as_posix()]
+    assert _calls(state_path.with_name("gh-calls.jsonl"))
+
+
+def test_profile_contract_drift_fails_before_github(tmp_path: Path) -> None:
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    spec_path = repo / "tools/agent_workflow/wsl2_github_evidence_profiles.json"
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    spec["profiles"]["review"]["operation"] = "delivery-preflight"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    completed = _run(repo, env, *_review_args(main_sha, head_sha))
     assert completed.returncode == 2
-    assert "differs from HEAD" in completed.stderr
+    assert "profile operation drift" in completed.stderr
     assert _calls(state_path.with_name("gh-calls.jsonl")) == []
 
 
@@ -600,7 +637,7 @@ def test_wrong_origin_and_symlink_entry_fail_closed(tmp_path: Path) -> None:
     link = repo / "evidence-link"
     link.symlink_to(repo / RUNNER_REL)
     linked = subprocess.run(
-        [str(link), *_review_args(main_sha, head_sha)],
+        [PYTHON, str(link), *_review_args(main_sha, head_sha)],
         cwd=repo,
         env=env,
         check=False,
@@ -813,6 +850,7 @@ def test_live_task_pr_schema() -> None:
     head = os.environ["TASK84_LIVE_HEAD_SHA"]
     completed = subprocess.run(
         [
+            PYTHON,
             str(ROOT / RUNNER_REL),
             "review",
             "--task",
@@ -837,32 +875,428 @@ def test_live_task_pr_schema() -> None:
     assert json.loads(completed.stdout)["task"] == 84
 
 
-def test_trusted_runner_executes_real_evidence_front_door(tmp_path: Path) -> None:
-    repo, _, env, main_sha, head_sha = _prepare_repo(tmp_path)
-    trusted_runner = ROOT / "tools/agent_workflow/trusted_runner.py"
-    completed = subprocess.run(
-        [
-            PYTHON,
-            str(trusted_runner),
-            "--trusted-sha",
-            main_sha,
-            "--tool",
-            "evidence-runner",
-            "--",
-            *_review_args(main_sha, head_sha),
-        ],
-        cwd=repo,
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
+def test_evidence_runner_has_no_removed_trusted_version_interface() -> None:
+    text = (ROOT / RUNNER_REL).read_text(encoding="utf-8")
+    for fragment in (
+        "WORKFLOW_TRUSTED_RUNNER_SHA",
+        "WORKFLOW_TRUSTED_BUNDLE_ROOT",
+        "WORKFLOW_TARGET_REPO_ROOT",
+        "trusted-commit-bundle-pre-execution",
+    ):
+        assert fragment not in text
+    assert not (ROOT / "tools/agent_workflow/trusted_runner.py").exists()
+
+
+# --- Delivery entry-point tests (new) ---
+
+
+def test_delivery_with_entry_point_delivery_start_passes(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "delivery-start",
     )
     assert completed.returncode == 0, completed.stderr
     digest = json.loads(completed.stdout)
-    stored = json.loads((repo / digest["result_path"]).read_text(encoding="utf-8"))
-    assert stored["integrity"]["verification"] == (
-        "trusted-commit-bundle-pre-execution"
+    assert digest["entry_point"] == "delivery-start"
+    assert digest["status"] == "pass"
+
+
+def test_delivery_entry_point_in_compact_digest(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "delivery-start",
     )
-    assert digest["base_sha"] == main_sha
-    assert digest["head_sha"] == head_sha
+    assert completed.returncode == 0, completed.stderr
+    digest = json.loads(completed.stdout)
+    assert digest["entry_point"] == "delivery-start"
+
+
+def test_delivery_lifecycle_conflict_ready_and_needs_spec_returns_fail(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["labels"] = [
+        {"name": "type:task"},
+        {"name": "codex:ready"},
+        {"name": "codex:needs-spec"},
+    ]
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert completed.returncode == 4, completed.stderr
+    value = _result(repo, completed.stdout)
+    assert (
+        "lifecycle_labels_exclusive"
+        in value["evidence"]["gate_summary"]["failed_gates"]
+    )
+
+
+def test_delivery_contract_violation_fails_before_github(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "implementation",
+    )
+    assert completed.returncode == 2
+    assert "parameter contract violation" in completed.stderr
+    assert _calls(state_path.with_name("gh-calls.jsonl")) == []
+    assert not (repo / ".agents/evidence.local/wsl2-github-runs").exists()
+
+
+def test_delivery_contract_extra_param_fails_before_github(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "delivery-start",
+        "--pr",
+        "102",
+    )
+    assert completed.returncode == 2
+    assert "parameter contract violation" in completed.stderr
+    assert _calls(state_path.with_name("gh-calls.jsonl")) == []
+    assert not (repo / ".agents/evidence.local/wsl2-github-runs").exists()
+
+
+def test_delivery_blocked_task_returns_fail(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["labels"] = [
+        {"name": "type:task"},
+        {"name": "codex:blocked"},
+    ]
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert completed.returncode == 4, completed.stderr
+    value = _result(repo, completed.stdout)
+    assert (
+        "label-not:codex:blocked" in value["evidence"]["gate_summary"]["failed_gates"]
+    )
+
+
+def test_delivery_project_status_incompatible_returns_fail(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert completed.returncode == 4, completed.stderr
+    value = _result(repo, completed.stdout)
+    assert "project_status_known" in value["evidence"]["gate_summary"]["failed_gates"]
+
+
+def test_delivery_no_github_write_on_fail(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["labels"] = [
+        {"name": "type:task"},
+        {"name": "codex:ready"},
+        {"name": "codex:needs-spec"},
+    ]
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "delivery-start",
+    )
+    assert completed.returncode == 4
+    gh_calls = _calls(state_path.with_name("gh-calls.jsonl"))
+    mutation_tokens = {"edit", "close", "comment", "merge", "delete", "create"}
+    assert all(not mutation_tokens.intersection(call) for call in gh_calls)
+
+
+# --- Skill identity tests ---
+
+
+def test_review_profile_records_default_agents_skill_path_when_not_provided(
+    tmp_path: Path,
+) -> None:
+    """When --skill-path is omitted the Runner falls back to the .agents path."""
+    repo, _, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    completed = _run(repo, env, *_review_args(main_sha, head_sha))
+    assert completed.returncode == 0, completed.stderr
+    value = _result(repo, completed.stdout)
+    assert value["integrity"]["skill"]["path"] == (
+        ".agents/skills/task-pr-review-runner/SKILL.md"
+    )
+    assert value["integrity"]["skill"]["sha256"]
+
+
+def test_review_profile_records_claude_skill_path_when_provided(
+    tmp_path: Path,
+) -> None:
+    """--skill-path .claude/skills/... is recorded with actual content hash."""
+    repo, _, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    claude_skill_path = ".claude/skills/task-pr-review-runner/SKILL.md"
+    completed = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        claude_skill_path,
+    )
+    assert completed.returncode == 0, completed.stderr
+    value = _result(repo, completed.stdout)
+    assert value["integrity"]["skill"]["path"] == claude_skill_path
+    expected_hash = _sha256_file(repo / claude_skill_path)
+    assert value["integrity"]["skill"]["sha256"] == expected_hash
+
+
+def test_skill_path_outside_allowed_roots_fails_before_github(
+    tmp_path: Path,
+) -> None:
+    """--skill-path must start with .agents/skills/ or .claude/skills/."""
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    completed = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        "tools/agent_workflow/SKILL.md",
+    )
+    assert completed.returncode == 2
+    assert "must start with" in completed.stderr
+    assert _calls(state_path.with_name("gh-calls.jsonl")) == []
+
+
+def test_skill_path_must_end_with_skill_md(
+    tmp_path: Path,
+) -> None:
+    """--skill-path must end with /SKILL.md."""
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    completed = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        ".claude/skills/task-pr-review-runner/README.md",
+    )
+    assert completed.returncode == 2
+    assert "SKILL.md" in completed.stderr
+    assert _calls(state_path.with_name("gh-calls.jsonl")) == []
+
+
+def test_skill_path_with_parent_traversal_fails(
+    tmp_path: Path,
+) -> None:
+    """--skill-path with .. is rejected."""
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    completed = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        ".claude/skills/../skills/task-pr-review-runner/SKILL.md",
+    )
+    assert completed.returncode == 2
+
+
+def test_skill_path_absolute_path_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """--skill-path must be repo-relative, not absolute."""
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    completed = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        "/home/user/.claude/skills/task-pr-review-runner/SKILL.md",
+    )
+    assert completed.returncode == 2
+
+
+def test_recheck_preserves_skill_identity(
+    tmp_path: Path,
+) -> None:
+    """Recheck with --skill-path records the same Skill identity."""
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    claude_skill = ".claude/skills/task-pr-review-runner/SKILL.md"
+    first = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        claude_skill,
+    )
+    assert first.returncode == 0
+    first_digest = json.loads(first.stdout)
+    second = _run(
+        repo,
+        env,
+        "recheck",
+        "--snapshot-id",
+        first_digest["snapshot_id"],
+        "--skill-path",
+        claude_skill,
+    )
+    assert second.returncode == 0, second.stderr
+    value = _result(repo, second.stdout)
+    assert value["integrity"]["skill"]["path"] == claude_skill
+
+
+def test_skill_path_hash_mismatch_detected(
+    tmp_path: Path,
+) -> None:
+    """When Skill content changes, the recorded hash reflects the current file."""
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    skill_path = ".claude/skills/task-pr-review-runner/SKILL.md"
+    skill_file = repo / skill_path
+    original_content = skill_file.read_text(encoding="utf-8")
+    first = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        skill_path,
+    )
+    assert first.returncode == 0
+    first_value = _result(repo, first.stdout)
+    # Modify the Skill file
+    skill_file.write_text(original_content + "\n# drift marker\n", encoding="utf-8")
+    second = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        skill_path,
+    )
+    assert second.returncode == 0
+    second_value = _result(repo, second.stdout)
+    assert (
+        first_value["integrity"]["skill"]["sha256"]
+        != (second_value["integrity"]["skill"]["sha256"])
+    )
+    assert first_value["integrity"]["skill"]["path"] == skill_path
+    assert second_value["integrity"]["skill"]["path"] == skill_path
+
+
+def test_delivery_profile_agents_skill_is_default(
+    tmp_path: Path,
+) -> None:
+    """Delivery profile falls back to .agents path without --skill-path."""
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+    )
+    assert completed.returncode == 0
+    value = _result(repo, completed.stdout)
+    assert ".agents/skills/task-delivery-runner/SKILL.md" in str(
+        value["integrity"]["skill"]["path"]
+    )
+
+
+def test_evidence_partial_has_exit_code_3_not_pass(
+    tmp_path: Path,
+) -> None:
+    """Evidence partial returns exit code 3, distinct from pass (0) and fail (4)."""
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["required_checks_mode"] = "plan-limit-403"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    _sync_remote_files(state_path, state)
+    completed = _run(repo, env, *_review_args(main_sha, head_sha))
+    assert completed.returncode == 3
+    digest = json.loads(completed.stdout)
+    assert digest["status"] == "partial"
+    assert digest["partial"] is True
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
