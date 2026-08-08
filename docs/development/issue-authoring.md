@@ -242,6 +242,11 @@ observable behavior、meaningful edge cases、acceptance、important scope bound
   修复明显 active stale naming；禁止改变产品目标、新增 requirement、删除 safety
   constraint / observable behavior / Non-goal / 重要 edge case、改变 AC 语义、
   根据当前代码重新设计旧 specification、把实现建议升级为 requirement。
+- **Form `type: markdown` guidance 不得进入 Issue body**：Form 顶部的 authoring
+  guidance 只用于创建 Issue 时向作者显示辅助说明（`type: markdown` 不会作为用户
+  输入提交），迁移/shadow conversion 只生成由可提交 form fields 对应的
+  specification 内容；migrated Issue body 必须直接从第一个实际 specification
+  section（`### Outcome` / `### Capability` / `### Objective` 等）开始。
 - 缺失信息（Non-goals、AC、Evidence criteria 等）只能从原正文、current canonical
   parent、明确引用且仍 active 的 ADR / architecture contract 恢复；无法确定时标记
   `NEEDS MAINTAINER REVIEW`，不自动创造 requirement。
