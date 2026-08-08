@@ -61,6 +61,16 @@ Branch cleanup may still use the separate
 `cleanup_eligibility.status = eligible-under-capability-limited-policy`; that
 field authorizes only exact branch cleanup under the conditions below.
 
+## Default context
+
+Normal closeout verifies: Task/PR identity, reviewed head, merge identity,
+CI/review status, Issue/Project lifecycle state, local/origin main, branch
+state, and post-merge validation requirements. It does not default to
+re-reading the complete business Issue hierarchy (Parent/Epic bodies),
+business comments, or full implementation context. Those are read only when
+an explicit anomaly trigger requires it — for example a linkage, closure, or
+merge-identity conflict that the deterministic facts cannot resolve.
+
 ## Permission boundary
 
 After all prerequisite gates pass, this Skill may fetch refs, fast-forward local

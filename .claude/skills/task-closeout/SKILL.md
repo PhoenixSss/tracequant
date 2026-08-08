@@ -104,6 +104,16 @@ Runner's own output to classify:
 Never fall back to an equivalent direct command chain after a Runner result.
 Never retry a Runner command with modified arguments to work around a failure.
 
+## Default context
+
+Normal closeout verifies: Task/PR identity, reviewed head, merge identity,
+CI/review status, Issue/Project lifecycle state, local/origin main, branch
+state, and post-merge validation requirements. It does not default to
+re-reading the complete business Issue hierarchy (Parent/Epic bodies),
+business comments, or full implementation context. Those are read only when
+an explicit anomaly trigger requires it — for example a linkage, closure, or
+merge-identity conflict that the deterministic facts cannot resolve.
+
 ## Permission boundary
 
 After all prerequisite gates pass, this Skill may fetch refs, fast-forward local

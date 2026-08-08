@@ -61,6 +61,9 @@ APPROVED_TELEMETRY_REFERENCE_FILES = {
     "docs/workflows/publication-materials/task-material-register.md": (
         "publication material register retaining historical workflow sample labels"
     ),
+    "docs/workflows/context-retrieval-v2/before-after-retrieval.md": (
+        "#87 retrieval before/after evidence noting Token telemetry remains disabled"
+    ),
 }
 
 LOCAL_ONLY_EXCLUSIONS = {

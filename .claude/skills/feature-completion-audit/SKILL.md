@@ -34,6 +34,15 @@ the same audit operations that Phase would have produced
 stability) — do not substitute direct `gh` or `git` queries — and stop at the
 requested boundary.
 
+## Context acquisition (hierarchy-aware exception)
+
+This audit is a hierarchy-aware flow, not a leaf-Issue-first default: its
+purpose requires the target Feature body, the relevant direct-child Issue
+hierarchy, completion state, and implementation / validation evidence. Read
+what the audit phases below require. Do not default to historical comments,
+unrelated docs/ADRs, the roadmap, sibling Feature history, or general
+workflow reports.
+
 ## Policies and audit interface
 
 Read applicable `AGENTS.md` / `AGENTS.override.md` and:

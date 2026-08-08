@@ -31,6 +31,15 @@ The Feature number is the primary key; the current Issue title is canonical.
 A request may limit execution to one named Phase. Verify prior Phase facts and
 stop at the requested boundary.
 
+## Context acquisition (hierarchy-aware exception)
+
+This audit is a hierarchy-aware flow, not a leaf-Issue-first default: its
+purpose requires the target Feature body, the relevant direct-child Issue
+hierarchy, completion state, and implementation / validation evidence. Read
+what the audit phases below require. Do not default to historical comments,
+unrelated docs/ADRs, the roadmap, sibling Feature history, or general
+workflow reports.
+
 ## Policies and audit interface
 
 Read applicable `AGENTS.md` / `AGENTS.override.md` and:
