@@ -13,7 +13,8 @@ push, or PR creation. Otherwise stop with:
 本会话不能提供独立审查
 ```
 
-A Delivery handoff locates the object but is not correctness evidence.
+A Delivery handoff locates the object but is not correctness evidence
+(no-verdict-inheritance, `docs/development/pr-review.md` §1).
 
 ## Standard invocation
 
@@ -38,6 +39,11 @@ Read applicable agent rules and:
 .agents/policies/command-execution.md
 .agents/policies/workflow-evidence.md
 ```
+
+Shared review semantics (fresh session, head lock, independent judgement,
+verdict semantics, remediation handoff) are owned by
+`docs/development/pr-review.md`. Read the minimal needed section for the
+current phase; do not duplicate review-semantic prose in this Skill.
 
 Use the current repository Runner interfaces in this order:
 
