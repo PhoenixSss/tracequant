@@ -1,92 +1,82 @@
 name: Bug report
-description: 用于报告可复现或可验证的软件缺陷。
+description: 用于报告具有明确实际行为、预期行为和可验证证据的软件缺陷。
 title: "[Bug] "
 labels:
-  - type:bug
-  - codex:needs-spec
+  - "type:bug"
+  - "codex:needs-spec"
 body:
-  - type: textarea
-    id: problem_description
+  - type: markdown
     attributes:
-      label: 问题描述
-      description: 简要说明出现了什么问题。
-    validations:
-      required: true
+      value: |
+        Bug 是可直接对应修复 PR 的 leaf work item，不需要额外 wrapper Task。
+        描述恢复后的系统 contract，而不是只要求“错误消失”。
+        Parent、blocked-by 和 Project metadata 使用 GitHub native state；不要在公开 Issue 中粘贴凭据或敏感运行信息。
+
   - type: textarea
-    id: impact
+    id: observed
     attributes:
-      label: 影响范围
-      description: 描述受影响的模块、数据、流程、用户或交易安全边界。
-    validations:
-      required: true
-  - type: textarea
-    id: reproduction_steps
-    attributes:
-      label: 复现步骤
-      description: 提供可以复现问题的最小步骤。
+      label: Observed
+      description: 描述实际观察到的错误行为、错误状态或违反 contract 的结果。
       placeholder: |
+        实际发生：
+        ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: 描述正确的系统行为或 contract；避免只写“应该不报错”。
+      placeholder: |
+        正确行为应为：
+        ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction_evidence
+    attributes:
+      label: Reproduction / Evidence
+      description: 提供最小复现步骤、失败测试、日志片段、截图或其他足以识别问题的证据；不要包含 credential、token 或 private trading information。
+      placeholder: |
+        复现步骤或证据：
         1. ...
         2. ...
-        3. ...
     validations:
       required: true
-  - type: textarea
-    id: expected_behavior
-    attributes:
-      label: 预期行为
-      description: 描述系统原本应该如何表现。
-    validations:
-      required: true
-  - type: textarea
-    id: actual_behavior
-    attributes:
-      label: 实际行为
-      description: 描述实际观察到的行为。
-    validations:
-      required: true
-  - type: textarea
-    id: environment
-    attributes:
-      label: 环境信息
-      description: 说明操作系统、运行模式、数据范围、配置和相关版本。
-    validations:
-      required: true
-  - type: textarea
-    id: logs
-    attributes:
-      label: 日志或错误信息
-      description: 粘贴相关日志、错误信息或截图说明；不要包含凭据。
-      render: shell
-    validations:
-      required: true
-  - type: textarea
-    id: workaround
-    attributes:
-      label: 临时解决方式
-      description: 如有临时规避方式，请说明；若无，请写“无”。
-    validations:
-      required: true
-  - type: checkboxes
-    id: risk_flags
-    attributes:
-      label: 风险复选项
-      description: 请选择所有相关风险。不要依赖自动风险标签，创建者应后续选择合适标签。
-      options:
-        - label: 数据完整性
-        - label: 未来数据泄漏
-        - label: 实盘交易
-        - label: 凭据安全
-        - label: 订单状态
-        - label: 无上述风险
-    validations:
-      required: true
+
   - type: textarea
     id: acceptance_criteria
     attributes:
-      label: 验收标准
-      description: 描述修复完成后必须满足的可验证条件。
+      label: Acceptance Criteria
+      description: 描述修复后必须恢复的可验证行为，并在适用时覆盖 regression；不要把通用 CI 命令作为验收标准。
       placeholder: |
-        - [ ] ...
         - [ ] ...
     validations:
       required: true
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional defect context
+      description: 可选。仅补充与本缺陷实际相关的信息，例如 Impact、Environment、Logs / Screenshots、Scope Boundary / Non-goals 或特殊 Regression Evidence。
+      placeholder: |
+        仅在需要时填写，例如：
+
+        ### Impact
+        ...
+
+        ### Environment
+        ...
+
+        ### Logs / Screenshots
+        ...
+
+        ### Scope Boundary / Non-goals
+        - ...
+
+        ### Regression Evidence
+        - ...
+    validations:
+      required: false
