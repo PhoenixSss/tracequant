@@ -1,75 +1,101 @@
 name: Research
-description: 用于需要先验证事实、假设、数据或方法的研究任务。
+description: 用于在实施决策前进行证据驱动的调查、比较、验证或可行性研究。
 title: "[Research] "
 labels:
-  - type:research
-  - codex:needs-spec
+  - "type:research"
+  - "codex:needs-spec"
 body:
   - type: markdown
     attributes:
       value: |
-        研究结果必须明确区分：已验证事实、推断、假设、未解决问题。
-        如涉及回测，必须说明数据范围、交易成本、样本外验证和潜在未来数据泄漏。
+        Research 是 evidence / decision leaf work item：当“是否应该实施”仍需要证据时使用；若实现目标已经决定，应创建 Task。
+        研究结果可以是 IMPLEMENT、DO NOT IMPLEMENT、NEEDS MORE EVIDENCE 或 ARCHITECTURE DECISION。
+        Parent、blocked-by 和 Project metadata 使用 GitHub native state。研究正文定义 pre-research specification，不要把完整过程日志永久堆入 Issue body。
+
   - type: textarea
-    id: research_question
+    id: question_decision
     attributes:
-      label: 研究问题
-      description: 用一个清晰问题描述本次研究要回答什么。
+      label: Question / Decision Needed
+      description: 用一个清晰问题或待决事项说明本研究最终必须回答什么。
+      placeholder: |
+        需要回答：
+        ...
     validations:
       required: true
+
   - type: textarea
-    id: background
+    id: context
     attributes:
-      label: 背景
-      description: 说明研究动机、上下文和相关 Issue。
+      label: Context
+      description: 简洁说明为什么现在需要这项研究，以及结论将支持什么后续判断；不要复制大段 Parent 或文档。
+      placeholder: |
+        当前背景：
+        ...
     validations:
       required: true
+
   - type: textarea
-    id: known_facts
+    id: scope
     attributes:
-      label: 已知事实
-      description: 列出现阶段已经确认的事实，并说明来源。
+      label: Scope
+      description: 明确本研究覆盖的系统、方案、数据、时间范围或调查边界。
+      placeholder: |
+        - ...
     validations:
       required: true
+
   - type: textarea
-    id: hypotheses
+    id: non_goals
     attributes:
-      label: 待验证假设
-      description: 列出需要通过数据、实验或文档验证的假设。
+      label: Non-goals
+      description: 明确本研究不包含的实现、调参、生产变更或相邻问题。
+      placeholder: |
+        - ...
     validations:
       required: true
+
   - type: textarea
-    id: data_requirements
+    id: evidence_evaluation
     attributes:
-      label: 数据需求
-      description: 描述所需数据、时间范围、字段、质量要求和数据不可用时的处理方式。
+      label: Evidence / Evaluation Criteria
+      description: 说明需要什么证据，以及如何判断证据足以支持继续、停止、比较方案或形成 decision。
+      placeholder: |
+        - ...
     validations:
       required: true
+
   - type: textarea
-    id: research_method
+    id: expected_outcome_artifact
     attributes:
-      label: 研究方法
-      description: 描述将如何验证事实和假设；涉及回测时说明数据范围、交易成本、样本外验证和潜在未来数据泄漏。
+      label: Expected Outcome / Artifact
+      description: 定义研究完成时应产出的结论或载体，例如 concise recommendation、benchmark result、versioned research report、ADR input 或 follow-up Task。
+      placeholder: |
+        预期结果：
+        - ...
     validations:
       required: true
+
   - type: textarea
-    id: deliverables
+    id: additional_context
     attributes:
-      label: 输出产物
-      description: 列出研究报告、实验记录、数据摘要、图表或后续 Issue。
+      label: Optional research details
+      description: 可选。仅在确实改变研究设计时补充 Hypotheses、Data Requirements、Method、Constraints 或 References；不要为了模板完整填写 N/A。
+      placeholder: |
+        仅在需要时填写，例如：
+
+        ### Hypotheses
+        - ...
+
+        ### Data Requirements
+        - ...
+
+        ### Method
+        - ...
+
+        ### Constraints
+        - ...
+
+        ### References
+        - ...
     validations:
-      required: true
-  - type: textarea
-    id: decision_criteria
-    attributes:
-      label: 判定标准
-      description: 说明什么结果支持继续实现、调整方向或停止投入。
-    validations:
-      required: true
-  - type: textarea
-    id: out_of_scope
-    attributes:
-      label: 范围外
-      description: 明确本研究不包含的实现、调参或生产行为。
-    validations:
-      required: true
+      required: false
