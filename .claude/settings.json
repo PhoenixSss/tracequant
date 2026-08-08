@@ -20,5 +20,9 @@
       "Bash(gh pr view:*)",
       "Bash(gh run list:*)"
     ]
+  },
+  "attribution": {
+    "commit": "",
+    "pr": ""
   }
 }
