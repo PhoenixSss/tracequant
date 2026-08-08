@@ -111,6 +111,53 @@ def test_pr_review_doc_owns_review_semantics() -> None:
         assert marker in text
 
 
+def test_pr_review_doc_has_tri_state_verdict_contract() -> None:
+    text = PR_REVIEW.read_text(encoding="utf-8")
+    # Tri-state verdict contract (aligned with the executable Review Skills).
+    for verdict in ("通过，可以人工合并", "有条件通过，不得合并", "不通过，需要修复"):
+        assert verdict in text
+    # Conditional is explicitly not merge approval.
+    assert "DO NOT MERGE" in text
+    assert "CONDITIONAL" in text
+    # partial / unknown objective gates map to conditional, not to pass.
+    assert "partial" in text
+    assert "unknown" in text
+    # Semantic failure / gate fail / identity drift must not map to conditional.
+    assert "identity drift" in text
+    assert "FAIL" in text
+    # Head change during review is invalidation, not conditional pass.
+    assert "REVIEW INVALIDATED" in text
+    # The binary-era claim that conditional pass does not exist must not return.
+    assert "不产出「conditional pass」" not in text
+
+
+def test_issue_workflow_doc_keeps_identity_locking_and_no_version_gate() -> None:
+    text = ISSUE_WORKFLOW.read_text(encoding="utf-8")
+    # Workflow identity locking is owned by the shared doc.
+    for marker in (
+        "Workflow identity locking",
+        "必须锁定",
+        "不得静默继续",
+        "reviewed head",
+        "merge SHA",
+    ):
+        assert marker in text
+    # Skill / Runner version is not a default reload gate.
+    for marker in (
+        "Skill / Runner version is not itself a workflow gate",
+        "不要求",
+        "重新加载",
+    ):
+        assert marker in text
+    # Old trusted-version mechanisms are named only as explicitly rejected.
+    assert "不重新引入" in text
+    assert "trusted Skill" in text
+    assert "main-only Skill" in text
+    assert "Skill hash as workflow state" in text
+    assert "trusted_runner.py" not in text
+    assert "--trusted-sha" not in text
+
+
 def test_every_active_skill_references_its_shared_semantic_owner() -> None:
     for name in LIFECYCLE_SKILLS:
         codex, claude = _skill_text(name)

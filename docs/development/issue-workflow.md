@@ -234,6 +234,23 @@ mechanical facts 可以使 stale textual assumption 失效，并触发
 fail-closed / Human Gate；但 **不得成为 business specification**，
 不得覆盖 current Issue requirement。
 
+### Workflow identity locking
+
+与当前 phase 相关的 workflow object identity 必须锁定并验证：Task / Issue
+identity、PR base、PR head、effective diff、reviewed head、audited main、
+merge SHA 等。这些 identity 在要求稳定的 phase 中发生变化时，必须
+invalidation / fail closed / Human Gate，不得静默继续。
+
+### Skill / Runner version is not itself a workflow gate
+
+除非 current Task、repository hard rule 或 approved workflow policy 明确
+要求，否则不要求为了执行 workflow 将 Skill / Runner 强制从 `main`、PR base
+或特定 trusted commit 重新加载。当前 worktree 中适用的 active Skill / Runner
+可以作为执行工具；workflow correctness 由 locked workflow object
+identities + current canonical specification + deterministic evidence 保证。
+不重新引入 trusted Skill、main-only Skill、Skill hash as workflow state 等
+已明确不采用的旧设计。
+
 `AGENTS.md` 只保留 fresh Agent 必须知道的简洁原则；本文件承载完整模型。
 
 ## 16. 与其它 instruction 的关系

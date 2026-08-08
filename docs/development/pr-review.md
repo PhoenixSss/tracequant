@@ -62,18 +62,46 @@ Review 的对象是 effective diff（base → head 的全部变更），而非�
 
 ## 8. Verdict semantics
 
-固定 verdict 集合：
+Review 输出**三态** verdict（与两套 `task-pr-review-runner` Skills 的
+executable contract 一致）：
 
-- **PASSING**：当前 head 满足 Task 的 Objective / Requirements /
-  Acceptance Criteria，无 blocker 级 findings。
-- **NON-PASSING**：存在必须修复的 findings；输出 bounded remediation
-  handoff（§9）。
-- 不产出「conditional pass」或模糊状态；每个 Review 只有一个最终 verdict。
+### 1. PASS / `通过，可以人工合并`
+
+只在 semantic review PASS、objective gates PASS、review identity / head
+stable 时允许。这是唯一允许进入 maintainer manual merge decision 的状态。
+
+### 2. CONDITIONAL / `有条件通过，不得合并`
+
+当 semantic review 本身无 BLOCKER / HIGH / MEDIUM finding，但一个或多个
+objective gate 为 `partial` / `unknown` / temporarily unverifiable，且不
+存在已证明的 semantic failure 或 identity drift 时使用。
+
+- CONDITIONAL ≠ semantic approval for merge；它仍然 **DO NOT MERGE**。
+- 必须先恢复 / 重新验证客观 gate。典型例子：remote-ref / GitHub network
+  verification 因瞬时网络故障变为 `partial`。
+
+### 3. FAIL / `不通过，需要修复`
+
+当存在 BLOCKER / HIGH / MEDIUM finding、identity / head / diff drift、
+required semantic requirement FAIL、或其他确定性 gate 明确 fail 时使用。
+
+CONDITIONAL 与 FAIL 都输出 bounded remediation handoff（§9）；
+每个 Review 只有一个最终 verdict。
+
+### Deterministic mapping principle
+
+- gate = `pass` + no blocking findings → **PASS**
+- gate = `partial` / `unknown` + no blocking findings + identity stable →
+  **CONDITIONAL — DO NOT MERGE**
+- semantic failure / gate `fail` / identity drift → **FAIL**（review invalid
+  as applicable）
+- head changed during review → **REVIEW INVALIDATED — HEAD CHANGED**
+  （是 review invalidation，不是普通 conditional pass）
 
 ## 9. Remediation handoff
 
-NON-PASSING Review 输出 bounded remediation handoff，仅包含 Delivery
-Skill 修复所需的最小信息：
+非 PASS 的 Review（CONDITIONAL / FAIL，见 §8）输出 bounded remediation
+handoff，仅包含 Delivery Skill 修复所需的最小信息：
 
 - findings（severity、位置、失败场景、最小修改方向）；
 - 当前锁定的 base/head；
