@@ -168,15 +168,26 @@ unrelated, generated, secret-bearing, or prohibited files → fail.
 
 ## Phase 1: identity and readiness
 
-Generate the `delivery` snapshot. Verify repository/origin, workspace, refs,
-worktrees, synchronized main identity, Task type/title/body/comments,
-Parent/dependencies/Relationships, labels, Project fields, blockers,
-templates, workflows, validation sources, and affected architecture.
+Generate the `delivery` snapshot. The snapshot provides deterministic
+identity facts: repository/origin, workspace, refs/worktrees, synchronized
+main identity, Task type/title/state, Parent identity,
+dependencies/Relationships metadata, labels, Project fields, blocker state,
+and PR head/base/checks when applicable. Verifying these mechanical facts
+does not require reading the full text of any source into the model context.
 
-Confirm that goal, scope, acceptance criteria, exceptions, and out-of-scope
-work are implementable without guessing. The Issue title is canonical when a
-derived Project title lags. Apply and re-read lifecycle transitions only after
-readiness passes.
+The current Task body is the business specification: read it and confirm
+that goal, scope, acceptance criteria, exceptions, and out-of-scope work are
+implementable without guessing. Do not default to reading comments, complete
+Parent/Epic bodies, dependency bodies, templates, workflows, validation
+sources, or linked docs/ADRs. Expand those only when a trigger applies: the
+Task body explicitly references them, the specification is missing or
+ambiguous, a conflict must be located, a dependency's state/contract affects
+implementation, a safety/architecture constraint applies, or verification
+requires them. Read the minimum relevant source/section, evaluate
+sufficiency, and expand further only if still insufficient.
+
+The Issue title is canonical when a derived Project title lags. Apply and
+re-read lifecycle transitions only after readiness passes.
 
 ## Phase 2: branch and implementation
 

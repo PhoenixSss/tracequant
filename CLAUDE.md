@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TraceQuant is an auditable research-to-live quantitative trading system for cryptocurrency perpetual futures (Binance USDⓈ-M, starting with BTCUSDT/ETHUSDT). Currently in **Research MVP** stage — no live trading capability exists yet.
 
-The `AGENTS.md` file at the repo root defines issue-driven workflow rules, implementation constraints, financial safety rules, and data correctness requirements. It is the primary behavior rule source; this file supplements it with development commands and architecture context.
+The `AGENTS.md` file at the repo root is the primary behavior rule source: it defines the issue-driven workflow, context acquisition (leaf-Issue-first, trigger-based expansion), implementation constraints, financial safety rules, and data correctness requirements. This file supplements it with Claude Code–specific tooling, commands, permissions, and environment context; it does not duplicate AGENTS.md rules.
 
 ### Codex 与 Claude Code 共存说明
 
@@ -118,14 +118,13 @@ Claude Code 权限控制（与 Codex 的 `.codex/rules/` 并存）。当前 allo
 
 ## Key design constraints
 
-- **Separation of concerns**: Strategy, risk, execution, and exchange connectivity must remain independent. A strategy must never submit an exchange order directly. The risk module has final authority to reject or reduce orders.
-- **Exchange code behind adapters**: Keep exchange-specific logic behind adapters so strategy code doesn't couple to a specific venue.
-- **No import-time side effects**: Modules must not perform I/O, read env vars, create directories, or cache global singletons on import.
-- **Live trading disabled by default**: Must require explicit configuration and fail closed.
-- **Strict typing**: `mypy --strict` passes on `src` and `tests`. Python 3.13.
-- **Financial time-series validation only**: Never use random train/test splits. Chronological walk-forward with purging and embargo required.
-- **Raw data immutability**: Raw data must never be overwritten by cleaned or aggregated results.
-- **Gross and net results reported separately**: Fees, funding, slippage, and fill assumptions must be modeled.
+The repository-wide hard constraints — separation of concerns, exchange code
+behind adapters, no import-time side effects, live trading disabled by
+default (fail closed), financial time-series validation (chronological
+walk-forward with purging and embargo), raw data immutability, and separate
+gross/net reporting — are defined in `AGENTS.md` and are binding here.
+Claude Code additionally enforces **strict typing**: `mypy --strict` passes
+on `src` and `tests` (Python 3.13), per the Commands section below.
 
 ## Technical baseline (future architecture)
 
@@ -144,10 +143,8 @@ Prohibited without an approved architecture Issue: microservices, Kubernetes, di
 
 ## Issue-driven development
 
-All work is tracked in GitHub Issues (the `PhoenixSss/tracequant` repo). Before changing code:
-1. Read the complete assigned Issue and confirm it has the `codex:ready` label
-2. Read parent/blocking Issues, linked docs, and ADRs
-3. Treat Issue scope, acceptance criteria, and out-of-scope sections as binding
-4. One implementation Issue → one PR
-
-The project is organized as 4 Epics (#1 Research MVP, #12 Shadow & Demo MVP, #13 Live MVP, #14 Production Hardening). Current focus is Feature #2 (Engineering & Research Foundation) under Epic #1.
+All work is tracked in GitHub Issues (the `PhoenixSss/tracequant` repo). The
+issue-driven workflow, leaf-Issue-first context acquisition, expansion
+triggers, and comments / Parent / Epic policies are defined in `AGENTS.md`
+and apply unchanged to Claude Code sessions. Current work scope is read from
+the active GitHub Issue and Project state, not from this file.

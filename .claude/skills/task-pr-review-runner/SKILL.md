@@ -176,13 +176,20 @@ Stop on material repository, Task, linkage, state, base, or head mismatch.
 
 ## Phase 2: read complete evidence
 
-Independently read the complete Task specification/comments/Relationships, PR
-body and effective diff, every changed file in context, commits,
-tests/docs/config/public interfaces, relevant unchanged code, current
-reviews/threads/checks, workflows, tooling, and safety rules.
+Independently read the current Task body, PR body and effective diff, every
+changed file in context, commits, tests/docs/config/public interfaces,
+relevant unchanged code, current reviews/threads/checks, and
+review-relevant repository constraints.
 
 Do not inherit Delivery conclusions or accept comments, test names, or green
 checks without inspecting coverage.
+
+Comments, Parent/Epic bodies, and other hierarchy/history are not default
+review input. Expand to them only when the review scope, risk, or ambiguity
+requires it — for example an acceptance criterion references a historical
+decision, the Task body is insufficient to judge a change, or a conflict
+must be located. Expansion is bounded: read the minimum relevant source or
+section and stop once the question is resolved.
 
 ## Phase 3: semantic review with evidence matrix
 
