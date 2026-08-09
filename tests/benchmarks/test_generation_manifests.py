@@ -105,10 +105,16 @@ def test_b_manifest_structure_and_schema() -> None:
         for entry in parsed.paths
         if entry.projection_action == "INHERIT_BUSINESS_BASE"
     ]
-    assert len(inherit) == 5
-    assert ".agents/skills/task-delivery/SKILL.md" in inherit
-    assert ".agents/skills/task-pr-review/SKILL.md" in inherit
-    assert "docs/workflows/task-skill-runner-migration/README.md" in inherit
+    assert inherit == []
+    installed = [
+        entry.path
+        for entry in parsed.paths
+        if entry.projection_action == "INSTALL_GENERATION_VERSION"
+    ]
+    assert len(installed) == 121
+    assert ".agents/skills/task-delivery/SKILL.md" in installed
+    assert ".agents/skills/task-pr-review/SKILL.md" in installed
+    assert "docs/workflows/task-skill-runner-migration/README.md" in installed
     assert "tools/agent_workflow/pr_resolve.py" in [
         entry.path for entry in parsed.paths if entry.role == "EXECUTION_REQUIRED"
     ]
@@ -141,6 +147,38 @@ def test_path_ownership_separates_business_generation_and_conductor_namespaces()
         GENERATION_CONTROL_PLANE
     )
     assert ownership_class("src/tracequant/config.py") == "BUSINESS_SNAPSHOT"
+
+
+def test_no_generation_control_plane_inherit_in_any_generation_projection() -> None:
+    for name in (
+        "generation-a-pinned-manifest.json",
+        "generation-b-pinned-manifest.json",
+    ):
+        parsed = parse_pinned_manifest(MANIFESTS / name)
+        assert [
+            entry.path
+            for entry in parsed.paths
+            if ownership_class(entry.path) == GENERATION_CONTROL_PLANE
+            and entry.projection_action == "INHERIT_BUSINESS_BASE"
+        ] == []
+
+    for name in (
+        "generation-c-current-template-manifest.json",
+        "generation-d-current-template-manifest.json",
+    ):
+        template = _manifest(name)
+        defaults = template["role_classification_rules"]["projection_defaults"]
+        assert defaults["OPTIONAL_HISTORICAL_LIMITATION"] == (
+            "INSTALL_GENERATION_VERSION"
+        )
+        for path in (
+            ".agents/skills/task-delivery/SKILL.md",
+            ".agents/skills/task-pr-review/SKILL.md",
+        ):
+            assert ownership_class(path) == GENERATION_CONTROL_PLANE
+            assert defaults["OPTIONAL_HISTORICAL_LIMITATION"] != (
+                "INHERIT_BUSINESS_BASE"
+            )
 
 
 def test_a_projection_covers_every_current_only_workflow_path() -> None:
@@ -248,7 +286,7 @@ def test_cd_templates_schema_and_path_classes() -> None:
     assert rules["identity_required_must_be_explicit"] is True
     assert rules["runtime_install_false_is_not_a_decision"] is True
     assert rules["projection_defaults"]["OPTIONAL_HISTORICAL_LIMITATION"] == (
-        "INHERIT_BUSINESS_BASE"
+        "INSTALL_GENERATION_VERSION"
     )
 
 

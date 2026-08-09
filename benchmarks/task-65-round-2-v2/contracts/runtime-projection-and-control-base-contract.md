@@ -12,7 +12,7 @@ managed path resolves to exactly one three-state action:
 
 | action | semantics | condition |
 |---|---|---|
-| `INSTALL_GENERATION_VERSION` | install the generation's version of the path | role = `EXECUTION_REQUIRED` or `VALIDATION_PRESENCE_REQUIRED` (default); `IDENTITY_REQUIRED` must give explicit per-file `INSTALL` / `INHERIT` / `ABSENT` + `reason`, **no implicit default**; `OPTIONAL_HISTORICAL_LIMITATION` defaults to not installed, install only with explicit historical runtime evidence that the Formal Arm must install it + explicit reason/evidence |
+| `INSTALL_GENERATION_VERSION` | install the generation's version of the path | role = `EXECUTION_REQUIRED`, `VALIDATION_PRESENCE_REQUIRED`, or a source-existing `OPTIONAL_HISTORICAL_LIMITATION`; `IDENTITY_REQUIRED` must give explicit per-file `INSTALL` / `INHERIT` / `ABSENT` + `reason`, **no implicit default** |
 | `INHERIT_BUSINESS_BASE` | keep/inherit the `BENCHMARK_BASE_SHA` version of the path | the path exists at `BENCHMARK_BASE_SHA` and the generation version is not installed |
 | `ENSURE_ABSENT` | the path is physically absent from the control-base tree | deletion required (e.g. A generation `.claude/**`, `.codex/**`, `CLAUDE.md`) or explicit exclusion |
 
@@ -21,6 +21,9 @@ Rules:
 - `runtime_install = false` alone is **not** a decision; keep-vs-delete is
   always explicitly given by `INHERIT_BUSINESS_BASE` / `ENSURE_ABSENT`; the
   materializer never guesses.
+- `GENERATION_CONTROL_PLANE` paths must never use `INHERIT_BUSINESS_BASE`; a
+  source-existing historical control-plane path is installed verbatim, while
+  a source-absent path is explicitly `ENSURE_ABSENT`.
 - Tree paths not covered by the projection inherit `BENCHMARK_BASE_SHA`
   (business tree content does not vary with the generation).
 - A-generation projection must make `.claude/**`, `.codex/**`, `CLAUDE.md`

@@ -65,8 +65,9 @@ def test_run_lock_role_classification_and_identity_explicit() -> None:
     for entry in c["closure"]["paths"]:
         roles[entry["role"]] = roles.get(entry["role"], 0) + 1
         actions.add(entry["projection_action"])
-    # Both default projection actions are exercised; every entry resolves.
-    assert actions == {"INSTALL_GENERATION_VERSION", "INHERIT_BUSINESS_BASE"}
+    # Every generation-control-plane path is installed or explicitly absent;
+    # no run-locked control-plane path may inherit the business base.
+    assert actions == {"INSTALL_GENERATION_VERSION"}
     assert "IDENTITY_REQUIRED" in roles
     assert "OPTIONAL_HISTORICAL_LIMITATION" in roles
 
@@ -76,6 +77,20 @@ def test_run_lock_role_classification_and_identity_explicit() -> None:
         assert len(entry["blob_id"]) == 40
         assert len(entry["sha256"]) == 64
         assert entry["file_mode"] in {"100644", "100755"}
+
+
+def test_run_lock_rejects_control_plane_inherit(tmp_path: Path) -> None:
+    base = run_git_quiet("rev-parse", "HEAD").stdout.strip()
+    c_path, _ = _templates()
+    raw = json.loads(c_path.read_text(encoding="utf-8"))
+    raw["role_classification_rules"]["projection_defaults"][
+        "OPTIONAL_HISTORICAL_LIMITATION"
+    ] = "INHERIT_BUSINESS_BASE"
+    template = tmp_path / "invalid-control-plane-inherit.json"
+    template.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+
+    with pytest.raises(BenchmarkError, match="GENERATION_CONTROL_PLANE"):
+        generate_run_locked(template, REPO_ROOT, base, "test")
 
 
 def test_file_identity_report_flags_blob_difference() -> None:

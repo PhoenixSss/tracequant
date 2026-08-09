@@ -45,7 +45,10 @@ from benchmark_common import (
     sha256_bytes,
     validate_basic,
 )
-from runtime_control_plane import runtime_control_plane_paths
+from runtime_control_plane import (
+    is_invalid_control_plane_inherit,
+    runtime_control_plane_paths,
+)
 
 TEMPLATE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -195,6 +198,11 @@ def generate_run_locked(
             }:
                 raise BenchmarkError(
                     f"role {role}: no explicit projection default (fail closed)"
+                )
+            if is_invalid_control_plane_inherit(path, projection_action):
+                raise BenchmarkError(
+                    f"{path}: GENERATION_CONTROL_PLANE cannot use "
+                    "INHERIT_BUSINESS_BASE (fail closed)"
                 )
             entries.append(
                 RunLockedPath(

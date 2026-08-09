@@ -78,6 +78,14 @@ def control_plane_role(path: str) -> str | None:
     return None
 
 
+def is_invalid_control_plane_inherit(path: str, projection_action: str) -> bool:
+    """Return whether a generation control-plane path inherits base content."""
+    return (
+        ownership_class(path) == GENERATION_CONTROL_PLANE
+        and projection_action == "INHERIT_BUSINESS_BASE"
+    )
+
+
 def tree_paths(repo_root: Path, commit: str) -> set[str]:
     """Return all regular-file paths in a commit tree."""
     result = run_git(repo_root, "ls-tree", "-r", "--name-only", commit)

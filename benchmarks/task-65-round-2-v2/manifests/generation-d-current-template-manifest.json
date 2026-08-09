@@ -62,16 +62,16 @@
       "EXECUTION_REQUIRED": "INSTALL_GENERATION_VERSION",
       "VALIDATION_PRESENCE_REQUIRED": "INSTALL_GENERATION_VERSION",
       "IDENTITY_REQUIRED": "INSTALL_GENERATION_VERSION",
-      "OPTIONAL_HISTORICAL_LIMITATION": "INHERIT_BUSINESS_BASE"
+      "OPTIONAL_HISTORICAL_LIMITATION": "INSTALL_GENERATION_VERSION"
     },
     "identity_required_must_be_explicit": true,
-    "optional_historical_limitation_default": "not-installed",
+    "optional_historical_limitation_default": "install generation version when source exists; ensure absent when source is absent",
     "runtime_install_false_is_not_a_decision": true,
     "role_action_mapping": {
       "EXECUTION_REQUIRED": "INSTALL_GENERATION_VERSION (default)",
       "VALIDATION_PRESENCE_REQUIRED": "INSTALL_GENERATION_VERSION (default)",
       "IDENTITY_REQUIRED": "explicit per-file INSTALL / INHERIT / ABSENT + reason (declared above; no implicit default)",
-      "OPTIONAL_HISTORICAL_LIMITATION": "default not installed (INHERIT_BUSINESS_BASE); install only with explicit historical runtime evidence + reason"
+      "OPTIONAL_HISTORICAL_LIMITATION": "INSTALL_GENERATION_VERSION when source exists; ENSURE_ABSENT when source is absent; preserve historical content verbatim"
     }
   },
   "materializer_contract": {

@@ -47,6 +47,7 @@ from benchmark_common import (
 from generation_materializer import PINNED_SCHEMA, ManifestPath, parse_pinned_manifest
 from runtime_control_plane import (
     covering_entry_paths,
+    is_invalid_control_plane_inherit,
     managed_runtime_control_plane_paths,
 )
 
@@ -116,6 +117,24 @@ def _validate_ab_parsed(
 ) -> ValidationResult:
     gates: list[dict[str, Any]] = []
     paths: list[ManifestPath] = manifest.paths
+
+    invalid_control_plane_inherit = sorted(
+        entry.path
+        for entry in paths
+        if is_invalid_control_plane_inherit(entry.path, entry.projection_action)
+    )
+    gates.append(
+        gate(
+            "generation_control_plane_must_not_inherit",
+            "pass" if not invalid_control_plane_inherit else "fail",
+            (
+                None
+                if not invalid_control_plane_inherit
+                else "invalid INHERIT_BUSINESS_BASE paths: "
+                + ", ".join(invalid_control_plane_inherit)
+            ),
+        )
+    )
 
     managed_paths = managed_runtime_control_plane_paths(
         repo_root, benchmark_base_sha, manifest.workflow_source_sha

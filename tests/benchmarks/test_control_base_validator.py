@@ -193,6 +193,32 @@ def test_ab_validate_fail_on_wrong_parent(tmp_path: Path) -> None:
     assert "parent_equals_benchmark_base" in names
 
 
+def test_ab_validate_fails_on_control_plane_inherit(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    base_sha = _setup_repo(repo)
+    manifest_path = tmp_path / "manifest.json"
+    _build_ab_manifest(repo, base_sha, manifest_path)
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for entry in raw["closure"]["paths"]:
+        if entry["path"] == "tools/agent_workflow/runner.py":
+            entry["projection_action"] = "INHERIT_BUSINESS_BASE"
+            break
+    manifest_path.write_text(
+        json.dumps(raw, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    control_sha = _write_control_plane(repo, manifest_path)
+
+    result = validate_ab_from_file(
+        manifest_path, repo, base_sha, control_sha, branch=None
+    )
+    assert result.disposition == "HUMAN GATE"
+    assert any(
+        gate["name"] == "generation_control_plane_must_not_inherit"
+        and gate["status"] == "fail"
+        for gate in result.gates
+    )
+
+
 def test_ab_validate_fail_on_unexpected_path(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
     base_sha = _setup_repo(repo)
@@ -290,7 +316,7 @@ def test_ab_validate_rejects_undeclared_current_only_workflow_path(
     )
 
 
-def test_ab_validate_allows_explicit_source_absent_inherit(
+def test_ab_validate_rejects_source_absent_control_plane_inherit(
     tmp_path: Path,
 ) -> None:
     repo = init_repo(tmp_path / "repo")
@@ -326,7 +352,12 @@ def test_ab_validate_allows_explicit_source_absent_inherit(
     result = validate_ab_from_file(
         manifest_path, repo, business_base_sha, control_sha, branch=None
     )
-    assert result.disposition == "pass", result.gates
+    assert result.disposition == "HUMAN GATE"
+    assert any(
+        gate["name"] == "generation_control_plane_must_not_inherit"
+        and gate["status"] == "fail"
+        for gate in result.gates
+    )
 
 
 def test_ab_validate_rejects_incomplete_projection_manifest(
