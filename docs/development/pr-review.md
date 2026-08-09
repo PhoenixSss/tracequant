@@ -93,6 +93,12 @@ CONDITIONAL 与 FAIL 都输出 bounded remediation handoff（§9）；
 - gate = `pass` + no blocking findings → **PASS**
 - gate = `partial` / `unknown` + no blocking findings + identity stable →
   **CONDITIONAL — DO NOT MERGE**
+- `unknown` 因 plan-limit `403`：默认 **CONDITIONAL — DO NOT MERGE**。403
+  本身不等于 Required-Checks 查询成功；只有仓库存在正式版本化、明确授权、
+  并确定性定义条件与证据负担的 capability-limited fallback policy，且
+  当前证据满足全部条件时，才允许 upgrade 至 pass。
+- `unknown`（其他原因）/ unsupported schema / lifecycle conflict →
+  review incomplete / failing（证据不足，不产生 passing verdict）。
 - semantic failure / gate `fail` / identity drift → **FAIL**（review invalid
   as applicable）
 - head changed during review → **REVIEW INVALIDATED — HEAD CHANGED**

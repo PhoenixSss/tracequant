@@ -131,6 +131,35 @@ def test_pr_review_doc_has_tri_state_verdict_contract() -> None:
     assert "不产出「conditional pass」" not in text
 
 
+def test_pr_review_doc_owns_full_mapping_and_skills_do_not_duplicate() -> None:
+    owner = PR_REVIEW.read_text(encoding="utf-8")
+    codex, claude = _skill_text("task-pr-review-runner")
+    # The shared owner holds the full verdict mapping (incl. plan-limit 403).
+    assert "Deterministic mapping principle" in owner
+    assert "gate = `pass`" in owner
+    assert "plan-limit `403`" in owner
+    assert "REVIEW INVALIDATED — HEAD CHANGED" in owner
+    # Both Skills reference the owner sections for verdict / remediation.
+    for text in (codex, claude):
+        assert "docs/development/pr-review.md" in text
+        assert "§8" in text
+        assert "§9" in text
+    # Exact executable verdict tokens and the invalidation token are retained.
+    for text in (codex, claude):
+        for verdict in (
+            "通过，可以人工合并",
+            "有条件通过，不得合并",
+            "不通过，需要修复",
+        ):
+            assert verdict in text
+        assert "REVIEW INVALIDATED — HEAD CHANGED" in text
+    # Neither Skill duplicates the full shared mapping table.
+    for text in (codex, claude):
+        assert "### Deterministic mapping" not in text
+        assert "| Evidence `status` | Permitted verdict ceiling |" not in text
+        assert "### Verdict rules" not in text
+
+
 def test_issue_workflow_doc_keeps_identity_locking_and_no_version_gate() -> None:
     text = ISSUE_WORKFLOW.read_text(encoding="utf-8")
     # Workflow identity locking is owned by the shared doc.
