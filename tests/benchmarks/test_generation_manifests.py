@@ -16,6 +16,11 @@ from generation_materializer import (  # type: ignore[import-not-found]
     PINNED_SCHEMA,
     parse_pinned_manifest,
 )
+from runtime_control_plane import (  # type: ignore[import-not-found]
+    covering_entry_paths,
+    managed_runtime_control_plane_paths,
+    runtime_control_plane_paths,
+)
 from run_lock import TEMPLATE_SCHEMA  # type: ignore[import-not-found]
 
 MANIFESTS = REPO_ROOT / "benchmarks" / "task-65-round-2-v2" / "manifests"
@@ -45,24 +50,34 @@ def test_a_manifest_structure_and_schema() -> None:
     assert parsed.generation_id == "A"
     assert parsed.workflow_source_sha == A_SOURCE_SHA
     assert parsed.source_label == "A_WORKFLOW_SOURCE_SHA"
-    assert len(parsed.paths) == 14
+    assert len(parsed.paths) == 43
 
     absent = [
         entry.path
         for entry in parsed.paths
         if entry.projection_action == "ENSURE_ABSENT"
     ]
-    assert absent == [".claude", ".codex", "CLAUDE.md"]
+    assert {".claude", ".codex", "CLAUDE.md"} <= set(absent)
     installed = [
         entry.path
         for entry in parsed.paths
         if entry.projection_action == "INSTALL_GENERATION_VERSION"
     ]
-    assert len(installed) == 11
+    assert len(installed) == 17
     assert "AGENTS.md" in installed
     assert "tools/agent_workflow/trusted_runner.py" in installed
     # A has no unified runner and no pr_resolve.py.
     assert "tools/agent_workflow/pr_resolve.py" not in installed
+    assert any(
+        entry.path == "tools/agent_workflow/pr_resolve.py"
+        and entry.projection_action == "ENSURE_ABSENT"
+        for entry in parsed.paths
+    )
+    assert any(
+        entry.path == "tests/tools/test_agent_neutral_workflow.py"
+        and entry.projection_action == "ENSURE_ABSENT"
+        for entry in parsed.paths
+    )
 
     # Class 2 exclusion is a declared known limitation.
     assert any("Class 2" in item for item in parsed.known_limitations)
@@ -74,7 +89,7 @@ def test_b_manifest_structure_and_schema() -> None:
     parsed = parse_pinned_manifest(MANIFESTS / "generation-b-pinned-manifest.json")
     assert parsed.generation_id == "B"
     assert parsed.workflow_source_sha == B_SOURCE_SHA
-    assert len(parsed.paths) == 31
+    assert len(parsed.paths) == 49
 
     inherit = [
         entry.path
@@ -99,6 +114,62 @@ def test_b_manifest_structure_and_schema() -> None:
     joined = "\n".join(parsed.known_limitations)
     for mention in stale_mentions:
         assert mention in joined
+
+
+def test_a_projection_covers_every_current_only_workflow_path() -> None:
+    parsed = parse_pinned_manifest(MANIFESTS / "generation-a-pinned-manifest.json")
+    base = run_git_head()
+    current_paths = runtime_control_plane_paths(REPO_ROOT, base)
+    managed_paths = managed_runtime_control_plane_paths(REPO_ROOT, base, A_SOURCE_SHA)
+    entries = {entry.path: entry for entry in parsed.paths}
+
+    assert managed_paths >= current_paths
+    for path in sorted(
+        current_paths - runtime_control_plane_paths(REPO_ROOT, A_SOURCE_SHA)
+    ):
+        covered = covering_entry_paths(entries, path)
+        assert len(covered) == 1, path
+        assert entries[covered[0]].projection_action == "ENSURE_ABSENT", path
+
+    for path in (
+        "tools/agent_workflow/pr_resolve.py",
+        ".claude/settings.json",
+        ".codex/rules/tracequant-wsl-evidence.rules",
+        "CLAUDE.md",
+    ):
+        covered = covering_entry_paths(entries, path)
+        assert len(covered) == 1
+        assert entries[covered[0]].projection_action == "ENSURE_ABSENT"
+
+
+def test_b_projection_audits_post_b_workflow_delta() -> None:
+    parsed = parse_pinned_manifest(MANIFESTS / "generation-b-pinned-manifest.json")
+    base = run_git_head()
+    current_paths = runtime_control_plane_paths(REPO_ROOT, base)
+    historical_paths = runtime_control_plane_paths(REPO_ROOT, B_SOURCE_SHA)
+    current_only = current_paths - historical_paths
+    entries = {entry.path: entry for entry in parsed.paths}
+
+    assert current_only == {
+        "docs/development/issue-workflow.md",
+        "docs/development/pr-review.md",
+        "tests/tools/test_agent_neutral_workflow.py",
+    }
+    for path in sorted(current_only):
+        covered = covering_entry_paths(entries, path)
+        assert len(covered) == 1
+        assert entries[covered[0]].projection_action == "ENSURE_ABSENT"
+
+
+def run_git_head() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
 
 
 def test_cd_templates_schema_and_path_classes() -> None:

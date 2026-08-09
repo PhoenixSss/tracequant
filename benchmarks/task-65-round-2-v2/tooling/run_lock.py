@@ -45,6 +45,7 @@ from benchmark_common import (
     sha256_bytes,
     validate_basic,
 )
+from runtime_control_plane import runtime_control_plane_paths
 
 TEMPLATE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -201,6 +202,18 @@ def generate_run_locked(
                     file_mode=mode,
                 )
             )
+
+    # The template's path classes are a projection declaration, not a best
+    # effort filter.  Every mechanically derived current control-plane path
+    # must be selected by exactly one class; otherwise a current workflow file
+    # can silently disappear from the run-locked closure.
+    control_plane_paths = runtime_control_plane_paths(repo_root, resolved_base)
+    unmatched = sorted(control_plane_paths - matched)
+    if unmatched:
+        raise BenchmarkError(
+            "runtime-control-plane path class coverage incomplete: "
+            + ", ".join(unmatched)
+        )
 
     # No path may be claimed by more than one class (deterministic ordering).
     entries_sorted = sorted(entries, key=lambda item: item.path)

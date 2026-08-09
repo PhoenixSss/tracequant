@@ -29,7 +29,7 @@ from generation_materializer import (  # type: ignore[import-not-found]
 
 
 def _setup_repo(repo: Path) -> str:
-    """Base tree: AGENTS.md, tools/runner.py (100755), business/source.py,
+    """Base tree: AGENTS.md, tools/agent_workflow/runner.py (100755), business/source.py,
     .claude/settings.json (to be ENSURE_ABSENT for the synthetic commit).
 
     An initial commit precedes the base commit so ``base_sha^`` always
@@ -38,9 +38,11 @@ def _setup_repo(repo: Path) -> str:
     (repo / "README.md").write_text("init\n", encoding="utf-8")
     commit_all(repo, "init")
     (repo / "AGENTS.md").write_text("base agents\n", encoding="utf-8")
-    (repo / "tools").mkdir()
-    (repo / "tools" / "runner.py").write_text("old runner\n", encoding="utf-8")
-    (repo / "tools" / "runner.py").chmod(0o755)
+    (repo / "tools" / "agent_workflow").mkdir(parents=True)
+    (repo / "tools" / "agent_workflow" / "runner.py").write_text(
+        "old runner\n", encoding="utf-8"
+    )
+    (repo / "tools" / "agent_workflow" / "runner.py").chmod(0o755)
     (repo / "business").mkdir()
     (repo / "business" / "source.py").write_text("x = 1\n", encoding="utf-8")
     (repo / ".claude").mkdir()
@@ -48,18 +50,27 @@ def _setup_repo(repo: Path) -> str:
     return commit_all(repo, "base")
 
 
-def _build_ab_manifest(repo: Path, base_sha: str, manifest_path: Path) -> None:
-    """A-style manifest: INSTALL AGENTS.md + tools/runner.py, ENSURE_ABSENT
+def _build_ab_manifest(
+    repo: Path,
+    base_sha: str,
+    manifest_path: Path,
+    *,
+    source_sha: str | None = None,
+) -> None:
+    """A-style manifest: INSTALL AGENTS.md + tools/agent_workflow/runner.py, ENSURE_ABSENT
     .claude, INHERIT business/source.py."""
-    mode, blob = ls_tree_blob(repo, base_sha, "AGENTS.md")
-    runner_mode, runner_blob = ls_tree_blob(repo, base_sha, "tools/runner.py")
+    source_sha = source_sha or base_sha
+    mode, blob = ls_tree_blob(repo, source_sha, "AGENTS.md")
+    runner_mode, runner_blob = ls_tree_blob(
+        repo, source_sha, "tools/agent_workflow/runner.py"
+    )
     manifest: dict[str, object] = {
         "schema_version": 1,
         "protocol_identity": "task-65-round-2-v2",
         "kind": "pinned",
         "generation_id": "TEST",
         "agent_identity": "test",
-        "workflow_source": {"sha": base_sha, "label": "TEST_SHA"},
+        "workflow_source": {"sha": source_sha, "label": "TEST_SHA"},
         "closure": {
             "definition": "test",
             "paths": [
@@ -74,7 +85,7 @@ def _build_ab_manifest(repo: Path, base_sha: str, manifest_path: Path) -> None:
                     "file_mode": mode,
                 },
                 {
-                    "path": "tools/runner.py",
+                    "path": "tools/agent_workflow/runner.py",
                     "role": "EXECUTION_REQUIRED",
                     "projection_action": "INSTALL_GENERATION_VERSION",
                     "projection_reason": None,
@@ -107,6 +118,7 @@ def _write_control_plane(
     *,
     extra_file: str | None = None,
     wrong_blob: bool = False,
+    benchmark_base_sha: str | None = None,
 ) -> str:
     """Apply the manifest-declared projection on top of the base commit and
     commit exactly one synthetic control-plane commit; return its SHA."""
@@ -117,7 +129,13 @@ def _write_control_plane(
         for entry in manifest.paths
         if entry.projection_action == "INSTALL_GENERATION_VERSION"
     }
-    run_git_quiet("checkout", "-q", "--detach", base_sha, cwd=repo)
+    run_git_quiet(
+        "checkout",
+        "-q",
+        "--detach",
+        benchmark_base_sha or base_sha,
+        cwd=repo,
+    )
     for path, blob_id in installed.items():
         data = cat_blob(repo, blob_id)
         if wrong_blob and path == "AGENTS.md":
@@ -239,6 +257,99 @@ def test_ab_validate_worktree_clean_gate(tmp_path: Path) -> None:
     assert result.disposition == "HUMAN GATE"
     assert any(
         g["name"] == "control_base_worktree_clean" and g["status"] == "fail"
+        for g in result.gates
+    )
+
+
+def test_ab_validate_rejects_undeclared_current_only_workflow_path(
+    tmp_path: Path,
+) -> None:
+    repo = init_repo(tmp_path / "repo")
+    source_sha = _setup_repo(repo)
+    (repo / "tools" / "agent_workflow" / "current_only.py").write_text(
+        "current = True\n", encoding="utf-8"
+    )
+    business_base_sha = commit_all(repo, "current workflow path")
+    manifest_path = tmp_path / "manifest.json"
+    _build_ab_manifest(repo, business_base_sha, manifest_path, source_sha=source_sha)
+    control_sha = _write_control_plane(
+        repo,
+        manifest_path,
+        benchmark_base_sha=business_base_sha,
+    )
+
+    result = validate_ab_from_file(
+        manifest_path, repo, business_base_sha, control_sha, branch=None
+    )
+    assert result.disposition == "HUMAN GATE"
+    assert any(
+        g["name"] == "runtime_control_plane_projection_complete"
+        and g["status"] == "fail"
+        and "tools/agent_workflow/current_only.py" in g.get("detail", "")
+        for g in result.gates
+    )
+
+
+def test_ab_validate_allows_explicit_source_absent_inherit(
+    tmp_path: Path,
+) -> None:
+    repo = init_repo(tmp_path / "repo")
+    source_sha = _setup_repo(repo)
+    (repo / "tools" / "agent_workflow" / "allowed_current.py").write_text(
+        "allowed = True\n", encoding="utf-8"
+    )
+    business_base_sha = commit_all(repo, "business path")
+    manifest_path = tmp_path / "manifest.json"
+    _build_ab_manifest(repo, business_base_sha, manifest_path, source_sha=source_sha)
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["closure"]["source_absent_inherit_allowlist"] = [
+        "tools/agent_workflow/allowed_current.py"
+    ]
+    raw["closure"]["paths"].append(
+        {
+            "path": "tools/agent_workflow/allowed_current.py",
+            "role": "VALIDATION_PRESENCE_REQUIRED",
+            "projection_action": "INHERIT_BUSINESS_BASE",
+            "projection_reason": "canonical test allowlist",
+            "exists_at_source": False,
+        }
+    )
+    manifest_path.write_text(
+        json.dumps(raw, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    control_sha = _write_control_plane(
+        repo,
+        manifest_path,
+        benchmark_base_sha=business_base_sha,
+    )
+
+    result = validate_ab_from_file(
+        manifest_path, repo, business_base_sha, control_sha, branch=None
+    )
+    assert result.disposition == "pass", result.gates
+
+
+def test_ab_validate_rejects_incomplete_projection_manifest(
+    tmp_path: Path,
+) -> None:
+    repo = init_repo(tmp_path / "repo")
+    base_sha = _setup_repo(repo)
+    manifest_path = tmp_path / "manifest.json"
+    _build_ab_manifest(repo, base_sha, manifest_path)
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["closure"]["paths"] = [
+        entry
+        for entry in raw["closure"]["paths"]
+        if entry["path"] != "tools/agent_workflow/runner.py"
+    ]
+    manifest_path.write_text(
+        json.dumps(raw, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    result = validate_ab_from_file(manifest_path, repo, base_sha, base_sha, branch=None)
+    assert result.disposition == "HUMAN GATE"
+    assert any(
+        g["name"] == "runtime_control_plane_projection_complete"
+        and "tools/agent_workflow/runner.py" in g.get("detail", "")
         for g in result.gates
     )
 

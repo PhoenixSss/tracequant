@@ -30,6 +30,25 @@ Rules:
   historical audit-only material never override the current business tree
   merely by existing in a full fixture.
 
+### Mechanically complete managed-path universe
+
+The projection tooling derives one bounded runtime-control-plane universe from
+the union of the business-base tree and the historical generation source. It
+classifies repository instruction files (`AGENTS.md`, `CLAUDE.md`), `.agents`
+policies/skills and execution-profile input, `.claude/**`, `.codex/**`,
+`tools/agent_workflow/**`, workflow validation inputs under `tests/tools/**`,
+and the current workflow identity documents `docs/development/issue-workflow.md`
+and `docs/development/pr-review.md`. `tests/benchmarks/**` and other ordinary
+business paths remain outside this universe.
+
+Every derived path must be covered by exactly one projection entry. A
+directory absence sentinel such as `.claude` explicitly covers its descendants;
+it is still checked against every derived file path. A current-only
+workflow/control-plane path is `ENSURE_ABSENT` unless an exact, canonical
+source-absent inherit allowlist entry explicitly authorizes
+`INHERIT_BUSINESS_BASE`. Omission from a historical manifest is never an
+inherit decision. Missing, duplicate, or invalid coverage fails closed.
+
 ## Materializer
 
 Deterministic materializer extracting generation fixtures blob-by-blob from
@@ -109,6 +128,12 @@ Verifies:
 - installed runtime control-plane matches the fixture manifest's blob/hash;
 - `expected_absent_paths` are truly absent from the control-base tree;
 - control-base worktree clean.
+
+The validator also derives the complete managed-path universe and fails closed
+when any path has no action, more than one covering action, or an undeclared
+current-only workflow path remains in the projected control base. Current
+generation run-locking applies the same completeness check to template path
+classes.
 
 Any failure → **HUMAN GATE**. The validator is testable in the PREP
 validation phase on a local ephemeral clone (construct → verify → discard,

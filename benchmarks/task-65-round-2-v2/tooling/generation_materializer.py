@@ -62,6 +62,7 @@ class ManifestPath:
     file_mode: str
     projection_action: str
     projection_reason: str | None
+    exists_at_source: bool
 
 
 @dataclass
@@ -73,6 +74,7 @@ class PinnedManifest:
     workflow_source_sha: str
     source_label: str
     paths: list[ManifestPath]
+    source_absent_inherit_allowlist: frozenset[str]
     known_limitations: list[str]
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -136,6 +138,10 @@ PINNED_SCHEMA: dict[str, Any] = {
                         "additionalProperties": False,
                     },
                 },
+                "source_absent_inherit_allowlist": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
             },
         },
         "invocation": {"type": "object"},
@@ -160,40 +166,63 @@ def parse_pinned_manifest(manifest_path: Path) -> PinnedManifest:
     if raw.get("kind") != "pinned":
         raise BenchmarkError(f"expected pinned manifest, got kind {raw.get('kind')!r}")
     closure = raw["closure"]
+    source_absent_inherit_allowlist = frozenset(
+        closure.get("source_absent_inherit_allowlist", [])
+    )
     paths: list[ManifestPath] = []
+    seen_paths: set[str] = set()
     for entry in closure["paths"]:
+        path = entry["path"]
+        if path in seen_paths:
+            raise BenchmarkError(f"duplicate projection entry for {path}")
+        seen_paths.add(path)
         if not entry["exists_at_source"]:
-            if entry["projection_action"] != "ENSURE_ABSENT":
+            action = entry["projection_action"]
+            if action == "INHERIT_BUSINESS_BASE":
+                if path not in source_absent_inherit_allowlist:
+                    raise BenchmarkError(
+                        f"{path}: source-absent INHERIT requires explicit "
+                        "source_absent_inherit_allowlist classification"
+                    )
+                if not entry.get("projection_reason"):
+                    raise BenchmarkError(
+                        f"{path}: source-absent INHERIT requires a reason"
+                    )
+            elif action != "ENSURE_ABSENT":
                 raise BenchmarkError(
-                    f"{entry['path']}: absent-at-source entry must use "
-                    f"projection_action ENSURE_ABSENT"
+                    f"{path}: absent-at-source entry must use ENSURE_ABSENT "
+                    "or an explicitly allowlisted INHERIT_BUSINESS_BASE"
                 )
             paths.append(
                 ManifestPath(
-                    path=entry["path"],
+                    path=path,
                     role=entry["role"],
                     blob_id="",
                     sha256="",
                     file_mode="",
                     projection_action=entry["projection_action"],
                     projection_reason=entry.get("projection_reason"),
+                    exists_at_source=False,
                 )
             )
             continue
+        if entry["projection_action"] == "ENSURE_ABSENT":
+            raise BenchmarkError(
+                f"{path}: source-existing entry cannot use ENSURE_ABSENT"
+            )
         for key in ("blob_id", "sha256", "file_mode"):
             if not entry.get(key):
-                raise BenchmarkError(
-                    f"{entry['path']}: missing {key} for existing file"
-                )
+                raise BenchmarkError(f"{path}: missing {key} for existing file")
         paths.append(
             ManifestPath(
-                path=entry["path"],
+                path=path,
                 role=entry["role"],
                 blob_id=entry["blob_id"],
                 sha256=entry["sha256"],
                 file_mode=entry["file_mode"],
                 projection_action=entry["projection_action"],
                 projection_reason=entry.get("projection_reason"),
+                exists_at_source=True,
             )
         )
     return PinnedManifest(
@@ -202,6 +231,7 @@ def parse_pinned_manifest(manifest_path: Path) -> PinnedManifest:
         workflow_source_sha=raw["workflow_source"]["sha"],
         source_label=raw["workflow_source"]["label"],
         paths=paths,
+        source_absent_inherit_allowlist=source_absent_inherit_allowlist,
         known_limitations=list(raw.get("known_limitations", [])),
         raw=raw,
     )

@@ -19,6 +19,8 @@
       {"glob": ".agents/skills/task-pr-review/SKILL.md", "role": "OPTIONAL_HISTORICAL_LIMITATION"},
       {"glob": "tools/agent_workflow/*.py", "role": "EXECUTION_REQUIRED"},
       {"glob": "tools/agent_workflow/*.json", "role": "VALIDATION_PRESENCE_REQUIRED"},
+      {"glob": "tests/tools/**", "role": "VALIDATION_PRESENCE_REQUIRED"},
+      {"glob": ".agents/execution-profile.example.toml", "role": "VALIDATION_PRESENCE_REQUIRED"},
       {"glob": ".agents/policies/*.md", "role": "VALIDATION_PRESENCE_REQUIRED"},
       {"glob": ".agents/skills/*/SKILL.md", "role": "VALIDATION_PRESENCE_REQUIRED"},
       {"glob": ".claude/skills/*/SKILL.md", "role": "VALIDATION_PRESENCE_REQUIRED"},
@@ -37,8 +39,10 @@
     "first_match_wins": true
   },
   "expected_workflow_path_classes": [
-    "tools/agent_workflow/*.py",
-    "tools/agent_workflow/*.json",
+      "tools/agent_workflow/*.py",
+      "tools/agent_workflow/*.json",
+      "tests/tools/**",
+      ".agents/execution-profile.example.toml",
     ".agents/policies/*.md",
     ".agents/skills/*/SKILL.md",
     ".claude/skills/*/SKILL.md",

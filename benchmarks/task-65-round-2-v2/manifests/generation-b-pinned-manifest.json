@@ -312,6 +312,177 @@
         "projection_reason": "known limitation 4 (stale description of removed trusted_runner.py); default not installed",
         "role": "OPTIONAL_HISTORICAL_LIMITATION",
         "sha256": "f5edef67c4749326756eeee852dd4534eae9c1b1742adcd75be2e26678067785"
+      },
+      {
+        "blob_id": "b74ad03a756aed1fab1faffc3d102325331242ca",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/execution-profile.example.toml",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "33dda01add0072eef00967de071c6f0329d53554b6b077d23793f715a0d6311a"
+      },
+      {
+        "blob_id": "279b8fb5353c02b7f80c251f597e3c8b6e3698ed",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_pr_resolve.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "f256257dcb8329a4e5701324fc76cf061471daf6d638c1bdb6ed214955898485"
+      },
+      {
+        "blob_id": "ec18b5470fab7cf07917569916dbec6eba46de70",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_retrieval_v2_policy.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "6497f057ca58a5616766c0882506607fbcc0349e3cae235bba67dda2aac47726"
+      },
+      {
+        "blob_id": "9258cf4a555bbfb5b5368d06aec9a7d8acf0fa26",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_runtime_telemetry_removed.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "e133554fc80b7a4836430c4d7e66e473f8faaa054627909ef9d670e80e0d6825"
+      },
+      {
+        "blob_id": "25ad708da0dd73848c752ceafeda5683bc14f28f",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_self_review.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "77d0cf2457095e0b114d1b06f32aea729e68e1464825b50e74a044240adad2fb"
+      },
+      {
+        "blob_id": "12d9c9cd095b749cf5c4c9cc224d909d3c1699e3",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_task85_migration_materials.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "b21daa9853e45178d336657fa26a2663822841b69201eda7f6e67564c3bf5570"
+      },
+      {
+        "blob_id": "ea7f76e0ddf0c0ed795deccd989e4409ad07a720",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_workflow_evidence.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "e78b016e91b8ccc3813033ae1e6bc9c0594b10e2ca83996ecdc2e204a756ebe4"
+      },
+      {
+        "blob_id": "a36d04ffe6928a90411f11e4f82725c74e4fa3a3",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_workflow_skills.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "4e437a8b854444f8f5bcc7a3903978856f76a164a0f8535c0a45262ba7709db3"
+      },
+      {
+        "blob_id": "04ec4e9799211ddb3d811bfd6710dcc69ce04294",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_workflow_validation.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "c2e5dc85dcd60e2a7d38d5012b07f68044f0fb799f9f81be030040c9ad335fd8"
+      },
+      {
+        "blob_id": "763b5e363c949d2d405c14f0e644f15103b79873",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_wsl2_codex_diagnostic.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "d47d75c6c5c71cfaca32f840a49fe3f90fe95a3d0b35b45381d04541895eb24a"
+      },
+      {
+        "blob_id": "fd213174f205f9ae243ccfab3647319919f50a45",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_wsl2_github_evidence_materials.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "0be58bd751aa79fc209d7a45a1e1874b096b2927580a59c61ac91367ebc732a5"
+      },
+      {
+        "blob_id": "08d16a1bb7fff9fbda2a7e91f9d57b70daa1546c",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_wsl2_github_evidence_rules.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "3f7c1ba5c6ace385b869369fef4cdc198f8cd93d016a99acccdf7f6eacafd4e5"
+      },
+      {
+        "blob_id": "908206c63d0c7dd3290ac36635ff1f4e28a4a59c",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_wsl2_github_evidence_runner.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "b640a55b18166688603373fe8c317b1e363a02f58e395f622c715c1337173f6a"
+      },
+      {
+        "blob_id": "1858d549c5c44694d2e224219323acaa158a7f79",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_wsl2_validation_rules.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "480e17ff2cf941c1efe2335357a719e7ab878b092ab13f1f9fbb2b223f530628"
+      },
+      {
+        "blob_id": "577e302525391fe6e4241facfe1020f57214d7c0",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_wsl2_validation_runner.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "fdd2f660a1ce806f123f7d0e0d9ea96f673659fbfc3dc2b54f0dd16daa3726b8"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/development/issue-workflow.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow identity input absent from B source; historical absence is explicit",
+        "role": "IDENTITY_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/development/pr-review.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow identity input absent from B source; historical absence is explicit",
+        "role": "IDENTITY_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_agent_neutral_workflow.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from B source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
       }
     ]
   },

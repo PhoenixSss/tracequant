@@ -119,7 +119,7 @@
                   "ENSURE_ABSENT"
                 ]
               },
-              "projection_reason": {"type": "string"},
+              "projection_reason": {"type": ["string", "null"]},
               "exists_at_source": {"type": "boolean"},
               "blob_id": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
               "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -136,12 +136,15 @@
               {
                 "if": {"properties": {"exists_at_source": {"const": false}}},
                 "then": {
-                  "properties": {"projection_action": {"const": "ENSURE_ABSENT"}},
                   "required": ["projection_reason"]
                 }
               }
             ]
           }
+        },
+        "source_absent_inherit_allowlist": {
+          "type": "array",
+          "items": {"type": "string"}
         }
       }
     },

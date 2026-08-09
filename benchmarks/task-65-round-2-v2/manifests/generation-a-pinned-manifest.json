@@ -133,6 +133,227 @@
         "projection_action": "ENSURE_ABSENT",
         "projection_reason": "absent at A source; A generation has no CLAUDE.md (must be physically absent)",
         "role": "IDENTITY_REQUIRED"
+      },
+      {
+        "blob_id": "b74ad03a756aed1fab1faffc3d102325331242ca",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/execution-profile.example.toml",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "33dda01add0072eef00967de071c6f0329d53554b6b077d23793f715a0d6311a"
+      },
+      {
+        "exists_at_source": false,
+        "path": ".agents/skills/task-delivery-runner/SKILL.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": ".agents/skills/task-pr-review-runner/SKILL.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/development/issue-workflow.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow identity input absent from A source; historical absence is explicit",
+        "role": "IDENTITY_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/development/pr-review.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow identity input absent from A source; historical absence is explicit",
+        "role": "IDENTITY_REQUIRED"
+      },
+      {
+        "blob_id": "6630fab78a44fe3478b14b508cff22f069474233",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_runtime_telemetry_removed.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "9c113b6d141f43ab5248a0d2d496f0748d112e83e07bbd7e7aacc37c3922415b"
+      },
+      {
+        "blob_id": "7a8fed24b169bbab84cc42e0a5100912a898755a",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_trusted_runner.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "368405bde389c8da554d6b8dbb4ef049ef081c2b5999ac0d9584628f511343c4"
+      },
+      {
+        "blob_id": "5da02b5d40aef86443e2b2b93b24370a487e06dc",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_workflow_evidence.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "38b3d39fbc99695dda822ae923cc2731b1b1ecd7d1b26cf71c390668e9da17fb"
+      },
+      {
+        "blob_id": "a47d06ef516f84e4a56e6dac50e8a2b61a751682",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_workflow_skills.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "15193d0ce6a3e4d06ad2d2aa7618ddf36d4ea7514fc01608820030b3c463332b"
+      },
+      {
+        "blob_id": "04ec4e9799211ddb3d811bfd6710dcc69ce04294",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_workflow_validation.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "c2e5dc85dcd60e2a7d38d5012b07f68044f0fb799f9f81be030040c9ad335fd8"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_agent_neutral_workflow.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_pr_resolve.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_retrieval_v2_policy.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_self_review.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_task85_migration_materials.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_wsl2_codex_diagnostic.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_wsl2_github_evidence_materials.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_wsl2_github_evidence_rules.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_wsl2_github_evidence_runner.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_wsl2_validation_rules.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_wsl2_validation_runner.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/pr_resolve.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow execution path absent from A source; A identity validation remains conductor-side",
+        "role": "EXECUTION_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/project_status.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow execution path absent from A source; historical absence is explicit",
+        "role": "EXECUTION_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/self_review.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow execution path absent from A source; historical absence is explicit",
+        "role": "EXECUTION_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/skill_path_audit.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow execution path absent from A source; historical absence is explicit",
+        "role": "EXECUTION_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/wsl2_github_evidence_profiles.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation configuration absent from A source; historical absence is explicit",
+        "role": "EXECUTION_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/wsl2_github_evidence_runner.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow execution path absent from A source; historical absence is explicit",
+        "role": "EXECUTION_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/wsl2_validation_profiles.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation configuration absent from A source; historical absence is explicit",
+        "role": "EXECUTION_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/wsl2_validation_runner.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow execution path absent from A source; historical absence is explicit",
+        "role": "EXECUTION_REQUIRED"
       }
     ]
   },

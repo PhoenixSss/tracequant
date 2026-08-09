@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pytest
 
 from _benchmark_helpers import REPO_ROOT, run_git_quiet
 
@@ -10,6 +13,7 @@ from file_identity_report import (  # type: ignore[import-not-found]
     ALLOWED_IDENTITY_FIELDS,
     file_identity_report,
 )
+from benchmark_common import BenchmarkError  # type: ignore[import-not-found]
 from run_lock import generate_run_locked  # type: ignore[import-not-found]
 
 MANIFESTS = REPO_ROOT / "benchmarks" / "task-65-round-2-v2" / "manifests"
@@ -87,3 +91,19 @@ def test_file_identity_report_flags_blob_difference() -> None:
     assert report["human_gate"] is True
     assert report["per_path_sha256_identical"] is False
     assert report["per_path_blob_identical"] is False
+
+
+def test_run_lock_rejects_unclassified_control_plane_path(tmp_path: Path) -> None:
+    base = run_git_quiet("rev-parse", "HEAD").stdout.strip()
+    c_path, _ = _templates()
+    raw = json.loads(c_path.read_text(encoding="utf-8"))
+    raw["closure_derivation_rules"]["path_classes"] = [
+        item
+        for item in raw["closure_derivation_rules"]["path_classes"]
+        if item["glob"] != "tests/tools/**"
+    ]
+    template = tmp_path / "incomplete-template.json"
+    template.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+
+    with pytest.raises(BenchmarkError, match="test_agent_neutral_workflow"):
+        generate_run_locked(template, REPO_ROOT, base, "test")

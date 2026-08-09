@@ -45,6 +45,10 @@ from benchmark_common import (
     validate_basic,
 )
 from generation_materializer import PINNED_SCHEMA, ManifestPath, parse_pinned_manifest
+from runtime_control_plane import (
+    covering_entry_paths,
+    managed_runtime_control_plane_paths,
+)
 
 ARMS_AB = frozenset({"A", "B"})
 ARMS_CD = frozenset({"C", "D"})
@@ -95,18 +99,83 @@ def validate_ab_from_file(
     validate_basic(raw, PINNED_SCHEMA, "manifest")
     parsed = parse_pinned_manifest(manifest_path)
     return _validate_ab_parsed(
-        parsed.paths, repo_root, benchmark_base_sha, control_base_sha, branch
+        parsed,
+        repo_root,
+        benchmark_base_sha,
+        control_base_sha,
+        branch,
     )
 
 
 def _validate_ab_parsed(
-    paths: list[ManifestPath],
+    manifest: Any,
     repo_root: Path,
     benchmark_base_sha: str,
     control_base_sha: str,
     branch: str | None,
 ) -> ValidationResult:
     gates: list[dict[str, Any]] = []
+    paths: list[ManifestPath] = manifest.paths
+
+    managed_paths = managed_runtime_control_plane_paths(
+        repo_root, benchmark_base_sha, manifest.workflow_source_sha
+    )
+    entries_by_path = {entry.path: entry for entry in paths}
+    missing: list[str] = []
+    duplicate_coverage: list[str] = []
+    invalid_actions: list[str] = []
+    for managed_path in sorted(managed_paths):
+        covering = covering_entry_paths(entries_by_path, managed_path)
+        if not covering:
+            missing.append(managed_path)
+            continue
+        if len(covering) != 1:
+            duplicate_coverage.append(f"{managed_path}: {', '.join(covering)}")
+            continue
+        entry = entries_by_path[covering[0]]
+        source_exists = (
+            git_ls_tree_blob(repo_root, manifest.workflow_source_sha, managed_path)
+            is not None
+        )
+        if source_exists:
+            # A source-existing file needs its own blob-bearing action.  A
+            # directory absence sentinel is the one intentional exception:
+            # it explicitly removes every source child under that directory.
+            directory_absence = (
+                entry.path != managed_path
+                and entry.projection_action == "ENSURE_ABSENT"
+                and not entry.exists_at_source
+            )
+            if not directory_absence and (
+                entry.path != managed_path or entry.projection_action == "ENSURE_ABSENT"
+            ):
+                invalid_actions.append(
+                    f"{managed_path}: source-existing path covered by "
+                    f"{entry.path}={entry.projection_action}"
+                )
+        elif entry.projection_action == "INHERIT_BUSINESS_BASE":
+            if managed_path not in manifest.source_absent_inherit_allowlist:
+                invalid_actions.append(
+                    f"{managed_path}: source-absent INHERIT is not allowlisted"
+                )
+        elif entry.projection_action != "ENSURE_ABSENT":
+            invalid_actions.append(
+                f"{managed_path}: source-absent path uses {entry.projection_action}"
+            )
+    for allowlisted in sorted(manifest.source_absent_inherit_allowlist):
+        if allowlisted not in managed_paths:
+            invalid_actions.append(
+                f"{allowlisted}: source-absent INHERIT allowlist path is "
+                "not in the managed universe"
+            )
+    completeness_failures = missing + duplicate_coverage + invalid_actions
+    gates.append(
+        gate(
+            "runtime_control_plane_projection_complete",
+            "pass" if not completeness_failures else "fail",
+            (None if not completeness_failures else "; ".join(completeness_failures)),
+        )
+    )
 
     try:
         actual_parent = git_rev_parse(repo_root, f"{control_base_sha}^")
@@ -138,7 +207,7 @@ def _validate_ab_parsed(
     else:
         gates.append(gate("synthetic_commit_present", "pass"))
 
-    managed_paths = {
+    changed_action_paths = {
         entry.path
         for entry in paths
         if entry.projection_action in {"INSTALL_GENERATION_VERSION", "ENSURE_ABSENT"}
@@ -149,7 +218,7 @@ def _validate_ab_parsed(
     changed = {line.split("\t")[-1] for line in diff_lines}
 
     def _is_managed(changed_path: str) -> bool:
-        if changed_path in managed_paths:
+        if changed_path in changed_action_paths:
             return True
         return any(changed_path.startswith(prefix + "/") for prefix in absent_prefixes)
 
