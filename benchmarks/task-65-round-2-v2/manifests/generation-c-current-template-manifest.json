@@ -20,6 +20,7 @@
       {"glob": "tools/agent_workflow/*.py", "role": "EXECUTION_REQUIRED"},
       {"glob": "tools/agent_workflow/*.json", "role": "VALIDATION_PRESENCE_REQUIRED"},
       {"glob": "tests/tools/**", "role": "VALIDATION_PRESENCE_REQUIRED"},
+      {"glob": "docs/workflows/**", "role": "VALIDATION_PRESENCE_REQUIRED"},
       {"glob": ".agents/execution-profile.example.toml", "role": "VALIDATION_PRESENCE_REQUIRED"},
       {"glob": ".agents/policies/*.md", "role": "VALIDATION_PRESENCE_REQUIRED"},
       {"glob": ".agents/skills/*/SKILL.md", "role": "VALIDATION_PRESENCE_REQUIRED"},
@@ -34,7 +35,9 @@
     "excluded_paths": [
       ".agents/evidence.local",
       ".agents/validation.local",
-      ".agents/benchmark-fixtures.local"
+      ".agents/benchmark-fixtures.local",
+      "benchmarks/task-65-round-2-v2/**",
+      "tests/benchmarks/**"
     ],
     "first_match_wins": true
   },
@@ -51,7 +54,8 @@
     "AGENTS.md",
     "CLAUDE.md",
     "docs/development/issue-workflow.md",
-    "docs/development/pr-review.md"
+    "docs/development/pr-review.md",
+    "docs/workflows/**"
   ],
   "role_classification_rules": {
     "projection_defaults": {

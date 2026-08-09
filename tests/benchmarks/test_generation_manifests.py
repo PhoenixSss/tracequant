@@ -17,8 +17,12 @@ from generation_materializer import (  # type: ignore[import-not-found]
     parse_pinned_manifest,
 )
 from runtime_control_plane import (  # type: ignore[import-not-found]
+    CONDUCTOR_BENCHMARK_PATH_CLASSES,
+    CONDUCTOR_BENCHMARK_TOOLING,
+    GENERATION_CONTROL_PLANE,
     covering_entry_paths,
     managed_runtime_control_plane_paths,
+    ownership_class,
     runtime_control_plane_paths,
 )
 from run_lock import TEMPLATE_SCHEMA  # type: ignore[import-not-found]
@@ -50,7 +54,7 @@ def test_a_manifest_structure_and_schema() -> None:
     assert parsed.generation_id == "A"
     assert parsed.workflow_source_sha == A_SOURCE_SHA
     assert parsed.source_label == "A_WORKFLOW_SOURCE_SHA"
-    assert len(parsed.paths) == 43
+    assert len(parsed.paths) == 123
 
     absent = [
         entry.path
@@ -63,7 +67,7 @@ def test_a_manifest_structure_and_schema() -> None:
         for entry in parsed.paths
         if entry.projection_action == "INSTALL_GENERATION_VERSION"
     ]
-    assert len(installed) == 17
+    assert len(installed) == 29
     assert "AGENTS.md" in installed
     assert "tools/agent_workflow/trusted_runner.py" in installed
     # A has no unified runner and no pr_resolve.py.
@@ -82,6 +86,11 @@ def test_a_manifest_structure_and_schema() -> None:
     # Class 2 exclusion is a declared known limitation.
     assert any("Class 2" in item for item in parsed.known_limitations)
 
+    for prefix in CONDUCTOR_BENCHMARK_PATH_CLASSES:
+        entry = next(item for item in parsed.paths if item.path == prefix.rstrip("/"))
+        assert entry.projection_action == "ENSURE_ABSENT"
+        assert entry.role == CONDUCTOR_BENCHMARK_TOOLING
+
 
 def test_b_manifest_structure_and_schema() -> None:
     manifest = _manifest("generation-b-pinned-manifest.json")
@@ -89,7 +98,7 @@ def test_b_manifest_structure_and_schema() -> None:
     parsed = parse_pinned_manifest(MANIFESTS / "generation-b-pinned-manifest.json")
     assert parsed.generation_id == "B"
     assert parsed.workflow_source_sha == B_SOURCE_SHA
-    assert len(parsed.paths) == 49
+    assert len(parsed.paths) == 126
 
     inherit = [
         entry.path
@@ -116,18 +125,37 @@ def test_b_manifest_structure_and_schema() -> None:
         assert mention in joined
 
 
+def test_path_ownership_separates_business_generation_and_conductor_namespaces() -> (
+    None
+):
+    assert (
+        ownership_class(
+            "benchmarks/task-65-round-2-v2/manifests/generation-a-pinned-manifest.json"
+        )
+        == CONDUCTOR_BENCHMARK_TOOLING
+    )
+    assert ownership_class("tests/benchmarks/test_materializer.py") == (
+        CONDUCTOR_BENCHMARK_TOOLING
+    )
+    assert ownership_class("docs/workflows/wsl2-validation-runner/README.md") == (
+        GENERATION_CONTROL_PLANE
+    )
+    assert ownership_class("src/tracequant/config.py") == "BUSINESS_SNAPSHOT"
+
+
 def test_a_projection_covers_every_current_only_workflow_path() -> None:
     if not _object_available(A_SOURCE_SHA):
         pytest.skip("historical A source object unavailable in this checkout")
     parsed = parse_pinned_manifest(MANIFESTS / "generation-a-pinned-manifest.json")
     base = run_git_head()
-    current_paths = runtime_control_plane_paths(REPO_ROOT, base)
+    current_paths = runtime_control_plane_paths(REPO_ROOT, base, include_conductor=True)
     managed_paths = managed_runtime_control_plane_paths(REPO_ROOT, base, A_SOURCE_SHA)
     entries = {entry.path: entry for entry in parsed.paths}
 
     assert managed_paths >= current_paths
     for path in sorted(
-        current_paths - runtime_control_plane_paths(REPO_ROOT, A_SOURCE_SHA)
+        current_paths
+        - runtime_control_plane_paths(REPO_ROOT, A_SOURCE_SHA, include_conductor=True)
     ):
         covered = covering_entry_paths(entries, path)
         assert len(covered) == 1, path

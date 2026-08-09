@@ -57,6 +57,9 @@ benchmarks/task-65-round-2-v2/
 - **Runtime projection** (three-state): `INSTALL_GENERATION_VERSION` /
   `INHERIT_BUSINESS_BASE` / `ENSURE_ABSENT`; `runtime_install = false` alone
   is never a decision; identity-required paths need explicit per-file actions.
+- **Path ownership**: `BUSINESS_SNAPSHOT`, `GENERATION_CONTROL_PLANE`, and
+  conductor-only `CONDUCTOR_BENCHMARK_TOOLING` are mechanically distinct; see
+  [path ownership and validation closure contract](contracts/path-ownership-and-validation-closure-contract.md).
 - **Control bases**: A/B = one synthetic benchmark-only control-plane commit
   on top of `BENCHMARK_BASE_SHA`; C/D = frozen branch with tip directly at
   `BENCHMARK_BASE_SHA`.

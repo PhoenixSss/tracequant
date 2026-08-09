@@ -108,7 +108,8 @@
                   "EXECUTION_REQUIRED",
                   "VALIDATION_PRESENCE_REQUIRED",
                   "IDENTITY_REQUIRED",
-                  "OPTIONAL_HISTORICAL_LIMITATION"
+                  "OPTIONAL_HISTORICAL_LIMITATION",
+                  "CONDUCTOR_BENCHMARK_TOOLING"
                 ]
               },
               "projection_action": {

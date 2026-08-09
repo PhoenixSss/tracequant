@@ -37,9 +37,14 @@ the union of the business-base tree and the historical generation source. It
 classifies repository instruction files (`AGENTS.md`, `CLAUDE.md`), `.agents`
 policies/skills and execution-profile input, `.claude/**`, `.codex/**`,
 `tools/agent_workflow/**`, workflow validation inputs under `tests/tools/**`,
-and the current workflow identity documents `docs/development/issue-workflow.md`
-and `docs/development/pr-review.md`. `tests/benchmarks/**` and other ordinary
-business paths remain outside this universe.
+`docs/workflows/**`, and the current workflow identity documents
+`docs/development/issue-workflow.md` and `docs/development/pr-review.md`.
+The conductor-only namespaces `benchmarks/task-65-round-2-v2/**` and
+`tests/benchmarks/**` are separately classified as
+`CONDUCTOR_BENCHMARK_TOOLING`; A/B completeness covers them with explicit
+directory `ENSURE_ABSENT` sentinels so they cannot enter native generation
+validation by inheritance. Other ordinary business paths remain outside this
+universe.
 
 Every derived path must be covered by exactly one projection entry. A
 directory absence sentinel such as `.claude` explicitly covers its descendants;

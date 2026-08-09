@@ -24,6 +24,7 @@ ROLES: frozenset[str] = frozenset(
         "VALIDATION_PRESENCE_REQUIRED",
         "IDENTITY_REQUIRED",
         "OPTIONAL_HISTORICAL_LIMITATION",
+        "CONDUCTOR_BENCHMARK_TOOLING",
     }
 )
 

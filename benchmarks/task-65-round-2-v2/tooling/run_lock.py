@@ -152,7 +152,10 @@ def generate_run_locked(
 
     resolved_base = git_rev_parse(repo_root, benchmark_base_sha)
     all_paths = _list_paths(repo_root, resolved_base)
-    excluded = set(raw["closure_derivation_rules"].get("excluded_paths", []))
+    excluded = tuple(raw["closure_derivation_rules"].get("excluded_paths", []))
+
+    def _excluded(path: str) -> bool:
+        return any(fnmatch.fnmatch(path, pattern) for pattern in excluded)
 
     role_rules = raw["role_classification_rules"]
     projection_defaults = role_rules["projection_defaults"]
@@ -173,7 +176,7 @@ def generate_run_locked(
         # First-match-wins ordering: a more specific class listed earlier
         # overrides a later general class for the same path (deterministic).
         for path in all_paths:
-            if path in excluded:
+            if _excluded(path):
                 continue
             if path in matched:
                 continue
