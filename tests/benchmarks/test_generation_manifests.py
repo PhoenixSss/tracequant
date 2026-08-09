@@ -117,6 +117,8 @@ def test_b_manifest_structure_and_schema() -> None:
 
 
 def test_a_projection_covers_every_current_only_workflow_path() -> None:
+    if not _object_available(A_SOURCE_SHA):
+        pytest.skip("historical A source object unavailable in this checkout")
     parsed = parse_pinned_manifest(MANIFESTS / "generation-a-pinned-manifest.json")
     base = run_git_head()
     current_paths = runtime_control_plane_paths(REPO_ROOT, base)
@@ -143,6 +145,8 @@ def test_a_projection_covers_every_current_only_workflow_path() -> None:
 
 
 def test_b_projection_audits_post_b_workflow_delta() -> None:
+    if not _object_available(B_SOURCE_SHA):
+        pytest.skip("historical B source object unavailable in this checkout")
     parsed = parse_pinned_manifest(MANIFESTS / "generation-b-pinned-manifest.json")
     base = run_git_head()
     current_paths = runtime_control_plane_paths(REPO_ROOT, base)
