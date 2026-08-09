@@ -1,0 +1,351 @@
+{
+  "agent_identity": "legacy-unified-runner-codex",
+  "closure": {
+    "definition": "B-generation coherent closure: workflow inputs that exist at B_WORKFLOW_SOURCE_SHA (AGENTS.md, CLAUDE.md, .agents/policies, .agents/skills, .claude/**, .codex/rules/**, tools/agent_workflow/**, plus OPTIONAL_HISTORICAL_LIMITATION stale-reference docs). Paths not covered by the projection inherit BENCHMARK_BASE_SHA.",
+    "paths": [
+      {
+        "blob_id": "9eda9920b0d661734b95879976a07009e3b0eb0b",
+        "exists_at_source": true,
+        "file_mode": "100755",
+        "path": "tools/agent_workflow/pr_resolve.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "EXECUTION_REQUIRED",
+        "sha256": "0daa051732e01750feb88a0e99a9d48812061cedfcac1a7e22c62d05d11941e5"
+      },
+      {
+        "blob_id": "d022d3f51063e3fa0ed8f7739d45c2439593a33a",
+        "exists_at_source": true,
+        "file_mode": "100755",
+        "path": "tools/agent_workflow/project_status.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "EXECUTION_REQUIRED",
+        "sha256": "384c7157b595bb3477535c6cbec6aadbf56e9e00ae463f930cb100dd5276e3a4"
+      },
+      {
+        "blob_id": "0a19c10e53437bfb8e1ecfad4a033485625f3f7a",
+        "exists_at_source": true,
+        "file_mode": "100755",
+        "path": "tools/agent_workflow/self_review.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "EXECUTION_REQUIRED",
+        "sha256": "19fb354e2158dc446154a4910c26e5b69a1a0f1f25cd937829193ec92b517363"
+      },
+      {
+        "blob_id": "a74cb36c7f723378e3ce83cdb7242157dea35e7a",
+        "exists_at_source": true,
+        "file_mode": "100755",
+        "path": "tools/agent_workflow/skill_path_audit.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "EXECUTION_REQUIRED",
+        "sha256": "a44056d2e3fb9c6d75fa8e165083076d81831ba874c8685ccd4a779a998872e0"
+      },
+      {
+        "blob_id": "8ec041e4e3284bd37152107ff18fda9107539341",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tools/agent_workflow/workflow_common.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "EXECUTION_REQUIRED",
+        "sha256": "d0a121f89564b3893b847d1103140d0de1be14a840b60fe0915be4126d25d97c"
+      },
+      {
+        "blob_id": "9ed37a41f16651d0332d524a8f025d5b5ef647a8",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tools/agent_workflow/workflow_evidence.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "EXECUTION_REQUIRED",
+        "sha256": "6508e87d2778a7ef9d75dcf2e26d5373287dffd53115024d44595db531858829"
+      },
+      {
+        "blob_id": "bfb12ab334d3e361ed141131ed6a5af1387fc173",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tools/agent_workflow/workflow_validation.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "EXECUTION_REQUIRED",
+        "sha256": "33facfe50ad5b43437c37197f5cf2f95a7474780c90c2c36b07513dbb54f8a4f"
+      },
+      {
+        "blob_id": "e17014b88a0b82095b0ea37a4ce32b4416e90818",
+        "exists_at_source": true,
+        "file_mode": "100755",
+        "path": "tools/agent_workflow/wsl2_github_evidence_runner.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "EXECUTION_REQUIRED",
+        "sha256": "cbeb15b3a95dc943da01f2e96502aa38dbca0fc2c031ebd33cf02489e49a79f3"
+      },
+      {
+        "blob_id": "a8d9c896d764d4bf51f363f15271f9548fe24c77",
+        "exists_at_source": true,
+        "file_mode": "100755",
+        "path": "tools/agent_workflow/wsl2_validation_runner.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "EXECUTION_REQUIRED",
+        "sha256": "04aa97d79bae2df84b4fc93acadffb390b093bb5c9a7180d32be1f7a28b55878"
+      },
+      {
+        "blob_id": "76e726f5ffd1b45736230146eb497720ceea4c83",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tools/agent_workflow/wsl2_github_evidence_profiles.json",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "1752d6380b0ca6ec7839645917207509f1b2c40fec1a7b0cf3cc4b094c9c258a"
+      },
+      {
+        "blob_id": "ad3d0424d39f2c6e79fc91c6fcfd319b3bac7ee0",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tools/agent_workflow/wsl2_validation_profiles.json",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "83f0c461b57301de3b9a8c6fa3b92c06553c6aaee9bd5052b6a8514891b57380"
+      },
+      {
+        "blob_id": "b9903200256de35ded03a70c92e27b62aa09ec88",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/policies/command-execution.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "bc97aef068c3051c40f7a8f43aeb485d4a581be7d0b0e5c93dcfbbde2825c042"
+      },
+      {
+        "blob_id": "c3d9eb50d2372bccf9a1ca9862a118ebbabffd20",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/policies/workflow-evidence.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "d289e656ac02a2a7f619c84ff62994d2568a1575adea9b850e1198318e02c2ab"
+      },
+      {
+        "blob_id": "71441cff2048a3fb6fa7c9d1c26bbb69833c0a52",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/skills/feature-completion-audit/SKILL.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "67a4299c26b5f7fd47a627979ab3bea83e569b97ba5f9fb16a9816ddf801c1a3"
+      },
+      {
+        "blob_id": "1dfeaeb5110dab92eb1cf07a0b5a83df5892d348",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/skills/task-closeout/SKILL.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "7214ccb8f9d06c116af63fc6073a7d4c9c3fdeef4198e4eb15483d35d1010118"
+      },
+      {
+        "blob_id": "94c16e54bd7e95b7b931c4f508d02d8048ad6c48",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/skills/task-delivery-runner/SKILL.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "c04f75f40499513a664f4f7c600747dd9d1e049a5db923c8c6385a3fa17c6cc7"
+      },
+      {
+        "blob_id": "1f7fe1222a6a66b9c365ac683cb8a81b26dd299a",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/skills/task-pr-review-runner/SKILL.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "4809322b27f882dba8e0e590f7b5d45e8372a1da68dddc2367acbf44786c2662"
+      },
+      {
+        "blob_id": "b9657c1cf2c0bb29e7a3fdf0ef2ece79017597b6",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".claude/settings.json",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "c6afddf14d161adf03108b33b7b16699306f5207353d8c24c7b55b265249f654"
+      },
+      {
+        "blob_id": "435fe046070005a8879dbdc49d02ff803551ac9f",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".claude/skills/feature-completion-audit/SKILL.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "b4f13f5171336a36eed47ca34eb99414cb4ebc0977509a49f6c12918a3ab695c"
+      },
+      {
+        "blob_id": "2171fadb3097462d251a18becb68dfb6bf5e8fb5",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".claude/skills/task-closeout/SKILL.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "f58bdea0ca76ccf8e05f1eac706aefac95f4aeaeb7d03198d9571fe78b062af6"
+      },
+      {
+        "blob_id": "90f187d4751ce0b9ff8f5b30f49ae3aa32bccd27",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".claude/skills/task-delivery-runner/SKILL.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "fb9cfbafa449ebeab41baf2e96b8c9242e3af298f4278f6c1a0c60c7a89f2770"
+      },
+      {
+        "blob_id": "9556a5ca647c090d766d5493a4d615aa92fe8160",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".claude/skills/task-pr-review-runner/SKILL.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "c600368543c4b6309baa79d3e05be83163e159da76c97c0e3912e5d0806fd74c"
+      },
+      {
+        "blob_id": "e6d07455e38b598e1531e211e7589dc881648dbf",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".codex/rules/tracequant-wsl-evidence.rules",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "755a93e9a9753ea47f3588c4beb495dc6e43de21243351bc8d43a58242d63b27"
+      },
+      {
+        "blob_id": "66f58c0e4955e212ce94f273711897ec3b4f47b5",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".codex/rules/tracequant-wsl-validation.rules",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "d7c275319e7eb77129864ff2776dce0dbb84408a55c355ea527fa75772ac9fed"
+      },
+      {
+        "blob_id": "9805501cf6c2b5a7e1ae32bb3ec41814cf15f77a",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "AGENTS.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": "B generation's native AGENTS.md defines its workflow identity; install the B-era version",
+        "role": "IDENTITY_REQUIRED",
+        "sha256": "82d79d9e736314330bbd4b65600f152884fadd59d5e74b288340b4fd456ffc2f"
+      },
+      {
+        "blob_id": "f19d7b40b9b151fba6021d3f4d81aef5437d10bd",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "CLAUDE.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": "B generation's native CLAUDE.md; install the B-era version",
+        "role": "IDENTITY_REQUIRED",
+        "sha256": "847ae7cb15d8aea75dd5d83994f3a5ee12ff3f979ac013b4a2df1b14cb7fb290"
+      },
+      {
+        "blob_id": "b82188c85417e0327c5a9566c799002e47d4c4ad",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/skills/task-delivery/SKILL.md",
+        "projection_action": "INHERIT_BUSINESS_BASE",
+        "projection_reason": "legacy baseline skill; known limitation 1 (stale reference to deleted .agents/policies/task-workflow-telemetry.md); default not installed",
+        "role": "OPTIONAL_HISTORICAL_LIMITATION",
+        "sha256": "637689aa8d07a5e2375325cc8292b3179494291245b96963a2d8723e1cac28fe"
+      },
+      {
+        "blob_id": "77c942f05da169b80641c4f10e7d07d0e3472009",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/skills/task-pr-review/SKILL.md",
+        "projection_action": "INHERIT_BUSINESS_BASE",
+        "projection_reason": "legacy baseline skill; historical limitation; default not installed",
+        "role": "OPTIONAL_HISTORICAL_LIMITATION",
+        "sha256": "43799f02bbba70e0f326a7301b8b303a5f6f46d04fce0d9b72c6cbac86cfaa16"
+      },
+      {
+        "blob_id": "eaeac1d9667288e9e51f3ee5130c17b0d1efc8db",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "docs/workflows/task-skill-runner-migration/README.md",
+        "projection_action": "INHERIT_BUSINESS_BASE",
+        "projection_reason": "known limitation 2 (stale description of removed trusted_runner.py); default not installed",
+        "role": "OPTIONAL_HISTORICAL_LIMITATION",
+        "sha256": "e1ef2b8911230f8ff5e5f97dda601afcf15ecd5a4681e4058014ef3d8f81561b"
+      },
+      {
+        "blob_id": "d8e7e39157238c3b4721d1ed03a71cbcec2830e6",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "docs/workflows/task-skill-runner-migration/rollback-and-compatibility.md",
+        "projection_action": "INHERIT_BUSINESS_BASE",
+        "projection_reason": "known limitation 3 (stale description of removed trusted_runner.py); default not installed",
+        "role": "OPTIONAL_HISTORICAL_LIMITATION",
+        "sha256": "b22ab04c03bab08a073ed28dc22b2830a0bfbef8d4ea6273db4af1ddf373b9e8"
+      },
+      {
+        "blob_id": "1533140d5119156699331f62f70ad3c598e85cac",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "docs/workflows/publication-materials/task-material-register.md",
+        "projection_action": "INHERIT_BUSINESS_BASE",
+        "projection_reason": "known limitation 4 (stale description of removed trusted_runner.py); default not installed",
+        "role": "OPTIONAL_HISTORICAL_LIMITATION",
+        "sha256": "f5edef67c4749326756eeee852dd4534eae9c1b1742adcd75be2e26678067785"
+      }
+    ]
+  },
+  "generation_id": "B",
+  "invocation": {
+    "evidence": "python tools/agent_workflow/wsl2_github_evidence_runner.py delivery|delivery-readiness ...",
+    "gates": "_worktree_state_compatible_gate requires clean committed head for pr-readiness/review-remediation",
+    "pr_contract": "PR is open and not Draft; PR body contains native 'Closes #<Task>' line",
+    "pr_resolve": "tools/agent_workflow/pr_resolve.py (fail-closed identity validation: baseRefName/baseRefOid/headRefName/headRefOid/isDraft==false)",
+    "skill": ".agents/skills/task-delivery-runner/SKILL.md (B-native)",
+    "validation": "python tools/agent_workflow/wsl2_validation_runner.py workflow-delivery --base-sha <base> ..."
+  },
+  "kind": "pinned",
+  "known_limitations": [
+    "Known limitation 1: legacy .agents/skills/task-delivery/SKILL.md references deleted .agents/policies/task-workflow-telemetry.md (recorded as-is, not repaired)",
+    "Known limitation 2: docs/workflows/task-skill-runner-migration/README.md contains a stale description of removed tools/agent_workflow/trusted_runner.py",
+    "Known limitation 3: docs/workflows/task-skill-runner-migration/rollback-and-compatibility.md contains the same stale description of removed trusted_runner.py",
+    "Known limitation 4: docs/workflows/publication-materials/task-material-register.md and the v1 benchmark-manifest.json (docs/workflows/benchmarks/task-65-round-2/benchmark-manifest.json) contain stale descriptions of removed trusted_runner.py; the v1 manifest is Class 2 prior-benchmark material (see inventory) and is excluded from this closure",
+    "The v1 benchmark-manifest.json at B_WORKFLOW_SOURCE_SHA has blob e8ad2c39d49ef067b5fd2ade7c2bd2a911c2bcf5 (identity only; content is Class 2 and must not be read)"
+  ],
+  "permission_profile": {
+    "note": "B-era permission rules and settings are installed as part of the B projection",
+    "rules_files": [
+      ".codex/rules/tracequant-wsl-evidence.rules",
+      ".codex/rules/tracequant-wsl-validation.rules"
+    ],
+    "settings_files": [
+      ".claude/settings.json"
+    ]
+  },
+  "protocol_identity": "task-65-round-2-v2",
+  "schema_version": 1,
+  "workflow_source": {
+    "label": "B_WORKFLOW_SOURCE_SHA",
+    "sha": "e4a38d8404b6ad935fc24430a70e715b4504aa57"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "task-65-round-2-v2 normalized access event",
+  "description": "Normalized mechanical access event produced by the Codex rollout adapter and the Claude transcript adapter. Adapters only extract/normalize; they never interpret workflow semantics.",
+  "protocol_identity": "task-65-round-2-v2",
+  "schema_version": 1,
+  "type": "object",
+  "required": [
+    "arm_id",
+    "session_id",
+    "timestamp",
+    "tool",
+    "operation",
+    "target",
+    "raw_event_reference"
+  ],
+  "properties": {
+    "arm_id": {"type": "string"},
+    "session_id": {"type": "string"},
+    "timestamp": {"type": "string"},
+    "tool": {
+      "type": "string",
+      "enum": ["git", "gh", "read", "grep", "glob", "shell", "evidence", "rollout", "transcript", "other"]
+    },
+    "operation": {"type": "string"},
+    "target": {"type": "string"},
+    "raw_event_reference": {"type": "string"}
+  },
+  "additionalProperties": false
+}

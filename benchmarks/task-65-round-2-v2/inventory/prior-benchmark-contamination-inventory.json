@@ -1,0 +1,175 @@
+{
+  "protocol_identity": "task-65-round-2-v2",
+  "schema_version": 1,
+  "classification": "PRIOR_BENCHMARK_CONTAMINATION_SECRET",
+  "generated_for_rounds": ["task-65-round-2-v1", "task-65-round-2-v1.1"],
+  "entries": [
+    {
+      "artifact_id": "v1-protocol-freeze-commit",
+      "type": "protocol",
+      "locations": [
+        {"kind": "commit", "identifier": "a492f0b334f950f2613b4b2204e96bef413355be"}
+      ],
+      "reason_forbidden": "v1 protocol freeze commit (merged via PR #98). Dual nature: it is A's Class 1 workflow-input source (pinned in the A manifest closure) AND it hosts the v1 bundle including answer-bearing benchmark-manifest.json. Only the A-manifest-declared workflow input files may be read from it; benchmark answer-bearing paths within it are Class 2 (see v1-benchmark-manifest entries).",
+      "scope": ["A", "B", "C", "D"],
+      "notes": "A_WORKFLOW_SOURCE_SHA pinned in generation-a-pinned-manifest.json."
+    },
+    {
+      "artifact_id": "v1-benchmark-manifest.json",
+      "type": "metrics",
+      "locations": [
+        {
+          "kind": "path",
+          "identifier": "docs/workflows/benchmarks/task-65-round-2/benchmark-manifest.json",
+          "path": "docs/workflows/benchmarks/task-65-round-2/benchmark-manifest.json"
+        },
+        {"kind": "commit", "identifier": "a492f0b334f950f2613b4b2204e96bef413355be"}
+      ],
+      "reason_forbidden": "v1/v1.1 benchmark run record carrying protocol answers, verdicts, and metrics. Present on current main (blob e8ad2c39d49ef067b5fd2ade7c2bd2a911c2bcf5).",
+      "scope": ["A", "B", "C", "D"],
+      "notes": "Identity-only blob record: e8ad2c39d49ef067b5fd2ade7c2bd2a911c2bcf5."
+    },
+    {
+      "artifact_id": "v1-protocol-bundle",
+      "type": "protocol",
+      "locations": [
+        {
+          "kind": "path",
+          "identifier": "docs/workflows/benchmarks/task-65-round-2",
+          "path": "docs/workflows/benchmarks/task-65-round-2"
+        }
+      ],
+      "reason_forbidden": "v1 protocol bundle (README.md, protocol.md, task-65-frozen.md, task-65-original.md, task-65-telemetry-only.diff, environment-current-windows.md, materials/*.example.json). Protocol/instruction documents are Class 1 readable as the reproduction spec and must NOT be modified by arms; they are explicitly distinguished from Class 2 answer-bearing material (benchmark-manifest.json is separately listed).",
+      "scope": ["A", "B", "C", "D"],
+      "notes": "A/B lineages ran under this protocol; C/D reproduce under the task-65-round-2-v2 namespace."
+    },
+    {
+      "artifact_id": "pr-98-v1-protocol-merge",
+      "type": "protocol",
+      "locations": [
+        {"kind": "pr", "identifier": "98", "pr": 98}
+      ],
+      "reason_forbidden": "PR #98 merged the v1 protocol freeze (a492f0b) into main; the PR thread and commit host the v1 bundle. Thread content may carry v1 discussion of the benchmark design.",
+      "scope": ["A", "B", "C", "D"]
+    },
+    {
+      "artifact_id": "pr-99-v1-current-windows-rollout",
+      "type": "rollout",
+      "locations": [
+        {"kind": "pr", "identifier": "99", "pr": 99},
+        {"kind": "branch", "identifier": "experiment/task65-current-windows", "branch": "experiment/task65-current-windows"}
+      ],
+      "reason_forbidden": "v1 round current-Windows merge-pre rollout: contains v1 protocol answers, verdicts, and metrics for generation A lineage.",
+      "scope": ["A", "B", "C", "D"]
+    },
+    {
+      "artifact_id": "branch-task65-current-windows",
+      "type": "rollout",
+      "locations": [
+        {"kind": "branch", "identifier": "experiment/task65-current-windows", "branch": "experiment/task65-current-windows"}
+      ],
+      "reason_forbidden": "v1 round rollout branch; carries v1 answers/verdicts/metrics and prior-run evidence.",
+      "scope": ["A", "B", "C", "D"],
+      "notes": "No longer present on remote; reachable via PR #99 records."
+    },
+    {
+      "artifact_id": "pr-108-v11-wsl2-candidate-rollout",
+      "type": "rollout",
+      "locations": [
+        {"kind": "pr", "identifier": "108", "pr": 108},
+        {"kind": "branch", "identifier": "experiment/task65-candidate-wsl2", "branch": "experiment/task65-candidate-wsl2"}
+      ],
+      "reason_forbidden": "v1.1 round WSL2 candidate merge-pre rollout: contains v1.1 protocol answers, verdicts, and metrics for generation B lineage.",
+      "scope": ["A", "B", "C", "D"]
+    },
+    {
+      "artifact_id": "branch-task65-candidate-wsl2",
+      "type": "rollout",
+      "locations": [
+        {"kind": "branch", "identifier": "experiment/task65-candidate-wsl2", "branch": "experiment/task65-candidate-wsl2"}
+      ],
+      "reason_forbidden": "v1.1 round rollout branch; carries v1.1 answers/verdicts/metrics and prior-run evidence.",
+      "scope": ["A", "B", "C", "D"],
+      "notes": "No longer present on remote; reachable via PR #108 records."
+    },
+    {
+      "artifact_id": "pr-109-v11-wsl2-rerun-rollout",
+      "type": "rework",
+      "locations": [
+        {"kind": "pr", "identifier": "109", "pr": 109},
+        {"kind": "branch", "identifier": "experiment/task65-candidate-wsl2-rerun", "branch": "experiment/task65-candidate-wsl2-rerun"}
+      ],
+      "reason_forbidden": "v1.1 round WSL2 candidate rerun merge-pre: contains rework and rerun answers/verdicts/metrics for generation B lineage.",
+      "scope": ["A", "B", "C", "D"]
+    },
+    {
+      "artifact_id": "branch-task65-candidate-wsl2-rerun",
+      "type": "rework",
+      "locations": [
+        {"kind": "branch", "identifier": "experiment/task65-candidate-wsl2-rerun", "branch": "experiment/task65-candidate-wsl2-rerun"}
+      ],
+      "reason_forbidden": "v1.1 round rerun branch; carries rerun answers/verdicts/metrics and prior-run evidence.",
+      "scope": ["A", "B", "C", "D"],
+      "notes": "No longer present on remote; reachable via PR #109 records."
+    },
+    {
+      "artifact_id": "branch-task65-round-2-v11-base",
+      "type": "protocol",
+      "locations": [
+        {"kind": "branch", "identifier": "experiment/task65-round-2-v1.1-base", "branch": "experiment/task65-round-2-v1.1-base"}
+      ],
+      "reason_forbidden": "v1.1 base branch used as base for PRs #108/#109; may carry v1.1 protocol plus any v1 answer material carried forward.",
+      "scope": ["A", "B", "C", "D"],
+      "notes": "No longer present on remote; referenced by PR #108/#109 base metadata."
+    },
+    {
+      "artifact_id": "pr-73-token-optimization-findings",
+      "type": "findings",
+      "locations": [
+        {"kind": "pr", "identifier": "73", "pr": 73}
+      ],
+      "reason_forbidden": "[Task] Token 优化 PR derived from v1 benchmark findings and metrics; contains benchmark-derived findings/verdicts.",
+      "scope": ["A", "B", "C", "D"],
+      "notes": "Merged to main; benchmark-derived conclusions are Class 2 even when repackaged as task findings."
+    },
+    {
+      "artifact_id": "v1-v11-review-threads",
+      "type": "review",
+      "locations": [
+        {"kind": "pr", "identifier": "99", "pr": 99},
+        {"kind": "pr", "identifier": "108", "pr": 108},
+        {"kind": "pr", "identifier": "109", "pr": 109}
+      ],
+      "reason_forbidden": "Review threads and comments on v1/v1.1 experiment PRs may carry verdicts, comparisons, and metric discussion.",
+      "scope": ["A", "B", "C", "D"]
+    },
+    {
+      "artifact_id": "v1-v11-conductor-evidence-archives",
+      "type": "evidence",
+      "locations": [
+        {"kind": "external", "identifier": ".agents/evidence.local", "evidence_location": ".agents/evidence.local"},
+        {"kind": "external", "identifier": ".agents/validation.local", "evidence_location": ".agents/validation.local"}
+      ],
+      "reason_forbidden": "Conductor-local evidence and validation archives from prior v1/v1.1 runs contain benchmark answers, verdicts, and metrics (Runner snapshots, self-reviews, validation records). Prior-run archives must not be read by any arm; current-run archives are per-arm/session isolated.",
+      "scope": ["A", "B", "C", "D"]
+    },
+    {
+      "artifact_id": "v1-v11-ci-run-artifacts",
+      "type": "evidence",
+      "locations": [
+        {"kind": "external", "identifier": "actions/runs", "evidence_location": "GitHub Actions workflow runs and logs for PRs #99/#108/#109"}
+      ],
+      "reason_forbidden": "GitHub Actions workflow-run artifacts, logs, and check-run details from v1/v1.1 experiment PRs may carry benchmark answers/metrics.",
+      "scope": ["A", "B", "C", "D"]
+    },
+    {
+      "artifact_id": "v1-v11-experiment-records",
+      "type": "metrics",
+      "locations": [
+        {"kind": "external", "identifier": "experiment-record", "evidence_location": "instantiated v1/v1.1 experiment records and publication materials (conductor-local archives, non-example)"}
+      ],
+      "reason_forbidden": "Instantiated (non-example) v1/v1.1 experiment records and publication materials carry metrics and verdicts. Only the protocol examples (materials/*.example.json) are Class 1.",
+      "scope": ["A", "B", "C", "D"]
+    }
+  ]
+}
