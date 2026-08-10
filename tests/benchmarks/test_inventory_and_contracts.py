@@ -91,10 +91,45 @@ def test_schemas_are_valid_json_documents() -> None:
         "arm-identity.schema.json",
         "contamination-inventory.schema.json",
         "access-event.schema.json",
+        "context-input.schema.json",
     ):
         raw = load_json(NAMESPACE / "schemas" / name)
         assert raw["protocol_identity"] == "task-65-round-2-v2"
         assert raw["$schema"].startswith("https://json-schema.org/")
+
+
+def test_context_input_schema_validates_normalized_inputs() -> None:
+    schema = _schema("context-input.schema.json")
+    validate_basic(
+        {
+            "session_id": "sess-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            "timestamp": "2026-08-10T14:02:52.353Z",
+            "source_type": "attachment:file",
+            "target": "synthetic attached content",
+            "raw_event_reference": "toolu_01",
+        },
+        schema,
+        "context-input",
+    )
+    for source_type in (
+        "attachment:agent_listing_delta",
+        "attachment:skill_listing",
+        "attachment:todo_reminder",
+        "summary",
+        "user-prompt",
+        "last-prompt",
+    ):
+        validate_basic(
+            {
+                "session_id": "s",
+                "timestamp": "t",
+                "source_type": source_type,
+                "target": "x",
+                "raw_event_reference": "r",
+            },
+            schema,
+            f"context-input/{source_type}",
+        )
 
 
 def test_contracts_present_and_covers_required_topics() -> None:

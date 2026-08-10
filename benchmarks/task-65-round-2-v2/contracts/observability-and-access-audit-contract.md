@@ -10,30 +10,67 @@ Task #65 v2 benchmark. Tooling: `tooling/observability_preflight.py`,
 
 ### Adapters
 
-Two benchmark-only adapters normalize observed records into mechanical access
-events `arm_id / session_id / timestamp / tool / operation / target /
-raw_event_reference`; `target` covers git args, gh args, Read paths, Grep
-paths/pattern scopes, Glob scopes, shell commands, and evidence/rollout
-paths.
+Two benchmark-only adapters normalize observed records into mechanical
+streams; `target` covers git args, gh args, Read paths, Grep paths/pattern
+scopes, Glob scopes, shell commands, and evidence/rollout paths.
 
 - Codex rollout adapter (`tooling/codex_rollout_adapter.py`): parses
-  `custom_tool_call` / `custom_tool_call_output` records.
+  `custom_tool_call` / `custom_tool_call_output` records into access events.
 - Claude transcript adapter (`tooling/claude_transcript_adapter.py`): parses
-  `tool_use` / `tool_result` records from `~/.claude/projects/**` or the
-  actual session transcript resolved at execution time.
+  the current tested Claude runtime transcript
+  (Claude Code VSCode 2.1.226, `~/.claude/projects/**` JSONL) into access
+  events and context inputs.
 
 Adapters only extract/normalize — they never interpret workflow semantics;
-unknown record format → **FAIL CLOSED → NOT VERIFIED**. Parser pinning: the
-four record types above. Adapters must ship tests with sample record
-fixtures.
+unknown record format → **FAIL CLOSED → NOT VERIFIED**. Adapters must ship
+tests with de-identified sample record fixtures.
+
+### Claude transcript record taxonomy
+
+Every top-level record type is classified explicitly
+(schema/contract-backed in `claude_transcript_adapter.py`); there is no
+"not a tool_use, skip it" catch-all:
+
+| Class | Record types | Behavior |
+|---|---|---|
+| A. ACCESS_BEARING | `assistant`, `user` | `message.content` items `tool_use` / `tool_result` → canonical access events `arm_id / session_id / timestamp / tool / operation / target / raw_event_reference` |
+| B. INPUT_CONTEXT_BEARING | `attachment` (sub-types `file`, `agent_listing_delta`, `skill_listing`, `todo_reminder`), `summary`, `last-prompt`, user message text (`user-prompt`, `isCompactSummary` continuation summary) | extracted as context inputs (`context-input.schema.json`), audited with the same Class 2 / Class 3 forbidden identifiers; never silently skipped |
+| C. KNOWN_NON_ACCESS_METADATA | `queue-operation`, `ai-title`, `file-history-delta`, `file-history-snapshot`, `system`, `meta`, `isMeta`, `pr-link`, `mode` | explicit allowlist with structural + semantic validation (e.g. `queue-operation.operation` ∈ {enqueue, dequeue}; `system.subtype` ∈ {api_error, compact_boundary}; file-history backup entries may only carry registry keys `backupFileName`/`version`/`backupTime`/`realParentDir` and never content payloads); violation → fail closed |
+| D. UNKNOWN | anything else | **FAIL CLOSED / NOT VERIFIED** |
+
+Evidence basis for C: on the current tested runtime, file-history
+snapshot/delta records are the file-history feature's backup registry (paths +
+backup metadata), never file content; `system` records carry harness
+error/compaction markers without `message`; the remaining metadata types
+carry UI/queue/lifecycle data only. Any record whose structure could carry
+content or access fails closed instead of being classified.
+
+### Session identity model
+
+Transcript records carry `sessionId`, but the resolved session identity is an
+**explicit adapter input** from the observability preflight. Rules:
+
+- `parse_transcript` / `parse_transcript_file` require a non-empty
+  `session_id`; every normalized event and context input is stamped with it
+  (`no empty session_id`).
+- The transcript path must mechanically match the session identity: the
+  Claude transcript basename stem equals the session id
+  (`~/.claude/projects/<project>/<session-id>.jsonl`); mismatch → fail closed
+  (`verify_session_path_match`).
+- A record carrying a `sessionId` conflicting with the injected identity →
+  fail closed.
+- No default value, no silent fallback inference.
 
 ### Observability preflight (six checks, before Arm start)
 
-1. **session identity resolvable**;
+1. **session identity resolvable** (for `claude_transcript` sources this
+   includes the mechanical transcript-path ↔ session-identity match);
 2. **transcript / rollout source locatable**;
 3. **capture active before formal Agent work**;
 4. **archive destination isolated for this Arm/session**;
-5. **parser supports the current observed record format**;
+5. **parser supports the current observed record format** — supported
+   formats: `codex:custom_tool_call`, `codex:custom_tool_call_output`, and
+   the full `claude:*` taxonomy of the current tested runtime;
 6. **controlled test tool call appears in capture and can be normalized**.
 
 Verdicts: `OBSERVABILITY VERIFIED` when all six checks pass;
@@ -45,9 +82,11 @@ incomplete → NOT VERIFIED).
 
 ## Access audit
 
-- Existing rollout adapter, transcript adapter, tool-result observability,
-  negative evidence, and Delivery/Review dual-session audit designs are not
-  rewritten.
+- The audit matches **access events and context inputs**; context inputs
+  (attachment/summary/prompt content that entered the session without a tool
+  call) are matched with the same forbidden identifiers, so Class 2 / Class 3
+  identities are detected even when no tool call touched them.  The canonical
+  Class 1/2/3 contract is unchanged.
 - Matching targets:
 
 ```text
@@ -58,13 +97,16 @@ matching targets = prior contamination inventory          (Class 2)
                    dynamic identity 时）
 ```
 
+- Forbidden identifiers are the inventory's concrete `identifier` /
+  `path` / `ref` / `pr` / `branch` / `commit` values; category labels
+  (`kind` values such as `commit` / `path` / `branch`) are **not**
+  identifiers and never match.
 - Any match → **`BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE`** → fresh
   workspace + fresh Delivery + fresh Review rerun (a prior-benchmark answer
   source is equally invalid).
 - **Negative-evidence PASS definition**: capture complete + parser supported +
-  audit executed + **0 forbidden matches** (the audit reason string for a PASS
-  is "zero forbidden matches"; including inventory matches and
-  timeline-metadata matches).
+  audit executed + **0 forbidden matches** (access or context; the audit
+  reason string for a PASS is "zero forbidden matches").
 - Delivery and Review are audited independently; each must PASS for the
   result to be valid.
 - Matching is deterministic substring/identifier matching on normalized

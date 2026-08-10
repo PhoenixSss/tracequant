@@ -24,6 +24,10 @@ from pathlib import Path
 from typing import Any
 
 from benchmark_common import BenchmarkError, gate, load_json, validate_basic
+from claude_transcript_adapter import (
+    CLAUDE_RECORD_FORMATS,
+    verify_session_path_match,
+)
 
 PREFLIGHT_CONFIG_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -48,13 +52,17 @@ PREFLIGHT_CONFIG_SCHEMA: dict[str, Any] = {
     "additionalProperties": True,
 }
 
-KNOWN_RECORD_FORMATS: frozenset[str] = frozenset(
-    {
-        "codex:custom_tool_call",
-        "codex:custom_tool_call_output",
-        "claude:tool_use",
-        "claude:tool_result",
-    }
+# Parser record formats supported by the adapters: the Codex rollout adapter's
+# two record types plus the full Claude transcript taxonomy observed on the
+# current tested runtime (Claude Code VSCode 2.1.226).
+KNOWN_RECORD_FORMATS: frozenset[str] = (
+    frozenset(
+        {
+            "codex:custom_tool_call",
+            "codex:custom_tool_call_output",
+        }
+    )
+    | CLAUDE_RECORD_FORMATS
 )
 
 
@@ -67,32 +75,53 @@ def run_preflight(config: dict[str, Any]) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
 
     session = config.get("session_identity")
+    session_ok = bool(
+        isinstance(session, dict)
+        and isinstance(session.get("session_id"), str)
+        and session.get("session_id")
+        and bool(session.get("arm_id"))
+    )
+    session_detail = None
+    if session_ok and isinstance(session, dict):
+        source = config.get("transcript_rollout_source")
+        session_id = str(session["session_id"])
+        if (
+            isinstance(source, dict)
+            and source.get("kind") == "claude_transcript"
+            and source.get("location")
+        ):
+            # Mechanical match: the Claude transcript basename stem must equal
+            # the resolved session identity; mismatch fails closed.
+            try:
+                verify_session_path_match(str(source["location"]), session_id)
+            except BenchmarkError as exc:
+                session_ok = False
+                session_detail = str(exc)
     checks.append(
         _check(
             "session_identity_resolvable",
-            isinstance(session, dict)
-            and bool(session.get("session_id"))
-            and bool(session.get("arm_id")),
-            None
-            if isinstance(session, dict)
-            and bool(session.get("session_id"))
-            and bool(session.get("arm_id"))
-            else "session_id/arm_id missing or unresolved",
+            session_ok,
+            session_detail
+            or (
+                None
+                if session_ok
+                else "session_id/arm_id missing, unresolved, or transcript "
+                "path does not match the session identity"
+            ),
         )
     )
 
     source = config.get("transcript_rollout_source")
+    source_ok = bool(
+        isinstance(source, dict)
+        and bool(source.get("kind") in {"codex_rollout", "claude_transcript"})
+        and bool(source.get("location"))
+    )
     checks.append(
         _check(
             "transcript_rollout_source_locatable",
-            isinstance(source, dict)
-            and bool(source.get("kind") in {"codex_rollout", "claude_transcript"})
-            and bool(source.get("location")),
-            None
-            if isinstance(source, dict)
-            and bool(source.get("kind") in {"codex_rollout", "claude_transcript"})
-            and bool(source.get("location"))
-            else "source kind/location missing or unknown",
+            source_ok,
+            None if source_ok else "source kind/location missing or unknown",
         )
     )
 

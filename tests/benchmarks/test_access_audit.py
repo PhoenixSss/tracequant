@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+import pytest
+
 from _benchmark_helpers import REPO_ROOT
 
 from access_audit import audit, match_target  # type: ignore[import-not-found]
-from benchmark_common import load_json  # type: ignore[import-not-found]
+from benchmark_common import BenchmarkError, load_json  # type: ignore[import-not-found]
 
 INVENTORY = (
     REPO_ROOT
@@ -167,3 +169,86 @@ def test_audit_accepts_schema_wrapper_document() -> None:
         audit_executed=True,
     )
     assert result["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+
+
+def _context_input(
+    target: str, source_type: str = "attachment:file"
+) -> dict[str, object]:
+    return {
+        "session_id": "s1",
+        "timestamp": "t",
+        "source_type": source_type,
+        "target": target,
+        "raw_event_reference": "c1",
+    }
+
+
+def test_audit_matches_context_inputs() -> None:
+    result = audit(
+        [_event("git status")],
+        load_json(INVENTORY),
+        [],
+        [],
+        context_inputs=[
+            _context_input(
+                "attached notes: docs/workflows/benchmarks/task-65-round-2/benchmark-manifest.json"
+            )
+        ],
+        capture_complete=True,
+        parser_supported=True,
+        audit_executed=True,
+    )
+    assert result["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+    assert result["context_inputs_count"] == 1
+    assert any(
+        m["kind"] == "context_input" and m["source_type"] == "attachment:file"
+        for m in result["matches"]
+    )
+
+
+def test_audit_clean_context_inputs_keep_pass() -> None:
+    result = audit(
+        [_event("git status")],
+        load_json(INVENTORY),
+        [],
+        [],
+        context_inputs=[_context_input("fully benign attached text")],
+        capture_complete=True,
+        parser_supported=True,
+        audit_executed=True,
+    )
+    assert result["verdict"] == "PASS"
+    assert result["reason"] == "zero forbidden matches"
+
+
+def test_audit_kind_labels_are_not_identifiers() -> None:
+    # Category labels (kind: commit/path/branch/...) must never be matched as
+    # identifiers: a generic label would flag every target containing the
+    # word and make a clean run unable to PASS.  Targets that merely contain
+    # the words "branch"/"path" must produce zero matches against the real
+    # inventory.
+    result = audit(
+        [_event("git branch --show-current"), _event("Read file_path AGENTS.md")],
+        load_json(INVENTORY),
+        [],
+        [],
+        capture_complete=True,
+        parser_supported=True,
+        audit_executed=True,
+    )
+    assert result["verdict"] == "PASS"
+    assert result["reason"] == "zero forbidden matches"
+
+
+def test_audit_rejects_malformed_context_input() -> None:
+    with pytest.raises(BenchmarkError):
+        audit(
+            [_event("git status")],
+            load_json(INVENTORY),
+            [],
+            [],
+            context_inputs=["not an object"],
+            capture_complete=True,
+            parser_supported=True,
+            audit_executed=True,
+        )

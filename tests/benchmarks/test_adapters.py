@@ -88,7 +88,7 @@ def test_codex_rollout_fail_closed_malformed_line() -> None:
 def test_claude_adapter_normalizes_tool_use() -> None:
     record = {
         "type": "assistant",
-        "session_id": "claude-sess",
+        "sessionId": "claude-sess",
         "timestamp": "2026-08-09T12:00:00Z",
         "message": {
             "content": [
@@ -102,20 +102,21 @@ def test_claude_adapter_normalizes_tool_use() -> None:
             ]
         },
     }
-    events = parse_claude_record(record)
-    assert events is not None
+    events, context_inputs = parse_claude_record(record)
     assert len(events) == 1
+    assert context_inputs == []
     event = events[0]
     assert event["tool"] == "shell"
     assert event["operation"] == "tool_use"
     assert '"command": "git log --oneline"' in event["target"]
     assert event["raw_event_reference"] == "toolu_01"
+    assert event["session_id"] == "claude-sess"  # record's own sessionId
 
 
 def test_claude_adapter_normalizes_tool_result() -> None:
     record = {
         "type": "user",
-        "session_id": "s",
+        "sessionId": "s",
         "timestamp": "t",
         "message": {
             "content": [
@@ -127,24 +128,47 @@ def test_claude_adapter_normalizes_tool_result() -> None:
             ]
         },
     }
-    events = parse_claude_record(record)
-    assert events is not None and len(events) == 1
+    events, context_inputs = parse_claude_record(record)
+    assert len(events) == 1 and context_inputs == []
     assert events[0]["operation"] == "tool_result"
     assert "benchmark-manifest.json" in events[0]["target"]
 
 
 def test_claude_adapter_skips_known_non_tool_records() -> None:
-    for record_type in ("system", "summary", "isMeta", "meta"):
-        events = parse_claude_record(
-            {"type": record_type, "session_id": "s", "timestamp": "t"}
-        )
+    for record_type in (
+        "queue-operation",
+        "ai-title",
+        "file-history-snapshot",
+        "system",
+        "meta",
+        "isMeta",
+    ):
+        record: dict[str, object] = {
+            "type": record_type,
+            "sessionId": "s",
+            "timestamp": "t",
+        }
+        if record_type == "queue-operation":
+            record["operation"] = "enqueue"
+        if record_type == "system":
+            record["subtype"] = "compact_boundary"
+        if record_type == "ai-title":
+            record["aiTitle"] = "title"
+        if record_type == "file-history-snapshot":
+            record["snapshot"] = {
+                "messageId": "m-1",
+                "timestamp": "t",
+                "trackedFileBackups": {},
+            }
+        events, context_inputs = parse_claude_record(record, session_id="s")
         assert events == []
+        assert context_inputs == []
 
 
 def test_claude_adapter_fail_closed_unknown_record_type() -> None:
     with pytest.raises(BenchmarkError):
         parse_claude_record(
-            {"type": "unknown_type", "session_id": "s", "timestamp": "t"}
+            {"type": "unknown_type", "sessionId": "s", "timestamp": "t"}
         )
 
 
@@ -153,7 +177,7 @@ def test_claude_adapter_fail_closed_unknown_content_item() -> None:
         parse_claude_record(
             {
                 "type": "assistant",
-                "session_id": "s",
+                "sessionId": "s",
                 "timestamp": "t",
                 "message": {"content": [{"type": "web_search_result", "content": "x"}]},
             }
@@ -162,11 +186,18 @@ def test_claude_adapter_fail_closed_unknown_content_item() -> None:
 
 def test_claude_transcript_parse() -> None:
     lines = [
-        json.dumps({"type": "system", "session_id": "s", "timestamp": "t"}),
+        json.dumps(
+            {
+                "type": "system",
+                "sessionId": "s",
+                "timestamp": "t",
+                "subtype": "compact_boundary",
+            }
+        ),
         json.dumps(
             {
                 "type": "assistant",
-                "session_id": "s",
+                "sessionId": "s",
                 "timestamp": "t",
                 "message": {
                     "content": [
@@ -181,9 +212,13 @@ def test_claude_transcript_parse() -> None:
             }
         ),
     ]
-    events, diagnostics = parse_transcript(lines, arm_id="D")
+    events, context_inputs, diagnostics = parse_transcript(
+        lines, arm_id="D", session_id="s"
+    )
+    assert context_inputs == []
     assert diagnostics["records"] == 2
     assert diagnostics["non_tool_records"] == 1
     assert diagnostics["events"] == 1
     assert events[0]["arm_id"] == "D"
     assert events[0]["tool"] == "read"
+    assert events[0]["session_id"] == "s"

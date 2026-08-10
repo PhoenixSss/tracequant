@@ -103,7 +103,22 @@ uv run python benchmarks/task-65-round-2-v2/tooling/run_lock.py \
 
 uv run python benchmarks/task-65-round-2-v2/tooling/access_audit.py \
   --events <events.json> --inventory inventory/prior-benchmark-contamination-inventory.json \
+  --context-inputs <context-inputs.json> \
   --capture-complete --parser-supported --audit-executed
+```
+
+The Claude transcript adapter normalizes the current runtime transcript
+(Claude Code VSCode 2.1.226) into access events + context inputs, with the
+resolved session identity injected explicitly:
+
+```bash
+uv run python -c "
+import sys; sys.path.insert(0, 'benchmarks/task-65-round-2-v2/tooling')
+from claude_transcript_adapter import parse_transcript_file
+events, context_inputs, diagnostics = parse_transcript_file(
+    '<TRANSCRIPT>.jsonl', arm_id='D', session_id='<SESSION_ID>')
+print(diagnostics)
+"
 ```
 
 Tests: `uv run pytest tests/benchmarks/`.

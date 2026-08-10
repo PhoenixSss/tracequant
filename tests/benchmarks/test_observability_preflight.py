@@ -91,3 +91,66 @@ def test_preflight_controlled_test_call_required() -> None:
         and c["status"] == "fail"
         for c in report["checks"]
     )
+
+
+def test_preflight_supports_current_claude_record_formats(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    session_id = "sess-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    transcript = tmp_path / f"{session_id}.jsonl"
+    transcript.write_text("{}\n", encoding="utf-8")
+    config = {
+        "arm_id": "D",
+        "session_identity": {"session_id": session_id, "arm_id": "D"},
+        "transcript_rollout_source": {
+            "kind": "claude_transcript",
+            "location": str(transcript),
+        },
+        "capture_active": True,
+        "archive_destination": ".agents/evidence.local/task-65-round-2-v2/D",
+        "parser_record_formats": [
+            "claude:tool_use",
+            "claude:tool_result",
+            "claude:queue-operation",
+            "claude:attachment",
+            "claude:file-history-snapshot",
+            "claude:ai-title",
+            "claude:last-prompt",
+            "claude:system",
+            "claude:summary",
+        ],
+        "controlled_test_tool_call": {
+            "captured": True,
+            "normalized_event": {"target": "read CLAUDE.md"},
+        },
+    }
+    report = run_preflight(config)
+    assert report["verified"] is True
+    assert all(c["status"] == "pass" for c in report["checks"])
+
+
+def test_preflight_claude_session_path_mismatch_fails(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    transcript = tmp_path / "other-session.jsonl"
+    transcript.write_text("{}\n", encoding="utf-8")
+    config = {
+        "arm_id": "D",
+        "session_identity": {
+            "session_id": "sess-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            "arm_id": "D",
+        },
+        "transcript_rollout_source": {
+            "kind": "claude_transcript",
+            "location": str(transcript),
+        },
+        "capture_active": True,
+        "archive_destination": ".agents/evidence.local/task-65-round-2-v2/D",
+        "parser_record_formats": ["claude:tool_use", "claude:tool_result"],
+        "controlled_test_tool_call": {
+            "captured": True,
+            "normalized_event": {"target": "read CLAUDE.md"},
+        },
+    }
+    report = run_preflight(config)
+    assert report["verified"] is False
+    assert any(
+        c["name"] == "session_identity_resolvable" and c["status"] == "fail"
+        for c in report["checks"]
+    )
