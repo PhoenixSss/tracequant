@@ -198,10 +198,17 @@ def generation_identity_digest(
 def validate_basic(data: Any, schema: Mapping[str, Any], label: str) -> None:
     """Minimal dependency-free structural validation against our schemas.
 
-    Supports ``type``, ``required``, ``properties``, ``items``, ``enum`` and
-    ``additionalProperties``.  This is intentionally small: the benchmark
-    schemas are flat and deterministic.  Fail closed on any violation.
+    Supports ``type``, ``required``, ``properties``, ``items``, ``enum``,
+    ``const`` and ``additionalProperties``.  This is intentionally small: the
+    benchmark schemas are flat and deterministic.  Fail closed on any
+    violation.
     """
+    if "const" in schema:
+        if data != schema["const"]:
+            _schema_fail(
+                label, f"value {data!r} does not equal const {schema['const']!r}"
+            )
+        return
     if isinstance(schema.get("enum"), list):
         if data not in schema["enum"]:
             _schema_fail(label, f"value {data!r} not in enum {schema['enum']}")

@@ -11,6 +11,13 @@ start.  The six checks:
 5. parser_supports_observed_record_format
 6. controlled_test_tool_call_captured_and_normalizable
 
+Check 5 is decided by the REAL parser machinery, not an allowlist: the
+declared ``parser_record_formats`` must be adapter-supported AND the formal
+adapter must actually consume every record of the observed source (top-level
+record types, sub-types, content-item types, structural invariants, session
+identity, metadata discriminators).  Any record the full parser rejects ->
+check 5 FAIL -> ``BENCHMARK OBSERVABILITY NOT VERIFIED``.
+
 The checks are mechanical probes over a preflight configuration document;
 they never interpret workflow semantics.
 """
@@ -20,14 +27,17 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from benchmark_common import BenchmarkError, gate, load_json, validate_basic
 from claude_transcript_adapter import (
     CLAUDE_RECORD_FORMATS,
+    parse_transcript,
     verify_session_path_match,
 )
+from codex_rollout_adapter import parse_rollout
 
 PREFLIGHT_CONFIG_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -54,7 +64,10 @@ PREFLIGHT_CONFIG_SCHEMA: dict[str, Any] = {
 
 # Parser record formats supported by the adapters: the Codex rollout adapter's
 # two record types plus the full Claude transcript taxonomy observed on the
-# current tested runtime (Claude Code VSCode 2.1.226).
+# current tested runtime (Claude Code VSCode 2.1.226).  This derives from the
+# adapters' own taxonomies; it only sanity-checks the DECLARED formats.
+# Whether the parser actually supports the OBSERVED records is decided by the
+# real parser compatibility probe below.
 KNOWN_RECORD_FORMATS: frozenset[str] = (
     frozenset(
         {
@@ -68,6 +81,60 @@ KNOWN_RECORD_FORMATS: frozenset[str] = (
 
 def _check(name: str, ok: bool, detail: str | None = None) -> dict[str, Any]:
     return gate(name, "pass" if ok else "fail", detail)
+
+
+def _claude_source_compatible(
+    source: Mapping[str, Any], session_id: str, arm_id: str
+) -> tuple[bool, str | None]:
+    """Run the formal Claude transcript adapter over the actual transcript.
+
+    The full parse machinery validates top-level record types, attachment /
+    system / queue-operation sub-types, content-item types, structural
+    invariants, metadata discriminators, and record-level session identity.
+    Any record the full parser cannot consume -> (False, reason).
+    """
+    if not session_id:
+        return False, "session identity unresolved (real parser probe skipped)"
+    location = str(source["location"])
+    try:
+        lines = Path(location).read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        return False, f"cannot read transcript {location}: {exc}"
+    try:
+        parse_transcript(lines, arm_id=arm_id, session_id=session_id)
+    except BenchmarkError as exc:
+        return False, str(exc)
+    return True, None
+
+
+def _codex_source_compatible(
+    source: Mapping[str, Any], arm_id: str
+) -> tuple[bool, str | None]:
+    """Run the formal Codex rollout adapter over the actual rollout source.
+
+    The source is a rollout JSONL file or a directory of rollout JSONL files;
+    every ``*.jsonl`` file is fully consumed by the adapter.  Any record the
+    full parser cannot consume -> (False, reason).
+    """
+    location = Path(str(source["location"]))
+    if location.is_dir():
+        files = sorted(location.glob("*.jsonl"))
+        if not files:
+            return False, f"no rollout JSONL files under {location}"
+    elif location.is_file():
+        files = [location]
+    else:
+        return False, f"rollout source not found: {location}"
+    for path in files:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            return False, f"cannot read rollout {path}: {exc}"
+        try:
+            parse_rollout(lines, arm_id=arm_id)
+        except BenchmarkError as exc:
+            return False, str(exc)
+    return True, None
 
 
 def run_preflight(config: dict[str, Any]) -> dict[str, Any]:
@@ -153,14 +220,33 @@ def run_preflight(config: dict[str, Any]) -> dict[str, Any]:
         )
     )
 
+    # 5. parser supports the observed record format.  The DECLARED formats
+    # must be adapter-supported (declaration sanity), and the REAL parser
+    # compatibility probe must consume every record of the actual source:
+    # any record the full parser rejects fails the check.
     formats = [str(item) for item in config.get("parser_record_formats", [])]
+    declared_ok = bool(formats) and all(
+        item in KNOWN_RECORD_FORMATS for item in formats
+    )
+    parser_ok = declared_ok
+    parser_detail: str | None = None
+    if declared_ok and source_ok and isinstance(source, Mapping):
+        session_id = ""
+        if isinstance(config.get("session_identity"), dict):
+            session_id = str(config["session_identity"].get("session_id", ""))
+        if source["kind"] == "claude_transcript":
+            parser_ok, parser_detail = _claude_source_compatible(
+                source, session_id, arm_id
+            )
+        else:  # codex_rollout
+            parser_ok, parser_detail = _codex_source_compatible(source, arm_id)
+    if not declared_ok:
+        parser_detail = f"unsupported declared record formats: {formats}"
     checks.append(
         _check(
             "parser_supports_observed_record_format",
-            bool(formats) and all(item in KNOWN_RECORD_FORMATS for item in formats),
-            None
-            if bool(formats) and all(item in KNOWN_RECORD_FORMATS for item in formats)
-            else f"unsupported record formats: {formats}",
+            parser_ok,
+            None if parser_ok else parser_detail,
         )
     )
 

@@ -17,6 +17,9 @@ Fixture provenance (observed shape -> fixture):
 - ``attachment`` ``skill_listing``: {attachment: {type, content, isInitial,
   names, skillCount}}
 - ``attachment`` ``todo_reminder``: {attachment: {type, content: [...], itemCount}}
+- ``attachment`` ``command_permissions``: {parentUuid, isSidechain, attachment:
+  {type, allowedTools}, type, uuid, timestamp, userType, entrypoint, cwd,
+  sessionId, version, gitBranch}
 - ``file-history-snapshot``: {type, isSnapshotUpdate, messageId, snapshot:
   {messageId, timestamp, trackedFileBackups: {path: {backupFileName, version,
   backupTime, realParentDir}}}}
@@ -181,6 +184,39 @@ def todo_reminder_attachment_record(
             ],
             "itemCount": 2,
         },
+    }
+
+
+def command_permissions_attachment_record(
+    allowed_tools: list[str] | None = None,
+    *,
+    session_id: str = FIXTURE_SESSION_ID,
+) -> dict[str, object]:
+    """Tool-permission context attachment (current tested runtime shape).
+
+    Mirrors the real record structure observed on Claude Code VSCode 2.1.226:
+    ``attachment: {type: "command_permissions", allowedTools: [...]}`` with
+    the surrounding per-record envelope (parentUuid, isSidechain, uuid,
+    userType, entrypoint, cwd, version, gitBranch).  ``allowedTools`` is
+    required by the adapter contract; the real transcript always carries it
+    (empty list observed).
+    """
+    return {
+        "parentUuid": "u-11111111-2222-4333-8444-555555555555",
+        "isSidechain": False,
+        "attachment": {
+            "type": "command_permissions",
+            "allowedTools": [] if allowed_tools is None else allowed_tools,
+        },
+        "type": "attachment",
+        "uuid": "u-22222222-3333-4444-9555-666666666666",
+        "timestamp": "2026-08-10T15:51:02.965Z",
+        "userType": "external",
+        "entrypoint": "claude-vscode",
+        "cwd": "<scrubbed>/tracequant",
+        "sessionId": session_id,
+        "version": "2.1.226",
+        "gitBranch": "<scrubbed-branch>",
     }
 
 

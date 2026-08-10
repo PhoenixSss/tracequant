@@ -31,7 +31,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from benchmark_common import BenchmarkError, load_json
+from benchmark_common import BenchmarkError, load_json, validate_basic
+
+_INVENTORY_SCHEMA_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "schemas"
+    / "contamination-inventory.schema.json"
+)
 
 _PR_NUMBER = re.compile(r"(?:^|[^0-9])#(\d{1,6})(?:[^0-9]|$)")
 _PULL_URL = re.compile(r"/pull/(\d{1,6})(?:[^0-9]|$)")
@@ -40,6 +46,26 @@ _PR_CONTEXT = re.compile(
     r"(?:^|[^0-9])(?:pr|pull|issue)\b[^0-9]{0,12}?(\d{1,6})(?:[^0-9]|$)"
 )
 _PR_IDENTIFIER = re.compile(r"#?\d{1,6}")
+
+
+def load_inventory_entries(value: Any) -> list[dict[str, Any]]:
+    """Load and schema-validate the canonical contamination inventory document.
+
+    The canonical contract is the schema-backed document
+    ``{"protocol_identity": ..., "schema_version": ..., "classification":
+    ..., "entries": [...]}`` (``schemas/contamination-inventory.schema.json``).
+    The document is validated against that schema and its ``entries`` are
+    extracted mechanically.  Anything else -- including a bare JSON array --
+    is an unsupported implicit format and fails closed.  API and CLI share
+    this single loader so the CLI contract cannot drift from the API.
+    """
+    if not isinstance(value, Mapping):
+        raise BenchmarkError(
+            "inventory must be the schema-conformant canonical document (fail closed)"
+        )
+    schema = load_json(_INVENTORY_SCHEMA_PATH)
+    validate_basic(value, schema, "inventory")
+    return list(value["entries"])
 
 
 def _normalize(value: str) -> str:
@@ -141,7 +167,7 @@ def _match_context_input(
 
 def audit(
     events: list[dict[str, Any]],
-    inventory: list[dict[str, Any]] | Mapping[str, Any],
+    inventory: Mapping[str, Any],
     cross_arm_dynamic_identity_sets: list[str],
     timeline_metadata: list[str],
     *,
@@ -152,22 +178,19 @@ def audit(
 ) -> dict[str, Any]:
     """Run the access audit over normalized events; returns the audit report.
 
-    ``context_inputs`` are the normalized INPUT_CONTEXT_BEARING records from
-    the Claude transcript adapter (attachments, summaries, prompts) and are
-    matched against the same forbidden identifiers, so Class 2 / Class 3
-    identities are detected even when they entered the session without a tool
-    call.  All preconditions (capture complete, parser supported, audit
-    executed) are explicit inputs so a missing log is never silently
-    interpreted as "no access".
+    ``inventory`` is the schema-conformant canonical contamination inventory
+    document (``{"...", "entries": [...]}``), loaded through the shared
+    :func:`load_inventory_entries` loader; a bare array is an unsupported
+    implicit format and fails closed.  ``context_inputs`` are the normalized
+    INPUT_CONTEXT_BEARING records from the Claude transcript adapter
+    (attachments, summaries, prompts) and are matched against the same
+    forbidden identifiers, so Class 2 / Class 3 identities are detected even
+    when they entered the session without a tool call.  All preconditions
+    (capture complete, parser supported, audit executed) are explicit inputs
+    so a missing log is never silently interpreted as "no access".
     """
-    if isinstance(inventory, Mapping) and "entries" in inventory:
-        # Accept the schema-conformant inventory document ({..., "entries": [...]}).
-        inventory = list(inventory["entries"])
-    elif not isinstance(inventory, list):
-        raise BenchmarkError(
-            "inventory must be a JSON array or the schema-conformant document (fail closed)"
-        )
-    forbidden = _forbidden_identifiers(inventory)
+    entries = load_inventory_entries(inventory)
+    forbidden = _forbidden_identifiers(entries)
     forbidden += [_normalize(item) for item in cross_arm_dynamic_identity_sets]
     forbidden += [_normalize(item) for item in timeline_metadata]
 
@@ -246,10 +269,14 @@ def main(argv: list[str] | None = None) -> int:
         context_inputs = (
             load_json(Path(args.context_inputs)) if args.context_inputs else []
         )
-        if not isinstance(events, list) or not isinstance(inventory, list):
-            raise BenchmarkError("events and inventory must be JSON arrays")
+        if not isinstance(events, list):
+            raise BenchmarkError("events must be a JSON array")
         if not isinstance(context_inputs, list):
             raise BenchmarkError("context inputs must be a JSON array")
+        # CLI contract: the canonical schema inventory document.  The shared
+        # ``load_inventory_entries`` loader schema-validates it and
+        # mechanically extracts entries inside ``audit``; a bare array or any
+        # other shape fails closed (no implicit second format).
         report = audit(
             events,
             inventory,

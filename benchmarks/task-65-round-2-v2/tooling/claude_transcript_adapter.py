@@ -19,10 +19,11 @@ A. ACCESS_BEARING
    ``tool_use`` / ``tool_result`` -> normalized access events.
 
 B. INPUT_CONTEXT_BEARING
-   ``attachment`` (file contents, agent/skill listings, todo state),
-   ``summary`` (compaction summaries), ``last-prompt`` (prompt echo), and
-   user message text (prompt / continuation summary) -> context inputs,
-   audited for forbidden identities.  Never silently skipped.
+   ``attachment`` (file contents, agent/skill listings, todo state,
+   command-permission context), ``summary`` (compaction summaries),
+   ``last-prompt`` (prompt echo), and user message text (prompt /
+   continuation summary) -> context inputs, audited for forbidden
+   identities.  Never silently skipped.
 
 C. KNOWN_NON_ACCESS_METADATA
    ``queue-operation``, ``ai-title``, ``file-history-delta``,
@@ -100,13 +101,28 @@ ASSISTANT_NON_ACCESS_CONTENT_TYPES: frozenset[str] = frozenset({"text", "thinkin
 
 # Attachment sub-types observed on the current tested runtime
 # (Claude Code VSCode 2.1.226).  ``file`` carries full file content injected
-# into the session (context input); the others carry listing/todo text.
+# into the session (context input); the others carry listing/todo/permission
+# text.  ``command_permissions`` carries the tool-permission context injected
+# into the session (``allowedTools`` string list); its strings are content
+# input and are audited, since they may carry Class 2 / Class 3 identifiers.
 ATTACHMENT_TYPES: frozenset[str] = frozenset(
-    {"file", "agent_listing_delta", "skill_listing", "todo_reminder"}
+    {
+        "file",
+        "agent_listing_delta",
+        "skill_listing",
+        "todo_reminder",
+        "command_permissions",
+    }
 )
 # Attachment types whose payload is content input (audited as context inputs).
 CONTEXT_BEARING_ATTACHMENT_TYPES: frozenset[str] = frozenset(
-    {"file", "agent_listing_delta", "skill_listing", "todo_reminder"}
+    {
+        "file",
+        "agent_listing_delta",
+        "skill_listing",
+        "todo_reminder",
+        "command_permissions",
+    }
 )
 
 # ``system`` record subtypes observed on the current tested runtime.
@@ -457,6 +473,28 @@ def _attachment_context_inputs(
                 session_id,
                 source_type="attachment:skill_listing",
                 target=content,
+            )
+        ]
+    if attachment_type == "command_permissions":
+        # Tool-permission context injected into the session: the ``allowedTools``
+        # string list is REQUIRED and must be a list of strings (fail closed on
+        # missing key, non-list, or non-string element).  The full list enters
+        # the context-input audit untruncated; an empty list is legal and
+        # produces zero contamination matches.
+        allowed_tools = attachment.get("allowedTools")
+        if not isinstance(allowed_tools, list) or not all(
+            isinstance(tool, str) for tool in allowed_tools
+        ):
+            raise BenchmarkError(
+                "command_permissions attachment without an allowedTools "
+                "string list (fail closed)"
+            )
+        return [
+            _context_input(
+                record,
+                session_id,
+                source_type="attachment:command_permissions",
+                target="\n".join(allowed_tools),
             )
         ]
     # todo_reminder

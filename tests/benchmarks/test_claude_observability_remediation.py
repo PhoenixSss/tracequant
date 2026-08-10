@@ -35,6 +35,7 @@ from claude_transcript_fixtures import (
     agent_listing_attachment_record,
     ai_title_record,
     assistant_record,
+    command_permissions_attachment_record,
     compact_summary_user_record,
     controlled_probe_records,
     file_attachment_record,
@@ -185,6 +186,100 @@ def test_unknown_attachment_type_fails_closed() -> None:
     record["attachment"] = {"type": "unknown_attachment", "content": "x"}
     with pytest.raises(BenchmarkError):
         _parse([record])
+
+
+def test_unknown_future_attachment_subtype_fails_closed() -> None:
+    # An attachment subtype the adapter has never observed must fail closed
+    # (future transcript structure is never silently skipped).
+    record = command_permissions_attachment_record()
+    record["attachment"] = {"type": "future_attachment_subtype", "content": "x"}
+    with pytest.raises(BenchmarkError):
+        _parse([record])
+
+
+# --------------------------------------------------------------------------
+# 4b. attachment:command_permissions classification (tool-permission context).
+# --------------------------------------------------------------------------
+
+
+def test_command_permissions_empty_allowed_tools_is_legal() -> None:
+    # The real current-runtime transcript carries command_permissions with an
+    # empty allowedTools list; it is legal and produces zero contamination
+    # matches (the record still enters the context-input audit).
+    events, context_inputs, diagnostics = _parse(
+        [command_permissions_attachment_record()]
+    )
+    assert events == []
+    assert diagnostics["context_inputs"] == 1
+    assert len(context_inputs) == 1
+    context_input = context_inputs[0]
+    assert context_input["source_type"] == "attachment:command_permissions"
+    assert context_input["target"] == ""
+    assert context_input["session_id"] == FIXTURE_SESSION_ID
+    report = _audit(events, context_inputs)
+    assert report["verdict"] == "PASS"
+    assert report["reason"] == "zero forbidden matches"
+
+
+def test_command_permissions_allowed_tools_full_text_context_input() -> None:
+    tools = ["Bash(git status)", "Read(CLAUDE.md)", "Glob(*.py)"]
+    events, context_inputs, _ = _parse([command_permissions_attachment_record(tools)])
+    assert events == []
+    assert len(context_inputs) == 1
+    target = context_inputs[0]["target"]
+    for tool in tools:
+        assert tool in target  # full untruncated content enters the audit
+
+
+def test_forbidden_class2_identifier_in_allowed_tools_detected() -> None:
+    contaminated = command_permissions_attachment_record(
+        ["Bash(git status)", f"Read({FORBIDDEN_PATH})"]
+    )
+    events, context_inputs, _ = _parse([contaminated])
+    report = _audit(events, context_inputs)
+    assert report["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+    assert any(
+        m["kind"] == "context_input"
+        and m["source_type"] == "attachment:command_permissions"
+        for m in report["matches"]
+    )
+
+
+def test_command_permissions_missing_allowed_tools_fails_closed() -> None:
+    record = command_permissions_attachment_record()
+    del record["attachment"]["allowedTools"]  # type: ignore[attr-defined]
+    with pytest.raises(BenchmarkError):
+        _parse([record])
+
+
+def test_command_permissions_malformed_allowed_tools_fails_closed() -> None:
+    record = command_permissions_attachment_record()
+    record["attachment"] = {
+        "type": "command_permissions",
+        "allowedTools": "Bash(git status)",  # not a list
+    }
+    with pytest.raises(BenchmarkError):
+        _parse([record])
+    record = command_permissions_attachment_record()
+    record["attachment"] = {
+        "type": "command_permissions",
+        "allowedTools": [123],  # non-string element
+    }
+    with pytest.raises(BenchmarkError):
+        _parse([record])
+
+
+def test_benign_command_permissions_keeps_zero_false_matches() -> None:
+    lines = [
+        file_attachment_record("fully benign synthetic fixture text"),
+        command_permissions_attachment_record(["Bash(git status)", "Read(CLAUDE.md)"]),
+        agent_listing_attachment_record(),
+        summary_record(),
+    ]
+    events, context_inputs, _ = _parse(lines)
+    report = _audit(events, context_inputs)
+    assert report["verdict"] == "PASS"
+    assert report["reason"] == "zero forbidden matches"
 
 
 # --------------------------------------------------------------------------

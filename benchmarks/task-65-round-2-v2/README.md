@@ -105,6 +105,11 @@ uv run python benchmarks/task-65-round-2-v2/tooling/access_audit.py \
   --events <events.json> --inventory inventory/prior-benchmark-contamination-inventory.json \
   --context-inputs <context-inputs.json> \
   --capture-complete --parser-supported --audit-executed
+
+The audit input contract is the canonical schema inventory document
+(`{"...", "entries": [...]}`, see `schemas/contamination-inventory.schema.json`);
+API and CLI share the same `load_inventory_entries` loader — a bare JSON
+array or any other shape fails closed.
 ```
 
 The Claude transcript adapter normalizes the current runtime transcript

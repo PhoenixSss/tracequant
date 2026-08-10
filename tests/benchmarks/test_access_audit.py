@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, cast
 
 import pytest
 
 from _benchmark_helpers import REPO_ROOT
 
-from access_audit import audit, match_target  # type: ignore[import-not-found]
+from access_audit import audit, load_inventory_entries, main, match_target  # type: ignore[import-not-found]
 from benchmark_common import BenchmarkError, load_json  # type: ignore[import-not-found]
 
 INVENTORY = (
@@ -169,6 +170,117 @@ def test_audit_accepts_schema_wrapper_document() -> None:
         audit_executed=True,
     )
     assert result["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+
+
+def test_audit_rejects_bare_array_inventory() -> None:
+    # The canonical contract is the schema document; a bare JSON array is an
+    # unsupported implicit format and fails closed (no shape guessing).
+    with pytest.raises(BenchmarkError):
+        audit(
+            [_event("git status")],
+            load_json(INVENTORY)["entries"],
+            [],
+            [],
+            capture_complete=True,
+            parser_supported=True,
+            audit_executed=True,
+        )
+
+
+def test_audit_rejects_inventory_missing_entries() -> None:
+    doc = load_json(INVENTORY)
+    del doc["entries"]
+    with pytest.raises(BenchmarkError):
+        audit(
+            [_event("git status")],
+            doc,
+            [],
+            [],
+            capture_complete=True,
+            parser_supported=True,
+            audit_executed=True,
+        )
+
+
+def test_audit_rejects_schema_invalid_entry() -> None:
+    doc = load_json(INVENTORY)
+    doc["entries"][0]["type"] = "not-a-valid-type"
+    with pytest.raises(BenchmarkError):
+        audit(
+            [_event("git status")],
+            doc,
+            [],
+            [],
+            capture_complete=True,
+            parser_supported=True,
+            audit_executed=True,
+        )
+
+
+def test_load_inventory_entries_shared_loader() -> None:
+    entries = load_inventory_entries(load_json(INVENTORY))
+    assert isinstance(entries, list)
+    assert entries == load_json(INVENTORY)["entries"]
+
+
+def _write_cli(tmp_path, name: str, value: object) -> str:  # type: ignore[no-untyped-def]
+    path = tmp_path / name
+    path.write_text(json.dumps(value), encoding="utf-8")
+    return str(path)
+
+
+def _cli_args(events_path: str, inventory_path: str) -> list[str]:
+    return [
+        "--events",
+        events_path,
+        "--inventory",
+        inventory_path,
+        "--capture-complete",
+        "--parser-supported",
+        "--audit-executed",
+    ]
+
+
+def test_cli_accepts_canonical_inventory_document(tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
+    # The canonical inventory artifact is the schema document; the CLI must
+    # accept it and mechanically extract entries (shared loader contract).
+    events_path = _write_cli(tmp_path, "events.json", [_event("git status")])
+    result = main(_cli_args(events_path, str(INVENTORY)))
+    assert result == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["verdict"] == "PASS"
+    assert report["reason"] == "zero forbidden matches"
+    assert report["forbidden_identifier_count"] >= 1  # real entries were loaded
+
+
+def test_cli_rejects_bare_array_inventory_fail_closed(tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
+    events_path = _write_cli(tmp_path, "events.json", [_event("git status")])
+    inventory_path = _write_cli(
+        tmp_path, "inventory.json", load_json(INVENTORY)["entries"]
+    )
+    result = main(_cli_args(events_path, inventory_path))
+    assert result == 1
+    assert "FAIL CLOSED" in capsys.readouterr().err
+
+
+def test_cli_rejects_inventory_missing_entries_fail_closed(tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
+    events_path = _write_cli(tmp_path, "events.json", [_event("git status")])
+    doc = load_json(INVENTORY)
+    del doc["entries"]
+    inventory_path = _write_cli(tmp_path, "inventory.json", doc)
+    result = main(_cli_args(events_path, inventory_path))
+    assert result == 1
+    assert "FAIL CLOSED" in capsys.readouterr().err
+
+
+def test_cli_rejects_schema_invalid_entry_fail_closed(tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
+    events_path = _write_cli(tmp_path, "events.json", [_event("git status")])
+    doc = load_json(INVENTORY)
+    doc["entries"][0]["type"] = "not-a-valid-type"
+    inventory_path = _write_cli(tmp_path, "inventory.json", doc)
+    result = main(_cli_args(events_path, inventory_path))
+    assert result == 1
+    assert "FAIL CLOSED" in capsys.readouterr().err
 
 
 def _context_input(

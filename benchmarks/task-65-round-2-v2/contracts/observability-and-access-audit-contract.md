@@ -34,7 +34,16 @@ Every top-level record type is classified explicitly
 | Class | Record types | Behavior |
 |---|---|---|
 | A. ACCESS_BEARING | `assistant`, `user` | `message.content` items `tool_use` / `tool_result` → canonical access events `arm_id / session_id / timestamp / tool / operation / target / raw_event_reference` |
-| B. INPUT_CONTEXT_BEARING | `attachment` (sub-types `file`, `agent_listing_delta`, `skill_listing`, `todo_reminder`), `summary`, `last-prompt`, user message text (`user-prompt`, `isCompactSummary` continuation summary) | extracted as context inputs (`context-input.schema.json`), audited with the same Class 2 / Class 3 forbidden identifiers; never silently skipped |
+| B. INPUT_CONTEXT_BEARING | `attachment` (sub-types `file`, `agent_listing_delta`, `skill_listing`, `todo_reminder`, `command_permissions`), `summary`, `last-prompt`, user message text (`user-prompt`, `isCompactSummary` continuation summary) | extracted as context inputs (`context-input.schema.json`), audited with the same Class 2 / Class 3 forbidden identifiers; never silently skipped |
+
+`attachment:command_permissions` carries the tool-permission context injected
+into the session (`allowedTools` string list).  Contract: `type` must be
+exactly `command_permissions`; `allowedTools` must exist and be a list of
+strings; the full list enters the context-input contamination audit
+untruncated; an empty list is legal and produces zero contamination matches;
+missing key, non-list, or non-string element → fail closed.  Rationale: the
+injected permission/tool context may carry strings matchable to Class 2 /
+Class 3 identities.
 | C. KNOWN_NON_ACCESS_METADATA | `queue-operation`, `ai-title`, `file-history-delta`, `file-history-snapshot`, `system`, `meta`, `isMeta`, `pr-link`, `mode` | explicit allowlist with structural + semantic validation (e.g. `queue-operation.operation` ∈ {enqueue, dequeue}; `system.subtype` ∈ {api_error, compact_boundary}; file-history backup entries may only carry registry keys `backupFileName`/`version`/`backupTime`/`realParentDir` and never content payloads); violation → fail closed |
 | D. UNKNOWN | anything else | **FAIL CLOSED / NOT VERIFIED** |
 
@@ -68,9 +77,14 @@ Transcript records carry `sessionId`, but the resolved session identity is an
 2. **transcript / rollout source locatable**;
 3. **capture active before formal Agent work**;
 4. **archive destination isolated for this Arm/session**;
-5. **parser supports the current observed record format** — supported
-   formats: `codex:custom_tool_call`, `codex:custom_tool_call_output`, and
-   the full `claude:*` taxonomy of the current tested runtime;
+5. **parser supports the current observed record format** — decided by the
+   REAL parser machinery, not an allowlist: the declared
+   `parser_record_formats` must be adapter-supported (`codex:custom_tool_call`,
+   `codex:custom_tool_call_output`, and the full `claude:*` taxonomy of the
+   current tested runtime) AND the formal adapter must actually consume every
+   record of the observed source — top-level record types, sub-types,
+   content-item types, structural invariants, session identity, and metadata
+   discriminators.  Any record the full parser rejects → check 5 FAIL;
 6. **controlled test tool call appears in capture and can be normalized**.
 
 Verdicts: `OBSERVABILITY VERIFIED` when all six checks pass;
@@ -82,6 +96,13 @@ incomplete → NOT VERIFIED).
 
 ## Access audit
 
+- The audit input contract is the canonical schema document
+  `schemas/contamination-inventory.schema.json` (`{"protocol_identity": ...,
+  "entries": [...]}`).  API and CLI share the single
+  `load_inventory_entries` loader: the document is schema-validated and its
+  `entries` are extracted mechanically.  A bare JSON array or any other shape
+  is an unsupported implicit format and fails closed — no shape guessing, no
+  second format.
 - The audit matches **access events and context inputs**; context inputs
   (attachment/summary/prompt content that entered the session without a tool
   call) are matched with the same forbidden identifiers, so Class 2 / Class 3
