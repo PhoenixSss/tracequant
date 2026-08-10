@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from benchmark_common import BenchmarkError, load_json, validate_basic
-from generation_materializer import RUN_LOCKED_SCHEMA  # type: ignore[import-not-found]
+from generation_materializer import RUN_LOCKED_SCHEMA
 
 # Fields allowed to differ between C and D (identity-only differences).
 ALLOWED_IDENTITY_FIELDS: frozenset[str] = frozenset(

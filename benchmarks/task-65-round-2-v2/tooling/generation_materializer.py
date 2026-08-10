@@ -36,7 +36,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from benchmark_common import (
     DEFAULT_FIXTURE_STORE,
@@ -619,8 +619,11 @@ def materialize(
         }
         for entry in verified
     ]
+    # ``verified`` entries passed the sha256/file_mode gates, so these three
+    # values are strings by construction despite the nullable field types.
     identity = tree_identity(
-        (item["path"], item["sha256"], item["file_mode"]) for item in written
+        cast("tuple[str, str, str]", (item["path"], item["sha256"], item["file_mode"]))
+        for item in written
     )
     identity_digest = generation_identity_digest(source_sha, written)
     if isinstance(manifest, RunLockedManifest):

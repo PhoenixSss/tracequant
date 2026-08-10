@@ -47,7 +47,7 @@ from benchmark_common import (
     sha256_bytes,
     validate_basic,
 )
-from generation_materializer import RUN_LOCKED_SCHEMA  # type: ignore[import-not-found]
+from generation_materializer import RUN_LOCKED_SCHEMA
 from runtime_control_plane import (
     is_invalid_control_plane_inherit,
     runtime_control_plane_paths,
