@@ -32,11 +32,13 @@ import fnmatch
 import json
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from benchmark_common import (
     BenchmarkError,
+    generation_identity_digest,
     git_cat_blob,
     git_ls_tree_blob,
     git_rev_parse,
@@ -45,6 +47,7 @@ from benchmark_common import (
     sha256_bytes,
     validate_basic,
 )
+from generation_materializer import RUN_LOCKED_SCHEMA  # type: ignore[import-not-found]
 from runtime_control_plane import (
     is_invalid_control_plane_inherit,
     runtime_control_plane_paths,
@@ -72,7 +75,7 @@ TEMPLATE_SCHEMA: dict[str, Any] = {
         "schema_version": {"type": "integer"},
         "protocol_identity": {"type": "string"},
         "kind": {"type": "string", "enum": ["template"]},
-        "generation_id": {"type": "string"},
+        "generation_id": {"type": "string", "enum": ["C", "D"]},
         "agent_identity": {"type": "object"},
         "source_selector": {
             "type": "object",
@@ -146,12 +149,27 @@ def generate_run_locked(
     repo_root: Path,
     benchmark_base_sha: str,
     generated_by: str,
+    generated_at_utc: str | None = None,
 ) -> dict[str, Any]:
     """Generate one run-locked manifest from a template and the base SHA."""
     raw = load_json(template_path)
     validate_basic(raw, TEMPLATE_SCHEMA, "template")
     if raw.get("kind") != "template":
         raise BenchmarkError(f"expected template manifest, got {raw.get('kind')!r}")
+    if raw.get("protocol_identity") != "task-65-round-2-v2":
+        raise BenchmarkError("template protocol identity mismatch")
+    if raw.get("source_selector") != {
+        "kind": "fixed-commit",
+        "ref": "BENCHMARK_BASE_SHA",
+    }:
+        raise BenchmarkError(
+            "template source selector must be fixed-commit/BENCHMARK_BASE_SHA"
+        )
+    if generated_at_utc is None:
+        generated_at_utc = datetime.now(UTC).replace(microsecond=0).isoformat()
+        generated_at_utc = generated_at_utc.replace("+00:00", "Z")
+    if len(generated_at_utc) != 20 or not generated_at_utc.endswith("Z"):
+        raise BenchmarkError("generated_at_utc must be a UTC second timestamp")
 
     resolved_base = git_rev_parse(repo_root, benchmark_base_sha)
     all_paths = _list_paths(repo_root, resolved_base)
@@ -229,6 +247,18 @@ def generate_run_locked(
     # No path may be claimed by more than one class (deterministic ordering).
     entries_sorted = sorted(entries, key=lambda item: item.path)
 
+    locked_path_dicts = [
+        {
+            "path": entry.path,
+            "role": entry.role,
+            "blob_id": entry.blob_id,
+            "sha256": entry.sha256,
+            "file_mode": entry.file_mode,
+            "projection_action": projection_defaults.get(entry.role),
+            "exists_at_source": True,
+        }
+        for entry in entries_sorted
+    ]
     run_locked: dict[str, Any] = {
         "schema_version": 1,
         "protocol_identity": "task-65-round-2-v2",
@@ -238,24 +268,18 @@ def generate_run_locked(
         "source_selector": {"kind": "fixed-commit", "ref": "BENCHMARK_BASE_SHA"},
         "benchmark_base_sha": resolved_base,
         "generated_by": generated_by,
+        "generated_at_utc": generated_at_utc,
         "closure": {
             "definition": raw["closure_derivation_rules"],
-            "paths": [
-                {
-                    "path": entry.path,
-                    "role": entry.role,
-                    "blob_id": entry.blob_id,
-                    "sha256": entry.sha256,
-                    "file_mode": entry.file_mode,
-                    "projection_action": projection_defaults.get(entry.role),
-                    "exists_at_source": True,
-                }
-                for entry in entries_sorted
-            ],
+            "paths": locked_path_dicts,
         },
         "validation_contract": raw["validation_contract"],
         "invocation_contract": raw["invocation_contract"],
     }
+    run_locked["generation_identity_digest"] = generation_identity_digest(
+        resolved_base, locked_path_dicts
+    )
+    validate_basic(run_locked, RUN_LOCKED_SCHEMA, "run-locked manifest")
     return run_locked
 
 
@@ -276,12 +300,18 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     generated: dict[str, Path] = {}
+    generated_at_utc = datetime.now(UTC).replace(microsecond=0).isoformat()
+    generated_at_utc = generated_at_utc.replace("+00:00", "Z")
     try:
         for template in args.template:
             raw = load_json(Path(template))
             generation_id = raw["generation_id"]
             run_locked = generate_run_locked(
-                Path(template), repo_root, args.benchmark_base_sha, args.generated_by
+                Path(template),
+                repo_root,
+                args.benchmark_base_sha,
+                args.generated_by,
+                generated_at_utc,
             )
             destination = (
                 out_dir / f"generation-{generation_id.lower()}-run-locked-manifest.json"

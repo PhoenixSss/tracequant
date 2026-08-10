@@ -18,8 +18,10 @@ from _benchmark_helpers import (
 )
 
 from benchmark_common import BenchmarkError  # type: ignore[import-not-found]
+from benchmark_common import generation_identity_digest
 from generation_materializer import (  # type: ignore[import-not-found]
     materialize,
+    parse_run_locked_manifest,
     parse_pinned_manifest,
 )
 
@@ -226,3 +228,50 @@ def test_materialize_against_current_repo_objects(tmp_path: Path) -> None:
     assert (store / ".claude" / "settings.json").read_bytes() == cat_blob(
         REPO_ROOT, ls_tree_blob(REPO_ROOT, head, ".claude/settings.json")[1]
     )
+
+
+def test_run_locked_materializer_never_falls_back_to_mutable_current_tree(
+    tmp_path: Path,
+) -> None:
+    repo = init_repo(tmp_path / "repo")
+    locked_file = repo / "locked.txt"
+    locked_file.write_text("locked source\n", encoding="utf-8")
+    base = commit_all(repo, "locked source")
+    mode, blob_id = ls_tree_blob(repo, base, "locked.txt")
+    locked_file.write_text("mutable current\n", encoding="utf-8")
+    commit_all(repo, "mutable current")
+
+    entry = {
+        "path": "locked.txt",
+        "role": "EXECUTION_REQUIRED",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "exists_at_source": True,
+        "blob_id": blob_id,
+        "sha256": sha256_bytes(cat_blob(repo, blob_id)),
+        "file_mode": mode,
+    }
+    raw: dict[str, object] = {
+        "schema_version": 1,
+        "protocol_identity": "task-65-round-2-v2",
+        "kind": "run_locked",
+        "generation_id": "C",
+        "agent_identity": {"agent": "codex"},
+        "source_selector": {"kind": "fixed-commit", "ref": "BENCHMARK_BASE_SHA"},
+        "benchmark_base_sha": base,
+        "generated_by": "test",
+        "generated_at_utc": "2026-08-10T00:00:00Z",
+        "closure": {"definition": {}, "paths": [entry]},
+        "validation_contract": {},
+        "invocation_contract": {},
+    }
+    raw["generation_identity_digest"] = generation_identity_digest(base, [entry])
+    manifest_path = tmp_path / "locked.json"
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    bundle = materialize(
+        parse_run_locked_manifest(manifest_path),
+        repo,
+        tmp_path / "store",
+    )
+    assert bundle["source_sha"] == base
+    assert (tmp_path / "store" / "locked.txt").read_bytes() == b"locked source\n"

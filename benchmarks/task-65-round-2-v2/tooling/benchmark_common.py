@@ -163,6 +163,38 @@ def tree_identity(entries: Iterable[tuple[str, str, str]]) -> str:
     return sha256_bytes("\n".join(sorted(lines)).encode("utf-8"))
 
 
+def generation_identity_digest(
+    source_sha: str, entries: Iterable[Mapping[str, Any]]
+) -> str:
+    """Digest the complete locked generation closure identity.
+
+    Agent/session metadata is intentionally excluded: C and D are the same
+    current workflow generation, so their locked source and closure facts must
+    produce the same digest even though their agent identities differ.
+    """
+    identity_entries = [
+        {
+            "path": entry["path"],
+            "role": entry["role"],
+            "projection_action": entry["projection_action"],
+            "projection_reason": entry.get("projection_reason"),
+            "exists_at_source": entry["exists_at_source"],
+            "blob_id": entry["blob_id"],
+            "sha256": entry["sha256"],
+            "file_mode": entry["file_mode"],
+        }
+        for entry in entries
+    ]
+    payload = {
+        "protocol_identity": PROTOCOL_IDENTITY,
+        "source_sha": source_sha,
+        "paths": sorted(identity_entries, key=lambda item: item["path"]),
+    }
+    return sha256_bytes(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+
+
 def validate_basic(data: Any, schema: Mapping[str, Any], label: str) -> None:
     """Minimal dependency-free structural validation against our schemas.
 

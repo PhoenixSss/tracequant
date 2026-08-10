@@ -15,7 +15,8 @@ benchmarks/task-65-round-2-v2/
   schemas/                      JSON Schemas (generation manifest / arm identity /
                                 contamination inventory / access event)
   manifests/                    A/B pinned manifests + C/D current-generation
-                                template manifests
+                                template manifests; C/D run-locked output is
+                                generated at freeze and consumed directly
   tooling/                      deterministic benchmark tooling (stdlib only)
   inventory/                    prior-benchmark contamination inventory (Class 2)
   registry/                     deterministic Arm identity registry (4 arms)
@@ -68,6 +69,10 @@ benchmarks/task-65-round-2-v2/
   for all four Arms), Class 3 CURRENT_RUN_CROSS_ARM_SECRET (forbidden).
 - **Fixture store**: conductor-local gitignored `.agents/benchmark-fixtures.local/`;
   fixtures are never committed.
+- **Manifest input contract**: the materializer dispatches only on the explicit
+  `kind` discriminator: `pinned` for A/B or `run_locked` for C/D.  Run-locked
+  input carries the resolved source SHA, selector, lock timestamp, and complete
+  generation identity digest; the materializer never re-resolves a mutable ref.
 - **NON-FORMAL**: this Task's PREP validation only verifies tooling
   mechanism on `PREP_VALIDATION_SOURCE_SHA` (ephemeral clones, no remote
   branches); all rehearsal products are labeled NON-FORMAL and never mixed
@@ -80,6 +85,12 @@ benchmarks/task-65-round-2-v2/
 uv run python benchmarks/task-65-round-2-v2/tooling/generation_materializer.py \
   --manifest benchmarks/task-65-round-2-v2/manifests/generation-a-pinned-manifest.json \
   --repo-root . --store .agents/benchmark-fixtures.local
+
+# At freeze, materialize the generated C/D manifests independently.  The
+# expected SHA is optional but recommended as an additional caller-side lock.
+uv run python benchmarks/task-65-round-2-v2/tooling/generation_materializer.py \
+  --manifest <OUT>/generation-c-run-locked-manifest.json \
+  --repo-root . --store <OUT>/c-bundle --expected-source-sha <BASE>
 
 uv run python benchmarks/task-65-round-2-v2/tooling/control_base_validator.py \
   --arm A --manifest .../generation-a-pinned-manifest.json \

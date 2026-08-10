@@ -23,13 +23,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from benchmark_common import BenchmarkError, load_json
+from benchmark_common import BenchmarkError, load_json, validate_basic
+from generation_materializer import RUN_LOCKED_SCHEMA  # type: ignore[import-not-found]
 
 # Fields allowed to differ between C and D (identity-only differences).
 ALLOWED_IDENTITY_FIELDS: frozenset[str] = frozenset(
     {
         "generation_id",
         "agent_identity",
+        "generated_by",
+        "generated_at_utc",
         "invocation_contract",
         "permission_discovery_identity",
     }
@@ -44,6 +47,12 @@ def file_identity_report(
     c_manifest: dict[str, Any], d_manifest: dict[str, Any]
 ) -> dict[str, Any]:
     """Compare C and D run-locked manifests; returns the FILE IDENTITY REPORT."""
+    validate_basic(c_manifest, RUN_LOCKED_SCHEMA, "C run-locked manifest")
+    validate_basic(d_manifest, RUN_LOCKED_SCHEMA, "D run-locked manifest")
+    if c_manifest.get("generation_id") != "C":
+        raise BenchmarkError("C report input must have generation_id C")
+    if d_manifest.get("generation_id") != "D":
+        raise BenchmarkError("D report input must have generation_id D")
     c_paths = _path_entries(c_manifest)
     d_paths = _path_entries(d_manifest)
 
@@ -53,16 +62,23 @@ def file_identity_report(
 
     blob_diffs: list[str] = []
     sha_diffs: list[str] = []
+    mode_diffs: list[str] = []
     for path in common:
         c_entry, d_entry = c_paths[path], d_paths[path]
         if c_entry["blob_id"] != d_entry["blob_id"]:
             blob_diffs.append(path)
         if c_entry["sha256"] != d_entry["sha256"]:
             sha_diffs.append(path)
+        if c_entry["file_mode"] != d_entry["file_mode"]:
+            mode_diffs.append(path)
 
     path_set_identical = not c_only and not d_only
     blob_identical = not blob_diffs
     sha_identical = not sha_diffs
+    mode_identical = not mode_diffs
+    identity_digest_identical = c_manifest.get(
+        "generation_identity_digest"
+    ) == d_manifest.get("generation_identity_digest")
 
     identity_diffs: dict[str, Any] = {}
     for field in ALLOWED_IDENTITY_FIELDS:
@@ -77,7 +93,13 @@ def file_identity_report(
         if c_manifest.get(key) != d_manifest.get(key):
             unexpected_field_diffs.append(key)
 
-    human_gate = not (path_set_identical and blob_identical and sha_identical)
+    human_gate = not (
+        path_set_identical
+        and blob_identical
+        and sha_identical
+        and mode_identical
+        and identity_digest_identical
+    )
 
     report: dict[str, Any] = {
         "protocol_identity": "task-65-round-2-v2",
@@ -89,6 +111,9 @@ def file_identity_report(
         "path_set_identical": path_set_identical,
         "per_path_blob_identical": blob_identical,
         "per_path_sha256_identical": sha_identical,
+        "per_path_file_mode_identical": mode_identical,
+        "file_mode_differences": mode_diffs,
+        "generation_identity_digest_identical": identity_digest_identical,
         "c_only_paths": c_only,
         "d_only_paths": d_only,
         "blob_differences": blob_diffs,
