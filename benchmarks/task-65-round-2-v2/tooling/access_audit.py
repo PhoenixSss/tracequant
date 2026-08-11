@@ -39,7 +39,10 @@ identifier, or a malformed ``current_run_identity``, aborts the audit.
 The audit only matches; it never interprets workflow semantics.  Matching is
 deterministic substring/identifier matching on normalized lowercased values;
 every match carries its ``identity_classes`` (PRIOR_BENCHMARK_CLASS_2 /
-OTHER_ARM_CURRENT_RUN_CLASS_3).
+OTHER_ARM_CURRENT_RUN_CLASS_3).  Access events are matched over their FULL
+``target_full`` text (M1, Issue #125 remediation) — the bounded display
+``target`` is never the sole matcher input — so a forbidden identifier beyond
+the 512-byte display cap is still detected.
 """
 
 from __future__ import annotations
@@ -312,7 +315,11 @@ def _match_access_event(
     matches: list[dict[str, Any]],
     exemptions: list[dict[str, Any]],
 ) -> None:
-    normalized = _normalize(str(event.get("target", "")))
+    # M1 (Issue #125 remediation): contamination matching runs over the FULL
+    # original input/output text (``target_full``) so a forbidden identifier
+    # beyond the bounded display cap is still detected; ``target`` remains the
+    # bounded display text in the match report.
+    normalized = _normalize(str(event.get("target_full") or event.get("target", "")))
     matched, exempted = _match_target_detail(normalized, forbidden, own_paths)
     if matched:
         matches.append(_match_record("access", event, matched))

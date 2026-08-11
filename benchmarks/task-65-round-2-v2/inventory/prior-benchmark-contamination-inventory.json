@@ -5,16 +5,6 @@
   "generated_for_rounds": ["task-65-round-2-v1", "task-65-round-2-v1.1"],
   "entries": [
     {
-      "artifact_id": "v1-protocol-freeze-commit",
-      "type": "protocol",
-      "locations": [
-        {"kind": "commit", "identifier": "a492f0b334f950f2613b4b2204e96bef413355be"}
-      ],
-      "reason_forbidden": "v1 protocol freeze commit (merged via PR #98). Dual nature: it is A's Class 1 workflow-input source (pinned in the A manifest closure) AND it hosts the v1 bundle including answer-bearing benchmark-manifest.json. Only the A-manifest-declared workflow input files may be read from it; benchmark answer-bearing paths within it are Class 2 (see v1-benchmark-manifest entries).",
-      "scope": ["A", "B", "C", "D"],
-      "notes": "A_WORKFLOW_SOURCE_SHA pinned in generation-a-pinned-manifest.json."
-    },
-    {
       "artifact_id": "v1-benchmark-manifest.json",
       "type": "metrics",
       "locations": [
@@ -22,26 +12,11 @@
           "kind": "path",
           "identifier": "docs/workflows/benchmarks/task-65-round-2/benchmark-manifest.json",
           "path": "docs/workflows/benchmarks/task-65-round-2/benchmark-manifest.json"
-        },
-        {"kind": "commit", "identifier": "a492f0b334f950f2613b4b2204e96bef413355be"}
-      ],
-      "reason_forbidden": "v1/v1.1 benchmark run record carrying protocol answers, verdicts, and metrics. Present on current main (blob e8ad2c39d49ef067b5fd2ade7c2bd2a911c2bcf5).",
-      "scope": ["A", "B", "C", "D"],
-      "notes": "Identity-only blob record: e8ad2c39d49ef067b5fd2ade7c2bd2a911c2bcf5."
-    },
-    {
-      "artifact_id": "v1-protocol-bundle",
-      "type": "protocol",
-      "locations": [
-        {
-          "kind": "path",
-          "identifier": "docs/workflows/benchmarks/task-65-round-2",
-          "path": "docs/workflows/benchmarks/task-65-round-2"
         }
       ],
-      "reason_forbidden": "v1 protocol bundle (README.md, protocol.md, task-65-frozen.md, task-65-original.md, task-65-telemetry-only.diff, environment-current-windows.md, materials/*.example.json). Protocol/instruction documents are Class 1 readable as the reproduction spec and must NOT be modified by arms; they are explicitly distinguished from Class 2 answer-bearing material (benchmark-manifest.json is separately listed).",
+      "reason_forbidden": "v1/v1.1 benchmark run record carrying protocol answers, verdicts, and metrics. Present on current main (blob e8ad2c39d49ef067b5fd2ade7c2bd2a911c2bcf5). The specific artifact PATH is the forbidden identity; the A/B workflow source SHA (a492f0b334f950f2613b4b2204e96bef413355be) is a provenance selector for normal Class 1 workflow materialization and is NOT itself a forbidden identifier.",
       "scope": ["A", "B", "C", "D"],
-      "notes": "A/B lineages ran under this protocol; C/D reproduce under the task-65-round-2-v2 namespace."
+      "notes": "Identity-only blob record: e8ad2c39d49ef067b5fd2ade7c2bd2a911c2bcf5. Removed the commit location (provenance selector, Class 1 workflow materialization) per Issue #125 remediation B1/H1."
     },
     {
       "artifact_id": "pr-98-v1-protocol-merge",
@@ -154,24 +129,6 @@
       "reason_forbidden": "Conductor-local evidence and validation archives from PRIOR Task #65 round-2-v2 / prior Arm-D runs contain benchmark answers, verdicts, and metrics (Runner snapshots, self-reviews, validation records, prior-run audit reports). Prior-run archives must not be read by any arm; current-run archives are per-arm/session isolated. NOTE: the generic evidence/validation ROOTS (.agents/evidence.local, .agents/validation.local) are NOT forbidden identifiers themselves; only these specific prior-run artifact identities are. A current run's own evidence under its own isolated namespace (current_run_identity overlap) is exempt.",
       "scope": ["A", "B", "C", "D"],
       "notes": "Replaces the previous generic-root identifiers (.agents/evidence.local / .agents/validation.local) which falsely flagged every current-run own-evidence occurrence (contamination-audit false positive, Issue #125). Specific prior-run artifact identities only: prior Arm-D final-head validation namespace, prior Arm-D final-head smoke evidence file, and the immediate prior Arm-D run's validation archive. Renamed from v1-v11-conductor-evidence-archives because the locations are round-2-v2 / Arm-D specific, not v1/v1.1 archives."
-    },
-    {
-      "artifact_id": "v1-v11-ci-run-artifacts",
-      "type": "evidence",
-      "locations": [
-        {"kind": "external", "identifier": "actions/runs", "evidence_location": "GitHub Actions workflow runs and logs for PRs #99/#108/#109"}
-      ],
-      "reason_forbidden": "GitHub Actions workflow-run artifacts, logs, and check-run details from v1/v1.1 experiment PRs may carry benchmark answers/metrics.",
-      "scope": ["A", "B", "C", "D"]
-    },
-    {
-      "artifact_id": "v1-v11-experiment-records",
-      "type": "metrics",
-      "locations": [
-        {"kind": "external", "identifier": "experiment-record", "evidence_location": "instantiated v1/v1.1 experiment records and publication materials (conductor-local archives, non-example)"}
-      ],
-      "reason_forbidden": "Instantiated (non-example) v1/v1.1 experiment records and publication materials carry metrics and verdicts. Only the protocol examples (materials/*.example.json) are Class 1.",
-      "scope": ["A", "B", "C", "D"]
     }
   ]
 }

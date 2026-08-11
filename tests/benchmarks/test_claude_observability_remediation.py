@@ -133,11 +133,16 @@ def test_queue_operation_unknown_operation_fails_closed() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_ai_title_is_metadata() -> None:
+def test_ai_title_is_metadata_with_audited_title() -> None:
+    # M4: ai-title stays KNOWN_NON_ACCESS_METADATA (never an access event),
+    # but its aiTitle payload can carry conversation-derived context, so it
+    # is transferred into the context-input audit (source_type "ai-title").
     events, context_inputs, diagnostics = _parse([ai_title_record()])
     assert events == []
-    assert context_inputs == []
     assert diagnostics["non_tool_records"] == 1
+    assert len(context_inputs) == 1
+    assert context_inputs[0]["source_type"] == "ai-title"
+    assert context_inputs[0]["target"] == "<scrubbed session title>"
 
 
 def test_last_prompt_is_context_input() -> None:
@@ -310,6 +315,123 @@ def test_file_history_snapshot_with_content_payload_fails_closed() -> None:
 
 
 # --------------------------------------------------------------------------
+# 5b. M4 remediation: ONE shared content guard for ALL metadata types.
+# --------------------------------------------------------------------------
+
+
+def test_metadata_content_guard_fails_closed_on_all_types() -> None:
+    # M4: any content-bearing payload on a metadata record whose subtype
+    # contract does not explicitly allow it fails closed.  One shared
+    # structural guard covers every known metadata type (no per-handler
+    # drift): file-history-delta, file-history-snapshot, pr-link, ai-title,
+    # mode, meta/isMeta, queue-operation.
+    contaminated: list[dict[str, object]] = [
+        {
+            "type": "file-history-delta",
+            "trackingPath": "<scrubbed>/synthetic.md",
+            "content": "file content must not hide in file-history-delta",
+        },
+        {
+            "type": "file-history-snapshot",
+            "snapshot": {
+                "messageId": "m-1",
+                "timestamp": "t",
+                "trackedFileBackups": {},
+            },
+            "payload": "file content must not hide in file-history-snapshot",
+        },
+        {
+            "type": "pr-link",
+            "prNumber": 108,
+            "prUrl": "https://x/108",
+            "data": "thread content must not hide in pr-link",
+        },
+        {
+            "type": "ai-title",
+            "aiTitle": "title",
+            "lines": "title content must not hide under 'lines'",
+        },
+        {
+            "type": "mode",
+            "mode": "default",
+            "input": "mode content must not hide under 'input'",
+        },
+        {"type": "meta", "meta": "m", "text": "meta content must not hide"},
+        {"type": "isMeta", "isMeta": True, "content": "isMeta content must not hide"},
+        {
+            "type": "queue-operation",
+            "operation": "enqueue",
+            "data": "queue content must not hide",
+        },
+    ]
+    for record in contaminated:
+        with pytest.raises(BenchmarkError):
+            _parse([record])
+
+
+def test_metadata_content_guard_allows_compact_boundary_content() -> None:
+    # The ONE explicitly allowed metadata content key: system:compact_boundary
+    # carries "content" on the real current runtime ("Conversation compacted").
+    events, context_inputs, _ = _parse([system_record("compact_boundary")])
+    assert events == []
+    assert context_inputs[0]["source_type"] == "system:compact_boundary"
+    assert context_inputs[0]["target"] == "Conversation compacted"
+
+
+def test_system_api_error_top_level_content_fails_closed() -> None:
+    # system:api_error's contract allows NO content key (only compact_boundary
+    # does); a top-level content payload fails closed.
+    record = system_record("api_error")
+    record["content"] = "error content must not hide at top level"
+    with pytest.raises(BenchmarkError):
+        _parse([record])
+
+
+def test_system_api_error_error_text_is_audited() -> None:
+    # M4 transfer: api_error diagnostics text (error.message / formatted) can
+    # echo context (e.g. a failed read naming a forbidden path) and must be
+    # audited, never silently dropped.
+    record = system_record("api_error")
+    record["error"] = {
+        "message": f"ENOENT: no such file: {FORBIDDEN_PATH}",
+        "formatted": "<scrubbed formatted>",
+    }
+    events, context_inputs, _ = _parse([record])
+    assert events == []
+    assert context_inputs[0]["source_type"] == "system:api_error"
+    report = _audit(events, context_inputs)
+    assert report["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+    assert report["matches"][0]["kind"] == "context_input"
+    assert report["matches"][0]["source_type"] == "system:api_error"
+
+
+def test_ai_title_contamination_is_detected() -> None:
+    # M4 transfer: a session title derived from conversation content can carry
+    # a Class 2 identity and is audited.
+    record = ai_title_record()
+    record["aiTitle"] = f"session working on {FORBIDDEN_PATH}"
+    events, context_inputs, _ = _parse([record])
+    assert events == []
+    assert context_inputs[0]["source_type"] == "ai-title"
+    report = _audit(events, context_inputs)
+    assert report["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+    assert report["matches"][0]["kind"] == "context_input"
+    assert report["matches"][0]["source_type"] == "ai-title"
+
+
+def test_compact_boundary_contamination_is_detected() -> None:
+    # M4 transfer: the compaction-marker content is context-capable and
+    # audited (a contaminated compaction marker must not be silently dropped).
+    record = system_record("compact_boundary")
+    record["content"] = f"Conversation compacted; last file: {FORBIDDEN_PATH}"
+    events, context_inputs, _ = _parse([record])
+    assert events == []
+    assert context_inputs[0]["source_type"] == "system:compact_boundary"
+    report = _audit(events, context_inputs)
+    assert report["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+
+
+# --------------------------------------------------------------------------
 # 6. summary classification (top-level and isCompactSummary user records).
 # --------------------------------------------------------------------------
 
@@ -453,6 +575,85 @@ def test_controlled_probe_full_normalization() -> None:
 
 
 # --------------------------------------------------------------------------
+# 11b. M1 remediation: full-text contamination matching (bounded display vs
+# untruncated audit text).  A forbidden identifier beyond the 512-byte
+# bounded target cap must be detected; ``target`` stays bounded for display.
+# --------------------------------------------------------------------------
+
+
+def test_forbidden_identifier_beyond_512_chars_in_tool_result_detected() -> None:
+    padding = "x" * 600
+    content = f"{padding} references {FORBIDDEN_PATH} at the tail"
+    lines = [
+        assistant_record(
+            [tool_use_item("Read", {"file_path": "CLAUDE.md"}, item_id="t1")]
+        ),
+        user_record([tool_result_item(content, tool_use_id="t1")]),
+    ]
+    events, context_inputs, _ = _parse(lines)
+    tool_result = events[1]
+    assert tool_result["operation"] == "tool_result"
+    # Display target is bounded; the forbidden path sits beyond the cap.
+    assert FORBIDDEN_PATH not in tool_result["target"]
+    # Matching text is the FULL untruncated content.
+    assert tool_result["target_full"] == content
+    report = _audit(events, context_inputs)
+    assert report["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+    assert report["match_count"] >= 1
+    assert report["matches"][0]["forbidden_identifiers"] == [FORBIDDEN_PATH]
+
+
+def test_forbidden_identifier_beyond_512_chars_in_tool_use_detected() -> None:
+    # A Bash tool_use whose command carries the forbidden identifier past the
+    # bounded cap (e.g. a very long compound command) is still matched.
+    command = "echo " + "x" * 600 + f"; cat {FORBIDDEN_PATH}"
+    lines = [
+        assistant_record([tool_use_item("Bash", {"command": command}, item_id="t2")]),
+    ]
+    events, context_inputs, _ = _parse(lines)
+    tool_use = events[0]
+    assert tool_use["operation"] == "tool_use"
+    assert FORBIDDEN_PATH not in tool_use["target"]
+    assert FORBIDDEN_PATH in tool_use["target_full"]
+    report = _audit(events, context_inputs)
+    assert report["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+
+
+def test_codex_events_carry_full_matching_text() -> None:
+    # The Codex rollout adapter normalizes the same bounded/full split: the
+    # full args text enters the audit even when the display target is bounded.
+    from codex_rollout_adapter import parse_rollout  # type: ignore[import-not-found]
+
+    command = "cat " + "x" * 600 + f"; sed -n '1,40p' {FORBIDDEN_PATH}"
+    lines = [
+        json.dumps(
+            {
+                "type": "custom_tool_call",
+                "session_id": "sess-c-m1",
+                "timestamp": "t",
+                "tool": "Bash",
+                "args": {"command": command},
+            }
+        )
+    ]
+    events, _ = parse_rollout(lines, arm_id="C")
+    assert len(events) == 1
+    assert FORBIDDEN_PATH not in events[0]["target"]
+    assert events[0]["target_full"] == command
+    report = audit(
+        events,
+        load_json(INVENTORY),
+        [],
+        [],
+        context_inputs=[],
+        capture_complete=True,
+        parser_supported=True,
+        audit_executed=True,
+    )
+    assert report["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+
+
+# --------------------------------------------------------------------------
 # 12. Class 2 / Class 3 contamination detectable via context-bearing records.
 # --------------------------------------------------------------------------
 
@@ -537,10 +738,20 @@ def test_benign_metadata_produces_no_false_access_events() -> None:
     ]
     events, context_inputs, diagnostics = _parse(lines)
     assert events == []
-    assert context_inputs == []
     assert diagnostics["events"] == 0
-    assert diagnostics["context_inputs"] == 0
     assert diagnostics["non_tool_records"] == 6
+    # M4: context-capable metadata payloads (ai-title title, system
+    # compact_boundary content, system api_error error text) are transferred
+    # to the context-input audit -- never dropped, never access events.
+    assert [c["source_type"] for c in context_inputs] == [
+        "ai-title",
+        "system:compact_boundary",
+        "system:api_error",
+    ]
+    assert diagnostics["context_inputs"] == 3
+    report = _audit(events, context_inputs)
+    assert report["verdict"] == "PASS"
+    assert report["reason"] == "zero forbidden matches"
 
 
 def test_benign_context_inputs_no_false_matches() -> None:

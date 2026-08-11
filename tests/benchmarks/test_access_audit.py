@@ -64,7 +64,6 @@ def test_match_target_long_identifiers_substring() -> None:
     forbidden = [
         "docs/workflows/benchmarks/task-65-round-2/benchmark-manifest.json",
         "experiment/task65-candidate-wsl2",
-        "a492f0b334f950f2613b4b2204e96bef413355be",
     ]
     assert match_target(
         "Read docs/workflows/benchmarks/task-65-round-2/benchmark-manifest.json",
@@ -73,9 +72,6 @@ def test_match_target_long_identifiers_substring() -> None:
     assert match_target("git checkout experiment/task65-candidate-wsl2", forbidden) == [
         "experiment/task65-candidate-wsl2"
     ]
-    assert match_target(
-        "git cat-file -p a492f0b334f950f2613b4b2204e96bef413355be", forbidden
-    ) == ["a492f0b334f950f2613b4b2204e96bef413355be"]
 
 
 def test_audit_negative_evidence_pass() -> None:
@@ -471,9 +467,11 @@ def test_audit_other_arm_current_evidence_is_forbidden() -> None:
     ]
 
 
-def test_audit_historical_forbidden_sha_in_current_input() -> None:
-    # (B) a historical forbidden SHA embedded in CURRENT input (context
-    # input, no tool call) -> Class 2 forbidden.
+def test_audit_source_sha_in_current_input_is_not_leakage() -> None:
+    # Remediation B1/H1 (Issue #125): the A/B workflow source SHA is a
+    # provenance selector for normal Class 1 workflow materialization, not a
+    # forbidden identifier.  Its literal occurrence in current input (context
+    # input, no tool call) must NOT auto-flag leakage.
     result = _audit_with_identity(
         [_event("git status")],
         context_inputs=[
@@ -482,13 +480,9 @@ def test_audit_historical_forbidden_sha_in_current_input() -> None:
             )
         ],
     )
-    assert result["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
-    assert result["match_count"] == 1
-    assert result["matches"][0]["kind"] == "context_input"
-    assert result["matches"][0]["identity_classes"] == ["PRIOR_BENCHMARK_CLASS_2"]
-    assert result["matches"][0]["forbidden_identifiers"] == [
-        "a492f0b334f950f2613b4b2204e96bef413355be"
-    ]
+    assert result["verdict"] == "PASS"
+    assert result["reason"] == "zero forbidden matches"
+    assert result["match_count"] == 0
 
 
 def test_audit_evidence_root_name_alone_is_not_forbidden() -> None:
@@ -508,7 +502,7 @@ def test_audit_inventory_entry_without_identifiers_fails_closed() -> None:
     # An entry whose locations carry no concrete forbidden identifier
     # forbids nothing and would silently weaken the audit -> fail closed.
     doc = load_json(INVENTORY)
-    doc["entries"][13]["locations"] = [{"kind": "external"}]
+    doc["entries"][0]["locations"] = [{"kind": "external"}]
     with pytest.raises(BenchmarkError):
         audit(
             [_event("git status")],
@@ -547,3 +541,119 @@ def test_audit_malformed_current_run_identity_fails_closed() -> None:
                 "own_evidence_paths": [".agents/evidence.local/D"],
             },
         )
+
+
+# --------------------------------------------------------------------------
+# Issue #125 remediation B1/H1: Class 1 / 2 / 3 identity semantics regressions
+# (maintainer decision: only SPECIFIC answer-bearing artifact identities may
+# be forbidden; STATIC_REPOSITORY_CONTEXT and provenance selectors are Class 1
+# readable and must never auto-flag).
+# --------------------------------------------------------------------------
+
+
+def test_class1_protocol_read_is_pass() -> None:
+    # (1) The v1 protocol is Class 1 STATIC_REPOSITORY_CONTEXT: reading the
+    # reproduction spec is the normal workflow, not leakage.
+    result = _audit_with_identity(
+        [_event("Read docs/workflows/benchmarks/task-65-round-2/protocol.md")]
+    )
+    assert result["verdict"] == "PASS"
+    assert result["reason"] == "zero forbidden matches"
+
+
+def test_class1_experiment_record_example_read_is_pass() -> None:
+    # (2) materials/*.example.json are Class 1 protocol examples; the generic
+    # category label "experiment-record" must never be a forbidden identifier.
+    result = _audit_with_identity(
+        [
+            _event(
+                "Read docs/workflows/benchmarks/task-65-round-2/materials/"
+                "experiment-record.example.json"
+            )
+        ]
+    )
+    assert result["verdict"] == "PASS"
+    assert result["reason"] == "zero forbidden matches"
+
+
+def test_class1_manifest_declared_workflow_materialization_is_pass() -> None:
+    # (3) Materializing the A-manifest-declared historical workflow input at
+    # its source SHA is normal Class 1 materialization: neither the SHA
+    # literal nor the Class 1 file path may auto-flag leakage.
+    result = _audit_with_identity(
+        [
+            _event(
+                "git cat-file -p "
+                "a492f0b334f950f2613b4b2204e96bef413355be:"
+                "docs/workflows/benchmarks/task-65-round-2/protocol.md"
+            )
+        ]
+    )
+    assert result["verdict"] == "PASS"
+    assert result["reason"] == "zero forbidden matches"
+
+
+def test_specific_prior_result_artifact_read_is_forbidden() -> None:
+    # (4) The specific prior answer-bearing result artifact (v1 benchmark run
+    # manifest with answers/verdicts/metrics) is Class 2 forbidden.
+    result = _audit_with_identity(
+        [
+            _event(
+                "Read docs/workflows/benchmarks/task-65-round-2/benchmark-manifest.json"
+            )
+        ]
+    )
+    assert result["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+    assert result["match_count"] >= 1
+    match = result["matches"][0]
+    assert match["identity_classes"] == ["PRIOR_BENCHMARK_CLASS_2"]
+    assert match["forbidden_identifiers"] == [
+        "docs/workflows/benchmarks/task-65-round-2/benchmark-manifest.json"
+    ]
+
+
+def test_specific_prior_review_verdict_read_is_forbidden() -> None:
+    # (5) Reading a specific prior review/verdict artifact (the #108 review
+    # thread) is Class 2 forbidden.
+    result = _audit_with_identity([_event("gh pr view 108")])
+    assert result["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+    assert result["match_count"] >= 1
+    assert result["matches"][0]["identity_classes"] == ["PRIOR_BENCHMARK_CLASS_2"]
+    result = _audit_with_identity([_event("gh pr view 109 --comments")])
+    assert result["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+
+
+def test_other_arm_current_result_read_is_forbidden() -> None:
+    # (6) Another arm's CURRENT-run answer-bearing evidence namespace is Class
+    # 3 forbidden (never a current arm's own artifact).
+    result = _audit_with_identity(
+        [
+            _event(
+                "Read .agents/evidence.local/task-65-round-2-v2/B/"
+                "arm-b-current-run-evidence.json"
+            )
+        ],
+        cross_arm=[".agents/evidence.local/task-65-round-2-v2/B"],
+    )
+    assert result["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+    assert result["match_count"] == 1
+    assert result["matches"][0]["identity_classes"] == ["OTHER_ARM_CURRENT_RUN_CLASS_3"]
+
+
+def test_generic_category_words_alone_are_pass() -> None:
+    # (7) Generic category labels / directory roots / provenance selectors
+    # alone (no specific answer-bearing artifact identity) are Class 1 and
+    # must produce zero matches: "actions/runs", "experiment-record", and the
+    # v1 protocol bundle directory root are not forbidden identifiers.
+    result = _audit_with_identity(
+        [
+            _event("gh run list --limit 5 (actions/runs)"),
+            _event("ls docs/workflows/benchmarks/task-65-round-2"),
+            _event("grep experiment-record materials"),
+            _event("git status"),
+        ]
+    )
+    assert result["verdict"] == "PASS"
+    assert result["reason"] == "zero forbidden matches"
+    assert result["match_count"] == 0
+    assert result["exemption_count"] == 0

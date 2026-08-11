@@ -967,7 +967,7 @@
   "known_limitations": [
     "Tree structure: no .claude/, no .codex/, no CLAUDE.md (projection treats them as ENSURE_ABSENT)",
     "No unified runner: trusted_runner.py bootstrap; pr_resolve.py does not exist; A identity validation is conductor-side and does not count as an A native workflow capability",
-    "A_WORKFLOW_SOURCE_SHA also carries v1 benchmark material (Class 2, see prior-benchmark-contamination-inventory); that material is excluded from this closure and must not be read"
+    "A_WORKFLOW_SOURCE_SHA also carries v1 benchmark material (Class 2, see prior-benchmark-contamination-inventory). The v1 benchmark-manifest.json at A_WORKFLOW_SOURCE_SHA has blob e8ad2c39d49ef067b5fd2ade7c2bd2a911c2bcf5 (present in this closure as INSTALL_GENERATION_VERSION / VALIDATION_PRESENCE_REQUIRED — install and presence identity only; its content is Class 2 and must not be read)"
   ],
   "permission_profile": {
     "note": "A-generation tree contains no permission rules files (.codex/**, .claude/** absent); A-era tooling runs under A-era AGENTS.md and policies",

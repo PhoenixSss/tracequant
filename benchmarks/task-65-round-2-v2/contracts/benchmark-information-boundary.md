@@ -14,6 +14,11 @@ Authoritative source: Issue #125 "Benchmark Information Boundary" and
   classified as PRIOR_BENCHMARK_CONTAMINATION_SECRET (Class 2).** Whether an
   artifact is closed, historical, or present in Git history **cannot override
   the Class 2 classification**.
+- A/B workflow source commits (e.g. `A_WORKFLOW_SOURCE_SHA` /
+  `B_WORKFLOW_SOURCE_SHA`) are provenance selectors for normal Class 1
+  workflow materialization: their SHA literal is never itself a forbidden
+  identifier, and only the specific answer-bearing artifact paths within them
+  are Class 2 (see the contamination inventory).
 
 ## Class 2 — PRIOR_BENCHMARK_CONTAMINATION_SECRET (forbidden for A/B/C/D)
 
@@ -33,9 +38,16 @@ evaluation result.
   superseded by this protocol; it does not constitute generation semantics
   that v2 must inherit.
 - Machine-readable inventory: `inventory/prior-benchmark-contamination-inventory.json`
-  (16 entries; scope = all four Arms). Unclassified Task #65 prior-benchmark
-  artifact → fail closed → contamination status NOT VERIFIED → Human Gate /
-  #86 ratification.
+  (12 entries; scope = all four Arms). **Only SPECIFIC answer-bearing
+  artifact identities are forbidden** — a specific prior
+  implementation/result/review/verdict/metrics/comparison/evidence artifact
+  (artifact path, PR/branch, or prior-run evidence namespace). Generic
+  directory roots (e.g. the v1 protocol bundle directory), generic category
+  labels (e.g. `actions/runs`, `experiment-record`), and provenance
+  selectors (e.g. A/B workflow source SHAs) are **never** forbidden
+  identifiers: Class 1 protocol/material reads must be able to PASS.
+  Unclassified Task #65 prior-benchmark artifact → fail closed →
+  contamination status NOT VERIFIED → Human Gate / #86 ratification.
 
 ## Class 3 — CURRENT_RUN_CROSS_ARM_SECRET (forbidden)
 

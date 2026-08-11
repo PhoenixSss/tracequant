@@ -25,21 +25,40 @@ def test_contamination_inventory_schema_and_scope() -> None:
     )
     assert inventory["classification"] == "PRIOR_BENCHMARK_CONTAMINATION_SECRET"
     entries = inventory["entries"]
-    assert isinstance(entries, list) and len(entries) >= 15
+    assert isinstance(entries, list) and len(entries) == 12
     for entry in entries:
         # Every entry covers all four arms (Class 2 is forbidden for all).
         assert set(entry["scope"]) == {"A", "B", "C", "D"}
         assert entry["artifact_id"] and entry["type"] and entry["reason_forbidden"]
         assert entry["locations"]
-        # The v1/v1.1 answer-bearing artifacts must be present.
+    # The v1/v1.1 answer-bearing artifacts must be present.
     identifiers = str(inventory)
     for expected in (
-        "a492f0b334f950f2613b4b2204e96bef413355be",
         "benchmark-manifest.json",
         "experiment/task65-candidate-wsl2",
         "experiment/task65-current-windows",
     ):
         assert expected in identifiers
+    # Remediation B1/H1 (Issue #125): only SPECIFIC answer-bearing artifact
+    # identities may be forbidden.  The A/B workflow source SHA is a
+    # provenance selector for normal Class 1 workflow materialization and
+    # must NOT be a location identifier (its literal occurrence must never
+    # auto-flag leakage); generic category/root labels (the v1 protocol
+    # bundle directory, "actions/runs", "experiment-record") are likewise
+    # not forbidden identifiers.
+    location_identifiers = {
+        location["identifier"]
+        for entry in entries
+        for location in entry["locations"]
+        if location.get("identifier")
+    }
+    assert "a492f0b334f950f2613b4b2204e96bef413355be" not in location_identifiers
+    assert not any("actions/runs" == ident for ident in location_identifiers)
+    assert not any("experiment-record" == ident for ident in location_identifiers)
+    assert not any(
+        ident.rstrip("/").endswith("docs/workflows/benchmarks/task-65-round-2")
+        for ident in location_identifiers
+    )
 
 
 def test_arm_identity_registry_schema() -> None:

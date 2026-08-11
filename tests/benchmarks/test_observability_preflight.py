@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from _benchmark_helpers import REPO_ROOT  # noqa: F401  (wires tooling onto sys.path)
+
 from observability_preflight import run_preflight  # type: ignore[import-not-found]
 
 from claude_transcript_fixtures import (
@@ -37,11 +39,18 @@ def _claude_config(transcript: str, formats: list[str]) -> dict[str, Any]:
             "location": transcript,
         },
         "capture_active": True,
-        "archive_destination": ".agents/evidence.local/task-65-round-2-v2/D",
+        # M2: the archive destination must explicitly carry the current arm
+        # (D) and the current session as path components.
+        "archive_destination": (
+            f".agents/evidence.local/task-65-round-2-v2/D/{FIXTURE_SESSION_ID}"
+        ),
         "parser_record_formats": formats,
+        # M3: the controlled probe is the EXPECTED normalized event; the
+        # check finds it mechanically in the real parser's events.
         "controlled_test_tool_call": {
-            "captured": True,
-            "normalized_event": {"target": "read CLAUDE.md"},
+            "tool": "read",
+            "operation": "tool_use",
+            "target_predicate": "CLAUDE.md",
         },
     }
 
@@ -83,14 +92,15 @@ def _good_codex_config(tmp_path) -> dict[str, Any]:  # type: ignore[no-untyped-d
             "location": str(rollout_dir),
         },
         "capture_active": True,
-        "archive_destination": ".agents/evidence.local/task-65-round-2-v2/C",
+        "archive_destination": ".agents/evidence.local/task-65-round-2-v2/C/sess-c-1",
         "parser_record_formats": [
             "codex:custom_tool_call",
             "codex:custom_tool_call_output",
         ],
         "controlled_test_tool_call": {
-            "captured": True,
-            "normalized_event": {"target": "git status"},
+            "tool": "shell",
+            "operation": "tool_call",
+            "target_predicate": "git status",
         },
     }
 
@@ -150,7 +160,7 @@ def test_preflight_unsupported_parser_format_fails(tmp_path) -> None:  # type: i
 
 def test_preflight_controlled_test_call_required(tmp_path) -> None:  # type: ignore[no-untyped-def]
     config = _good_codex_config(tmp_path)
-    config["controlled_test_tool_call"] = {"captured": False, "normalized_event": {}}
+    config["controlled_test_tool_call"] = {}
     report = run_preflight(config)
     assert report["verified"] is False
     assert any(
@@ -158,6 +168,169 @@ def test_preflight_controlled_test_call_required(tmp_path) -> None:  # type: ign
         and c["status"] == "fail"
         for c in report["checks"]
     )
+
+
+# --------------------------------------------------------------------------
+# M2 remediation: archive destination isolation (path-component semantics).
+# --------------------------------------------------------------------------
+
+
+def test_preflight_archive_wrong_arm_fails(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    config = _good_codex_config(tmp_path)  # arm C, session sess-c-1
+    config["archive_destination"] = (
+        ".agents/evidence.local/task-65-round-2-v2/D/sess-c-1"
+    )
+    report = run_preflight(config)
+    assert report["verified"] is False
+    check = next(
+        c for c in report["checks"] if c["name"] == "archive_destination_isolated"
+    )
+    assert check["status"] == "fail"
+    assert "arm" in str(check.get("detail", ""))
+
+
+def test_preflight_archive_wrong_session_fails(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    config = _good_codex_config(tmp_path)  # session sess-c-1
+    config["archive_destination"] = (
+        ".agents/evidence.local/task-65-round-2-v2/C/some-other-session"
+    )
+    report = run_preflight(config)
+    assert report["verified"] is False
+    check = next(
+        c for c in report["checks"] if c["name"] == "archive_destination_isolated"
+    )
+    assert check["status"] == "fail"
+    assert "session" in str(check.get("detail", ""))
+
+
+def test_preflight_archive_fixture_store_fails(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    config = _good_codex_config(tmp_path)
+    config["archive_destination"] = (
+        ".agents/benchmark-fixtures.local/arm-c-smoke/sess-c-1"
+    )
+    report = run_preflight(config)
+    assert report["verified"] is False
+    check = next(
+        c for c in report["checks"] if c["name"] == "archive_destination_isolated"
+    )
+    assert check["status"] == "fail"
+    assert "fixture store" in str(check.get("detail", ""))
+
+
+def test_preflight_archive_generic_arm_substring_fails(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # Component equality, never loose substring: a component like
+    # "arm-d-something" must NOT satisfy arm D.
+    config = _good_codex_config(tmp_path)
+    config["arm_id"] = "D"
+    config["archive_destination"] = (
+        ".agents/evidence.local/task-65-round-2-v2/arm-d-something/sess-c-1"
+    )
+    report = run_preflight(config)
+    assert report["verified"] is False
+    check = next(
+        c for c in report["checks"] if c["name"] == "archive_destination_isolated"
+    )
+    assert check["status"] == "fail"
+    assert "arm" in str(check.get("detail", ""))
+
+
+# --------------------------------------------------------------------------
+# M3 remediation: controlled probe found in the REAL parser's events.
+# --------------------------------------------------------------------------
+
+
+def test_preflight_controlled_probe_not_in_transcript_fails(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # Valid probe spec, but the actual transcript carries no such normalized
+    # event -> check 6 FAIL (the probe must be mechanically found, never
+    # assumed).
+    transcript = _write_transcript(
+        tmp_path, [queue_operation_record("enqueue"), ai_title_record()]
+    )
+    config = _claude_config(transcript, ["claude:queue-operation", "claude:ai-title"])
+    report = run_preflight(config)
+    assert report["verified"] is False
+    check = next(
+        c
+        for c in report["checks"]
+        if c["name"] == "controlled_test_tool_call_captured_and_normalizable"
+    )
+    assert check["status"] == "fail"
+    assert "no normalized event" in str(check.get("detail", ""))
+
+
+def test_preflight_fake_capture_assertion_is_not_trusted(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # The old-style config asserted "captured": true / "normalized_event"
+    # without any probe in the real transcript.  The config assertion is
+    # never trusted: the spec fields are missing and the check FAILs.
+    transcript = _write_transcript(tmp_path, [queue_operation_record("enqueue")])
+    config = _claude_config(transcript, ["claude:queue-operation"])
+    config["controlled_test_tool_call"] = {
+        "captured": True,
+        "normalized_event": {"target": "read CLAUDE.md"},
+    }
+    report = run_preflight(config)
+    assert report["verified"] is False
+    check = next(
+        c
+        for c in report["checks"]
+        if c["name"] == "controlled_test_tool_call_captured_and_normalizable"
+    )
+    assert check["status"] == "fail"
+    assert "tool" in str(check.get("detail", ""))
+
+
+def test_preflight_controlled_probe_wrong_target_predicate_fails(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # The transcript's controlled probe is Read CLAUDE.md; declaring a
+    # different target predicate must FAIL (wrong predicate -> no match).
+    transcript = _write_transcript(
+        tmp_path,
+        [
+            assistant_record(
+                [tool_use_item("Read", {"file_path": "CLAUDE.md"}, item_id="t1")]
+            )
+        ],
+    )
+    config = _claude_config(transcript, ["claude:tool_use", "claude:tool_result"])
+    config["controlled_test_tool_call"] = {
+        "tool": "read",
+        "operation": "tool_use",
+        "target_predicate": "AGENTS.md",
+    }
+    report = run_preflight(config)
+    assert report["verified"] is False
+    check = next(
+        c
+        for c in report["checks"]
+        if c["name"] == "controlled_test_tool_call_captured_and_normalizable"
+    )
+    assert check["status"] == "fail"
+    assert "no normalized event" in str(check.get("detail", ""))
+
+
+def test_preflight_controlled_probe_session_mismatch_fails(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # A normalized probe event exists but carries a DIFFERENT session
+    # identity: the current session identity must be part of the match.
+    transcript = _write_transcript(
+        tmp_path,
+        [
+            assistant_record(
+                [tool_use_item("Read", {"file_path": "CLAUDE.md"}, item_id="t1")],
+                session_id="another-session-uuid",
+            )
+        ],
+    )
+    config = _claude_config(transcript, ["claude:tool_use"])
+    report = run_preflight(config)
+    # The record's own sessionId conflicts with the resolved identity, so the
+    # full parser rejects it (check 5 FAIL); check 6 additionally cannot find
+    # the probe under the current session identity.
+    assert report["verified"] is False
+    probe_check = next(
+        c
+        for c in report["checks"]
+        if c["name"] == "controlled_test_tool_call_captured_and_normalizable"
+    )
+    assert probe_check["status"] == "fail"
 
 
 def test_preflight_supports_current_claude_record_formats(tmp_path) -> None:  # type: ignore[no-untyped-def]

@@ -32,10 +32,6 @@ ACTIVE_WORKFLOW_FILES = (
 
 APPROVED_TELEMETRY_REFERENCE_FILES = {
     "AGENTS.md": "normative statement that runtime telemetry is disabled",
-    "benchmarks/task-65-round-2-v2/inventory/prior-benchmark-contamination-inventory.json": (
-        "Class 2 contamination inventory recording the removed telemetry workflow "
-        "doc path verbatim as a forbidden access target"
-    ),
     "benchmarks/task-65-round-2-v2/manifests/generation-b-pinned-manifest.json": (
         "B-generation pinned manifest recording the historical telemetry doc "
         "reference verbatim as a known limitation"

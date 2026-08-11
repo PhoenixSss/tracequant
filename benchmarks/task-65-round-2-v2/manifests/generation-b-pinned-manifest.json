@@ -89,7 +89,7 @@
         "file_mode": "100644",
         "path": ".agents/skills/task-pr-review/SKILL.md",
         "projection_action": "INSTALL_GENERATION_VERSION",
-        "projection_reason": "B source path exists; install the B-era legacy baseline skill verbatim and preserve its historical limitation",
+        "projection_reason": "B source path exists; install the B-era blob verbatim while preserving known limitation 5 (stale references to deleted .agents/policies/task-workflow-telemetry.md, .agents/task-workflow-telemetry.example.toml, and tools/agent_workflow/telemetry.py)",
         "role": "OPTIONAL_HISTORICAL_LIMITATION",
         "sha256": "43799f02bbba70e0f326a7301b8b303a5f6f46d04fce0d9b72c6cbac86cfaa16"
       },
@@ -1264,7 +1264,8 @@
     "Known limitation 1: legacy .agents/skills/task-delivery/SKILL.md references deleted .agents/policies/task-workflow-telemetry.md (recorded as-is, not repaired)",
     "Known limitation 2: docs/workflows/task-skill-runner-migration/README.md contains a stale description of removed tools/agent_workflow/trusted_runner.py",
     "Known limitation 3: docs/workflows/task-skill-runner-migration/rollback-and-compatibility.md contains the same stale description of removed trusted_runner.py",
-    "Known limitation 4: docs/workflows/publication-materials/task-material-register.md and the v1 benchmark-manifest.json (docs/workflows/benchmarks/task-65-round-2/benchmark-manifest.json) contain stale descriptions of removed trusted_runner.py; the v1 manifest is Class 2 prior-benchmark material (see inventory) and is excluded from this closure",
+    "Known limitation 4: docs/workflows/publication-materials/task-material-register.md and the v1 benchmark-manifest.json (docs/workflows/benchmarks/task-65-round-2/benchmark-manifest.json) contain stale descriptions of removed trusted_runner.py; the v1 manifest is Class 2 prior-benchmark material (see inventory) and is present in this closure for install/presence identity only (content must not be read)",
+    "Known limitation 5: legacy .agents/skills/task-pr-review/SKILL.md references deleted .agents/policies/task-workflow-telemetry.md, .agents/task-workflow-telemetry.example.toml, and tools/agent_workflow/telemetry.py (recorded as-is, not repaired)",
     "The v1 benchmark-manifest.json at B_WORKFLOW_SOURCE_SHA has blob e8ad2c39d49ef067b5fd2ade7c2bd2a911c2bcf5 (identity only; content is Class 2 and must not be read)"
   ],
   "permission_profile": {

@@ -24,6 +24,7 @@
     },
     "operation": {"type": "string"},
     "target": {"type": "string"},
+    "target_full": {"type": "string"},
     "raw_event_reference": {"type": "string"}
   },
   "additionalProperties": false

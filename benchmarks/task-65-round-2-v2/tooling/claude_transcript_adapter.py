@@ -29,7 +29,11 @@ C. KNOWN_NON_ACCESS_METADATA
    ``queue-operation``, ``ai-title``, ``file-history-delta``,
    ``file-history-snapshot``, ``system``, ``meta``, ``isMeta``, ``pr-link``,
    ``mode`` -- structurally validated UI/queue/lifecycle metadata.  Explicit
-   allowlist; a structure that could carry content or access fails closed.
+   allowlist; ONE shared content guard (M4) fails closed on any content
+   payload the subtype contract does not explicitly allow.  Metadata whose
+   contract genuinely allows context-bearing payloads (``ai-title`` titles,
+   ``system`` compact_boundary content / api_error error text) is transferred
+   into the context-input audit -- never silently dropped.
 
 D. UNKNOWN
    Any other record type, content item type, or invalid structure ->
@@ -141,10 +145,35 @@ FILE_HISTORY_SNAPSHOT_KEYS: frozenset[str] = frozenset(
     {"messageId", "timestamp", "trackedFileBackups"}
 )
 
-# Content-bearing keys that must never appear inside metadata records.
+# Content-bearing keys that must never appear inside metadata records unless
+# the subtype contract explicitly allows them (M4, Issue #125 remediation).
 _CONTENT_KEYS: frozenset[str] = frozenset(
     {"content", "text", "lines", "data", "payload", "input"}
 )
+
+# Per-subtype allowed content keys.  ONE shared structural guard
+# (_validate_metadata_content_guard) enforces this for ALL metadata types --
+# no per-handler drift.  Only ``system:compact_boundary``'s ``content`` is
+# allowed: the real current-runtime transcript carries the compaction marker
+# in it ("Conversation compacted").  Every other metadata subtype forbids all
+# content-bearing keys -> fail closed.
+_METADATA_ALLOWED_CONTENT_KEYS: dict[str, frozenset[str]] = {
+    "system:compact_boundary": frozenset({"content"}),
+}
+
+
+def _metadata_contract_key(record_type: str, record: Mapping[str, Any]) -> str:
+    """Per-subtype contract key for the shared content guard.
+
+    ``system`` records discriminate by ``subtype`` (api_error /
+    compact_boundary) so one subtype's allowed content key can never leak to
+    the other.
+    """
+    if record_type == "system":
+        subtype = record.get("subtype")
+        if isinstance(subtype, str):
+            return f"system:{subtype}"
+    return record_type
 
 
 def _record_session_id(record: Mapping[str, Any]) -> str | None:
@@ -184,16 +213,34 @@ def _validate_record_session(record: Mapping[str, Any], session_id: str) -> None
 # --------------------------------------------------------------------------
 
 
-def _validate_no_content_payload(record_type: str, record: Mapping[str, Any]) -> None:
+def _validate_metadata_content_guard(
+    record_type: str, record: Mapping[str, Any]
+) -> None:
+    """ONE shared structural guard for ALL metadata record types (M4).
+
+    Any content-bearing key (``content`` / ``text`` / ``lines`` / ``data`` /
+    ``payload`` / ``input``) present on a metadata record must be explicitly
+    allowed by the subtype's contract; otherwise the record FAILS CLOSED.
+    Previously each metadata handler drifted on whether it checked content
+    payloads; this single guard makes the check structural and uniform.
+    """
+    allowed = _METADATA_ALLOWED_CONTENT_KEYS.get(
+        _metadata_contract_key(record_type, record), frozenset()
+    )
     for key in _CONTENT_KEYS:
-        if key in record:
+        if key in record and key not in allowed:
             raise BenchmarkError(
                 f"{record_type} metadata record carries a content payload "
-                f"key {key!r} (fail closed)"
+                f"key {key!r} not allowed by its subtype contract (fail closed)"
             )
 
 
 def _validate_metadata_record(record_type: str, record: Mapping[str, Any]) -> None:
+    # NOTE: the shared structural content guard
+    # (_validate_metadata_content_guard) runs for EVERY metadata type in
+    # parse_record; the per-type handlers below only validate subtype
+    # semantics (never content keys -- that is the shared guard's job, so
+    # no handler can drift).
     if record_type == "queue-operation":
         operation = record.get("operation")
         if not isinstance(operation, str) or operation not in QUEUE_OPERATIONS:
@@ -201,7 +248,6 @@ def _validate_metadata_record(record_type: str, record: Mapping[str, Any]) -> No
                 f"queue-operation with unsupported operation {operation!r} "
                 "(fail closed)"
             )
-        _validate_no_content_payload(record_type, record)
     elif record_type == "ai-title":
         if not isinstance(record.get("aiTitle"), str):
             raise BenchmarkError("ai-title without an aiTitle string (fail closed)")
@@ -247,8 +293,6 @@ def _validate_metadata_record(record_type: str, record: Mapping[str, Any]) -> No
             raise BenchmarkError(
                 "system record carries a message payload (fail closed)"
             )
-    elif record_type in ("meta", "isMeta"):
-        _validate_no_content_payload(record_type, record)
     elif record_type == "pr-link":
         if not isinstance(record.get("prNumber"), int):
             raise BenchmarkError("pr-link without a prNumber integer (fail closed)")
@@ -272,6 +316,72 @@ def _validate_file_history_backup(record_type: str, backup: Any) -> None:
             f"{record_type} backup entry with unsupported keys {unexpected} "
             "(fail closed)"
         )
+
+
+def _metadata_context_inputs(
+    record: Mapping[str, Any], session_id: str | None
+) -> list[dict[str, Any]]:
+    """M4 (Issue #125 remediation): context-capable metadata payloads.
+
+    Metadata types whose subtype contract genuinely allows a payload that can
+    carry user/context content are NEVER silently dropped: the payload is
+    transferred into the INPUT_CONTEXT_BEARING audit as a context input
+    (source_type ``ai-title`` / ``system:compact_boundary`` /
+    ``system:api_error``).  Only these three contract-allowed payloads are
+    transferred; everything else fails closed at the shared content guard.
+    """
+    if not session_id:
+        return []
+    record_type = record.get("type")
+    if record_type == "ai-title":
+        title = record.get("aiTitle")
+        if isinstance(title, str) and title:
+            return [
+                _context_input(
+                    record,
+                    session_id,
+                    source_type="ai-title",
+                    target=title,
+                )
+            ]
+        return []
+    if record_type == "system":
+        subtype = record.get("subtype")
+        if subtype == "compact_boundary":
+            content = record.get("content")
+            if isinstance(content, str) and content:
+                return [
+                    _context_input(
+                        record,
+                        session_id,
+                        source_type="system:compact_boundary",
+                        target=content,
+                    )
+                ]
+            return []
+        # api_error: the error diagnostics text can echo paths/context (e.g. a
+        # read error naming a forbidden file) and is audited, never dropped.
+        error = record.get("error")
+        if isinstance(error, Mapping):
+            parts = [
+                str(value)
+                for key, value in error.items()
+                if isinstance(key, str)
+                and key in ("message", "formatted")
+                and isinstance(value, str)
+                and value
+            ]
+            if parts:
+                return [
+                    _context_input(
+                        record,
+                        session_id,
+                        source_type="system:api_error",
+                        target="\n".join(parts),
+                    )
+                ]
+        return []
+    return []
 
 
 # --------------------------------------------------------------------------
@@ -306,6 +416,7 @@ def _event(
     tool: str,
     operation: str,
     target: str,
+    target_full: str,
     raw_event_reference: str,
 ) -> dict[str, Any]:
     return {
@@ -315,6 +426,11 @@ def _event(
         "tool": tool,
         "operation": operation,
         "target": target,
+        # M1 (Issue #125 remediation): the FULL original input/output text,
+        # never truncated.  Contamination matching runs over ``target_full``
+        # so a forbidden identifier beyond the bounded display cap can never
+        # be lost; ``target`` stays bounded for report display only.
+        "target_full": target_full,
         "raw_event_reference": raw_event_reference,
     }
 
@@ -372,6 +488,7 @@ def _extract_tool_events(
                 raise BenchmarkError("tool_use without a name (fail closed)")
             if not isinstance(item_id, str) or not item_id:
                 raise BenchmarkError("tool_use without an id (fail closed)")
+            raw_input = json.dumps(item.get("input", {}), sort_keys=True)
             events.append(
                 _event(
                     record,
@@ -379,9 +496,8 @@ def _extract_tool_events(
                     arm_id,
                     tool=_normalize_tool(name),
                     operation="tool_use",
-                    target=bounded_text(
-                        json.dumps(item.get("input", {}), sort_keys=True)
-                    ),
+                    target=bounded_text(raw_input),
+                    target_full=raw_input,
                     raw_event_reference=item_id,
                 )
             )
@@ -390,6 +506,11 @@ def _extract_tool_events(
             if not isinstance(tool_use_id, str) or not tool_use_id:
                 raise BenchmarkError("tool_result without a tool_use_id (fail closed)")
             content_value = item.get("content", "")
+            raw_content = (
+                content_value
+                if isinstance(content_value, str)
+                else json.dumps(content_value)
+            )
             events.append(
                 _event(
                     record,
@@ -397,11 +518,8 @@ def _extract_tool_events(
                     arm_id,
                     tool="other",
                     operation="tool_result",
-                    target=bounded_text(
-                        content_value
-                        if isinstance(content_value, str)
-                        else json.dumps(content_value)
-                    ),
+                    target=bounded_text(raw_content),
+                    target_full=raw_content,
                     raw_event_reference=tool_use_id,
                 )
             )
@@ -592,9 +710,13 @@ def parse_record(
     record_type = record.get("type")
     if record_type in KNOWN_NON_ACCESS_METADATA_RECORD_TYPES:
         _validate_metadata_record(record_type, record)
+        # M4: ONE shared structural guard for ALL metadata types -- any
+        # content-bearing payload not explicitly allowed by the subtype
+        # contract fails closed (no per-handler drift).
+        _validate_metadata_content_guard(record_type, record)
         if session_id is not None:
             _validate_record_session(record, session_id)
-        return [], []
+        return [], _metadata_context_inputs(record, session_id)
 
     if record_type not in ACCESS_BEARING_RECORD_TYPES and (
         record_type not in INPUT_CONTEXT_BEARING_RECORD_TYPES
@@ -758,8 +880,14 @@ def parse_transcript(
             )
         record_types[record_type] = record_types.get(record_type, 0) + 1
         if record_type in KNOWN_NON_ACCESS_METADATA_RECORD_TYPES:
-            parse_record(parsed, session_id=session_id)  # validates structure
+            # Validates structure (subtype semantics + the shared content
+            # guard) and transfers any context-capable metadata payload (e.g.
+            # ai-title titles, system compaction/error text) into the
+            # context-input audit -- never silently dropped (M4).
+            _record_events, record_context = parse_record(parsed, session_id=session_id)
             diagnostics["non_tool_records"] += 1
+            context_inputs.extend(record_context)
+            diagnostics["context_inputs"] += len(record_context)
             continue
         record_events, record_context = parse_record(
             parsed, session_id=session_id, arm_id=arm_id

@@ -18,6 +18,18 @@ record types, sub-types, content-item types, structural invariants, session
 identity, metadata discriminators).  Any record the full parser rejects ->
 check 5 FAIL -> ``BENCHMARK OBSERVABILITY NOT VERIFIED``.
 
+Check 4 (archive isolation, M2) uses mechanical PATH-COMPONENT semantics:
+the archive destination must be under an approved evidence/archive root, must
+never point at the fixture store (``.agents/benchmark-fixtures.local/**``),
+and must explicitly contain the current arm and session components
+(component equality, never loose substring).
+
+Check 6 (controlled probe, M3) is also decided by the REAL parser: the
+declared ``controlled_test_tool_call`` spec {tool, operation,
+target_predicate} must be found as a normalized event in the actual source
+(never trusted from ``captured``/``normalized_event`` config assertions), with
+the event's session identity equal to the resolved current session.
+
 The checks are mechanical probes over a preflight configuration document;
 they never interpret workflow semantics.
 """
@@ -95,13 +107,10 @@ def _claude_source_compatible(
     """
     if not session_id:
         return False, "session identity unresolved (real parser probe skipped)"
-    location = str(source["location"])
     try:
-        lines = Path(location).read_text(encoding="utf-8").splitlines()
+        _source_events(source, arm_id, session_id)
     except OSError as exc:
-        return False, f"cannot read transcript {location}: {exc}"
-    try:
-        parse_transcript(lines, arm_id=arm_id, session_id=session_id)
+        return False, f"cannot read transcript {source.get('location')}: {exc}"
     except BenchmarkError as exc:
         return False, str(exc)
     return True, None
@@ -116,25 +125,142 @@ def _codex_source_compatible(
     every ``*.jsonl`` file is fully consumed by the adapter.  Any record the
     full parser cannot consume -> (False, reason).
     """
+    try:
+        _source_events(source, arm_id, "")
+    except OSError as exc:
+        return False, f"cannot read rollout {source.get('location')}: {exc}"
+    except BenchmarkError as exc:
+        return False, str(exc)
+    return True, None
+
+
+def _source_events(
+    source: Mapping[str, Any], arm_id: str, session_id: str
+) -> list[dict[str, Any]]:
+    """Fully parse the observed source with the REAL parser machinery.
+
+    Returns the normalized access events.  Raises ``BenchmarkError`` for any
+    record the full parser cannot consume (fail closed) and ``OSError`` for
+    unreadable sources.  Shared by check 5 (parse validation) and check 6
+    (controlled-probe search), so both checks always see the same normalized
+    events.
+    """
+    if source["kind"] == "claude_transcript":
+        location = str(source["location"])
+        lines = Path(location).read_text(encoding="utf-8").splitlines()
+        events, _context, _diag = parse_transcript(
+            lines, arm_id=arm_id, session_id=session_id
+        )
+        return events
     location = Path(str(source["location"]))
     if location.is_dir():
         files = sorted(location.glob("*.jsonl"))
         if not files:
-            return False, f"no rollout JSONL files under {location}"
+            raise BenchmarkError(f"no rollout JSONL files under {location}")
     elif location.is_file():
         files = [location]
     else:
-        return False, f"rollout source not found: {location}"
+        raise BenchmarkError(f"rollout source not found: {location}")
+    events: list[dict[str, Any]] = []
     for path in files:
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError as exc:
-            return False, f"cannot read rollout {path}: {exc}"
-        try:
-            parse_rollout(lines, arm_id=arm_id)
-        except BenchmarkError as exc:
-            return False, str(exc)
-    return True, None
+        lines = path.read_text(encoding="utf-8").splitlines()
+        parsed, _diag = parse_rollout(lines, arm_id=arm_id)
+        events.extend(parsed)
+    return events
+
+
+def _archive_isolation_failure(
+    archive: str, arm_id: str, session_id: str
+) -> str | None:
+    """Check 4 (M2, Issue #125 remediation): archive destination isolation.
+
+    Mechanical PATH-COMPONENT semantics (never loose substring): the archive
+    must be under an approved evidence/archive root, must never point at the
+    fixture store (``.agents/benchmark-fixtures.local/**``), and its path
+    identity must explicitly contain the current arm component and the
+    current session component.  Returns a failure reason, or ``None`` when
+    the destination is isolated for this Arm/session.
+    """
+    normalized = archive.strip().lower().rstrip("/")
+    if not normalized:
+        return "archive destination is empty"
+    if normalized == ".agents/benchmark-fixtures.local" or normalized.startswith(
+        ".agents/benchmark-fixtures.local/"
+    ):
+        return (
+            "archive destination must not be the fixture store "
+            f"(.agents/benchmark-fixtures.local/**): {archive}"
+        )
+    if not normalized.startswith(
+        (".agents/evidence.local/", ".agents/validation.local/")
+    ):
+        return (
+            "archive destination must be under an approved evidence/archive "
+            f"root (.agents/evidence.local or .agents/validation.local): {archive}"
+        )
+    if not session_id.strip():
+        return "session identity unresolved (cannot verify archive isolation)"
+    components = [part for part in normalized.split("/") if part]
+    arm_expected = {arm_id.strip().lower(), f"arm-{arm_id.strip().lower()}"}
+    if not arm_expected.intersection(components):
+        return (
+            "archive destination does not explicitly contain the current arm "
+            f"component {sorted(arm_expected)!r} (component equality, not "
+            f"substring): {archive}"
+        )
+    if session_id.strip().lower() not in components:
+        return (
+            "archive destination does not explicitly contain the current "
+            f"session component: {archive}"
+        )
+    return None
+
+
+def _controlled_probe_found(
+    spec: Mapping[str, Any],
+    events: list[dict[str, Any]],
+    session_id: str,
+) -> tuple[bool, str | None]:
+    """Check 6 (M3, Issue #125 remediation): mechanical probe verification.
+
+    The declared ``controlled_test_tool_call`` spec is the EXPECTED probe
+    {tool, operation, target_predicate}; this function mechanically finds it
+    in the REAL normalized events from the full parser (never trusts a
+    ``captured`` / ``normalized_event`` config assertion).  A normalized
+    event matches only when ALL of: normalized tool equals ``spec.tool``,
+    operation equals ``spec.operation``, the FULL target text
+    (``target_full``, never truncated) contains ``spec.target_predicate``,
+    and the event's session identity equals the resolved current session.
+    Returns (found, failure_reason).
+    """
+    tool = spec.get("tool")
+    operation = spec.get("operation")
+    predicate = spec.get("target_predicate")
+    if not isinstance(tool, str) or not tool:
+        return False, "controlled_test_tool_call.tool missing"
+    if not isinstance(operation, str) or not operation:
+        return False, "controlled_test_tool_call.operation missing"
+    if not isinstance(predicate, str) or not predicate:
+        return False, "controlled_test_tool_call.target_predicate missing"
+    if not session_id.strip():
+        return False, "session identity unresolved (cannot verify the probe)"
+    needle = predicate.strip().lower()
+    for event in events:
+        if str(event.get("tool", "")) != tool:
+            continue
+        if str(event.get("operation", "")) != operation:
+            continue
+        if str(event.get("session_id", "")) != session_id:
+            continue
+        text = str(event.get("target_full") or event.get("target", ""))
+        if needle in text.strip().lower():
+            return True, None
+    return (
+        False,
+        "no normalized event from the real parser matches the declared "
+        f"controlled probe (tool={tool!r} operation={operation!r} "
+        f"target_predicate={predicate!r} session={session_id!r})",
+    )
 
 
 def run_preflight(config: dict[str, Any]) -> dict[str, Any]:
@@ -204,19 +330,16 @@ def run_preflight(config: dict[str, Any]) -> dict[str, Any]:
 
     archive = str(config.get("archive_destination", ""))
     arm_id = str(config.get("arm_id", ""))
-    archive_isolated = (
-        bool(archive)
-        and arm_id in archive
-        and "fixture-store" not in archive
-        and "comparison" not in archive
-    )
+    session_id = ""
+    if isinstance(config.get("session_identity"), dict):
+        session_id = str(config["session_identity"].get("session_id", ""))
+    archive_failure = _archive_isolation_failure(archive, arm_id, session_id)
+    archive_isolated = archive_failure is None
     checks.append(
         _check(
             "archive_destination_isolated",
             archive_isolated,
-            None
-            if archive_isolated
-            else "archive destination must be isolated per Arm/session",
+            None if archive_isolated else archive_failure,
         )
     )
 
@@ -250,16 +373,36 @@ def run_preflight(config: dict[str, Any]) -> dict[str, Any]:
         )
     )
 
+    # 6. controlled test tool call: mechanical probe verification.  The
+    # declared ``controlled_test_tool_call`` spec is the EXPECTED probe
+    # {tool, operation, target_predicate}; it is found in the REAL normalized
+    # events from the full parser (check 5's machinery).  A config assertion
+    # like ``captured: true`` / ``normalized_event: {...}`` is never trusted:
+    # without a matching normalized probe event in the actual source the
+    # check FAILs (fake config + no probe -> FAIL).
     controlled = config.get("controlled_test_tool_call")
-    captured = controlled and bool(controlled.get("captured"))
-    normalized = controlled and bool(controlled.get("normalized_event"))
+    probe_ok = False
+    probe_detail: str | None = None
+    if isinstance(controlled, Mapping):
+        probe_events: list[dict[str, Any]] = []
+        if source_ok and isinstance(source, Mapping):
+            try:
+                probe_events = _source_events(source, arm_id, session_id)
+            except (BenchmarkError, OSError) as exc:
+                probe_detail = (
+                    f"controlled-probe search over the real parser failed: {exc}"
+                )
+        if probe_detail is None:
+            probe_ok, probe_detail = _controlled_probe_found(
+                controlled, probe_events, session_id
+            )
+    else:
+        probe_detail = "controlled_test_tool_call spec missing"
     checks.append(
         _check(
             "controlled_test_tool_call_captured_and_normalizable",
-            bool(captured) and bool(normalized),
-            None
-            if bool(captured) and bool(normalized)
-            else "controlled test tool call not captured or not normalizable",
+            probe_ok,
+            None if probe_ok else probe_detail,
         )
     )
 

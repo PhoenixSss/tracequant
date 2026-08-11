@@ -12,7 +12,11 @@ Task #65 v2 benchmark. Tooling: `tooling/observability_preflight.py`,
 
 Two benchmark-only adapters normalize observed records into mechanical
 streams; `target` covers git args, gh args, Read paths, Grep paths/pattern
-scopes, Glob scopes, shell commands, and evidence/rollout paths.
+scopes, Glob scopes, shell commands, and evidence/rollout paths.  Every
+access event also carries `target_full`: the FULL original input/output text
+(never truncated).  Contamination matching runs over `target_full`; `target`
+is the bounded display text only (M1, Issue #125 remediation) — a forbidden
+identifier beyond the 512-byte display cap can never be lost.
 
 - Codex rollout adapter (`tooling/codex_rollout_adapter.py`): parses
   `custom_tool_call` / `custom_tool_call_output` records into access events.
@@ -44,7 +48,7 @@ untruncated; an empty list is legal and produces zero contamination matches;
 missing key, non-list, or non-string element → fail closed.  Rationale: the
 injected permission/tool context may carry strings matchable to Class 2 /
 Class 3 identities.
-| C. KNOWN_NON_ACCESS_METADATA | `queue-operation`, `ai-title`, `file-history-delta`, `file-history-snapshot`, `system`, `meta`, `isMeta`, `pr-link`, `mode` | explicit allowlist with structural + semantic validation (e.g. `queue-operation.operation` ∈ {enqueue, dequeue}; `system.subtype` ∈ {api_error, compact_boundary}; file-history backup entries may only carry registry keys `backupFileName`/`version`/`backupTime`/`realParentDir` and never content payloads); violation → fail closed |
+| C. KNOWN_NON_ACCESS_METADATA | `queue-operation`, `ai-title`, `file-history-delta`, `file-history-snapshot`, `system`, `meta`, `isMeta`, `pr-link`, `mode` | explicit allowlist with structural + semantic validation (e.g. `queue-operation.operation` ∈ {enqueue, dequeue}; `system.subtype` ∈ {api_error, compact_boundary}; file-history backup entries may only carry registry keys `backupFileName`/`version`/`backupTime`/`realParentDir` and never content payloads); **one shared structural content guard** (M4) fails closed on any content-bearing payload (`content`/`text`/`lines`/`data`/`payload`/`input`) the subtype contract does not explicitly allow; violation → fail closed |
 | D. UNKNOWN | anything else | **FAIL CLOSED / NOT VERIFIED** |
 
 Evidence basis for C: on the current tested runtime, file-history
@@ -53,6 +57,19 @@ backup metadata), never file content; `system` records carry harness
 error/compaction markers without `message`; the remaining metadata types
 carry UI/queue/lifecycle data only. Any record whose structure could carry
 content or access fails closed instead of being classified.
+
+**M4 shared content guard and context-capable metadata transfer**: every
+metadata record type is checked by ONE structural guard; only
+`system:compact_boundary`'s `content` key (the real runtime's compaction
+marker) is explicitly allowed.  Metadata whose subtype contract genuinely
+allows a payload that can carry user/context content is NEVER silently
+dropped — it transfers into the INPUT_CONTEXT_BEARING audit as a context
+input and is matched with the same forbidden identifiers: `ai-title`'s
+`aiTitle` (source_type `ai-title`), `system:compact_boundary`'s `content`
+(source_type `system:compact_boundary`), and `system:api_error`'s
+`error.message`/`error.formatted` diagnostics (source_type
+`system:api_error` — error text can echo a forbidden path).  All other
+metadata payloads fail closed at the shared guard.
 
 ### Session identity model
 
@@ -76,7 +93,14 @@ Transcript records carry `sessionId`, but the resolved session identity is an
    includes the mechanical transcript-path ↔ session-identity match);
 2. **transcript / rollout source locatable**;
 3. **capture active before formal Agent work**;
-4. **archive destination isolated for this Arm/session**;
+4. **archive destination isolated for this Arm/session** — mechanical
+   PATH-COMPONENT semantics (M2, never loose substring): the archive must be
+   under an approved evidence/archive root (`.agents/evidence.local` /
+   `.agents/validation.local`), must never point at the fixture store
+   (`.agents/benchmark-fixtures.local/**` is explicitly rejected), and its
+   path identity must explicitly contain the current arm component and the
+   current session component (component equality — `arm-d-something` never
+   satisfies arm D);
 5. **parser supports the current observed record format** — decided by the
    REAL parser machinery, not an allowlist: the declared
    `parser_record_formats` must be adapter-supported (`codex:custom_tool_call`,
@@ -85,7 +109,15 @@ Transcript records carry `sessionId`, but the resolved session identity is an
    record of the observed source — top-level record types, sub-types,
    content-item types, structural invariants, session identity, and metadata
    discriminators.  Any record the full parser rejects → check 5 FAIL;
-6. **controlled test tool call appears in capture and can be normalized**.
+6. **controlled test tool call appears in capture and can be normalized** —
+   mechanical probe verification (M3): the declared
+   `controlled_test_tool_call` spec `{tool, operation, target_predicate}` is
+   the EXPECTED probe, found in the REAL normalized events from the full
+   parser (the same machinery as check 5).  A normalized event matches only
+   when its tool, operation, FULL target text (never truncated), and session
+   identity equal the spec / resolved current session.  Config assertions
+   (`captured: true`, `normalized_event: {...}`) are never trusted: fake
+   config with no probe in the actual transcript → FAIL.
 
 Verdicts: `OBSERVABILITY VERIFIED` when all six checks pass;
 **`BENCHMARK OBSERVABILITY NOT VERIFIED`** on any failure → the formal
@@ -169,8 +201,10 @@ aborts the audit (`BenchmarkError`, CLI exit 1).
 - Matching is deterministic substring/identifier matching on normalized
   lowercased values; PR-number identifiers (bare digits, `#NN`, `gh pr view
   NN`, `/pull/NN`) match only through boundary-checked PR patterns to avoid
-  false positives on unrelated digits. Fail-closed bias: any forbidden match
-  is reported for human investigation, never silently ignored.
+  false positives on unrelated digits. Access events are matched over their
+  FULL `target_full` text (M1) — the bounded display `target` is never the
+  sole matcher input. Fail-closed bias: any forbidden match is reported for
+  human investigation, never silently ignored.
 
 ## Non-negotiable semantics
 

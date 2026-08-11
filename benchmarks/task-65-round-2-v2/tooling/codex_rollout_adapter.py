@@ -48,8 +48,8 @@ def _normalize_tool(tool: str) -> str:
     return _TOOL_MAP.get(tool.lower(), "other")
 
 
-def _target_from_args(args: Any) -> str:
-    """Derive a bounded audit target from tool call arguments.
+def _args_text(args: Any) -> str:
+    """Derive the full (never truncated) audit text from tool call arguments.
 
     Targets cover git args, gh args, Read paths, Grep path/pattern scope,
     Glob scope, shell commands, and evidence/rollout paths.
@@ -66,9 +66,9 @@ def _target_from_args(args: Any) -> str:
         ):
             value = args.get(key)
             if isinstance(value, str) and value:
-                return bounded_text(value)
-        return bounded_text(json.dumps(args, sort_keys=True, ensure_ascii=False))
-    return bounded_text(json.dumps(args, sort_keys=True, ensure_ascii=False))
+                return value
+        return json.dumps(args, sort_keys=True, ensure_ascii=False)
+    return json.dumps(args, sort_keys=True, ensure_ascii=False)
 
 
 def parse_record(record: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -90,23 +90,27 @@ def parse_record(record: Mapping[str, Any]) -> dict[str, Any] | None:
     if not isinstance(tool, str):
         raise BenchmarkError(f"{record_type}: missing tool (fail closed)")
     if record_type == "custom_tool_call":
+        args_text = _args_text(record.get("args"))
         return {
             "arm_id": record.get("arm_id", ""),
             "session_id": session_id,
             "timestamp": timestamp,
             "tool": _normalize_tool(tool),
             "operation": "tool_call",
-            "target": _target_from_args(record.get("args")),
+            "target": bounded_text(args_text),
+            "target_full": args_text,
             "raw_event_reference": str(record.get("raw_reference", "")),
         }
     # custom_tool_call_output
+    output_text = str(record.get("output_reference", ""))
     return {
         "arm_id": record.get("arm_id", ""),
         "session_id": session_id,
         "timestamp": timestamp,
         "tool": _normalize_tool(tool),
         "operation": "tool_call_output",
-        "target": bounded_text(str(record.get("output_reference", ""))),
+        "target": bounded_text(output_text),
+        "target_full": output_text,
         "raw_event_reference": str(record.get("raw_reference", "")),
     }
 

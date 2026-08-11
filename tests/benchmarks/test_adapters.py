@@ -162,7 +162,13 @@ def test_claude_adapter_skips_known_non_tool_records() -> None:
             }
         events, context_inputs = parse_claude_record(record, session_id="s")
         assert events == []
-        assert context_inputs == []
+        # M4: only the ai-title payload is context-capable and transfers to
+        # the context-input audit; the other metadata types carry no payload.
+        if record_type == "ai-title":
+            assert [c["source_type"] for c in context_inputs] == ["ai-title"]
+            assert context_inputs[0]["target"] == "title"
+        else:
+            assert context_inputs == []
 
 
 def test_claude_adapter_fail_closed_unknown_record_type() -> None:
