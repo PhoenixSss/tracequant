@@ -273,6 +273,7 @@
         "source_selector": {"$ref": "#/$defs/sourceSelector"},
         "benchmark_base_sha": {"$ref": "#/$defs/sha"},
         "generated_by": {"type": "string", "minLength": 1},
+        "evaluation_id": {"type": "string", "minLength": 1},
         "generated_at_utc": {
           "type": "string",
           "format": "date-time"

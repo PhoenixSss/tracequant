@@ -7,19 +7,20 @@ blob IDs, sha256 digests, and role classification resolved from the actual
 tree at ``BENCHMARK_BASE_SHA``.
 
 C and D run-locked manifests are generated independently from their own
-templates, then compared by ``file_identity_report`` to verify the
-C/D identical-generation file identity invariant:
+templates, then compared by ``file_identity_report``.  Formal comparison
+validity is decided by the mandatory shared identities alone —
+BUSINESS_SNAPSHOT_ID (``benchmark_base_sha``), TASK_SPEC_ID
+(``protocol_identity``), EVALUATION_ID (optional ``evaluation_id``,
+assigned via ``--evaluation-id`` at freeze).  Any shared identity mismatch
+-> HUMAN GATE; the formal C vs D comparison must not continue.
 
-- complete generation source-path set identical between C and D;
-- per-path blob ID identical;
-- per-path sha256 identical;
-- allowed differences limited to agent identity / discovery adapter /
-  invocation identity / permission-runtime environment identity /
-  session-evidence identity;
-- no per-agent-pruned closure, no symlinks, no shared runtime files.
-
-Any unexpected file-set / blob / hash difference -> HUMAN GATE, and the
-formal C vs D comparison must not continue.
+Control-plane file identity (complete generation source-path set, per-path
+blob ID, per-path sha256, file mode) is DIAGNOSTIC / PROVENANCE: differences
+are recorded by the report but never alone gate the formal C vs D
+comparison.  Allowed identity differences remain limited to agent identity /
+discovery adapter / invocation identity / permission-runtime environment
+identity / session-evidence identity; no per-agent-pruned closure, no
+symlinks, no shared runtime files.
 
 Run-locked manifests are #86 evidence (conductor-local archive); this Task
 does not pre-generate formal run-locked manifests.
@@ -150,6 +151,7 @@ def generate_run_locked(
     benchmark_base_sha: str,
     generated_by: str,
     generated_at_utc: str | None = None,
+    evaluation_id: str | None = None,
 ) -> dict[str, Any]:
     """Generate one run-locked manifest from a template and the base SHA."""
     raw = load_json(template_path)
@@ -170,6 +172,8 @@ def generate_run_locked(
         generated_at_utc = generated_at_utc.replace("+00:00", "Z")
     if len(generated_at_utc) != 20 or not generated_at_utc.endswith("Z"):
         raise BenchmarkError("generated_at_utc must be a UTC second timestamp")
+    if evaluation_id is not None and not evaluation_id.strip():
+        raise BenchmarkError("evaluation_id must not be empty when assigned")
 
     resolved_base = git_rev_parse(repo_root, benchmark_base_sha)
     all_paths = _list_paths(repo_root, resolved_base)
@@ -276,6 +280,10 @@ def generate_run_locked(
         "validation_contract": raw["validation_contract"],
         "invocation_contract": raw["invocation_contract"],
     }
+    if evaluation_id is not None:
+        # EVALUATION_ID (mandatory shared identity): assigned by the freeze
+        # operator, identical for C and D, gated by file_identity_report.
+        run_locked["evaluation_id"] = evaluation_id
     run_locked["generation_identity_digest"] = generation_identity_digest(
         resolved_base, locked_path_dicts
     )
@@ -293,6 +301,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-dir", required=True)
     parser.add_argument(
         "--generated-by", default="task-65-round-2-v2 run-lock", help="freeze operator"
+    )
+    parser.add_argument(
+        "--evaluation-id",
+        help=(
+            "EVALUATION_ID (mandatory shared identity) assigned at freeze; "
+            "identical for C and D; required for formal freeze"
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -312,6 +327,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.benchmark_base_sha,
                 args.generated_by,
                 generated_at_utc,
+                evaluation_id=args.evaluation_id,
             )
             destination = (
                 out_dir / f"generation-{generation_id.lower()}-run-locked-manifest.json"
@@ -329,7 +345,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"RUN LOCK FAIL CLOSED: {exc}", file=sys.stderr)
         return 1
 
-    # C/D FILE IDENTITY REPORT (independent bundle comparison).
+    # C/D FILE IDENTITY REPORT (independent bundle comparison; control-plane
+    # file identity differences are diagnostic, shared identities gate).
     try:
         from file_identity_report import file_identity_report
 

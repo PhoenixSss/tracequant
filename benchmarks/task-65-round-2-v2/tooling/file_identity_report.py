@@ -1,18 +1,32 @@
 """C/D FILE IDENTITY REPORT for task-65-round-2-v2.
 
-Verifies the C/D identical-generation file identity invariant between the
-independently generated C and D run-locked manifests:
+Compares the independently generated C and D run-locked manifests.
 
-- complete generation source-path set identical;
-- per-path blob ID identical;
-- per-path sha256 identical;
-- allowed differences limited to: agent identity, discovery adapter,
-  invocation identity, permission/runtime environment identity,
-  session/evidence identity;
-- no per-agent-pruned closure (a per-agent-pruned file set is a violation).
+Formal comparison validity is decided by the mandatory shared identities
+alone (SAME BUSINESS / SAME TASK / SAME EVALUATION):
 
-Any unexpected file-set / blob / hash difference -> ``human_gate: true`` and
-the formal C vs D comparison must not continue.
+- BUSINESS_SNAPSHOT_ID — carried by ``benchmark_base_sha``;
+- TASK_SPEC_ID — carried by ``protocol_identity``;
+- EVALUATION_ID — carried by the optional ``evaluation_id`` field when it
+  has been assigned (run-lock ``--evaluation-id`` at freeze).
+
+Any mismatch -> ``human_gate: true``; the formal C vs D comparison is
+invalid and must not continue.
+
+Control-plane file identity — complete generation source-path set,
+per-path blob ID, per-path sha256, file mode, generation identity digest —
+is DIAGNOSTIC / PROVENANCE. Every difference is recorded in this report,
+but a control-plane file identity difference alone never invalidates an
+Arm, never sets a mandatory Human Gate, and never prohibits formal C vs D
+comparison. Per-arm identities (workflow / runner / agent runtime /
+environment) are carried by the allowed identity fields
+(``ALLOWED_IDENTITY_FIELDS``) and are traceable without requiring
+cross-Arm equality.
+
+Allowed identity differences remain limited to: agent identity, discovery
+adapter, invocation identity, permission/runtime environment identity,
+session/evidence identity; no per-agent-pruned closure (a per-agent-pruned
+file set is a violation).
 """
 
 from __future__ import annotations
@@ -37,6 +51,35 @@ ALLOWED_IDENTITY_FIELDS: frozenset[str] = frozenset(
         "permission_discovery_identity",
     }
 )
+
+# The mandatory shared identities that decide formal comparison validity.
+# BUSINESS_SNAPSHOT_ID and TASK_SPEC_ID are carried by required run-locked
+# manifest fields; EVALUATION_ID is carried by the optional ``evaluation_id``
+# field (assigned at freeze via run-lock ``--evaluation-id``) and is only
+# gated when at least one manifest carries it.
+SHARED_IDENTITY_FIELDS: tuple[str, ...] = (
+    "business_snapshot_id",
+    "task_spec_id",
+    "evaluation_id",
+)
+
+_SHARED_IDENTITY_FIELD_MAP: dict[str, str] = {
+    "business_snapshot_id": "benchmark_base_sha",
+    "task_spec_id": "protocol_identity",
+    "evaluation_id": "evaluation_id",
+}
+
+DIAGNOSTIC_DISPOSITION = (
+    "DIAGNOSTIC — control-plane file identity differences recorded; "
+    "formal comparison permitted if experiment definition permits"
+)
+HUMAN_GATE_DISPOSITION = (
+    "HUMAN GATE — mandatory shared identity mismatch; formal C vs D comparison invalid"
+)
+
+
+def _shared_identity_value(manifest: dict[str, Any], identity: str) -> Any:
+    return manifest.get(_SHARED_IDENTITY_FIELD_MAP[identity])
 
 
 def _path_entries(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -90,16 +133,49 @@ def file_identity_report(
     for key in sorted(set(c_manifest) | set(d_manifest)):
         if key in ALLOWED_IDENTITY_FIELDS:
             continue
+        if key == "evaluation_id":
+            # Owned by the mandatory shared-identity block below.
+            continue
         if c_manifest.get(key) != d_manifest.get(key):
             unexpected_field_diffs.append(key)
 
-    human_gate = not (
+    # Mandatory shared identities decide formal comparison validity.  A
+    # control-plane file identity difference never gates formal comparison.
+    shared_identities: dict[str, Any] = {}
+    shared_identities_identical = True
+    for identity in SHARED_IDENTITY_FIELDS:
+        c_value = _shared_identity_value(c_manifest, identity)
+        d_value = _shared_identity_value(d_manifest, identity)
+        if identity == "evaluation_id":
+            carried = c_value is not None or d_value is not None
+            # Not carried -> no gate; carried -> both present and equal.
+            identical = c_value == d_value if carried else True
+        else:
+            carried = True
+            identical = c_value == d_value
+        if not identical:
+            shared_identities_identical = False
+        shared_identities[identity] = {
+            "carried": carried,
+            "identical": identical,
+            "c": c_value,
+            "d": d_value,
+        }
+
+    human_gate = not shared_identities_identical
+    file_identity_consistent = (
         path_set_identical
         and blob_identical
         and sha_identical
         and mode_identical
         and identity_digest_identical
     )
+    if not shared_identities_identical:
+        disposition = HUMAN_GATE_DISPOSITION
+    elif file_identity_consistent:
+        disposition = "pass"
+    else:
+        disposition = DIAGNOSTIC_DISPOSITION
 
     report: dict[str, Any] = {
         "protocol_identity": "task-65-round-2-v2",
@@ -108,6 +184,8 @@ def file_identity_report(
         "d_generation_id": d_manifest.get("generation_id"),
         "c_benchmark_base_sha": c_manifest.get("benchmark_base_sha"),
         "d_benchmark_base_sha": d_manifest.get("benchmark_base_sha"),
+        "mandatory_shared_identities": shared_identities,
+        "shared_identities_identical": shared_identities_identical,
         "path_set_identical": path_set_identical,
         "per_path_blob_identical": blob_identical,
         "per_path_sha256_identical": sha_identical,
@@ -122,16 +200,18 @@ def file_identity_report(
         "unexpected_field_differences": unexpected_field_diffs,
         "no_per_agent_pruned_closure": not c_only and not d_only,
         "human_gate": human_gate,
-        "disposition": "HUMAN GATE — do not continue formal C vs D comparison"
-        if human_gate
-        else "pass",
+        "disposition": disposition,
     }
     return report
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Generate the C/D FILE IDENTITY REPORT from run-locked manifests."
+        description=(
+            "Generate the C/D FILE IDENTITY REPORT from run-locked manifests; "
+            "control-plane file identity differences are diagnostic/provenance, "
+            "human_gate fires only on mandatory shared identity mismatch."
+        )
     )
     parser.add_argument("--c", required=True, help="C run-locked manifest")
     parser.add_argument("--d", required=True, help="D run-locked manifest")

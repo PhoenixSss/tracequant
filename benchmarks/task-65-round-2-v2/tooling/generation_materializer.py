@@ -231,6 +231,9 @@ RUN_LOCKED_SCHEMA: dict[str, Any] = {
             "type": "string",
             "pattern": UTC_TIMESTAMP_PATTERN.pattern,
         },
+        # EVALUATION_ID (mandatory shared identity); optional: assigned by
+        # the freeze operator (run-lock --evaluation-id) at formal freeze.
+        "evaluation_id": {"type": "string", "minLength": 1},
         "generation_identity_digest": {
             "type": "string",
             "pattern": r"[0-9a-f]{64}",

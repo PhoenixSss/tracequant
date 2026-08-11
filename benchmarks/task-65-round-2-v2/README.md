@@ -20,7 +20,7 @@ benchmarks/task-65-round-2-v2/
   tooling/                      deterministic benchmark tooling (stdlib only)
   inventory/                    prior-benchmark contamination inventory (Class 2)
   registry/                     deterministic Arm identity registry (4 arms)
-  contracts/                    6 contract documents (see below)
+  contracts/                    7 contract documents (see below)
 ```
 
 ## Deliverables map (Issue #125)
@@ -43,6 +43,7 @@ benchmarks/task-65-round-2-v2/
 - [arm-identity-and-pr-contract.md](contracts/arm-identity-and-pr-contract.md)
 - [temporary-development-link-contract.md](contracts/temporary-development-link-contract.md)
 - [runtime-projection-and-control-base-contract.md](contracts/runtime-projection-and-control-base-contract.md)
+- [formal-comparison-identity-contract.md](contracts/formal-comparison-identity-contract.md)
 - [benchmark-information-boundary.md](contracts/benchmark-information-boundary.md)
 - [observability-and-access-audit-contract.md](contracts/observability-and-access-audit-contract.md)
 - [non-formal-labeling-convention.md](contracts/non-formal-labeling-convention.md)
@@ -73,6 +74,18 @@ benchmarks/task-65-round-2-v2/
   `kind` discriminator: `pinned` for A/B or `run_locked` for C/D.  Run-locked
   input carries the resolved source SHA, selector, lock timestamp, and complete
   generation identity digest; the materializer never re-resolves a mutable ref.
+- **Identity model** (see
+  [formal-comparison-identity-contract.md](contracts/formal-comparison-identity-contract.md)):
+  formal comparison is decided only by the mandatory shared identities
+  `BUSINESS_SNAPSHOT_ID` (`benchmark_base_sha`) / `TASK_SPEC_ID`
+  (`protocol_identity`) / `EVALUATION_ID` (optional `evaluation_id` from
+  run-lock `--evaluation-id`) — SAME BUSINESS / SAME TASK / SAME EVALUATION.
+  Per-Arm identities (`WORKFLOW_ID` / `RUNNER_ID` / `AGENT_RUNTIME_ID` /
+  `ENVIRONMENT_ID`) are traceable but never required equal across Arms.
+- **C/D FILE IDENTITY REPORT is DIAGNOSTIC / PROVENANCE**: path/blob/sha256/
+  mode/generation-closure differences are recorded, but never invalidate an
+  Arm and never alone set a mandatory Human Gate or prohibit formal C vs D
+  comparison; `human_gate` fires only on a mandatory shared identity mismatch.
 - **NON-FORMAL**: this Task's PREP validation only verifies tooling
   mechanism on `PREP_VALIDATION_SOURCE_SHA` (ephemeral clones, no remote
   branches); all rehearsal products are labeled NON-FORMAL and never mixed
@@ -99,7 +112,8 @@ uv run python benchmarks/task-65-round-2-v2/tooling/control_base_validator.py \
 uv run python benchmarks/task-65-round-2-v2/tooling/run_lock.py \
   --template manifests/generation-c-current-template-manifest.json \
   --template manifests/generation-d-current-template-manifest.json \
-  --benchmark-base-sha <BASE> --out-dir <OUT>
+  --benchmark-base-sha <BASE> --out-dir <OUT> \
+  --evaluation-id <EVALUATION_ID>   # mandatory shared identity; formal freeze only
 
 uv run python benchmarks/task-65-round-2-v2/tooling/access_audit.py \
   --events <events.json> --inventory inventory/prior-benchmark-contamination-inventory.json \

@@ -12,6 +12,8 @@ from _benchmark_helpers import REPO_ROOT, run_git_quiet
 
 from file_identity_report import (  # type: ignore[import-not-found]
     ALLOWED_IDENTITY_FIELDS,
+    DIAGNOSTIC_DISPOSITION,
+    HUMAN_GATE_DISPOSITION,
     file_identity_report,
 )
 from benchmark_common import BenchmarkError  # type: ignore[import-not-found]
@@ -61,6 +63,19 @@ def test_run_lock_generates_cd_identical_closure() -> None:
     assert report["unexpected_field_differences"] == []
     # Only identity fields differ.
     assert set(report["allowed_identity_differences"]) <= ALLOWED_IDENTITY_FIELDS
+    # Mandatory shared identities identical (no evaluation_id assigned yet).
+    assert report["shared_identities_identical"] is True
+    shared = report["mandatory_shared_identities"]
+    assert shared["business_snapshot_id"] == {
+        "carried": True,
+        "identical": True,
+        "c": base,
+        "d": base,
+    }
+    assert shared["task_spec_id"]["identical"] is True
+    assert shared["task_spec_id"]["c"] == "task-65-round-2-v2"
+    assert shared["evaluation_id"]["carried"] is False
+    assert shared["evaluation_id"]["identical"] is True
 
 
 def test_run_lock_role_classification_and_identity_explicit() -> None:
@@ -101,20 +116,121 @@ def test_run_lock_rejects_control_plane_inherit(tmp_path: Path) -> None:
         generate_run_locked(template, REPO_ROOT, base, "test", "2026-08-10T00:00:00Z")
 
 
-def test_file_identity_report_flags_blob_difference() -> None:
+def test_file_identity_report_records_blob_difference_as_diagnostic() -> None:
     base = run_git_quiet("rev-parse", "HEAD").stdout.strip()
     c_path, d_path = _templates()
     timestamp = "2026-08-10T00:00:00Z"
     c = generate_run_locked(c_path, REPO_ROOT, base, "test", timestamp)
     d = generate_run_locked(d_path, REPO_ROOT, base, "test", timestamp)
 
-    # Tamper: change one path's sha256 in D -> human gate.
+    # Tamper: change one path's sha256/blob in D.  Control-plane file
+    # identity difference is DIAGNOSTIC / PROVENANCE: recorded, but no
+    # mandatory Human Gate and no prohibition of formal C vs D comparison.
     d["closure"]["paths"][0]["sha256"] = "f" * 64
     d["closure"]["paths"][0]["blob_id"] = "0" * 40
     report = file_identity_report(c, d)
-    assert report["human_gate"] is True
+    assert report["human_gate"] is False
+    assert report["disposition"] == DIAGNOSTIC_DISPOSITION
     assert report["per_path_sha256_identical"] is False
     assert report["per_path_blob_identical"] is False
+    assert report["sha256_differences"]
+    assert report["shared_identities_identical"] is True
+
+
+def test_file_identity_report_human_gate_on_shared_identity_mismatch() -> None:
+    base = run_git_quiet("rev-parse", "HEAD").stdout.strip()
+    c_path, d_path = _templates()
+    timestamp = "2026-08-10T00:00:00Z"
+    c = generate_run_locked(c_path, REPO_ROOT, base, "test", timestamp)
+    d = generate_run_locked(d_path, REPO_ROOT, base, "test", timestamp)
+
+    # BUSINESS_SNAPSHOT_ID mismatch -> mandatory Human Gate.
+    d_business = json.loads(json.dumps(d))
+    d_business["benchmark_base_sha"] = "0" * 40
+    report = file_identity_report(c, d_business)
+    assert report["human_gate"] is True
+    assert report["disposition"] == HUMAN_GATE_DISPOSITION
+    assert report["shared_identities_identical"] is False
+    assert (
+        report["mandatory_shared_identities"]["business_snapshot_id"]["identical"]
+        is False
+    )
+
+    # TASK_SPEC_ID mismatch -> mandatory Human Gate.
+    d_task = json.loads(json.dumps(d))
+    d_task["protocol_identity"] = "other-protocol"
+    report = file_identity_report(c, d_task)
+    assert report["human_gate"] is True
+    assert report["mandatory_shared_identities"]["task_spec_id"]["identical"] is False
+
+    # Control-plane file identity consistency does not rescue a shared
+    # identity mismatch: file identity is diagnostic, not a precondition.
+    assert report["path_set_identical"] is True
+
+
+def test_file_identity_report_evaluation_id_gate() -> None:
+    base = run_git_quiet("rev-parse", "HEAD").stdout.strip()
+    c_path, d_path = _templates()
+    timestamp = "2026-08-10T00:00:00Z"
+    evaluation = "ev-task65-round2-v2-001"
+    c = generate_run_locked(
+        c_path, REPO_ROOT, base, "test", timestamp, evaluation_id=evaluation
+    )
+    d = generate_run_locked(
+        d_path, REPO_ROOT, base, "test", timestamp, evaluation_id=evaluation
+    )
+
+    # Both carry the same EVALUATION_ID -> identical, no gate.
+    report = file_identity_report(c, d)
+    evaluation_entry = report["mandatory_shared_identities"]["evaluation_id"]
+    assert evaluation_entry["carried"] is True
+    assert evaluation_entry["identical"] is True
+    assert evaluation_entry["c"] == evaluation
+    assert report["human_gate"] is False
+    assert report["disposition"] == "pass"
+
+    # Asymmetric carry (C assigned, D not) -> shared identity mismatch -> gate.
+    d_without = json.loads(json.dumps(d))
+    del d_without["evaluation_id"]
+    report = file_identity_report(c, d_without)
+    assert report["human_gate"] is True
+    assert report["disposition"] == HUMAN_GATE_DISPOSITION
+    assert report["mandatory_shared_identities"]["evaluation_id"]["identical"] is False
+
+    # Different EVALUATION_ID values -> gate.
+    d_other = json.loads(json.dumps(d))
+    d_other["evaluation_id"] = "ev-other"
+    report = file_identity_report(c, d_other)
+    assert report["human_gate"] is True
+    assert report["mandatory_shared_identities"]["evaluation_id"]["identical"] is False
+
+
+def test_run_lock_evaluation_id_round_trip(tmp_path: Path) -> None:
+    base = run_git_quiet("rev-parse", "HEAD").stdout.strip()
+    c_path, d_path = _templates()
+    timestamp = "2026-08-10T00:00:00Z"
+    evaluation = "ev-task65-round2-v2-002"
+    c = generate_run_locked(
+        c_path, REPO_ROOT, base, "test", timestamp, evaluation_id=evaluation
+    )
+    d = generate_run_locked(
+        d_path, REPO_ROOT, base, "test", timestamp, evaluation_id=evaluation
+    )
+    assert c["evaluation_id"] == d["evaluation_id"] == evaluation
+
+    # Schema accepts the carried identity and the digest stays consistent.
+    c_path_file = tmp_path / "c.json"
+    c_path_file.write_text(json.dumps(c), encoding="utf-8")
+    parsed = parse_run_locked_manifest(c_path_file)
+    c_store = tmp_path / "c-bundle"
+    bundle = materialize(parsed, REPO_ROOT, c_store, expected_source_sha=base)
+    assert bundle["generation_identity_digest"] == c["generation_identity_digest"]
+
+    # Empty evaluation_id is rejected (no guessing).
+    with pytest.raises(BenchmarkError, match="evaluation_id must not be empty"):
+        generate_run_locked(
+            c_path, REPO_ROOT, base, "test", timestamp, evaluation_id=" "
+        )
 
 
 def test_run_lock_rejects_unclassified_control_plane_path(tmp_path: Path) -> None:

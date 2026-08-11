@@ -92,7 +92,7 @@
   },
   "validation_contract": {
     "control_base_validator": "control_base_validator.py --arm <ARM> --benchmark-base-sha <BENCHMARK_BASE_SHA> --control-base-sha <ARM_CONTROL_BASE_SHA>",
-    "cd_file_identity_report": "required at freeze after run-lock: complete path/blob/hash identity; any unexpected file-set/blob/hash difference -> HUMAN GATE, formal C vs D comparison must not continue",
+    "cd_file_identity_report": "required at freeze after run-lock: path/blob/hash differences are recorded as DIAGNOSTIC/PROVENANCE; HUMAN GATE only on mandatory shared identity mismatch (BUSINESS_SNAPSHOT_ID / TASK_SPEC_ID / EVALUATION_ID); control-plane file identity difference alone never blocks formal C vs D comparison",
     "c_d_frozen_tip": "ARM_CONTROL_BASE_SHA = BENCHMARK_BASE_SHA (no synthetic commit; arm known from the run-locked manifest filename)",
     "worktree_clean_required": true
   },
@@ -124,5 +124,21 @@
     "no_per_agent_pruned_closure": true,
     "no_symlink": true,
     "independent_materialization": true
+  },
+  "shared_identity_contract": {
+    "mandatory_shared_identities": {
+      "business_snapshot_id": "identity of the frozen business snapshot; carried by the run-locked benchmark_base_sha field (BUSINESS_SNAPSHOT_ID)",
+      "task_spec_id": "identity of the frozen Task #65 workload spec; carried by the run-locked protocol_identity field (TASK_SPEC_ID)",
+      "evaluation_id": "identity of the formal C vs D evaluation definition; assigned at freeze via run-lock --evaluation-id (EVALUATION_ID)"
+    },
+    "per_arm_traceable_identities": {
+      "workflow_id": "per-arm workflow identity (invocation_contract)",
+      "runner_id": "per-arm runner identity (invocation_contract)",
+      "agent_runtime_id": "per-arm agent runtime identity (agent_identity)",
+      "environment_id": "per-arm runtime environment identity (permission_discovery_identity / #86 environment manifest)"
+    },
+    "formal_comparison_gate": "formal C vs D comparison is valid iff BUSINESS_SNAPSHOT_ID, TASK_SPEC_ID, and EVALUATION_ID are identical across the compared Arms; any mismatch -> comparison invalid / Human Gate",
+    "file_identity_disposition": "control-plane file identity differences are DIAGNOSTIC / PROVENANCE; they never invalidate an Arm and never alone set a mandatory Human Gate or prohibit formal C vs D comparison",
+    "rerun_policy": "Arm-specific workflow/infrastructure fix -> rerun only that Arm; a shared component actually used by multiple Arms changed -> rerun affected Arms only; BUSINESS_SNAPSHOT_ID / TASK_SPEC_ID / EVALUATION_ID changed -> rerun all affected Arms; repository HEAD change alone never automatically invalidates prior valid Arm runs"
   }
 }
