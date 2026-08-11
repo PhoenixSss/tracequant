@@ -364,3 +364,186 @@ def test_audit_rejects_malformed_context_input() -> None:
             parser_supported=True,
             audit_executed=True,
         )
+
+
+# --- Issue #125: contamination identity semantics (current-run own evidence) ---
+
+OWN_RUN_IDENTITY: dict[str, object] = {
+    "arm_id": "D",
+    "session_id": "19a59af7-02f6-4e51-ba23-f7f2c2e53df1",
+    "own_evidence_paths": [
+        # validated identity is echoed lowercased (matching normalizes)
+        ".agents/evidence.local/task-65-round-2-v2/d",
+        ".agents/benchmark-fixtures.local/arm-d-smoke-20260811",
+    ],
+}
+
+
+def _audit_with_identity(
+    events: list[dict[str, object]],
+    *,
+    context_inputs: list[dict[str, object]] | None = None,
+    cross_arm: list[str] | None = None,
+    timeline: list[str] | None = None,
+    identity: dict[str, object] | None = OWN_RUN_IDENTITY,
+) -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        audit(
+            events,
+            load_json(INVENTORY),
+            cross_arm or [],
+            timeline or [],
+            context_inputs=context_inputs,
+            capture_complete=True,
+            parser_supported=True,
+            audit_executed=True,
+            current_run_identity=identity,
+        ),
+    )
+
+
+def test_audit_current_run_own_evidence_is_allowed() -> None:
+    # (A) CURRENT_ARM_OWN_EVIDENCE: the forbidden prior-evidence file name
+    # under the current run's OWN evidence namespace is its own freshly
+    # written artifact -> exempted (recorded), never a match.
+    result = _audit_with_identity(
+        [
+            _event(
+                ".agents/evidence.local/task-65-round-2-v2/D/"
+                "arm-d-claude-final-head-smoke-evidence-NON-FORMAL.json"
+            )
+        ]
+    )
+    assert result["verdict"] == "PASS"
+    assert result["reason"] == "zero forbidden matches"
+    assert result["match_count"] == 0
+    assert result["exemption_count"] == 1
+    assert result["own_evidence_exemptions"][0]["forbidden_identifiers"] == [
+        ".agents/evidence.local/task-65-round-2-v2/d/"
+        "arm-d-claude-final-head-smoke-evidence-non-formal.json"
+    ]
+    assert result["current_run_identity"] == OWN_RUN_IDENTITY
+
+
+def test_audit_prior_evidence_same_root_is_forbidden() -> None:
+    # (B) PRIOR_BENCHMARK: prior Task #65 round-2-v2 evidence under the same
+    # evidence/validation ROOT but NOT under the current run's own paths is
+    # Class 2 forbidden (the generic root is not the problem; the specific
+    # prior artifact identity is).
+    result = _audit_with_identity(
+        [
+            _event(
+                ".agents/validation.local/task-65-round-2-v2/"
+                "arm-d-claude-final-head-NON-FORMAL/result.json"
+            )
+        ]
+    )
+    assert result["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+    assert result["match_count"] == 1
+    assert result["exemption_count"] == 0
+    match = result["matches"][0]
+    assert match["identity_classes"] == ["PRIOR_BENCHMARK_CLASS_2"]
+    assert match["forbidden_identifiers"] == [
+        ".agents/validation.local/task-65-round-2-v2/arm-d-claude-final-head-non-formal"
+    ]
+
+
+def test_audit_other_arm_current_evidence_is_forbidden() -> None:
+    # (C) OTHER_ARM_CURRENT_RUN: another arm's CURRENT-run evidence namespace
+    # is Class 3 forbidden even when the current run's own paths are declared
+    # (the Class 3 exemption never applies).
+    result = _audit_with_identity(
+        [
+            _event(
+                ".agents/evidence.local/task-65-round-2-v2/B/"
+                "arm-b-current-run-evidence.json"
+            )
+        ],
+        cross_arm=[".agents/evidence.local/task-65-round-2-v2/B"],
+    )
+    assert result["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+    assert result["match_count"] == 1
+    match = result["matches"][0]
+    assert match["identity_classes"] == ["OTHER_ARM_CURRENT_RUN_CLASS_3"]
+    assert match["forbidden_identifiers"] == [
+        ".agents/evidence.local/task-65-round-2-v2/b"
+    ]
+
+
+def test_audit_historical_forbidden_sha_in_current_input() -> None:
+    # (B) a historical forbidden SHA embedded in CURRENT input (context
+    # input, no tool call) -> Class 2 forbidden.
+    result = _audit_with_identity(
+        [_event("git status")],
+        context_inputs=[
+            _context_input(
+                "attached notes reference a492f0b334f950f2613b4b2204e96bef413355be"
+            )
+        ],
+    )
+    assert result["verdict"] == "BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE"
+    assert result["match_count"] == 1
+    assert result["matches"][0]["kind"] == "context_input"
+    assert result["matches"][0]["identity_classes"] == ["PRIOR_BENCHMARK_CLASS_2"]
+    assert result["matches"][0]["forbidden_identifiers"] == [
+        "a492f0b334f950f2613b4b2204e96bef413355be"
+    ]
+
+
+def test_audit_evidence_root_name_alone_is_not_forbidden() -> None:
+    # The generic evidence/validation ROOTS are NOT forbidden identifiers:
+    # a bare root mention must produce zero matches against the real
+    # inventory (no wholesale root ignoring either way).
+    result = _audit_with_identity(
+        [_event("ls .agents/evidence.local"), _event("ls .agents/validation.local")]
+    )
+    assert result["verdict"] == "PASS"
+    assert result["reason"] == "zero forbidden matches"
+    assert result["match_count"] == 0
+    assert result["exemption_count"] == 0
+
+
+def test_audit_inventory_entry_without_identifiers_fails_closed() -> None:
+    # An entry whose locations carry no concrete forbidden identifier
+    # forbids nothing and would silently weaken the audit -> fail closed.
+    doc = load_json(INVENTORY)
+    doc["entries"][13]["locations"] = [{"kind": "external"}]
+    with pytest.raises(BenchmarkError):
+        audit(
+            [_event("git status")],
+            doc,
+            [],
+            [],
+            capture_complete=True,
+            parser_supported=True,
+            audit_executed=True,
+        )
+
+
+def test_audit_malformed_current_run_identity_fails_closed() -> None:
+    # A malformed current_run_identity must never silently disable or
+    # broaden the exemption -> fail closed.
+    with pytest.raises(BenchmarkError):
+        _audit_with_identity(
+            [_event("git status")],
+            identity={"arm_id": "D"},  # missing session_id / own_evidence_paths
+        )
+    with pytest.raises(BenchmarkError):
+        _audit_with_identity(
+            [_event("git status")],
+            identity={
+                "arm_id": "D",
+                "session_id": "s1",
+                "own_evidence_paths": ["/tmp/not-conductor-local"],
+            },
+        )
+    with pytest.raises(BenchmarkError):
+        _audit_with_identity(
+            [_event("git status")],
+            identity={
+                "arm_id": "Z",  # not a registered arm
+                "session_id": "s1",
+                "own_evidence_paths": [".agents/evidence.local/D"],
+            },
+        )

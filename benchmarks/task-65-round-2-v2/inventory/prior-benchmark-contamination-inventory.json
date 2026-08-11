@@ -144,14 +144,16 @@
       "scope": ["A", "B", "C", "D"]
     },
     {
-      "artifact_id": "v1-v11-conductor-evidence-archives",
+      "artifact_id": "conductor-evidence-archives-prior-runs",
       "type": "evidence",
       "locations": [
-        {"kind": "external", "identifier": ".agents/evidence.local", "evidence_location": ".agents/evidence.local"},
-        {"kind": "external", "identifier": ".agents/validation.local", "evidence_location": ".agents/validation.local"}
+        {"kind": "external", "identifier": ".agents/validation.local/task-65-round-2-v2/arm-d-claude-final-head-NON-FORMAL", "evidence_location": ".agents/validation.local/task-65-round-2-v2/arm-d-claude-final-head-NON-FORMAL"},
+        {"kind": "external", "identifier": ".agents/evidence.local/task-65-round-2-v2/D/arm-d-claude-final-head-smoke-evidence-NON-FORMAL.json", "evidence_location": ".agents/evidence.local/task-65-round-2-v2/D/arm-d-claude-final-head-smoke-evidence-NON-FORMAL.json"},
+        {"kind": "external", "identifier": ".agents/validation.local/arm-D-current-claude-162000af", "evidence_location": ".agents/validation.local/arm-D-current-claude-162000af"}
       ],
-      "reason_forbidden": "Conductor-local evidence and validation archives from prior v1/v1.1 runs contain benchmark answers, verdicts, and metrics (Runner snapshots, self-reviews, validation records). Prior-run archives must not be read by any arm; current-run archives are per-arm/session isolated.",
-      "scope": ["A", "B", "C", "D"]
+      "reason_forbidden": "Conductor-local evidence and validation archives from PRIOR Task #65 round-2-v2 / prior Arm-D runs contain benchmark answers, verdicts, and metrics (Runner snapshots, self-reviews, validation records, prior-run audit reports). Prior-run archives must not be read by any arm; current-run archives are per-arm/session isolated. NOTE: the generic evidence/validation ROOTS (.agents/evidence.local, .agents/validation.local) are NOT forbidden identifiers themselves; only these specific prior-run artifact identities are. A current run's own evidence under its own isolated namespace (current_run_identity overlap) is exempt.",
+      "scope": ["A", "B", "C", "D"],
+      "notes": "Replaces the previous generic-root identifiers (.agents/evidence.local / .agents/validation.local) which falsely flagged every current-run own-evidence occurrence (contamination-audit false positive, Issue #125). Specific prior-run artifact identities only: prior Arm-D final-head validation namespace, prior Arm-D final-head smoke evidence file, and the immediate prior Arm-D run's validation archive. Renamed from v1-v11-conductor-evidence-archives because the locations are round-2-v2 / Arm-D specific, not v1/v1.1 archives."
     },
     {
       "artifact_id": "v1-v11-ci-run-artifacts",

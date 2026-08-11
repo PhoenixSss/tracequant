@@ -122,9 +122,45 @@ matching targets = prior contamination inventory          (Class 2)
   `path` / `ref` / `pr` / `branch` / `commit` values; category labels
   (`kind` values such as `commit` / `path` / `branch`) are **not**
   identifiers and never match.
-- Any match → **`BENCHMARK INVALID — BENCHMARK INFORMATION LEAKAGE`** → fresh
-  workspace + fresh Delivery + fresh Review rerun (a prior-benchmark answer
-  source is equally invalid).
+
+### Contamination identity semantics
+
+Every match carries `identity_classes` (`PRIOR_BENCHMARK_CLASS_2` /
+`OTHER_ARM_CURRENT_RUN_CLASS_3`):
+
+- **(A) CURRENT_ARM_OWN_EVIDENCE → allowed.** The audit takes an optional
+  `current_run_identity` input `{arm_id, session_id, own_evidence_paths}`
+  (validated fail closed; arm id ∈ {A,B,C,D}; non-empty session id; own
+  paths under a conductor-local `.agents/evidence.local` /
+  `.agents/validation.local` / `.agents/benchmark-fixtures.local` root). A
+  Class 2 identifier occurrence whose span overlaps a boundary-checked
+  occurrence of one of the current run's own paths is the current run's own
+  freshly written evidence: exempted and recorded in
+  `own_evidence_exemptions` / `exemption_count` (the report echoes the
+  validated `current_run_identity`). The exemption is **never silent
+  ignoring**: it is a span-overlap mechanism scoped to the current run's
+  declared own paths, and it applies **only to Class 2 (inventory)
+  identifiers** — other-arm current-run identities (Class 3) are never a
+  current arm's own artifact.
+- **(B) PRIOR_BENCHMARK / HISTORICAL_ANSWER_BEARING → Class 2 forbidden.**
+- **(C) OTHER_ARM_CURRENT_RUN → Class 3 forbidden** (cross-arm dynamic
+  identity sets + timeline-metadata-connected identities).
+
+**The generic evidence/validation roots (`.agents/evidence.local`,
+`.agents/validation.local`) are NOT forbidden identifiers.** The inventory
+carries only specific prior-run artifact identities (artifact provenance /
+specific identity / arm / session / path identity, e.g. prior-run namespaces
+and evidence files under those roots); a bare root mention in a target never
+matches. The audit never ignores an evidence/validation root wholesale.
+
+Fail closed: an inventory entry whose locations carry **no** concrete
+identifier (nothing matchable → would silently weaken the audit), or a
+malformed / missing-key / non-conductor-local-path `current_run_identity`,
+aborts the audit (`BenchmarkError`, CLI exit 1).
+
+- Any non-exempt match → **`BENCHMARK INVALID — BENCHMARK INFORMATION
+  LEAKAGE`** → fresh workspace + fresh Delivery + fresh Review rerun (a
+  prior-benchmark answer source is equally invalid).
 - **Negative-evidence PASS definition**: capture complete + parser supported +
   audit executed + **0 forbidden matches** (access or context; the audit
   reason string for a PASS is "zero forbidden matches").
