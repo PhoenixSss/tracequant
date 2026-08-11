@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "task-65-round-2-v2 prior-benchmark contamination inventory",
+  "description": "Machine-readable prior-benchmark contamination inventory (Class 2 universe) for the task-65-round-2-v2 benchmark. Each entry records an artifact identity, type, location(s), reason forbidden, and arm scope. Access audit matches observed targets against these identifiers.",
+  "protocol_identity": "task-65-round-2-v2",
+  "schema_version": 1,
+  "type": "object",
+  "required": ["protocol_identity", "schema_version", "classification", "entries"],
+  "properties": {
+    "protocol_identity": {"const": "task-65-round-2-v2"},
+    "schema_version": {"type": "integer"},
+    "classification": {
+      "const": "PRIOR_BENCHMARK_CONTAMINATION_SECRET"
+    },
+    "generated_for_rounds": {"type": "array", "items": {"type": "string"}},
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "artifact_id",
+          "type",
+          "locations",
+          "reason_forbidden",
+          "scope"
+        ],
+        "properties": {
+          "artifact_id": {"type": "string"},
+          "type": {
+            "type": "string",
+            "enum": [
+              "implementation",
+              "protocol",
+              "rollout",
+              "review",
+              "findings",
+              "verdict",
+              "rework",
+              "metrics",
+              "comparison",
+              "evidence",
+              "workload_copy"
+            ]
+          },
+          "locations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["kind"],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": ["path", "pr", "branch", "commit", "external"]
+                },
+                "identifier": {"type": "string"},
+                "path": {"type": "string"},
+                "pr": {"type": "integer"},
+                "branch": {"type": "string"},
+                "commit": {"type": "string"},
+                "evidence_location": {"type": "string"}
+              },
+              "additionalProperties": false
+            }
+          },
+          "reason_forbidden": {"type": "string"},
+          "scope": {
+            "type": "array",
+            "items": {"type": "string", "enum": ["A", "B", "C", "D"]}
+          },
+          "notes": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

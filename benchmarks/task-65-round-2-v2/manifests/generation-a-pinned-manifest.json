@@ -1,0 +1,994 @@
+{
+  "agent_identity": "legacy-no-unified-runner-codex",
+  "closure": {
+    "definition": "A-generation coherent closure: generation-control-plane inputs that exist at A_WORKFLOW_SOURCE_SHA are pinned verbatim; current-only generation-control-plane paths are explicitly absent. Conductor benchmark tooling is explicitly absent from native Arm validation; ordinary business snapshot paths inherit BENCHMARK_BASE_SHA.",
+    "paths": [
+      {
+        "blob_id": "b74ad03a756aed1fab1faffc3d102325331242ca",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/execution-profile.example.toml",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "33dda01add0072eef00967de071c6f0329d53554b6b077d23793f715a0d6311a"
+      },
+      {
+        "blob_id": "3c51aac8465da838508d238c9425f6a09f2adf19",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/policies/command-execution.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "112ee854a15c3d7daf59c398f42705b6b13553a80a0be7c60b864188c8c1bb9b"
+      },
+      {
+        "blob_id": "ad1feaf417ed8a97c48d29d6aafdaeebd08035ec",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/policies/workflow-evidence.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "5075f9c36e88a98f22594b3dbde12b59338a08ec89b6c0f8ad45156f740d2139"
+      },
+      {
+        "blob_id": "9b293116847a326c7c79378d88cf1108b75762b2",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/skills/feature-completion-audit/SKILL.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "bdd64a6aa91fca6ab805c347b827258af183f0ec6bd3d7d1acd1779b1c3c78b9"
+      },
+      {
+        "blob_id": "c0a7aa5fef0e97f5da8aeaba794efccb94d9545f",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/skills/task-closeout/SKILL.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "eb7562d542732dcaa40e1769fe7f52d7b1fedc603f11a430c469619c7658976b"
+      },
+      {
+        "exists_at_source": false,
+        "path": ".agents/skills/task-delivery-runner/SKILL.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "blob_id": "d465c2ffd978e3260e00f6cab103831e9f286127",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/skills/task-delivery/SKILL.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "bd6f42d611c8de1f8a0316137245fb21f9d91a749d5da107dd66d00460d8ad62"
+      },
+      {
+        "exists_at_source": false,
+        "path": ".agents/skills/task-pr-review-runner/SKILL.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "blob_id": "e562d0145cee34faf79c97a1084d0ff56a7bb8a3",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": ".agents/skills/task-pr-review/SKILL.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "31badff6decf86cf663ddd4785f921b0d09706a6412ae904ff00fa4f1cec5b00"
+      },
+      {
+        "exists_at_source": false,
+        "path": ".claude",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "absent at A source; A generation has no Claude config (.claude/** must be physically absent)",
+        "role": "IDENTITY_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": ".codex",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "absent at A source; A generation has no Codex config directory (.codex/** must be physically absent)",
+        "role": "IDENTITY_REQUIRED"
+      },
+      {
+        "blob_id": "88c87e6dbcc8f0a1ac9e0a35160f16dd66189192",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "AGENTS.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": "A generation's native AGENTS.md defines its workflow identity; the A-era version must be installed",
+        "role": "IDENTITY_REQUIRED",
+        "sha256": "912ba81bae91061469dd9fcd653048e15e4202f67a55e58c35b48bda65f58858"
+      },
+      {
+        "exists_at_source": false,
+        "path": "CLAUDE.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "absent at A source; A generation has no CLAUDE.md (must be physically absent)",
+        "role": "IDENTITY_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "benchmarks/task-65-round-2-v2",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "benchmark preparation namespace is conductor-only; absent from Arm runtime validation",
+        "role": "CONDUCTOR_BENCHMARK_TOOLING"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/development/issue-workflow.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow identity input absent from A source; historical absence is explicit",
+        "role": "IDENTITY_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/development/pr-review.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow identity input absent from A source; historical absence is explicit",
+        "role": "IDENTITY_REQUIRED"
+      },
+      {
+        "blob_id": "ac300f3eea7d61f871b53808992d1a0a56687e21",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "docs/workflows/agent-skills.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "4bc0ad0b9bf331f4410ffd3620b6037a24f4db4ba164da7ef8ebc59718cc318d"
+      },
+      {
+        "blob_id": "375cecd7e4cfe36cf8046ca0c175523fe1d3d00a",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "docs/workflows/benchmarks/task-65-round-2/README.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "95c364c743aa4746b27e29c95d010b027abcb295021cbd5d5d87fc909d78579e"
+      },
+      {
+        "blob_id": "e8ad2c39d49ef067b5fd2ade7c2bd2a911c2bcf5",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "docs/workflows/benchmarks/task-65-round-2/benchmark-manifest.json",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "1e7eee53c9ccccfe7ee486a750998271390e53940b6796806a19e96a0423b8c7"
+      },
+      {
+        "blob_id": "94545c4eb18e27bf0d07884e7a67787f937d3c99",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "docs/workflows/benchmarks/task-65-round-2/environment-current-windows.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "e471431e3dc06c78dbe8349194f750b59805d7629a752ec21e82f29b08038989"
+      },
+      {
+        "blob_id": "906556cc50b59491fd24ef9fde11663edb148d2d",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "docs/workflows/benchmarks/task-65-round-2/materials/experiment-record.example.json",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "b6a40396e9e9023e14b2f23cbe450fe37f68d757e2bd98dfc33e801cccecc0cc"
+      },
+      {
+        "blob_id": "d203cf709bca7cadc9653a708ffa15fdf664909f",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "docs/workflows/benchmarks/task-65-round-2/materials/publication-materials.example.json",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "5543a3f8ac6851598a6d6c6d51a4458786b5de085955e098d30214d60890cc3c"
+      },
+      {
+        "blob_id": "18c0958b23b7e51bfe05fd3b9934a4049d083a83",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "docs/workflows/benchmarks/task-65-round-2/protocol.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "de8423d4b42c7627e2bcdd4c4e3c1ae213cec62e800773d6d0b92c82d752146c"
+      },
+      {
+        "blob_id": "35a245ae9bae83d6273766c628692d63ae4d22fd",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "docs/workflows/benchmarks/task-65-round-2/task-65-frozen.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "3aa6f22cca47dad597122b10ebc740e09c0112659c443e84207e086d7b32dbac"
+      },
+      {
+        "blob_id": "fe7c9b8eef4c23d6ab05d4a9de75796cbb6e804e",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "docs/workflows/benchmarks/task-65-round-2/task-65-original.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "5fb923a4fbfd81686a7689cb589d5ebed1e5c085c2c99d93968f746b4f431a1d"
+      },
+      {
+        "blob_id": "168307b12e4461c3f774e94282f0752106b1fb36",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "docs/workflows/benchmarks/task-65-round-2/task-65-telemetry-only.diff",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "4018d1a8533423a69871b467e3642d9fb86797eb8087641a30420cb0462ac2d9"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/context-retrieval-v2/before-after-retrieval.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/publication-materials/task-material-register.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/README.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/before-after-command-paths.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/examples/failure-expansion.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/examples/success-path.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/external-live-evidence-manifest.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/live-evidence-capture-plan.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/live-migration-evidence.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/publication-materials.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/publication-readiness.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/removed-legacy-paths.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/rollback-and-compatibility.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/templates/live-migration-evidence.example.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/visuals/README.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/visuals/live-migration-metrics.csv",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/visuals/skill-runner-flow.mmd",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/task-skill-runner-migration/visuals/static-command-paths.csv",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "blob_id": "d936895c8f55c038a80d329486b8751c3ef7405d",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "docs/workflows/task-workflow-first-token-optimization.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "7570e1abba652f23dbe886b7a46f40e47d9f341195d3347b534e7746ca8b29e4"
+      },
+      {
+        "blob_id": "d0fb0e26075a87341612cf3b29b508813d0c6cc9",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "docs/workflows/workflow-evidence.md",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "4b52f04b2acba19565aa3fe78bcfdfc81c2ec43a0a5b20daa06d3f16f6e9f3a7"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/README.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/article-materials.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/decisions-and-cases.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/evidence-index.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/external-evidence-manifest.example.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/external-evidence-manifest.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/publication-materials.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/publication-readiness.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/runner-environment-contract.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/visuals/README.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/visuals/approval-boundaries.mmd",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/visuals/capability-matrix.csv",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/visuals/windows-wsl2-comparison.csv",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-codex-environment/visuals/workflow-before-after.mmd",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/README.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/environment-capability.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/external-live-evidence-manifest.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/git-approval-boundary.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/historical-command-baseline.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/live-evidence-capture-plan.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/live-profile-evidence.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/live-recheck-evidence.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/publication-materials.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/publication-readiness.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/rules-live-evidence.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/security-and-troubleshooting.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/templates/external-live-evidence-manifest.example.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/templates/live-profile-evidence.example.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/templates/live-recheck-evidence.example.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/templates/rules-live-evidence.example.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/visuals/README.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/visuals/command-consolidation.csv",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/visuals/evidence-boundary.mmd",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/visuals/gh-cli-capability-drift.mmd",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/visuals/historical-git-gh-baseline.csv",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-github-evidence-runner/visuals/live-evidence-metrics.csv",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-validation-runner/README.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-validation-runner/current-ci-equivalent-evidence.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-validation-runner/live-activation-evidence.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-validation-runner/maintenance-and-adoption.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-validation-runner/publication-materials.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-validation-runner/security-hardening-cases.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-validation-runner/visuals/README.md",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-validation-runner/visuals/task83-observed-metrics.csv",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-validation-runner/visuals/validation-boundary.mmd",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "docs/workflows/wsl2-validation-runner/visuals/validation-call-consolidation.csv",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current generation-control-plane doc absent at A source; explicit historical absence",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/benchmarks",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "benchmark preparation tests are conductor-only; absent from Arm runtime validation",
+        "role": "CONDUCTOR_BENCHMARK_TOOLING"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_agent_neutral_workflow.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_pr_resolve.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_retrieval_v2_policy.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "blob_id": "6630fab78a44fe3478b14b508cff22f069474233",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_runtime_telemetry_removed.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "9c113b6d141f43ab5248a0d2d496f0748d112e83e07bbd7e7aacc37c3922415b"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_self_review.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_task85_migration_materials.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "blob_id": "7a8fed24b169bbab84cc42e0a5100912a898755a",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_trusted_runner.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "368405bde389c8da554d6b8dbb4ef049ef081c2b5999ac0d9584628f511343c4"
+      },
+      {
+        "blob_id": "5da02b5d40aef86443e2b2b93b24370a487e06dc",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_workflow_evidence.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "38b3d39fbc99695dda822ae923cc2731b1b1ecd7d1b26cf71c390668e9da17fb"
+      },
+      {
+        "blob_id": "a47d06ef516f84e4a56e6dac50e8a2b61a751682",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_workflow_skills.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "15193d0ce6a3e4d06ad2d2aa7618ddf36d4ea7514fc01608820030b3c463332b"
+      },
+      {
+        "blob_id": "04ec4e9799211ddb3d811bfd6710dcc69ce04294",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tests/tools/test_workflow_validation.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "VALIDATION_PRESENCE_REQUIRED",
+        "sha256": "c2e5dc85dcd60e2a7d38d5012b07f68044f0fb799f9f81be030040c9ad335fd8"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_wsl2_codex_diagnostic.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_wsl2_github_evidence_materials.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_wsl2_github_evidence_rules.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_wsl2_github_evidence_runner.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_wsl2_validation_rules.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tests/tools/test_wsl2_validation_runner.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation input absent from A source; historical absence is explicit",
+        "role": "VALIDATION_PRESENCE_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/pr_resolve.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow execution path absent from A source; A identity validation remains conductor-side",
+        "role": "EXECUTION_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/project_status.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow execution path absent from A source; historical absence is explicit",
+        "role": "EXECUTION_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/self_review.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow execution path absent from A source; historical absence is explicit",
+        "role": "EXECUTION_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/skill_path_audit.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow execution path absent from A source; historical absence is explicit",
+        "role": "EXECUTION_REQUIRED"
+      },
+      {
+        "blob_id": "acab92ae4b56ddc1c126e28d1114f5f36db524c5",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tools/agent_workflow/trusted_runner.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "EXECUTION_REQUIRED",
+        "sha256": "142aa6ec2c609815ec2a2c0b8af793064e04facc0ec2bf04b03be557eaef5a86"
+      },
+      {
+        "blob_id": "8ec041e4e3284bd37152107ff18fda9107539341",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tools/agent_workflow/workflow_common.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "EXECUTION_REQUIRED",
+        "sha256": "d0a121f89564b3893b847d1103140d0de1be14a840b60fe0915be4126d25d97c"
+      },
+      {
+        "blob_id": "40f0b22c8018bc66b0ded46fd84cecc16ccb7f56",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tools/agent_workflow/workflow_evidence.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "EXECUTION_REQUIRED",
+        "sha256": "0b9412170ba22d5ebdd68d1af11a2a16e310a6e5a7853fd02d787bef634370ec"
+      },
+      {
+        "blob_id": "24099f22c05fc13847be44ae2df99494ce677fcf",
+        "exists_at_source": true,
+        "file_mode": "100644",
+        "path": "tools/agent_workflow/workflow_validation.py",
+        "projection_action": "INSTALL_GENERATION_VERSION",
+        "projection_reason": null,
+        "role": "EXECUTION_REQUIRED",
+        "sha256": "d1efd25e9a73bc188bb8600f579e8f4a0761e8f8a91e0783dc78771c89679185"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/wsl2_github_evidence_profiles.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation configuration absent from A source; historical absence is explicit",
+        "role": "EXECUTION_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/wsl2_github_evidence_runner.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow execution path absent from A source; historical absence is explicit",
+        "role": "EXECUTION_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/wsl2_validation_profiles.json",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow validation configuration absent from A source; historical absence is explicit",
+        "role": "EXECUTION_REQUIRED"
+      },
+      {
+        "exists_at_source": false,
+        "path": "tools/agent_workflow/wsl2_validation_runner.py",
+        "projection_action": "ENSURE_ABSENT",
+        "projection_reason": "current workflow execution path absent from A source; historical absence is explicit",
+        "role": "EXECUTION_REQUIRED"
+      }
+    ]
+  },
+  "generation_id": "A",
+  "invocation": {
+    "evidence": "python tools/agent_workflow/workflow_evidence.py delivery-preflight|delivery-readiness ...",
+    "gates": "clean committed head; not_draft and closing_linkage ordinary gates",
+    "pr_contract": "create or reuse one matching non-Draft PR; PR body contains native 'Closes #<Task>' line",
+    "pr_identity": "conductor-side benchmark identity validator (no pr_resolve.py exists in A; not an A native capability)",
+    "skill": ".agents/skills/task-delivery/SKILL.md (A-native)",
+    "trusted_bootstrap": "python tools/agent_workflow/trusted_runner.py <evidence|validation> ...",
+    "validation": "python tools/agent_workflow/workflow_validation.py run --phase delivery --base-sha <Task base SHA> ..."
+  },
+  "kind": "pinned",
+  "known_limitations": [
+    "Tree structure: no .claude/, no .codex/, no CLAUDE.md (projection treats them as ENSURE_ABSENT)",
+    "No unified runner: trusted_runner.py bootstrap; pr_resolve.py does not exist; A identity validation is conductor-side and does not count as an A native workflow capability",
+    "A_WORKFLOW_SOURCE_SHA also carries v1 benchmark material (Class 2, see prior-benchmark-contamination-inventory). The v1 benchmark-manifest.json at A_WORKFLOW_SOURCE_SHA has blob e8ad2c39d49ef067b5fd2ade7c2bd2a911c2bcf5 (present in this closure as INSTALL_GENERATION_VERSION / VALIDATION_PRESENCE_REQUIRED — install and presence identity only; its content is Class 2 and must not be read)"
+  ],
+  "permission_profile": {
+    "note": "A-generation tree contains no permission rules files (.codex/**, .claude/** absent); A-era tooling runs under A-era AGENTS.md and policies",
+    "rules_files": [],
+    "settings_files": []
+  },
+  "protocol_identity": "task-65-round-2-v2",
+  "schema_version": 1,
+  "workflow_source": {
+    "label": "A_WORKFLOW_SOURCE_SHA",
+    "sha": "a492f0b334f950f2613b4b2204e96bef413355be"
+  },
+  "ownership_contract": {
+    "classes": {
+      "BUSINESS_SNAPSHOT": "ordinary repository workload/product paths outside managed ownership classes",
+      "GENERATION_CONTROL_PLANE": "repository identity, workflow tooling, workflow tests, and docs/workflows",
+      "CONDUCTOR_BENCHMARK_TOOLING": "benchmarks/task-65-round-2-v2/** and tests/benchmarks/**"
+    },
+    "native_validation_excludes": [
+      "benchmarks/task-65-round-2-v2/**",
+      "tests/benchmarks/**"
+    ]
+  }
+}

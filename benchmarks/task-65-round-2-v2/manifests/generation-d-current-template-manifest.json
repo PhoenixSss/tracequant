@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "protocol_identity": "task-65-round-2-v2",
+  "kind": "template",
+  "generation_id": "D",
+  "agent_identity": {
+    "agent": "claude",
+    "generation_name": "current-claude",
+    "discovery_adapter": "claude-transcript",
+    "runtime_environment": "claude-runtime"
+  },
+  "source_selector": {
+    "kind": "fixed-commit",
+    "ref": "BENCHMARK_BASE_SHA"
+  },
+  "closure_derivation_rules": {
+    "path_classes": [
+      {"glob": ".agents/skills/task-delivery/SKILL.md", "role": "OPTIONAL_HISTORICAL_LIMITATION"},
+      {"glob": ".agents/skills/task-pr-review/SKILL.md", "role": "OPTIONAL_HISTORICAL_LIMITATION"},
+      {"glob": "tools/agent_workflow/*.py", "role": "EXECUTION_REQUIRED"},
+      {"glob": "tools/agent_workflow/*.json", "role": "VALIDATION_PRESENCE_REQUIRED"},
+      {"glob": "tests/tools/**", "role": "VALIDATION_PRESENCE_REQUIRED"},
+      {"glob": "docs/workflows/**", "role": "VALIDATION_PRESENCE_REQUIRED"},
+      {"glob": ".agents/execution-profile.example.toml", "role": "VALIDATION_PRESENCE_REQUIRED"},
+      {"glob": ".agents/policies/*.md", "role": "VALIDATION_PRESENCE_REQUIRED"},
+      {"glob": ".agents/skills/*/SKILL.md", "role": "VALIDATION_PRESENCE_REQUIRED"},
+      {"glob": ".claude/skills/*/SKILL.md", "role": "VALIDATION_PRESENCE_REQUIRED"},
+      {"glob": ".claude/settings.json", "role": "VALIDATION_PRESENCE_REQUIRED"},
+      {"glob": ".codex/rules/*.rules", "role": "VALIDATION_PRESENCE_REQUIRED"},
+      {"glob": "AGENTS.md", "role": "IDENTITY_REQUIRED"},
+      {"glob": "CLAUDE.md", "role": "IDENTITY_REQUIRED"},
+      {"glob": "docs/development/issue-workflow.md", "role": "IDENTITY_REQUIRED"},
+      {"glob": "docs/development/pr-review.md", "role": "IDENTITY_REQUIRED"}
+    ],
+    "excluded_paths": [
+      ".agents/evidence.local",
+      ".agents/validation.local",
+      ".agents/benchmark-fixtures.local",
+      "benchmarks/task-65-round-2-v2/**",
+      "tests/benchmarks/**"
+    ],
+    "first_match_wins": true
+  },
+  "expected_workflow_path_classes": [
+      "tools/agent_workflow/*.py",
+      "tools/agent_workflow/*.json",
+      "tests/tools/**",
+      ".agents/execution-profile.example.toml",
+    ".agents/policies/*.md",
+    ".agents/skills/*/SKILL.md",
+    ".claude/skills/*/SKILL.md",
+    ".claude/settings.json",
+    ".codex/rules/*.rules",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/development/issue-workflow.md",
+    "docs/development/pr-review.md",
+    "docs/workflows/**"
+  ],
+  "role_classification_rules": {
+    "projection_defaults": {
+      "EXECUTION_REQUIRED": "INSTALL_GENERATION_VERSION",
+      "VALIDATION_PRESENCE_REQUIRED": "INSTALL_GENERATION_VERSION",
+      "IDENTITY_REQUIRED": "INSTALL_GENERATION_VERSION",
+      "OPTIONAL_HISTORICAL_LIMITATION": "INSTALL_GENERATION_VERSION"
+    },
+    "identity_required_must_be_explicit": true,
+    "optional_historical_limitation_default": "install generation version when source exists; ensure absent when source is absent",
+    "runtime_install_false_is_not_a_decision": true,
+    "role_action_mapping": {
+      "EXECUTION_REQUIRED": "INSTALL_GENERATION_VERSION (default)",
+      "VALIDATION_PRESENCE_REQUIRED": "INSTALL_GENERATION_VERSION (default)",
+      "IDENTITY_REQUIRED": "explicit per-file INSTALL / INHERIT / ABSENT + reason (declared above; no implicit default)",
+      "OPTIONAL_HISTORICAL_LIMITATION": "INSTALL_GENERATION_VERSION when source exists; ENSURE_ABSENT when source is absent; preserve historical content verbatim"
+    }
+  },
+  "materializer_contract": {
+    "verbatim_blob_extraction": true,
+    "deterministic": true,
+    "idempotent": true,
+    "no_synthetic_repair": true,
+    "no_current_generation_fallback": true,
+    "no_cross_generation_shared_runtime_file": true,
+    "no_symlink": true,
+    "validate_git_file_mode": true,
+    "fail_closed_conditions": [
+      "source path missing",
+      "blob mismatch",
+      "sha256 mismatch",
+      "manifest/source identity mismatch"
+    ]
+  },
+  "validation_contract": {
+    "control_base_validator": "control_base_validator.py --arm <ARM> --benchmark-base-sha <BENCHMARK_BASE_SHA> --control-base-sha <ARM_CONTROL_BASE_SHA>",
+    "cd_file_identity_report": "required at freeze after run-lock: path/blob/hash differences are recorded as DIAGNOSTIC/PROVENANCE; HUMAN GATE only on mandatory shared identity mismatch (BUSINESS_SNAPSHOT_ID / TASK_SPEC_ID / EVALUATION_ID); control-plane file identity difference alone never blocks formal C vs D comparison",
+    "c_d_frozen_tip": "ARM_CONTROL_BASE_SHA = BENCHMARK_BASE_SHA (no synthetic commit; arm known from the run-locked manifest filename)",
+    "worktree_clean_required": true
+  },
+  "invocation_contract": {
+    "skill_roots": [".agents/skills", ".claude/skills"],
+    "evidence": "tools/agent_workflow/wsl2_github_evidence_runner.py delivery|delivery-readiness ...",
+    "validation": "tools/agent_workflow/wsl2_validation_runner.py workflow-delivery --base-sha <base> ...",
+    "pr_resolve": "tools/agent_workflow/pr_resolve.py (generation-native fail-closed identity validation)",
+    "pr_contract": "OPEN NON-DRAFT; PR body contains native 'Closes #65'; DO NOT MERGE; base = frozen control-base branch",
+    "closing_linkage": "must come from ENSURE-LINKED-BUSINESS-BRANCH -> PR Development linkage promotion (closing keyword is native contract only, not an evidence source)"
+  },
+  "permission_discovery_identity": {
+    "codex_rules": [".codex/rules/tracequant-wsl-evidence.rules", ".codex/rules/tracequant-wsl-validation.rules"],
+    "claude_settings": [".claude/settings.json"],
+    "user_global_config": "excluded from fixture closure (environment manifest, owned by #86)"
+  },
+  "file_identity_rule": {
+    "generations": ["C", "D"],
+    "complete_source_path_set_identical": true,
+    "per_path_blob_identical": true,
+    "per_path_sha256_identical": true,
+    "allowed_differences": [
+      "agent identity",
+      "discovery adapter",
+      "invocation identity",
+      "permission/runtime environment identity",
+      "session/evidence identity"
+    ],
+    "no_per_agent_pruned_closure": true,
+    "no_symlink": true,
+    "independent_materialization": true
+  },
+  "shared_identity_contract": {
+    "mandatory_shared_identities": {
+      "business_snapshot_id": "identity of the frozen business snapshot; carried by the run-locked benchmark_base_sha field (BUSINESS_SNAPSHOT_ID)",
+      "task_spec_id": "identity of the frozen Task #65 workload spec; carried by the run-locked protocol_identity field (TASK_SPEC_ID)",
+      "evaluation_id": "identity of the formal C vs D evaluation definition; assigned at freeze via run-lock --evaluation-id (EVALUATION_ID)"
+    },
+    "per_arm_traceable_identities": {
+      "workflow_id": "per-arm workflow identity (invocation_contract)",
+      "runner_id": "per-arm runner identity (invocation_contract)",
+      "agent_runtime_id": "per-arm agent runtime identity (agent_identity)",
+      "environment_id": "per-arm runtime environment identity (permission_discovery_identity / #86 environment manifest)"
+    },
+    "formal_comparison_gate": "formal C vs D comparison is valid iff BUSINESS_SNAPSHOT_ID, TASK_SPEC_ID, and EVALUATION_ID are identical across the compared Arms; any mismatch -> comparison invalid / Human Gate",
+    "file_identity_disposition": "control-plane file identity differences are DIAGNOSTIC / PROVENANCE; they never invalidate an Arm and never alone set a mandatory Human Gate or prohibit formal C vs D comparison",
+    "rerun_policy": "Arm-specific workflow/infrastructure fix -> rerun only that Arm; a shared component actually used by multiple Arms changed -> rerun affected Arms only; BUSINESS_SNAPSHOT_ID / TASK_SPEC_ID / EVALUATION_ID changed -> rerun all affected Arms; repository HEAD change alone never automatically invalidates prior valid Arm runs"
+  }
+}
