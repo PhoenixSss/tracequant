@@ -6,10 +6,26 @@ import json
 
 import pytest
 
-from benchmark_common import BenchmarkError  # type: ignore[import-not-found]
+from _benchmark_helpers import REPO_ROOT  # noqa: F401  (wires tooling onto sys.path)
+
+from benchmark_common import BenchmarkError, load_json  # type: ignore[import-not-found]
 from claude_transcript_adapter import (  # type: ignore[import-not-found]
     parse_record as parse_claude_record,
     parse_transcript,
+)
+from claude_transcript_fixtures import (
+    FIXTURE_SESSION_ID,
+    agent_listing_attachment_record,
+    ai_title_record,
+    command_permissions_attachment_record,
+    compact_summary_user_record,
+    file_attachment_record,
+    last_prompt_record,
+    prompt_user_record,
+    skill_listing_attachment_record,
+    summary_record,
+    system_record,
+    todo_reminder_attachment_record,
 )
 from codex_rollout_adapter import (  # type: ignore[import-not-found]
     parse_record as parse_codex_record,
@@ -228,3 +244,48 @@ def test_claude_transcript_parse() -> None:
     assert events[0]["arm_id"] == "D"
     assert events[0]["tool"] == "read"
     assert events[0]["session_id"] == "s"
+
+
+def test_context_input_source_types_have_no_known_drift_with_schema() -> None:
+    # Every adapter context-input emission path, exercised through the REAL
+    # adapter over the observed-transcript fixtures.  The emitted source_type
+    # set must equal the context-input schema enum exactly: no adapter type
+    # may be missing from the schema, and no schema enum value may be stale
+    # (a type the adapter never emits).
+    fixture_records: list[tuple[str, dict[str, object]]] = [
+        ("attachment:file", file_attachment_record("<scrubbed content>")),
+        (
+            "attachment:agent_listing_delta",
+            agent_listing_attachment_record(),
+        ),
+        ("attachment:skill_listing", skill_listing_attachment_record()),
+        (
+            "attachment:command_permissions",
+            command_permissions_attachment_record(),
+        ),
+        ("attachment:todo_reminder", todo_reminder_attachment_record()),
+        ("summary", summary_record()),
+        ("summary", compact_summary_user_record()),
+        ("user-prompt", prompt_user_record("<scrubbed prompt>")),
+        ("last-prompt", last_prompt_record()),
+        ("ai-title", ai_title_record()),
+        ("system:compact_boundary", system_record("compact_boundary")),
+        ("system:api_error", system_record("api_error")),
+    ]
+    emitted: set[str] = set()
+    for expected, record in fixture_records:
+        _events, context_inputs = parse_claude_record(
+            record, session_id=FIXTURE_SESSION_ID
+        )
+        types = {c["source_type"] for c in context_inputs}
+        assert types == {expected}, f"fixture emitted {types}, expected {expected!r}"
+        emitted.update(types)
+    schema = load_json(
+        REPO_ROOT / "benchmarks/task-65-round-2-v2/schemas/context-input.schema.json"
+    )
+    schema_types = set(schema["properties"]["source_type"]["enum"])
+    assert emitted == schema_types, (
+        "adapter/schema source-type drift: "
+        f"adapter-only={sorted(emitted - schema_types)} "
+        f"schema-only={sorted(schema_types - emitted)}"
+    )

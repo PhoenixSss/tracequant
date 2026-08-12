@@ -234,6 +234,84 @@ def test_preflight_archive_generic_arm_substring_fails(tmp_path) -> None:  # typ
     assert "arm" in str(check.get("detail", ""))
 
 
+def test_preflight_archive_dot_component_fails(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # Any path component equal to "." fails closed (path-component
+    # semantics, never substring, never normalized into a legal path).
+    config = _good_codex_config(tmp_path)
+    config["archive_destination"] = (
+        ".agents/evidence.local/./task-65-round-2-v2/C/sess-c-1"
+    )
+    report = run_preflight(config)
+    assert report["verified"] is False
+    check = next(
+        c for c in report["checks"] if c["name"] == "archive_destination_isolated"
+    )
+    assert check["status"] == "fail"
+    assert "traversal" in str(check.get("detail", ""))
+
+
+def test_preflight_archive_dotdot_component_fails(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # Any path component equal to ".." fails closed, even when the
+    # remainder of the path is a normal approved archive destination.
+    config = _good_codex_config(tmp_path)
+    config["archive_destination"] = (
+        ".agents/evidence.local/task-65-round-2-v2/C/sess-c-1/.."
+    )
+    report = run_preflight(config)
+    assert report["verified"] is False
+    check = next(
+        c for c in report["checks"] if c["name"] == "archive_destination_isolated"
+    )
+    assert check["status"] == "fail"
+    assert "traversal" in str(check.get("detail", ""))
+
+
+def test_preflight_archive_traversal_toward_fixture_store_fails(  # type: ignore[no-untyped-def]
+    tmp_path,
+) -> None:
+    # ".." traversal from the evidence root toward the fixture store must
+    # fail closed WITHOUT path normalization: the traversal component is
+    # rejected before any approved-root / fixture-store judgment.
+    config = _good_codex_config(tmp_path)
+    config["archive_destination"] = (
+        ".agents/evidence.local/../benchmark-fixtures.local/"
+        "task-65-round-2-v2/C/sess-c-1"
+    )
+    report = run_preflight(config)
+    assert report["verified"] is False
+    check = next(
+        c for c in report["checks"] if c["name"] == "archive_destination_isolated"
+    )
+    assert check["status"] == "fail"
+    assert "traversal" in str(check.get("detail", ""))
+
+
+def test_preflight_archive_traversal_across_arm_fails(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # ".." traversal across arms/sessions must fail closed: the archive
+    # would resolve to a different arm/session than the current one.
+    config = _good_codex_config(tmp_path)  # arm C, session sess-c-1
+    config["archive_destination"] = (
+        ".agents/evidence.local/task-65-round-2-v2/D/../C/sess-c-1"
+    )
+    report = run_preflight(config)
+    assert report["verified"] is False
+    check = next(
+        c for c in report["checks"] if c["name"] == "archive_destination_isolated"
+    )
+    assert check["status"] == "fail"
+    assert "traversal" in str(check.get("detail", ""))
+
+
+def test_preflight_archive_validation_root_passes(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # A normal archive under the approved validation root passes.
+    config = _good_codex_config(tmp_path)
+    config["archive_destination"] = (
+        ".agents/validation.local/task-65-round-2-v2/C/sess-c-1"
+    )
+    report = run_preflight(config)
+    assert report["verified"] is True
+
+
 # --------------------------------------------------------------------------
 # M3 remediation: controlled probe found in the REAL parser's events.
 # --------------------------------------------------------------------------
