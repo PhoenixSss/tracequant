@@ -178,12 +178,21 @@ def _archive_isolation_failure(
     must be under an approved evidence/archive root, must never point at the
     fixture store (``.agents/benchmark-fixtures.local/**``), and its path
     identity must explicitly contain the current arm component and the
-    current session component.  Returns a failure reason, or ``None`` when
-    the destination is isolated for this Arm/session.
+    current session component.  Any path component equal to ``.`` or ``..``
+    fails closed before the approved-root / arm / session judgment: traversal
+    components are never normalized into a legal path and never bypass
+    isolation.  Returns a failure reason, or ``None`` when the destination is
+    isolated for this Arm/session.
     """
     normalized = archive.strip().lower().rstrip("/")
     if not normalized:
         return "archive destination is empty"
+    components = [part for part in normalized.split("/") if part]
+    if "." in components or ".." in components:
+        return (
+            "archive destination contains a traversal path component "
+            f"({'.'!r} or {'..'!r}): {archive}"
+        )
     if normalized == ".agents/benchmark-fixtures.local" or normalized.startswith(
         ".agents/benchmark-fixtures.local/"
     ):
@@ -200,7 +209,6 @@ def _archive_isolation_failure(
         )
     if not session_id.strip():
         return "session identity unresolved (cannot verify archive isolation)"
-    components = [part for part in normalized.split("/") if part]
     arm_expected = {arm_id.strip().lower(), f"arm-{arm_id.strip().lower()}"}
     if not arm_expected.intersection(components):
         return (

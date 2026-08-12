@@ -5,9 +5,15 @@ from __future__ import annotations
 import subprocess
 from typing import Any, cast
 
+import pytest
+
 from _benchmark_helpers import REPO_ROOT
 
-from benchmark_common import load_json, validate_basic  # type: ignore[import-not-found]
+from benchmark_common import (  # type: ignore[import-not-found]
+    BenchmarkError,
+    load_json,
+    validate_basic,
+)
 
 NAMESPACE = REPO_ROOT / "benchmarks" / "task-65-round-2-v2"
 
@@ -133,10 +139,14 @@ def test_context_input_schema_validates_normalized_inputs() -> None:
     for source_type in (
         "attachment:agent_listing_delta",
         "attachment:skill_listing",
+        "attachment:command_permissions",
         "attachment:todo_reminder",
         "summary",
         "user-prompt",
         "last-prompt",
+        "ai-title",
+        "system:compact_boundary",
+        "system:api_error",
     ):
         validate_basic(
             {
@@ -149,6 +159,30 @@ def test_context_input_schema_validates_normalized_inputs() -> None:
             schema,
             f"context-input/{source_type}",
         )
+
+
+def test_context_input_schema_rejects_unknown_source_type() -> None:
+    # Unknown source types must fail closed: the schema never widens to
+    # accept arbitrary source_type values.
+    schema = _schema("context-input.schema.json")
+    for source_type in (
+        "attachment:something_else",
+        "attachment:command_permissions_extra",
+        "system:unknown",
+        "",
+    ):
+        with pytest.raises(BenchmarkError):
+            validate_basic(
+                {
+                    "session_id": "s",
+                    "timestamp": "t",
+                    "source_type": source_type,
+                    "target": "x",
+                    "raw_event_reference": "r",
+                },
+                schema,
+                "context-input/unknown-source-type",
+            )
 
 
 def test_contracts_present_and_covers_required_topics() -> None:
