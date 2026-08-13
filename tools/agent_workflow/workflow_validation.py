@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import re
 import sys
@@ -33,8 +32,6 @@ OUTPUT_DIR: Final = ".agents/validation.local"
 SKILLS: Final = (
     "task-delivery",
     "task-pr-review",
-    "task-delivery-runner",
-    "task-pr-review-runner",
     "task-closeout",
     "feature-completion-audit",
 )
@@ -280,9 +277,10 @@ def _run_validation(
         "limitations": limitations,
         "operations": runner.counters(),
         "output_dir": run_dir.relative_to(repo_root).as_posix(),
-        "execution_identity": {
-            "path": "tools/agent_workflow/workflow_validation.py",
-            "content_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "trusted_runner": {
+            "source_sha": os.environ.get("WORKFLOW_TRUSTED_RUNNER_SHA"),
+            "content_sha256": os.environ.get("WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256"),
+            "active": bool(os.environ.get("WORKFLOW_TRUSTED_RUNNER_SHA")),
         },
     }
     return output, 0 if overall else 1
@@ -303,7 +301,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--skill-validator", help="path to quick_validate.py")
     run.add_argument(
         "--base-sha",
-        help="PR or Task base SHA used to detect changed validation scope",
+        help="trusted PR base SHA used to detect governance changes",
     )
     run.add_argument(
         "--include-skill-validators",
