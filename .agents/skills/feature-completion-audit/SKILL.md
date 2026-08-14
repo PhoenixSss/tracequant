@@ -1,16 +1,16 @@
 ---
 name: feature-completion-audit
-description: Independently and strictly read-only audit one maintainer-specified open GitHub Feature against a locked current main before maintainer closeout. Inventory direct children, map acceptance criteria to current-main evidence, review integration and safety, validate, recheck stability, and output one fixed verdict. Do not implement, create Tasks, edit GitHub state, close the Feature, merge, perform Task closeout, or assess Epic completion.
+description: Independently and strictly read-only audit one maintainer-specified open GitHub Feature against a locked current main. Inventory direct children, map acceptance criteria to current-main evidence, review integration and safety, validate, recheck stability, and output one fixed verdict. Do not implement, create Tasks, edit GitHub state, close the Feature, merge, perform Task closeout, or assess Epic completion.
 ---
 
 # Feature completion audit
 
-Use this Skill only for one existing open Feature before the maintainer manually
+Use this Skill for one existing open Feature before the maintainer manually
 closes it or sets Project Status to `Done`.
 
-Run in a new session that did not participate in the Feature's direct-child
-splitting, key design decisions, implementation, fixes, review verdicts, or
-closeout. Otherwise stop with:
+Run in a new session that did not participate in direct-child splitting, key
+design decisions, implementation, fixes, review verdicts, or closeout.
+Otherwise stop with:
 
 ```text
 本会话不能提供独立 Feature Completion Audit
@@ -27,26 +27,30 @@ A passing audit is evidence only and never authorizes Feature closeout.
 Expected main SHA: <当前 main SHA>
 ```
 
-The Feature number is the primary key; current Issue title is canonical.
+The Feature number is the primary key; the current Issue title is canonical.
+A request may limit execution to one named Phase. Verify prior Phase facts and
+stop at the requested boundary.
 
-## Rules, trust, and tools
+## Context acquisition (hierarchy-aware exception)
 
-Read applicable `AGENTS.md` / `AGENTS.override.md` and trusted versions of:
+This audit is a hierarchy-aware flow, not a leaf-Issue-first default: its
+purpose requires the target Feature body, the relevant direct-child Issue
+hierarchy, completion state, and implementation / validation evidence. Read
+what the audit phases below require. Do not default to historical comments,
+unrelated docs/ADRs, the roadmap, sibling Feature history, or general
+workflow reports.
+
+## Policies and audit interface
+
+Read applicable `AGENTS.md` / `AGENTS.override.md` and:
 
 ```text
-.agents/skills/feature-completion-audit/SKILL.md
 .agents/policies/command-execution.md
 .agents/policies/workflow-evidence.md
 ```
 
-Use current Feature/child/PR facts and locked `origin/main` implementation,
-workflows, `pyproject.toml`, lock files, documentation, ADRs, and tests. Run
-current checks through `tools/agent_workflow/workflow_validation.py` from the
-trusted audited-main control plane.
-Historical Task/PR/delivery/review/closeout reports may locate evidence but are
-not completion proof.
-
-Use trusted-control-plane operations:
+Audit the exact locked `origin/main` implementation and current Feature facts.
+Use the repository-defined operations:
 
 ```text
 feature-audit-snapshot
@@ -54,80 +58,67 @@ workflow_validation.py run --phase feature-audit --include-skill-validators --re
 feature-audit-recheck
 ```
 
-If audited `main` changes governance or tooling relative to the current working
-context, run Evidence and Validation from the locked audited-main commit through
-`trusted_runner.py` or a detached trusted worktree. Record audited main, runner
-source SHA/content digest, and child-set/snapshot fingerprints.
+Run validation against a worktree fixed at the audited main SHA. Record the
+actual Audit Skill, Evidence/Validation Runner, profile/schema, audited main,
+Feature snapshot, direct-child-set digest, and content hashes used. Historical
+Task/PR/delivery/review/closeout reports may locate evidence but are not
+completion proof.
+
+For `partial`, `unknown`, `fail`, truncation, schema mismatch, or drift, inspect
+only the named facts or failed commands and preserve the original status.
 
 ## Permission boundary
 
-This audit is strictly read-only for Feature, Task, Issue, PR, Project, label,
-Relationship, review/thread, repository, branch, and code state. It may fetch
-refs, create and remove one exact detached temporary audit worktree, run
-validation, and write exact ignored local evidence/validation files.
+The audit is strictly read-only for Feature, child Issues, PRs, Project, labels,
+Relationships, reviews/threads, repository, branches, and code. It may fetch
+refs, use one isolated worktree at the audited main SHA, run validation, and
+write exact ignored local evidence artifacts.
 
-It never:
+It does not authorize Feature or child edits/closure, Task creation, Project or
+label changes, body-checkbox edits, source/test/doc/config changes, commits,
+pushes, merge, GitHub Review submission, branch deletion, Task closeout, or Epic
+completion assessment. Gap recommendations are proposals only.
 
-- edits or closes the Feature or a child Issue;
-- creates, edits, reopens, or closes a Task;
-- changes Project, labels, Parent, Relationships, comments, reviews, or threads;
-- checks boxes in Issue bodies;
-- modifies source, tests, docs, configuration, or governance;
-- commits, pushes, merges, submits a GitHub Review, or deletes business branches;
-- performs Task closeout or Epic completion assessment.
+## Phase 1: identify and lock
 
-Gap recommendations are non-writing proposals only.
+Generate the Feature snapshot. Verify repository, open `type:feature`, canonical
+title, complete body/comments/fields, Parent, blockers, dependencies,
+Relationships, actual `origin/main`, and the direct-child collection.
 
-## Phase 1: identify and lock the audit baseline
-
-Generate a current Feature snapshot and verify:
-
-- repository and Feature exist;
-- Feature is open and `type:feature`;
-- canonical title matches supplied title;
-- complete Feature body/comments, fields, Parent, blockers, dependencies, and
-  Relationships were read;
-- actual `origin/main` matches expected main SHA when supplied;
-- direct sub-issue collection is available and can be distinguished from
-  indirect descendants or merely related Issues.
-
-Lock:
+Lock and report:
 
 ```text
 Audited branch: origin/main
-Audited main SHA: <exact SHA>
+Audited main SHA
 Feature canonical identity
+Feature content / Relationship digest
 Direct-child set and digest
-Feature content / Relationship facts
+Snapshot ID
 ```
 
-A ProjectV2 derived title is not canonical. If required identity, child, or main
-facts are unavailable or contradictory, use the evidence-insufficient path.
+Distinguish direct children from indirect descendants and related Issues. Use
+the evidence-insufficient path when identity, child-set, or main facts are
+unavailable or contradictory.
 
 ## Phase 2: direct-child inventory
 
-For every direct child, independently classify and record:
+For every direct child, record:
 
-- Issue number, canonical title, type, state, labels, Parent, Project Status,
-  blockers, and Relationships;
+- Issue number, title, type, state, labels, Parent, Project Status, blockers, and
+  Relationships;
 - whether it is necessary to Feature completion;
-- closing or merged PR, merge commit, checks, and correct linkage;
+- merged/closing PR, merge commit, checks, and correct linkage;
 - Task closeout/lifecycle facts when applicable;
-- approved no-PR/no-code exception and its current-main evidence, if any;
+- approved no-PR/no-code exception and its current-main evidence;
 - current-main implementation, tests, docs, ADR, or approved-decision evidence.
 
-Do not infer completion from `n / n closed`. A closed child without merged/current
-main evidence is not automatically satisfied. A related or indirect Issue is not
-a direct child. Reopened, orphaned, blocked, or ambiguously parented work must be
-reported.
-
-The snapshot may normalize inventory metadata, but the Agent must inspect the
-relevant child Issue/PR and current-main evidence needed for semantic judgment.
+Do not infer completion from child closure counts. A closed child without merged
+or current-main evidence is not automatically satisfied. Report reopened,
+orphaned, blocked, or ambiguously parented work.
 
 ## Phase 3: acceptance coverage
 
-Parse every Feature acceptance criterion and create a coverage matrix with one
-of:
+Map every Feature acceptance criterion to one status:
 
 ```text
 Satisfied
@@ -136,71 +127,54 @@ Not applicable by approved decision
 Insufficient evidence
 ```
 
-For each criterion cite current-main source, tests, docs, ADR, configuration,
-runtime/public behavior, merged PR, or explicit approved decision. Child closure
-or a prior report alone is not sufficient.
+Cite current-main source, tests, docs, ADR, configuration, runtime/public
+behavior, merged PR, or an explicit approved decision. Child closure and prior
+reports are insufficient by themselves.
 
-Do not silently reinterpret ambiguous or contradictory criteria. Use
-`Insufficient evidence` and identify the maintainer clarification needed.
+Do not reinterpret ambiguous or contradictory criteria. Record the maintainer
+clarification required.
 
-## Phase 4: Feature-level integration and safety
+## Phase 4: integration and safety
 
-Review the current-main result as a whole, not only historical PRs:
+Review the current-main result as a whole:
 
 - primary Feature goals and user/system value;
 - cross-Task interfaces and end-to-end behavior;
 - compatibility, configuration, documentation, and operations;
 - dead, isolated, placeholder, or unconnected implementation;
-- tests that cover integrated behavior rather than only isolated units;
+- integrated tests, not only isolated unit tests;
 - credentials, permissions, UTC/data correctness, financial safety, live-mode
   defaults, and repository-history safety where applicable;
-- missing work not represented by a direct child.
+- required work not represented by a direct child.
 
-Do not re-review every historical line by default, but inspect enough current
-code and evidence to establish Feature-level completion.
+Inspect enough current code and evidence to establish Feature-level completion;
+a full historical re-review is not required by default.
 
 ## Phase 5: validation and remote checks
 
-Run the shared Validation runner against the locked audited-main worktree. Run
-all current applicable checks and Skill validators. Read actual remote-main check
-runs and Required-Checks configuration with the same explicit handling of no
-configured checks, plan-limit `403`, pending, failed, stale, cancelled, skipped,
-and unavailable states.
+Run the Feature audit Validation profile against the locked audited-main
+worktree. Read actual remote-main checks and Required-Checks configuration.
+Preserve no-configured, plan-limit `403`, pending, failed, stale, cancelled,
+skipped, and unavailable states.
 
 A real validation failure is a completion gap. Missing or ambiguous evidence
 without a confirmed defect uses the evidence-insufficient verdict.
 
-## Phase 6: gaps and stability recheck
+## Phase 6: gaps and stability
 
-Classify each completion gap by severity and propose the smallest candidate
-Task boundary when useful. Do not create or edit that Task.
+Classify each completion gap by severity and, when useful, propose the smallest
+candidate Task boundary without creating or editing a Task.
 
-Run `feature-audit-recheck` from the same trusted audited-main control plane.
-Recollect Feature identity/content facts, Relationships, direct-child set,
-child lifecycle evidence, audited main, and current checks.
+Run `feature-audit-recheck`. Recollect Feature identity/content,
+Relationships, direct-child set, child lifecycle evidence, audited main, and
+checks. Any audited-main, material Feature, Relationship, or direct-child-set
+change invalidates the stable conclusion and requires a new independent audit.
 
-Any audited-main, material Feature, Relationship, or direct-child-set change
-invalidates the stable completion conclusion. Re-audit the new object in a new
-session.
+## Findings and verdicts
 
-## Severity
-
-Use exactly:
-
-- **Blocking**: Feature cannot safely be declared complete; credentials, funds,
-  core data, permissions, or repository history are at risk;
-- **High**: primary goal, critical integration, major acceptance criterion, or
-  core safety property is incomplete;
-- **Medium**: clear completion, test, documentation, compatibility, or lifecycle
-  gap prevents closeout;
-- **Low**: non-blocking maintainability, clarity, or residual risk;
-- **Nit**: wording, formatting, or tiny consistency issue.
-
-Order findings by severity and cite exact Feature clauses, child Issues,
-current-main files, validation, or GitHub state. Any unresolved
+Use exactly Blocking, High, Medium, Low, and Nit. Cite exact Feature clauses,
+child Issues, current-main files, validation, or GitHub state. Any unresolved
 Blocking/High/Medium finding prevents a passing verdict.
-
-## Fixed verdicts
 
 Output exactly one:
 
@@ -208,10 +182,11 @@ Output exactly one:
 Feature 已完成，可以由维护者人工收尾
 ```
 
-Only when all necessary direct work is complete, every criterion is `Satisfied`
-or approved `Not applicable`, current-main integration/tests/docs are complete,
-validation/checks pass, no blocker or Blocking/High/Medium finding remains, and
-the audited main/Feature/Relationships/direct-child set stayed stable.
+Only when all necessary direct work is complete, every criterion is
+`Satisfied` or approved `Not applicable`, current-main integration/tests/docs
+are complete, validation/checks pass, no blocker or Blocking/High/Medium finding
+remains, and the audited main, Feature, Relationships, and direct-child set are
+stable.
 
 ```text
 Feature 尚未完成，需要补充或修复 Task
@@ -229,42 +204,27 @@ When no confirmed defect can be concluded but criteria, children, GitHub facts,
 current-main evidence, stability, or a maintainer decision are insufficient or
 contradictory.
 
-## Report contract
+## Report and closeout gate
 
-On a clean path, use a compact report containing:
+On a clean path, report Feature identity/URL/Parent, audited main SHA, actual
+Skill/Runner identity, direct-child summary, acceptance matrix, integration and
+safety summary, findings, validation/checks, blockers and state conflicts,
+gap-to-Task recommendations, limitations, actions not performed, one fixed
+verdict, and:
 
 ```text
-Feature canonical identity / URL / Parent
-Audited branch and main SHA
-Trusted runner source
-Direct-child inventory summary
-Acceptance coverage matrix
-Feature integration / safety summary
-Findings by severity
-Local validation and remote checks
-Blockers, orphaned/reopened work, and state conflicts
-Gap-to-Task recommendations
-Limitations and actions not performed
-One fixed verdict
 Audited main SHA: <actual SHA>
 ```
 
-The direct-child inventory, acceptance matrix, findings, validation, verdict,
-and SHA may be concise but cannot be omitted. Use a detailed report for gaps,
-failed/pending evidence, drift, fallback, conflict, or maintainer decision.
-
-## Maintainer closeout gate
+Use a detailed report for gaps, failed/pending evidence, drift, fallback,
+conflict, or maintainer decision.
 
 After a passing audit, the maintainer must re-verify current `origin/main`,
 Feature title/body, direct-child set, blockers, and checks immediately before
-manually closing the Feature or setting Project `Done`. This Skill performs none
-of those writes and never assesses Epic completion.
+manual closeout. This Skill performs none of those writes and never assesses
+Epic completion.
 
-## Temporary worktree and recovery
-
-A temporary audit worktree must be unique, detached at the locked main SHA,
-read-only for audited files, and removed by exact path without `git clean`.
-
-Re-run in a new independent session after any new merged Task, clarified Feature,
-resolved blocker, repaired validation, changed main, child-set change, or
-reopened Feature. Never inherit an old verdict.
+Remove any temporary worktree by exact path without destructive broad cleanup.
+Re-run in a new independent session after any new merged Task, clarified
+Feature, resolved blocker, repaired validation, main change, child-set change,
+or reopened Feature. Never inherit an earlier verdict.

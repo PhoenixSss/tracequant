@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "task": 83,
+  "pull_request": 101,
+  "evidence_type": "codex-rules-live-activation",
+  "observed_at_utc": "2026-08-02T08:07:01Z",
+  "command": [
+    "tools/agent_workflow/wsl2_validation_runner.py",
+    "targeted"
+  ],
+  "execution": {
+    "first_execution_direct": true,
+    "guardian_shown": false,
+    "guardian_turns": 0,
+    "approval_prompts": 0,
+    "elevated_executions": 0,
+    "exit_code": 0
+  },
+  "runner_result": {
+    "profile": "targeted",
+    "status": "pass",
+    "command_count": 1,
+    "expected_command_count": 1,
+    "duration_ms": 10284,
+    "stdout_bytes": 346,
+    "stdout_json_bytes": 345,
+    "result_path": ".agents/validation.local/wsl2-runs/20260802T080701Z-dfc84649195c/result.json",
+    "result_sha256": "1e0cc6cd7850457dd83b9be58e0da48a20c99f0cfd3e349f426fc9c3616a8caa",
+    "runner_version": "1.0.0",
+    "runner_schema_version": 1
+  },
+  "external_locator": {
+    "tool_chunk_id": "73948b",
+    "codex_session_id": "unavailable",
+    "rollout_id": "unavailable",
+    "authority": "auxiliary-locator-only"
+  },
+  "repository_inclusion": {
+    "raw_result_committed": false,
+    "summary_committed": true
+  },
+  "applicability": {
+    "observed_runner_version": "1.0.0",
+    "current_review_candidate_runner_version": "1.0.1",
+    "rules_file_changed_between_versions": false,
+    "rules_sha256": "f593c3959cc94dc2621a97e468617bb3e98a2dd0332c6ca7ed7ecc9bc1522186",
+    "supported_interpretation": "The live probe demonstrates project Rules activation and direct routing for the fixed targeted entry in the observed session.",
+    "unsupported_interpretation": "The live probe does not independently validate runner 1.0.1 integrity or process-tree semantics; those are covered by automated tests and static review."
+  }
+}

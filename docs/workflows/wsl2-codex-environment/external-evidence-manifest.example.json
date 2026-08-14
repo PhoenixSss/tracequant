@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "task_scope": "WSL2 Codex environment and execution-capability diagnostics",
+  "generated_at_utc": "<YYYY-MM-DDTHH:MM:SSZ>",
+  "repository_head_sha": "<FINAL_DELIVERY_HEAD_SHA>",
+  "runs": [
+    {
+      "run_id": "20260801T133921Z-66016f44",
+      "archive_root": ".agents/evidence.local/wsl2-environment-diagnostic/20260801T133921Z-66016f44/",
+      "files": [
+        {
+          "path": "environment.json",
+          "sha256": "<SHA256>",
+          "size_bytes": 0
+        }
+      ]
+    }
+  ],
+  "redaction": {
+    "manifest_contains_credentials": false,
+    "raw_evidence_committed": false,
+    "absolute_user_path_normalized": true
+  }
+}

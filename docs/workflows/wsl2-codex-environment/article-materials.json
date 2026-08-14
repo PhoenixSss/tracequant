@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "status": "summary-only",
+  "source_of_truth": "docs/workflows/wsl2-codex-environment/publication-materials.json",
+  "scope": "Environment and execution-capability diagnostics only; no Task #65 candidate result.",
+  "public_claim_boundaries": {
+    "supported": [
+      "WSL2 improved selected Windows-specific tool and credential visibility issues",
+      "Codex approval boundaries remain",
+      "Approved proxy-enabled GitHub path is supported",
+      "Bare python is not required by this repository"
+    ],
+    "not_yet_supported": [
+      "Token reduction",
+      "Guardian-turn reduction",
+      "Runner effectiveness",
+      "Final minimum-permission Rules effectiveness",
+      "Task #65 candidate superiority"
+    ]
+  },
+  "chart_data": {
+    "counting_rule": "One row per capability category in capability-matrix.md.",
+    "capability_counts": {
+      "direct": 4,
+      "approval_required": 7,
+      "partial": 1,
+      "prohibited": 1,
+      "total": 13
+    },
+    "project_validation": {
+      "commands_passed": 6,
+      "commands_failed": 0
+    }
+  },
+  "redaction": {
+    "raw_credentials_included": false,
+    "raw_rollouts_included": false,
+    "absolute_home_path_normalized": true,
+    "proxy_credentials_included": false
+  }
+}

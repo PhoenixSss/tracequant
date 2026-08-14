@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "task": 84,
+  "evidence_type": "task84-live-execpolicy-matrix",
+  "status": "not-measured",
+  "observed_at_utc": null,
+  "codex_version": null,
+  "rules_path": ".codex/rules/tracequant-wsl-evidence.rules",
+  "cases": [
+    {
+      "id": "fixed-review-profile",
+      "policy_expected": "allow",
+      "policy_observed": null,
+      "runner_expected": "accepted-with-valid-identity",
+      "runner_observed": null
+    },
+    {
+      "id": "fixed-profile-arbitrary-tail",
+      "policy_expected": "allow-prefix-boundary",
+      "policy_observed": null,
+      "runner_expected": "reject-before-evidence-query",
+      "runner_observed": null
+    },
+    {
+      "id": "direct-gh-api",
+      "policy_expected": "not-allow",
+      "policy_observed": null
+    },
+    {
+      "id": "direct-git-write",
+      "policy_expected": "prompt-forbidden-or-unmatched",
+      "policy_observed": null
+    },
+    {
+      "id": "gh-auth-token",
+      "policy_expected": "forbidden",
+      "policy_observed": null
+    }
+  ],
+  "claim_boundary": {
+    "rules_are_prefix_based": true,
+    "runner_owns_complete_argv_validation": true,
+    "exact_end_of_command_matching_claimed": false
+  }
+}

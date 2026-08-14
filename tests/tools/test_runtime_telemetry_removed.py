@@ -18,8 +18,8 @@ ACTIVE_WORKFLOW_FILES = (
     "AGENTS.md",
     ".agents/policies/command-execution.md",
     ".agents/policies/workflow-evidence.md",
-    ".agents/skills/task-delivery/SKILL.md",
-    ".agents/skills/task-pr-review/SKILL.md",
+    ".agents/skills/task-delivery-runner/SKILL.md",
+    ".agents/skills/task-pr-review-runner/SKILL.md",
     ".agents/skills/task-closeout/SKILL.md",
     ".agents/skills/feature-completion-audit/SKILL.md",
     "docs/workflows/agent-skills.md",
@@ -27,13 +27,17 @@ ACTIVE_WORKFLOW_FILES = (
     "tools/agent_workflow/workflow_common.py",
     "tools/agent_workflow/workflow_evidence.py",
     "tools/agent_workflow/workflow_validation.py",
-    "tools/agent_workflow/trusted_runner.py",
     ".github/workflows/ci.yml",
 )
 
 APPROVED_TELEMETRY_REFERENCE_FILES = {
     "AGENTS.md": "normative statement that runtime telemetry is disabled",
-    "docs/workflows/agent-skills.md": "developer-facing external-analysis boundary",
+    ".agents/skills/task-delivery/SKILL.md": (
+        "preserved historical baseline Skill containing the former telemetry contract"
+    ),
+    ".agents/skills/task-pr-review/SKILL.md": (
+        "preserved historical baseline Skill containing the former telemetry contract"
+    ),
     "tests/tools/test_runtime_telemetry_removed.py": "removal regression assertions",
     "tests/tools/test_workflow_skills.py": "Skill regression assertion",
     "docs/workflows/benchmarks/task-65-round-2/README.md": (
@@ -53,6 +57,12 @@ APPROVED_TELEMETRY_REFERENCE_FILES = {
     ),
     "docs/workflows/benchmarks/task-65-round-2/task-65-telemetry-only.diff": (
         "auditable historical-to-frozen Task #65 diff"
+    ),
+    "docs/workflows/publication-materials/task-material-register.md": (
+        "publication material register retaining historical workflow sample labels"
+    ),
+    "docs/workflows/context-retrieval-v2/before-after-retrieval.md": (
+        "#87 retrieval before/after evidence noting Token telemetry remains disabled"
     ),
 }
 

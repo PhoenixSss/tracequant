@@ -1,0 +1,10 @@
+metric,value,unit,status,scope,evidence_file
+review_profile_model_visible_invocations,1,invocations,expected,one fixed profile,live-profile-evidence.json
+review_profile_api_calls,6,calls,observed,Task #84 live review profile,live-profile-evidence.json
+review_profile_duration,6984,ms,observed,Task #84 live review profile,live-profile-evidence.json
+review_profile_stdout,455,bytes,observed,compact digest,live-profile-evidence.json
+review_profile_guardian_turns,,turns,unavailable,fresh Codex session,live-profile-evidence.json
+review_profile_approval_prompts,1,prompts,observed,live runner execution,live-profile-evidence.json
+review_profile_elevated_executions,1,executions,observed,live runner execution,live-profile-evidence.json
+recheck_api_calls,6,calls,observed,same snapshot,live-recheck-evidence.json
+task65_token_reduction,,tokens,not-measured,Task #86 only,publication-materials.json

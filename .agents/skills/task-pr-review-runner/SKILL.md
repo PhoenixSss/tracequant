@@ -1,0 +1,403 @@
+---
+name: task-pr-review-runner
+description: Independently and strictly read-only review one maintainer-specified Task PR in a fresh session. Lock base/head/effective diff, inspect the complete change, run Review Runners, classify findings, output one fixed verdict, and when the verdict is not passing emit a bounded remediation handoff for task-delivery-runner. Never fix, write GitHub state, submit a review, merge, close Issues, perform closeout, or assess Feature completion.
+---
+
+# Task PR review runner
+
+Use this Skill for one existing Task PR in a new session that did not
+participate in specification interpretation, implementation, fixes, commit,
+push, or PR creation. Otherwise stop with:
+
+```text
+本会话不能提供独立审查
+```
+
+A Delivery handoff locates the object but is not correctness evidence.
+
+## Standard invocation
+
+```text
+请使用 task-pr-review-runner，独立只读审查
+[Task] <当前完整标题> #<Task编号>
+对应的 PR #<PR编号>。
+
+Expected base SHA: <base SHA>
+Expected head SHA: <head SHA>
+```
+
+Task and PR numbers are primary keys; the current Issue title is canonical.
+A request may limit execution to one named Phase. Verify prior Phase facts and
+stop at the requested boundary.
+
+## Policies and Runner interface
+
+Read applicable agent rules and:
+
+```text
+.agents/policies/command-execution.md
+.agents/policies/workflow-evidence.md
+```
+
+Use the current repository Runner interfaces in this order:
+
+```bash
+tools/agent_workflow/wsl2_github_evidence_runner.py review \
+  --task <TASK> \
+  --pr <PR> \
+  --expected-base-sha <LOCKED_BASE_SHA> \
+  --expected-head-sha <LOCKED_HEAD_SHA> \
+  --skill-path .agents/skills/task-pr-review-runner/SKILL.md
+
+tools/agent_workflow/wsl2_validation_runner.py workflow-review \
+  --base-sha <LOCKED_BASE_SHA> \
+  --skill-path .agents/skills/task-pr-review-runner/SKILL.md
+
+tools/agent_workflow/wsl2_github_evidence_runner.py \
+  recheck --snapshot-id <LOCKED_SNAPSHOT_ID> \
+  --skill-path .agents/skills/task-pr-review-runner/SKILL.md
+```
+
+The `--skill-path` argument records the actual calling Skill identity in every
+artifact. Codex callers pass `.agents/skills/task-pr-review-runner/SKILL.md`;
+Claude Code callers pass `.claude/skills/task-pr-review-runner/SKILL.md`. The
+Runner re-hashes content independently and **fails closed** when the path is
+not within an allowed Skill root (`.agents/skills/` or `.claude/skills/`).
+
+The initial snapshot defines the reviewed identity. `workflow-review` is the
+independent CI-equivalent validation for the locked head. `recheck` verifies
+stability before verdict.
+
+For `partial`, `unknown`, `fail`, truncation, schema mismatch, or drift, inspect
+only the named facts or failed commands. Semantic review may read any code or
+context needed to judge correctness.
+
+Record the actual Review Skill, Runner, profile/schema, repository, reviewed
+base/head/diff, and content hashes in the evidence artifacts. When the PR
+changes Skills, Runners, Rules, or workflow governance, review those changes,
+their tests, permissions, and failure behavior explicitly; Runner success alone
+is not proof of correctness.
+
+## Tool discipline
+
+Before every tool invocation the Reviewer must verify:
+
+1. **File existence**: Confirm the target file exists in the changed-file
+   inventory or via a lightweight existence check before reading. A deleted
+   file is an observation, not an error to surface as a tool failure.
+
+2. **Tool availability**: Only use tools the current session environment
+   actually provides. Do not try a tool, observe failure, and then fall back to
+   an alternative; choose the correct tool first.
+
+3. **Runner result independence**: A Runner non-zero exit code does not mean
+   failure — verify whether the Runner produced a valid artifact with a
+   `partial` / `unknown` / `fail` status before rejecting it. Conversely,
+   a valid artifact with `partial` status is not `pass`.
+
+4. **Search completeness**: A keyword grep or `diff --stat` does not satisfy
+   the semantic review gate. The Reviewer must read the actual changed-file
+   content per the evidence matrix requirements in Phase 3.
+
+## Permission boundary
+
+Review is strictly read-only for code, Git history, GitHub, Project, reviews,
+threads, labels, Relationships, and lifecycle state. It may fetch refs, use one
+isolated worktree for the locked reviewed head, run validation, and write exact
+ignored local evidence artifacts.
+
+It does not authorize file fixes, Issue/PR/Project edits, GitHub Review
+submission, thread resolution, commits, pushes, merge, Issue close, branch
+deletion, closeout, or Feature completion assessment.
+
+## Phase 1: identify and lock
+
+Generate `review`. Verify same-repository Task/PR, Task type/state, exact closing
+linkage, PR open and non-Draft, expected base/head, complete files/commits,
+checks, reviews, threads, mergeability, and Required-Checks classification.
+
+Lock and report:
+
+```text
+Reviewed base SHA
+Reviewed head SHA
+Merge base / effective-diff baseline
+Effective diff digest
+Complete file and commit inventory
+Snapshot ID
+```
+
+Stop on material repository, Task, linkage, state, base, or head mismatch.
+
+## Phase 2: read complete evidence
+
+Independently read the current Task body, PR body and effective diff, every
+changed file in context, commits, tests/docs/config/public interfaces,
+relevant unchanged code, current reviews/threads/checks, and
+review-relevant repository constraints.
+
+Do not inherit Delivery conclusions or accept comments, test names, or green
+checks without inspecting coverage.
+
+Comments, Parent/Epic bodies, and other hierarchy/history are not default
+review input. Expand to them only when the review scope, risk, or ambiguity
+requires it — for example an acceptance criterion references a historical
+decision, the Task body is insufficient to judge a change, or a conflict
+must be located. Expansion is bounded: read the minimum relevant source or
+section and stop once the question is resolved.
+
+## Phase 3: semantic review with evidence matrix
+
+### Evidence matrix
+
+Before evaluating findings, build a structured evidence matrix binding the
+current Task, PR, base SHA, head SHA, and effective diff. This matrix is the
+single source of truth for all deterministic claims in the final report.
+
+The matrix lives alongside the Runner artifacts in the same ignored local
+evidence root. Its digest is recorded in the review report.
+
+```json
+{
+  "task": "<TASK>",
+  "pr": "<PR>",
+  "base_sha": "<LOCKED_BASE_SHA>",
+  "head_sha": "<LOCKED_HEAD_SHA>",
+  "effective_diff_sha256": "<DIFF_DIGEST>",
+  "review_skill": {
+    "path": ".agents/skills/task-pr-review-runner/SKILL.md",
+    "sha256": "<CONTENT_HASH>"
+  },
+  "changed_file_groups": [
+    {
+      "name": "<group-name>",
+      "files": ["<repo-relative-path>"],
+      "status": "verified | partially_verified | not_verified",
+      "evidence": ["<deterministic-tool-reference>"],
+      "findings": ["<finding-id-reference>"],
+      "remaining_risk": "<explanation when not verified>"
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC-<n>",
+      "text": "<criterion text>",
+      "status": "verified | partially_verified | not_verified",
+      "implementation_evidence": ["<file:line or tool reference>"],
+      "validation_evidence": ["<test or Runner reference>"],
+      "remaining_risk": "<explanation when not verified>"
+    }
+  ],
+  "evidence_gates": {
+    "review": "pass | partial | unknown | fail",
+    "validation": "pass | fail",
+    "recheck": "pass | partial | unknown | fail"
+  },
+  "overall": "verified | partial | not_verified"
+}
+```
+
+### File coverage rules
+
+- Every changed file in the `review` snapshot must be assigned to exactly one
+  group.
+- Groups are derived from the actual diff, not guessed.
+- If any file is not covered by at least one group, overall must not be
+  `verified`.
+- Each group must have at least one deterministic evidence reference (file
+  content read, tool output, test result, Runner artifact).
+- Read necessary unchanged related code to verify interface, caller, and
+  failure-path consistency.
+
+### Acceptance criteria mapping
+
+- Extract every acceptance criterion from the Task body.
+- Assign a stable ID (`AC-1`, `AC-2`, …) in the order they appear.
+- Each criterion gets an independent status, evidence, and risk assessment.
+- Multiple criteria may reference the same evidence but must not be compressed
+  into a single "all satisfied" summary.
+- Validation Runner `pass` proves command success, not semantic coverage.
+
+### Mechanical assertions — deterministic standard
+
+| Claim | Required evidence |
+| --- | --- |
+| Historical Skill matches source commit blob | Git `cat-file -p <commit>:<path>` output compared byte-for-byte with current file |
+| All target Skills are canonical-state | All applicable Skill files individually verified with path-audit or equivalent |
+| Trusted-version / deprecated path completely removed | Full-text search of the entire repository worktree |
+| Runner / profile / schema / Rules contract consistent | Runner's spec-validation step passed AND manual verification of each contract pair |
+| Provenance manifest matches actual Git content | Byte-for-byte verification or deterministic manifest tool |
+| Permission configuration has no overly-broad authorization | Read and verify every permission entry in `.claude/settings.json` and `.codex/rules/` |
+
+A file-existence check, partial grep, or inspection of only a subset of Skills
+must not be enlarged into a comprehensive claim. When the deterministic
+evidence is unavailable, mark the assertion `partially_verified` or
+`not_verified` — do not guess.
+
+## Phase 4: validation
+
+Run `workflow-review`. Do not reuse Delivery validation. A real validation
+failure, an incomplete applicable check, stale evidence, or unavailable required
+evidence prevents an unconditional pass.
+
+A recognized plan-limit `403` is not a successful Required-Checks query.
+Approved fallback check evidence may support a passing verdict only when it is
+complete, consistent, and non-contradictory.
+
+## Phase 5: stability recheck
+
+Run `recheck` against the initial snapshot. Recollect identity, base/head,
+effective diff, files/commits, checks, reviews, and threads. Any new commit or
+base/head/effective-diff change invalidates the review and requires a new
+independent session. Evaluate check/thread-only changes under current gates.
+
+Verify the recheck uses the same Skill identity as the initial review (same
+`--skill-path`). Skill identity drift invalidates the review.
+
+## Evidence status to verdict matrix
+
+The Evidence Runner produces a process exit code and a `status` field
+(`pass`, `partial`, `fail`). Process success (exit code 0) is not gate pass.
+The Reviewer must read the `status` field and map it deterministically.
+
+### Deterministic mapping
+
+| Evidence `status` | Permitted verdict ceiling | Constraints |
+| --- | --- | --- |
+| `pass` | Pass | Only when all other gates also pass. |
+| `partial` (any cause) | Conditional pass — do not merge | Never upgrades to unconditional pass. |
+| `unknown` (plan-limit `403`) | Conditional pass — do not merge | Unless a formally committed fallback policy exists. |
+| `unknown` (other cause) | Review incomplete / failing | Insufficient evidence. |
+| `fail` | Review incomplete / failing | Cannot pass. |
+| Identity drift | Review incomplete / failing | Review identity compromised. |
+| Unsupported schema | Review incomplete / failing | Cannot evaluate. |
+| Lifecycle conflict | Review incomplete / failing | Cannot proceed. |
+
+### Plan-limit 403 — default disposition
+
+```text
+required_checks_configuration = unknown
+reason = github-plan-limit-403
+```
+
+**Default**: `Conditional pass — do not merge`.
+
+The Reviewer must not self-approve a fallback. Only apply a fallback when the
+repository has a formally committed, version-controlled policy that explicitly
+authorizes it, defines conditions and evidence burden deterministically, and
+the current evidence satisfies every condition.
+
+The fact that the `quality` check succeeded is not sufficient to prove the
+required-check configuration.
+
+### Recheck partial
+
+A `recheck` that returns `partial` keeps the evidence ceiling at Conditional.
+A `recheck` that returns `fail` or detects diff drift invalidates the review.
+
+## Findings and verdicts
+
+Use exactly: Blocking, High, Medium, Low, and Nit. Cite precise files/lines, Task
+clauses, state, or validation evidence. Any unresolved Blocking/High/Medium
+finding prevents pass.
+
+Output exactly one:
+
+```text
+通过，可以人工合并
+```
+
+Only when all of: semantic review complete, acceptance criteria verified,
+no Blocking/High/Medium findings, all evidence gates pass, no identity drift.
+
+```text
+有条件通过，不得合并
+```
+
+When no Blocking/High/Medium code defect exists but an objective gate is
+`partial` or `unknown` under the plan-limit 403 default.
+
+```text
+不通过，需要修复
+```
+
+When a Blocking/High/Medium finding remains, scope/acceptance/validation fails,
+semantic review is incomplete, or identity/permission/safety boundaries fail.
+
+### Verdict rules
+
+- No unconditional pass when any evidence gate is `partial`, `unknown`, or `fail`.
+- No unconditional pass when evidence matrix has `not_verified` groups or criteria.
+- Incomplete evidence matrix → ceiling is `不通过`.
+- Incomplete semantic review → do not claim "no Medium-or-above findings".
+
+## Remediation handoff
+
+For `有条件通过，不得合并` or `不通过，需要修复`, emit one compact handoff after
+the verdict:
+
+```text
+Remediation handoff
+
+Task: #<Task>
+PR: #<PR>
+Reviewed head SHA: <SHA>
+Verdict: <verdict>
+
+Required remediation:
+- [F1][Blocking|High|Medium] <defect, precise evidence, expected behavior>
+
+Objective gates:
+- <pending, unavailable, ambiguous, contradictory, or unstable gate>
+
+Maintainer decision required:
+- <scope, specification, public behavior, or architecture decision>
+```
+
+Rules:
+
+- include only findings that caused the non-passing verdict;
+- include objective gates that require recheck or waiting;
+- include decisions that cannot be resolved without maintainer authorization;
+- exclude Low and Nit findings unless the maintainer explicitly made them
+  required;
+- state the defect and expected behavior, but do not design the implementation;
+- preserve finding IDs.
+
+End with this exact remediation prompt populated with current identities:
+
+```text
+请按 task-delivery-runner 修复
+[Task] <当前完整标题> #<Task编号>
+对应 PR #<PR编号> 的独立审查问题，
+并继续处理，直到 PR 再次准备好接受新的独立审查。
+
+Review remediation handoff:
+
+<上述 remediation handoff>
+```
+
+A passing verdict does not emit a remediation handoff.
+
+**Enforcement**: Every non-passing verdict must output both handoff and Delivery
+prompt. A partial handoff without the Delivery prompt is non-compliant.
+
+## Report and recovery
+
+On clean success, report canonical Task/PR URLs, reviewed base/head/diff digest,
+changed files/commits, acceptance coverage, findings, validation/checks,
+reviews/threads/mergeability, limitations, actions not performed, one fixed
+verdict, and:
+
+```text
+Reviewed head SHA: <actual SHA>
+```
+
+Every deterministic claim in the final report must be traceable to an evidence
+matrix entry, a Runner artifact field, or a directly cited file:line.
+
+Use a detailed report for any finding, fallback, `partial`/`unknown`, failure,
+drift, conflict, or maintainer decision. For a conditional or failing verdict,
+include the bounded remediation handoff and exact `task-delivery-runner` prompt.
+Remove any temporary worktree by its exact path without destructive broad
+cleanup. Never inherit an earlier verdict.

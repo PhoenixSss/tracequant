@@ -1,21 +1,103 @@
 # Workflow evidence and compact validation policy
 
-## Purpose and responsibility
-
-This is the shared normative source for deterministic evidence, compact
-validation, stability rechecks, and success reports used by the four workflow
-Skills.
+## Responsibilities
 
 ```text
 Skill       authorization, phases, semantic judgment, findings, verdict
-Evidence    current mechanical facts, normalization, bounded snapshots
-Validation  current applicable checks, bounded results
+Evidence    deterministic current Git/GitHub facts and stability snapshots
+Validation  deterministic command plans, exit codes, and bounded diagnostics
 Maintainer  manual Merge and Feature closeout
 ```
 
-Evidence never authorizes a write or proves semantic correctness.
+Evidence and Validation never authorize repository or GitHub writes and never
+replace semantic correctness review.
 
-## Local data and command routing
+## Current front doors
+
+Runner Skills use the current repository entries directly:
+
+```text
+tools/agent_workflow/wsl2_github_evidence_runner.py
+tools/agent_workflow/wsl2_validation_runner.py
+```
+
+The implementation CLIs are Runner internals:
+
+```text
+tools/agent_workflow/workflow_evidence.py
+tools/agent_workflow/workflow_validation.py
+```
+
+For each phase, the named Runner is the single mechanical source. Do not run its
+implementation CLI or a second equivalent Git/`gh`/`uv` chain after a valid
+result.
+
+| Workflow phase | Evidence profile | Validation profile |
+| --- | --- | --- |
+| Runner Delivery preflight | `delivery` | named `targeted*` only when useful |
+| Runner Delivery final | `delivery-readiness` | `workflow-delivery --base-sha <base>` |
+| Independent Runner Review | `review`, then `recheck` | `workflow-review --base-sha <base>` |
+| Closeout | `closeout-readonly`, then `recheck` | `workflow-closeout --base-sha <PR base>` |
+
+Validation is not reused across Delivery, Review, and Closeout. A targeted
+profile is not CI-equivalent.
+
+## Execution identity
+
+Use the Skill and Runner explicitly invoked from the current repository. Do not
+load them from `main`, a PR base, audited main, or another commit. Do not create
+a detached worktree or bundle merely to obtain a different control-plane
+version.
+
+Every result artifact records, when applicable:
+
+- Skill name/path and content SHA-256;
+- Runner, profile specification, Rules, and implementation content SHA-256;
+- profile/schema/Runner versions;
+- repository head and clean/dirty state;
+- Task, PR, base/head/effective-diff, audited-main, or merge identities.
+
+Content identity is reproducibility evidence, not a source hierarchy. Final
+Delivery and Review validation bind a clean committed current head. Object SHA
+locks remain mandatory even though control-plane version locks do not.
+
+When a PR changes Skills, Runners, Rules, profiles, or workflow governance, an
+independent Review directly evaluates those changes, tests, permissions, and
+failure behavior. Runner success is supporting evidence, never self-approval.
+
+## PR resolve/create
+
+The deterministic PR resolve/create helper at
+`tools/agent_workflow/pr_resolve.py` is the canonical path for Delivery PR
+creation and recovery. It is a shared library, not a Runner. It enforces:
+
+- exactly one `gh pr list` → exit-code check → non-empty stdout check → JSON
+  parse → exactly zero or one match;
+- zero matches → `gh pr create` with exit-code/stdout/URL checks;
+- one match → reuse;
+- more than one match → fail-closed;
+- exactly one `gh pr view $URL` identity verification;
+- no stderr suppression, no empty-stdout-to-JSON, no retry with modified
+  `--json` fields, no fallback to text-mode queries.
+
+Delivery Skills use this helper as their single PR create/recovery path.
+
+## Semantic self-review
+
+Delivery Skills produce a structured self-review artifact before the
+`delivery-readiness` snapshot. The artifact schema is defined in
+`tools/agent_workflow/self_review.py`. It binds Task, base SHA, head SHA,
+effective-diff SHA-256, and PR identity.
+
+The self-review artifact is stored in `.agents/evidence.local/self-reviews/`
+(Git-ignored, never committed). It records acceptance-criteria mapping,
+changed-file group review, and evidence references — not source copies or
+complete logs. The model fills in semantic content; the helper validates
+structural completeness and evidence constraints.
+
+The self-review is an internal Delivery gate, not an independent review.
+
+## Local artifacts
 
 Tools may write only below the exact Git-ignored roots:
 
@@ -24,112 +106,109 @@ Tools may write only below the exact Git-ignored roots:
 .agents/validation.local/
 ```
 
-Never stage, commit, attach, or treat these files as repository truth. Stored
-metadata and diagnostics must be bounded and must exclude credentials, auth
-headers, cookies, complete environment variables, private keys, complete Issue
-or PR bodies, source, complete diffs, private reasoning, transcripts, unbounded
-command output, and machine-sensitive absolute paths.
+Never stage or commit these files. Stored output must be bounded and must exclude
+credentials, auth headers, cookies, private keys, complete environment dumps,
+private reasoning, transcripts, unbounded source/diffs, and machine-sensitive
+absolute paths.
 
-The active Skill authorizes an operation; `command-execution.md` only selects
-its execution context. Tool failure is not a workflow verdict. A Skill may use
-its safe read-only fallback, but must report the fallback and limitation. Failed
-or incomplete evidence is never `pass`.
+## Evidence contract
 
-## Evidence snapshots
-
-Use the phase operation instead of repeating the legacy mechanical query chain:
+The Evidence Runner supports:
 
 ```text
-delivery-preflight       delivery-readiness
-pr-review-snapshot       pr-review-recheck
-closeout-plan            closeout-final
-feature-audit-snapshot   feature-audit-recheck
+delivery
+delivery-readiness
+review
+pre-merge
+closeout-readonly
+recheck
 ```
 
-Each snapshot must be deterministic, machine-readable, bounded, and include:
+It validates complete argv, repository identity, fixed queries, and fixed
+read-only Git operations. It accepts no arbitrary repository, API path, raw
+`gh`/Git argv, shell string, output path, or cwd.
 
-- repository and subject identity;
-- trusted SHA, runner source SHA/content digest, and applicable expected and
-  observed base/head/merge/main identities;
-- applicable labels, Project state, relationships, branch facts, checks,
-  threads, and direct-child metadata;
-- explicit truncation markers and aggregate operation counts;
-- distinct `pass`, `fail`, and `unknown` gates;
-- distinct handling of plan-limit `403`, absent Required Checks, pending or
-  failed checks, endpoint failure, and unavailable facts;
-- a snapshot ID and stability fingerprint.
+Snapshots contain bounded normalized facts, explicit `pass`/`fail`/`unknown`
+gates, operation counts, truncation state, content identities, snapshot ID, and
+stability fingerprint. Distinguish no Required Checks, plan-limited `403`, real
+permission/auth/network/rate-limit failure, pending/failed checks, and unavailable
+facts.
 
-The Agent still reads the complete current Task/Feature body, PR diff, and
-relevant source, tests, docs, and governance. Snapshot metadata does not replace
-specification review, code review, acceptance mapping, integration review, or
-safety judgment.
+The Agent still reads complete current specifications, diffs, source, tests,
+docs, and governance for semantic work. Snapshot metadata is not semantic
+review.
 
-A snapshot is current only when generated. Rechecks recollect facts and compare
-applicable identity/title, base/head, effective diff, checks, threads, merge,
-`origin/main`, audited main, and direct-child set. Material drift invokes the
-Skill's stop or re-review rule; an old snapshot is never current evidence.
+## Validation contract
 
-## Trusted control plane
-
-A reviewed change must not control its own review. If a PR changes applicable
-agent rules, Skills, this policy, command policy, Evidence, Validation,
-or another shared governance dependency, use locked PR-base versions. Feature
-audits use the locked audited-main versions.
-
-The bootstrap must itself come from the trusted commit or a detached trusted
-worktree. Then use `trusted_runner.py` to extract Evidence/Validation from the
-same commit and record trusted SHA, runner source/content digest, reviewed head
-or audited main, and diff/snapshot digest.
+Reusable profiles:
 
 ```text
-python tools/agent_workflow/trusted_runner.py \
-  --trusted-sha <trusted-sha> --tool evidence -- \
-  pr-review-snapshot ...
+current-ci-equivalent
+targeted
+targeted:tools-tests
+targeted:workflow-tests
+post-merge
 ```
 
-A PR-head bootstrap cannot establish trust in that same head. If control-plane
-isolation cannot be proven, stop without a passing verdict.
+Workflow profiles:
 
-## Validation
+```text
+workflow-delivery --base-sha <base>
+workflow-review --base-sha <base>
+workflow-closeout --base-sha <PR base>
+```
 
-Run `workflow_validation.py run --phase <phase>`. For PR work pass the locked
-base SHA so governance changes are detected from `base...HEAD`. The runner uses
-current workflows, `pyproject.toml`, lock files, repository structure, and Skill
-validator rules.
+Workflow profiles run the current CI-equivalent plan and all repository Skill
+validators. Delivery and Review require a clean committed worktree.
+`workflow-closeout` additionally requires clean local `main == origin/main`.
 
-It must not skip or weaken applicable checks, reuse results across phases or
-SHAs, label a partial set CI-equivalent, or hide a missing required tool.
-Delivery, independent review, closeout, and Feature audit remain separate
-validation observations.
+Success stdout is a compact digest. Full redacted results and bounded failure
+diagnostics remain in the ignored validation directory.
 
-Success output is command ID, exit code, duration, status, and short summary.
-Failure includes bounded diagnostics. Sanitized size-limited logs may be written
-only to the ignored validation directory.
+## Preflight disposition and Recovery boundary
 
-## Skill integration and reports
+Delivery Preflight is a terminal admission gate, not a remediation phase.
+Recovery rules apply only after Invocation Preflight has passed and never
+authorize remediation of a Preflight result. A valid non-pass Preflight
+result (`fail`, `partial`, `unknown`, `blocked`, lifecycle conflict,
+identity conflict, incompatible entry state, or maintainer-decision-required)
+is a final disposition — not a recoverable state.
 
-Normal Skills use Evidence/Validation **instead of** the full legacy mechanical
-chain; they do not run both. Skills retain scope, permissions, trusted-control
-plane, identity/specification gates, phase order, stop conditions, exact writes,
-implementation/semantic review, acceptance mapping, severity/verdict, fallback,
-and report contracts.
+Preflight pass returns `disposition.workflow_may_continue = true` and
+`disposition.write_actions_allowed = true`. Any other disposition forbids
+all write operations, auto-remediation, state modification, and re-invocation
+of the same profile to obtain `pass`.
 
-Compact success reporting is allowed only when required evidence and validation
-pass with no drift, finding, fallback, conflict, or maintainer decision. It still
-includes canonical identity, relevant URLs/branches/SHAs, scope summary,
-validation/checks, lifecycle state, threads, limitations, operations not
-performed, and exact next step. Feature reports additionally include audited
-main, direct-child and acceptance summaries, findings, and one fixed verdict.
+The `worktree_state_compatible` gate evaluates worktree cleanliness per
+entry point. `delivery-start` and `implementation` may accept a dirty
+worktree with Task-owned changes; `final-validation`, `pr-readiness`, and
+`review-remediation` require a clean committed head.
 
-Any abnormal path uses a detailed report. Handoffs never copy complete bodies,
-diffs, successful logs, or prior reports. Delivery handoff locates the review
-object and is not review evidence.
+## Failure expansion
 
-## External Token analysis boundary
+`partial`, `unknown`, `fail`, drift, truncation, schema mismatch, or Runner
+unavailability never becomes `pass` through selective fallback.
 
-Repository workflow Skills do not start, update, validate, or summarize a runtime
-usage run. Token-consumption analysis is an external maintainer activity based on
-Codex rollout logs and Task metadata. Do not add queries, validation, report fields,
-local writes, fallbacks, or verdict branches solely for that analysis. Raw rollout
-logs and generated analysis reports are not repository artifacts, and missing or
-failed external analysis never changes a Skill verdict.
+1. Preserve the original result and identity.
+2. Inspect only the named gate, fact, or failed-command log.
+3. Record the limitation or fallback.
+4. Do not rerun an equivalent complete command chain.
+5. Stop before a dependent write or verdict while the gate is unresolved.
+
+## Capability-limited cleanup
+
+A recognized Required-Checks plan-limit `403` remains
+`required_checks_configuration = unknown` and keeps Evidence `partial`.
+Closeout may compute `eligible-under-capability-limited-policy` only for exact
+Task branch cleanup and only under the complete conditions defined by
+`task-closeout`. It never authorizes Merge, push, Issue/Project/label writes, or
+Review actions.
+
+## Reporting and external analysis
+
+Compact success reporting requires complete evidence, validation pass, stable
+identity, no unresolved finding, no fallback/conflict, and no pending maintainer
+decision. Abnormal paths use a detailed report.
+
+Repository Skills do not measure runtime Token use. Token analysis remains an
+external maintainer activity based on Codex rollout logs and Task metadata.
