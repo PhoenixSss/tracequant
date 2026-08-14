@@ -1,0 +1,34 @@
+%% Title: Native Windows to WSL2 Codex environment migration
+%% Sources: environment-current-windows.md, current-diagnostic.json, capability-matrix.md
+%% Scope: capability architecture only; not Token or performance results
+%% Redaction: public-safe; user names, credentials and proxy port omitted
+flowchart LR
+  subgraph Before[Native Windows baseline]
+    WRepo[NTFS repository]
+    WAlias[WindowsApps Python alias]
+    WUV[WinGet user-private uv]
+    WCred[Host keyring]
+    WSandbox[Codex sandbox]
+    WRepo --> WSandbox
+    WAlias --> WSandbox
+    WUV --> WSandbox
+    WCred --> WSandbox
+    WSandbox --> WFail[Tool visibility and credential failures]
+    WSandbox --> WElev[Frequent elevated or approval path]
+  end
+
+  subgraph After[WSL2 target environment]
+    LRepo[ext4 repository under /home]
+    LPython[/usr/bin/python3]
+    LUV[WSL-native uv 0.12.1]
+    LGH[WSL-local revocable gh login]
+    LSandbox[Codex sandbox]
+    LRepo --> LSandbox
+    LPython --> LSandbox
+    LUV --> LSandbox
+    LGH --> LSandbox
+    LSandbox --> LDirect[Read and /tmp Git direct]
+    LSandbox --> LApproval[Cache, formal Git metadata and GitHub network approval]
+  end
+
+  Before -->|environment migration| After

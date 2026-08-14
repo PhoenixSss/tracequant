@@ -1,0 +1,100 @@
+{
+  "schema_version": "1.0",
+  "task": 84,
+  "evidence_type": "environment-capability-baseline",
+  "status": "observed-with-live-refresh",
+  "source": {
+    "path": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+    "sha256": "e151c535a5d640d7060910dde5a8bf718cb8d8c3efe5f9200c4b7a9fd09e4495",
+    "observed_at": "2026-08-01"
+  },
+  "environment": {
+    "distribution": "Ubuntu 24.04.4 LTS",
+    "distribution_id": "Ubuntu-24.04",
+    "kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "repository_path_contract": "/home/<user>/code/quant-system",
+    "repository_filesystem": "ext4",
+    "repository_under_windows_mount": false,
+    "vscode_remote_wsl": "verified",
+    "codex_in_wsl": "verified"
+  },
+  "tools": {
+    "uv": {
+      "version": "0.12.1",
+      "path_contract": "$HOME/.local/bin/uv"
+    },
+    "git": {
+      "observed_version": "2.43.0",
+      "path": "/usr/bin/git"
+    },
+    "github_cli": {
+      "observed_version": "2.97.0",
+      "path": "$HOME/.local/bin/gh",
+      "authentication": "verified",
+      "credential_boundary": "WSL-local, revocable; credential contents are not recorded"
+    },
+    "codex": {
+      "version": "0.146.0-alpha.9.2",
+      "status": "observed",
+      "sandbox_execpolicy_warning": "PATH alias creation reported read-only filesystem before returning policy decisions"
+    }
+  },
+  "github_capabilities": {
+    "authentication": {
+      "status": "verified",
+      "credential_boundary": "WSL-local, revocable; credential contents are not recorded",
+      "scope_names": [
+        "gist",
+        "project",
+        "read:org",
+        "repo",
+        "workflow"
+      ]
+    },
+    "base_head_oid_metadata": {
+      "status": "observed",
+      "pull_request": 102,
+      "base_ref_oid": "74a75872078221c38dbd132a1d438b0bb05c1870",
+      "head_ref_oid": "3814af3d95ece48ef03c59536dd025f5fb5511fb"
+    },
+    "project_read": {
+      "status": "observed",
+      "task": 84,
+      "project_status": "Review",
+      "scopes": [
+        "project",
+        "read:org",
+        "repo"
+      ]
+    },
+    "required_checks_configuration": {
+      "status": "plan-limited-403-observed",
+      "classification": "server-capability-unavailable",
+      "check_run_fallback_must_remain_auditable": true,
+      "http_status": 403,
+      "message": "Upgrade to GitHub Pro or make this repository public to enable this feature."
+    },
+    "review_threads": {
+      "status": "observed",
+      "unresolved_threads": 0
+    },
+    "check_runs": {
+      "status": "observed",
+      "quality": "SUCCESS"
+    }
+  },
+  "security": {
+    "token_committed": false,
+    "token_value_recorded": false,
+    "complete_credential_recorded": false,
+    "proxy_credential_recorded": false,
+    "scopes_recorded": true,
+    "authorization_header_recorded": false,
+    "cookie_recorded": false
+  },
+  "limitations": [
+    "Required Checks configuration remains unavailable through the GitHub branch protection endpoint because of plan-limited HTTP 403.",
+    "Guardian/session rollout locators were not exposed to this repository run.",
+    "No Token metric is inferred from this environment capability refresh."
+  ]
+}

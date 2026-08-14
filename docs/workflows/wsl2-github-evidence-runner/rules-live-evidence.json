@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0",
+  "task": 84,
+  "evidence_type": "task84-live-execpolicy-matrix",
+  "status": "observed",
+  "observed_at_utc": "2026-08-02T17:16:00Z",
+  "codex_version": "0.146.0-alpha.9.2",
+  "rules_path": ".codex/rules/quant-system-wsl-evidence.rules",
+  "cases": [
+    {
+      "id": "fixed-profiles",
+      "policy_expected": "allow",
+      "policy_observed": "allow",
+      "profiles": [
+        "delivery",
+        "delivery-readiness",
+        "review",
+        "pre-merge",
+        "closeout-readonly",
+        "recheck"
+      ]
+    },
+    {
+      "id": "fixed-profile-arbitrary-tail",
+      "policy_expected": "allow-prefix-boundary",
+      "policy_observed": "allow",
+      "runner_expected": "reject-before-evidence-query",
+      "runner_observed": "exit-2-argparse-unrecognized-argument-before-github-git-query"
+    },
+    {
+      "id": "direct-gh-and-gh-api",
+      "policy_expected": "not-allow",
+      "policy_observed": "prompt"
+    },
+    {
+      "id": "direct-git-read",
+      "policy_expected": "not-allow",
+      "policy_observed": "unmatched"
+    },
+    {
+      "id": "direct-python",
+      "policy_expected": "not-allow",
+      "policy_observed": "unmatched"
+    },
+    {
+      "id": "direct-bash-and-sh",
+      "policy_expected": "not-allow",
+      "policy_observed": "unmatched"
+    },
+    {
+      "id": "direct-git-write",
+      "policy_expected": "prompt-forbidden-or-unmatched",
+      "policy_observed": "prompt"
+    },
+    {
+      "id": "direct-github-write",
+      "policy_expected": "prompt-forbidden-or-unmatched",
+      "policy_observed": "prompt"
+    },
+    {
+      "id": "gh-auth-token",
+      "policy_expected": "forbidden",
+      "policy_observed": "forbidden"
+    }
+  ],
+  "execution_notes": [
+    "Sandboxed codex execpolicy checks emitted a PATH-alias read-only warning before JSON but returned policy decisions.",
+    "No GitHub write command was executed; write cases used execpolicy check only."
+  ],
+  "claim_boundary": {
+    "rules_are_prefix_based": true,
+    "runner_owns_complete_argv_validation": true,
+    "exact_end_of_command_matching_claimed": false
+  }
+}

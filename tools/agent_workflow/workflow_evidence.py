@@ -9,6 +9,7 @@ workflow verdicts remain the responsibility of the governing Skill.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import unicodedata
 from collections.abc import Mapping, Sequence
@@ -70,6 +71,60 @@ query($owner:String!, $name:String!, $number:Int!) {
 }
 """
 
+LIFECYCLE_LABELS: Final = frozenset(
+    {"codex:needs-spec", "codex:ready", "codex:blocked"}
+)
+KNOWN_PROJECT_STATUSES: Final = frozenset(
+    {"Inbox", "Specifying", "Ready", "In Progress", "Review", "Blocked", "Done"}
+)
+DELIVERY_ENTRY_POINTS: Final = (
+    "delivery-start",
+    "implementation",
+    "final-validation",
+    "pr-readiness",
+    "review-remediation",
+)
+DELIVERY_ENTRY_PARAMS: Final = {
+    "delivery-start": frozenset({"task", "expected_main_sha"}),
+    "implementation": frozenset(
+        {"task", "expected_main_sha", "branch", "expected_base_sha"}
+    ),
+    "final-validation": frozenset(
+        {
+            "task",
+            "expected_main_sha",
+            "branch",
+            "expected_base_sha",
+            "expected_head_sha",
+        }
+    ),
+    "pr-readiness": frozenset(
+        {
+            "task",
+            "expected_main_sha",
+            "branch",
+            "expected_base_sha",
+            "expected_head_sha",
+        }
+    ),
+    "review-remediation": frozenset(
+        {"task", "expected_main_sha", "pr", "expected_base_sha", "expected_head_sha"}
+    ),
+}
+DELIVERY_PARAM_SPACE: Final = frozenset(
+    {
+        "task",
+        "expected_main_sha",
+        "branch",
+        "pr",
+        "expected_base_sha",
+        "expected_head_sha",
+    }
+)
+BRANCH_NAME_ALLOWED: Final = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-"
+)
+
 THREADS_QUERY: Final = r"""
 query($owner:String!, $name:String!, $number:Int!) {
   repository(owner:$owner, name:$name) {
@@ -77,6 +132,50 @@ query($owner:String!, $name:String!, $number:Int!) {
       reviewThreads(first:100) {
         nodes { isResolved isOutdated comments(first:1) { totalCount } }
         pageInfo { hasNextPage }
+      }
+    }
+  }
+}
+"""
+
+ISSUE_CLOSURE_QUERY: Final = r"""
+query($owner:String!, $name:String!, $number:Int!) {
+  repository(owner:$owner, name:$name) {
+    issue(number:$number) {
+      number
+      state
+      closedAt
+      closedByPullRequestsReferences(first:20, includeClosedPrs:true) {
+        nodes {
+          number
+          state
+          merged
+          mergedAt
+          url
+          repository { nameWithOwner }
+        }
+        pageInfo { hasNextPage }
+      }
+      timelineItems(last:50, itemTypes:[CLOSED_EVENT, REOPENED_EVENT]) {
+        nodes {
+          __typename
+          ... on ClosedEvent {
+            createdAt
+            closer {
+              __typename
+              ... on PullRequest {
+                number
+                state
+                merged
+                mergedAt
+                url
+                repository { nameWithOwner }
+              }
+            }
+          }
+          ... on ReopenedEvent { createdAt }
+        }
+        pageInfo { hasPreviousPage }
       }
     }
   }
@@ -162,7 +261,7 @@ def _repository_slug(
         return None
     value = read_json_text(result.stdout, field="gh repo view")
     if isinstance(value, dict) and isinstance(value.get("nameWithOwner"), str):
-        return value["nameWithOwner"]
+        return str(value["nameWithOwner"])
     return None
 
 
@@ -170,12 +269,15 @@ def _git_snapshot(
     runner: CommandRunner,
     warnings: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    fetch = runner.run(
-        ["git", "fetch", "--prune", "origin"],
-        command_id="git-fetch-origin",
-    )
-    if fetch.returncode != 0:
-        warnings.append(command_warning(fetch))
+    read_only_local_refs = os.environ.get("WORKFLOW_EVIDENCE_READ_ONLY") == "1"
+    fetch: CommandResult | None = None
+    if not read_only_local_refs:
+        fetch = runner.run(
+            ["git", "fetch", "--prune", "origin"],
+            command_id="git-fetch-origin",
+        )
+        if fetch.returncode != 0:
+            warnings.append(command_warning(fetch))
     branch = _git_value(
         runner,
         ["branch", "--show-current"],
@@ -186,6 +288,12 @@ def _git_snapshot(
         runner,
         ["rev-parse", "HEAD"],
         command_id="git-head",
+        warnings=warnings,
+    )
+    local_main = _git_value(
+        runner,
+        ["rev-parse", "refs/heads/main"],
+        command_id="git-local-main",
         warnings=warnings,
     )
     origin_main = _git_value(
@@ -218,16 +326,32 @@ def _git_snapshot(
         command_id="git-worktrees",
         warnings=warnings,
     )
+    worktree_branches = sorted(
+        line.removeprefix("branch refs/heads/")
+        for line in worktrees
+        if line.startswith("branch refs/heads/")
+    )
     return {
-        "origin_fetch": "pass" if fetch.returncode == 0 else "unknown",
+        "origin_fetch": (
+            "pass"
+            if read_only_local_refs
+            else "pass"
+            if fetch is not None and fetch.returncode == 0
+            else "unknown"
+        ),
+        "origin_refresh": (
+            "skipped-read-only" if read_only_local_refs else "attempted"
+        ),
         "branch": safe_text(branch),
         "head_sha": head if is_sha(head) else None,
+        "local_main_sha": local_main if is_sha(local_main) else None,
         "origin_main_sha": origin_main if is_sha(origin_main) else None,
         "clean": len(status_lines) == 0,
         "status_entries": len(status_lines),
         "staged_files": bounded_list(staged, item_limit=MAX_FILES),
         "changed_files": bounded_list(changed, item_limit=MAX_FILES),
         "worktree_count": sum(1 for line in worktrees if line.startswith("worktree ")),
+        "worktree_branches": bounded_list(worktree_branches, item_limit=MAX_FILES),
     }
 
 
@@ -237,7 +361,10 @@ def _issue_view(
     number: int,
     warnings: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    fields = "number,title,body,comments,state,labels,projectItems,url,closedAt,closedByPullRequestsReferences"
+    fields = (
+        "number,title,body,comments,state,labels,projectItems,url,closedAt,"
+        "closedByPullRequestsReferences"
+    )
     result = runner.run(
         [
             "gh",
@@ -298,8 +425,12 @@ def _issue_view(
                 {
                     "number": pr.get("number"),
                     "state": safe_text(pr.get("state")),
+                    "merged": pr.get("merged")
+                    if isinstance(pr.get("merged"), bool)
+                    else None,
                     "merged_at": safe_text(pr.get("mergedAt")),
                     "url": safe_text(pr.get("url")),
+                    "repository": _repository_name(pr),
                 }
             )
     body = value.get("body") if isinstance(value.get("body"), str) else None
@@ -321,7 +452,7 @@ def _issue_view(
                 }
             )
     content_facts = {"body": body, "comments": comment_facts}
-    return {
+    issue = {
         "number": value.get("number"),
         "title": safe_text(value.get("title")),
         "content_sha256": sha256_json(content_facts),
@@ -334,6 +465,10 @@ def _issue_view(
         "closed_at": safe_text(value.get("closedAt")),
         "closing_pull_requests": bounded_list(pull_refs),
     }
+    issue["issue_closure"] = _issue_closure_snapshot(
+        runner, repository, number, warnings
+    )
+    return issue
 
 
 def _find_project_status(value: Any) -> str | None:
@@ -405,6 +540,170 @@ def _graphql(
         )
         return None
     return value
+
+
+def _repository_name(value: Mapping[str, Any]) -> str | None:
+    repository = value.get("repository")
+    if isinstance(repository, Mapping):
+        return safe_text(repository.get("nameWithOwner"))
+    return None
+
+
+def _normalize_closing_pr(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return {
+        "number": value.get("number"),
+        "state": safe_text(value.get("state")),
+        "merged": value.get("merged")
+        if isinstance(value.get("merged"), bool)
+        else None,
+        "merged_at": safe_text(value.get("mergedAt")),
+        "url": safe_text(value.get("url")),
+        "repository": _repository_name(value),
+    }
+
+
+def _issue_closure_snapshot(
+    runner: CommandRunner,
+    repository: str,
+    number: int,
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    value = _graphql(
+        runner,
+        repository,
+        number,
+        ISSUE_CLOSURE_QUERY,
+        command_id=f"gh-issue-closure-{number}",
+        warnings=warnings,
+    )
+    if not isinstance(value, dict):
+        return {
+            "status": "unknown",
+            "reason": "issue-closure-query-unavailable",
+            "evidence_status": "partial",
+        }
+    data = value.get("data")
+    repo = data.get("repository") if isinstance(data, Mapping) else None
+    issue = repo.get("issue") if isinstance(repo, Mapping) else None
+    if not isinstance(issue, Mapping):
+        return {
+            "status": "unknown",
+            "reason": "issue-closure-metadata-unavailable",
+            "evidence_status": "partial",
+        }
+
+    refs = issue.get("closedByPullRequestsReferences")
+    if isinstance(refs, Mapping):
+        ref_nodes = refs.get("nodes")
+    elif isinstance(refs, list):
+        ref_nodes = refs
+    else:
+        ref_nodes = []
+    ref_items = (
+        [
+            normalized
+            for normalized in (_normalize_closing_pr(item) for item in ref_nodes)
+            if normalized is not None
+        ]
+        if isinstance(ref_nodes, list)
+        else []
+    )
+    ref_page = refs.get("pageInfo") if isinstance(refs, Mapping) else None
+    refs_truncated = (
+        isinstance(ref_page, Mapping) and ref_page.get("hasNextPage") is True
+    )
+
+    timeline = issue.get("timelineItems")
+    timeline_nodes = timeline.get("nodes") if isinstance(timeline, Mapping) else []
+    timeline_page = timeline.get("pageInfo") if isinstance(timeline, Mapping) else None
+    timeline_truncated = (
+        isinstance(timeline_page, Mapping)
+        and timeline_page.get("hasPreviousPage") is True
+    )
+
+    events: list[dict[str, Any]] = []
+    if isinstance(timeline_nodes, list):
+        for item in timeline_nodes:
+            if not isinstance(item, Mapping):
+                continue
+            typename = safe_text(item.get("__typename"))
+            created_at = safe_text(item.get("createdAt"))
+            if typename == "ClosedEvent":
+                closer = item.get("closer")
+                closer_type = (
+                    safe_text(closer.get("__typename"))
+                    if isinstance(closer, Mapping)
+                    else None
+                )
+                event: dict[str, Any] = {
+                    "type": "closed",
+                    "created_at": created_at,
+                    "closer_type": closer_type,
+                }
+                if closer_type == "PullRequest" and isinstance(closer, Mapping):
+                    event["closer"] = _normalize_closing_pr(closer)
+                events.append(event)
+            elif typename == "ReopenedEvent":
+                events.append({"type": "reopened", "created_at": created_at})
+
+    latest_closure: dict[str, Any] | None = None
+    for event in sorted(events, key=lambda item: str(item.get("created_at") or "")):
+        if event.get("type") == "closed":
+            latest_closure = event
+        elif event.get("type") == "reopened":
+            latest_closure = None
+
+    state = safe_text(issue.get("state"))
+    closed_at = safe_text(issue.get("closedAt"))
+    evidence_status = "complete"
+    reason = "closed-by-pr"
+    status = "closed-by-pr"
+    if refs_truncated:
+        evidence_status = "partial"
+        reason = "closing-pr-references-truncated"
+        status = "unknown"
+    elif timeline_truncated:
+        evidence_status = "partial"
+        reason = "timeline-truncated"
+        status = "unknown"
+    elif state != "CLOSED":
+        reason = "issue-not-closed"
+        status = "not-closed"
+    elif latest_closure is None:
+        evidence_status = "partial"
+        reason = "latest-effective-close-event-unavailable"
+        status = "unknown"
+    elif latest_closure.get("closer_type") != "PullRequest":
+        reason = "latest-closer-is-not-pull-request"
+        status = "not-pr-closer"
+    elif not isinstance(latest_closure.get("closer"), Mapping):
+        evidence_status = "partial"
+        reason = "latest-closer-pr-metadata-unavailable"
+        status = "unknown"
+
+    closer = (
+        latest_closure.get("closer") if isinstance(latest_closure, Mapping) else None
+    )
+    return {
+        "status": status,
+        "reason": reason,
+        "state": state,
+        "closed_at": closed_at,
+        "latest_effective_event": latest_closure,
+        "closer_type": latest_closure.get("closer_type")
+        if isinstance(latest_closure, Mapping)
+        else None,
+        "closer_repository": closer.get("repository")
+        if isinstance(closer, Mapping)
+        else None,
+        "closer_number": closer.get("number") if isinstance(closer, Mapping) else None,
+        "closed_by_pull_requests": bounded_list(ref_items),
+        "evidence_status": evidence_status,
+        "evidence_complete": evidence_status == "complete",
+        "conflict": False,
+    }
 
 
 def _relationship_snapshot(
@@ -528,7 +827,7 @@ def _pr_view(
     fields = (
         "number,title,body,state,isDraft,url,baseRefName,baseRefOid,headRefName,headRefOid,"
         "mergeCommit,mergedAt,mergeable,reviewDecision,files,commits,statusCheckRollup,"
-        "reviews,closingIssuesReferences"
+        "reviews,closingIssuesReferences,headRepository"
     )
     result = runner.run(
         ["gh", "pr", "view", str(number), "--repo", repository, "--json", fields],
@@ -550,11 +849,9 @@ def _pr_view(
     files: list[str] = []
     raw_files = value.get("files", [])
     if isinstance(raw_files, list):
-        files = [
-            item.get("path")
-            for item in raw_files
-            if isinstance(item, dict) and isinstance(item.get("path"), str)
-        ]
+        for item in raw_files:
+            if isinstance(item, dict) and isinstance(item.get("path"), str):
+                files.append(str(item["path"]))
     commits: list[dict[str, Any]] = []
     raw_commits = value.get("commits", [])
     if isinstance(raw_commits, list):
@@ -593,6 +890,7 @@ def _pr_view(
             )
     checks = _normalize_checks(value.get("statusCheckRollup"))
     merge_commit = value.get("mergeCommit")
+    head_repo = value.get("headRepository")
     return {
         "number": value.get("number"),
         "title": safe_text(value.get("title")),
@@ -624,6 +922,9 @@ def _pr_view(
         "closing_issues": bounded_list(sorted(closing_issues)),
         "checks": checks,
         "reviews": bounded_list(reviews),
+        "head_repository": safe_text(head_repo.get("nameWithOwner"))
+        if isinstance(head_repo, dict)
+        else None,
     }
 
 
@@ -722,12 +1023,21 @@ def _required_checks(
     )
     if result.returncode != 0:
         combined = f"{result.stderr}\n{result.stdout}".casefold()
-        if "403" in combined:
-            return {"configuration": "plan-limited-403", "contexts": bounded_list([])}
+        failure = _classify_required_checks_failure(result)
+        if failure["category"] == "plan-limit":
+            return {
+                "configuration": "plan-limited-403",
+                "failure": failure,
+                "contexts": bounded_list([]),
+            }
         if "404" in combined:
             return {"configuration": "not-configured", "contexts": bounded_list([])}
         warnings.append(command_warning(result))
-        return {"configuration": "unknown", "contexts": bounded_list([])}
+        return {
+            "configuration": "unknown",
+            "failure": failure,
+            "contexts": bounded_list([]),
+        }
     value = read_json_text(result.stdout, field="required checks")
     contexts: list[str] = []
     if isinstance(value, dict):
@@ -742,6 +1052,529 @@ def _required_checks(
     return {
         "configuration": "available" if contexts else "configured-empty",
         "contexts": bounded_list(sorted(set(contexts))),
+    }
+
+
+def _remote_branch_tip(value: str | None) -> str | None:
+    if not value:
+        return None
+    for line in value.splitlines():
+        parts = line.split("\t", 1)
+        if len(parts) == 2 and is_sha(parts[0]):
+            return parts[0]
+    return None
+
+
+def _gate_pass(gates: Mapping[str, Any], name: str) -> bool:
+    value = gates.get(name)
+    return isinstance(value, dict) and value.get("status") == "pass"
+
+
+def _checks_cleanup_status(pr: Mapping[str, Any] | None) -> tuple[bool, str]:
+    if not isinstance(pr, Mapping):
+        return False, "PR metadata unavailable"
+    checks = pr.get("checks")
+    if not isinstance(checks, Mapping):
+        return False, "check run metadata unavailable"
+    if checks.get("count") == 0:
+        return False, "no applicable check runs observed"
+    if checks.get("all_success") is not True:
+        return False, "not all observed check runs reached a successful terminal state"
+    items = checks.get("items")
+    if not isinstance(items, Mapping) or items.get("count", 0) <= 0:
+        return False, "check run item details unavailable"
+    raw_items = items.get("items")
+    check_items = raw_items if isinstance(raw_items, list) else []
+    has_quality_gate = any(
+        isinstance(item, Mapping) and str(item.get("name", "")).casefold() == "quality"
+        for item in check_items
+    )
+    if not has_quality_gate:
+        return False, "expected quality check run was not observed"
+    return True, "all observed check runs successful"
+
+
+def _lifecycle_labels_gate(labels: set[str], *, required_label: str) -> dict[str, Any]:
+    lifecycle = labels & LIFECYCLE_LABELS
+    if lifecycle == {required_label}:
+        return _gate("pass", f"lifecycle labels: {sorted(lifecycle)}")
+    detail = f"observed lifecycle labels: {sorted(lifecycle) or 'none'}"
+    return _gate("fail", detail)
+
+
+def _project_status_gate(
+    status: str | None, *, entry_point: str | None = None
+) -> dict[str, Any]:
+    if status is None:
+        return _gate("unknown", "Project Status unavailable")
+    if status not in KNOWN_PROJECT_STATUSES:
+        return _gate("fail", f"unknown Project Status: {status!r}")
+    if entry_point is None:
+        return _gate("pass", f"Project Status: {status}")
+    compatible = {
+        "delivery-start": {"Ready", "In Progress"},
+        "implementation": {"Ready", "In Progress"},
+        "final-validation": {"Ready", "In Progress"},
+        "pr-readiness": {"Ready", "In Progress"},
+        "review-remediation": {"Review"},
+    }.get(entry_point, set())
+    if status in compatible:
+        return _gate("pass", f"Project Status {status} compatible with {entry_point}")
+    return _gate(
+        "fail",
+        f"Project Status {status} not compatible with entry point {entry_point}",
+    )
+
+
+def _parent_state_gate(relationships: Mapping[str, Any]) -> dict[str, Any]:
+    if relationships.get("available") is not True:
+        return _gate("unknown", "Relationship facts unavailable")
+    parent = relationships.get("parent")
+    if not isinstance(parent, dict):
+        return _gate("pass", "no parent")
+    parent_state = parent.get("state")
+    if not isinstance(parent_state, str):
+        return _gate("unknown", "parent state unavailable")
+    if parent_state.upper() == "OPEN":
+        return _gate(
+            "pass",
+            f"parent #{parent.get('number')} is OPEN",
+        )
+    if parent_state.upper() == "CLOSED":
+        return _gate(
+            "fail",
+            f"parent #{parent.get('number')} is CLOSED",
+        )
+    return _gate("unknown", f"parent state: {parent_state}")
+
+
+def _validate_delivery_entry_args(args: argparse.Namespace) -> None:
+    entry_point = args.entry_point
+    allowed = DELIVERY_ENTRY_PARAMS[entry_point]
+    supplied = {
+        name for name in DELIVERY_PARAM_SPACE if getattr(args, name, None) is not None
+    }
+    missing = sorted(allowed - supplied)
+    extra = sorted(supplied - allowed)
+    if missing or extra:
+        raise WorkflowToolError(
+            f"delivery entry-point {entry_point} parameter contract violation: "
+            f"missing={missing or 'none'} extra={extra or 'none'}"
+        )
+    if args.branch is not None:
+        value = str(args.branch)
+        if (
+            not value
+            or len(value) > 255
+            or value[0]
+            not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+            or not all(c in BRANCH_NAME_ALLOWED for c in value)
+            or ".." in value
+            or "@{" in value
+            or value.endswith(".")
+            or value.endswith("/")
+            or value.endswith(".lock")
+        ):
+            raise WorkflowToolError(f"invalid branch name: {value!r}")
+
+
+def _entry_point_gates(
+    args: argparse.Namespace,
+    runner: CommandRunner,
+    repository: str | None,
+    observed: Mapping[str, Any],
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    gates: dict[str, Any] = {}
+    entry_point = args.entry_point
+    git = observed.get("git")
+    git = git if isinstance(git, dict) else {}
+
+    if entry_point in {"implementation", "final-validation", "pr-readiness"}:
+        branch = args.branch
+        branch_exists = runner.run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+            command_id="git-branch-exists",
+        )
+        if branch_exists.returncode == 0:
+            gates["branch_exists"] = _gate("pass")
+        elif branch_exists.returncode == 1:
+            gates["branch_exists"] = _gate("fail", f"branch {branch!r} does not exist")
+        else:
+            gates["branch_exists"] = _gate("unknown")
+
+        if args.expected_base_sha and repository:
+            merge_base = runner.run(
+                [
+                    "git",
+                    "merge-base",
+                    f"refs/heads/{branch}",
+                    "refs/remotes/origin/main",
+                ],
+                command_id="git-branch-base",
+            )
+            if merge_base.returncode == 0:
+                actual_base = merge_base.stdout.strip()
+                if is_sha(actual_base) and actual_base == args.expected_base_sha:
+                    gates["branch_base"] = _gate("pass")
+                else:
+                    gates["branch_base"] = _gate(
+                        "fail",
+                        f"expected {args.expected_base_sha}, observed {actual_base}",
+                    )
+            elif merge_base.returncode == 1:
+                gates["branch_base"] = _gate(
+                    "fail", "no common ancestor with origin/main"
+                )
+            else:
+                warnings.append(command_warning(merge_base))
+                gates["branch_base"] = _gate("unknown")
+
+    if entry_point in {"final-validation", "pr-readiness"}:
+        branch = args.branch
+        head_result = runner.run(
+            ["git", "rev-parse", f"refs/heads/{branch}"],
+            command_id="git-branch-head",
+        )
+        if head_result.returncode == 0:
+            actual_head = head_result.stdout.strip()
+            if is_sha(actual_head) and actual_head == args.expected_head_sha:
+                gates["branch_head"] = _gate("pass")
+            else:
+                gates["branch_head"] = _gate(
+                    "fail",
+                    f"expected {args.expected_head_sha}, observed {actual_head or 'none'}",
+                )
+        else:
+            warnings.append(command_warning(head_result))
+            gates["branch_head"] = _gate("unknown")
+
+    if entry_point == "pr-readiness":
+        branch = args.branch
+        remote_result = runner.run(
+            ["git", "ls-remote", "--heads", "origin", str(branch)],
+            command_id="git-remote-branch-head",
+        )
+        if remote_result.returncode == 0:
+            remote_tip = _remote_branch_tip(remote_result.stdout)
+            if remote_tip == args.expected_head_sha:
+                gates["remote_head"] = _gate("pass")
+            elif remote_tip is None:
+                gates["remote_head"] = _gate("fail", "branch not found on remote")
+            else:
+                gates["remote_head"] = _gate(
+                    "fail",
+                    f"expected {args.expected_head_sha}, observed {remote_tip}",
+                )
+        else:
+            warnings.append(command_warning(remote_result))
+            gates["remote_head"] = _gate("unknown")
+
+        if repository and isinstance(branch, str):
+            pr_list = runner.run(
+                [
+                    "gh",
+                    "pr",
+                    "list",
+                    "--repo",
+                    repository,
+                    "--head",
+                    branch,
+                    "--state",
+                    "all",
+                    "--limit",
+                    "100",
+                    "--json",
+                    "number,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,closingIssuesReferences",
+                ],
+                command_id="gh-pr-list-branch",
+            )
+            if pr_list.returncode != 0:
+                warnings.append(command_warning(pr_list))
+                gates["pr_identity"] = _gate("unknown")
+            else:
+                prs = read_json_text(pr_list.stdout, field="pr-list-branch")
+                if isinstance(prs, list):
+                    if len(prs) == 0:
+                        gates["pr_identity"] = _gate(
+                            "pass", "no PR for branch; PR creation authorized"
+                        )
+                    elif len(prs) == 1:
+                        pr_item = prs[0]
+                        if not isinstance(pr_item, dict):
+                            gates["pr_identity"] = _gate("unknown")
+                        else:
+                            issues = []
+                            raw_closing = pr_item.get("closingIssuesReferences", [])
+                            if isinstance(raw_closing, list):
+                                issues = [
+                                    item["number"]
+                                    for item in raw_closing
+                                    if isinstance(item, dict)
+                                    and isinstance(item.get("number"), int)
+                                ]
+                            state_ok = str(pr_item.get("state", "")).upper() == "OPEN"
+                            head_ok = (
+                                pr_item.get("headRefOid") == args.expected_head_sha
+                            )
+                            base_ok = (
+                                pr_item.get("baseRefOid") == args.expected_base_sha
+                            )
+                            closing_ok = issues == [args.task]
+                            if state_ok and head_ok and base_ok and closing_ok:
+                                gates["pr_identity"] = _gate("pass")
+                            else:
+                                failures = []
+                                if not state_ok:
+                                    failures.append(f"state={pr_item.get('state')}")
+                                if not head_ok:
+                                    failures.append(f"head={pr_item.get('headRefOid')}")
+                                if not base_ok:
+                                    failures.append(f"base={pr_item.get('baseRefOid')}")
+                                if not closing_ok:
+                                    failures.append(f"closing={issues}")
+                                gates["pr_identity"] = _gate(
+                                    "fail", "; ".join(failures)
+                                )
+                    else:
+                        gates["pr_identity"] = _gate(
+                            "fail",
+                            f"multiple PRs for branch: {[p.get('number') for p in prs if isinstance(p, dict)]}",
+                        )
+                else:
+                    gates["pr_identity"] = _gate("unknown")
+
+    if entry_point == "review-remediation":
+        if repository and args.pr is not None:
+            pr = _pr_view(runner, repository, args.pr, warnings)
+            observed_copy = dict(observed)
+            observed_copy["pr"] = pr
+            if pr is None:
+                gates["pr_available"] = _gate("unknown", "PR metadata unavailable")
+            else:
+                gates["pr_available"] = _gate("pass")
+                state = str(pr.get("state", "")).upper()
+                gates["pr_state"] = _gate("pass" if state == "OPEN" else "fail", state)
+                gates["not_draft"] = _gate(
+                    "pass" if pr.get("is_draft") is False else "fail"
+                )
+                gates["pr_base_sha"] = _sha_gate(
+                    pr.get("base_sha"), args.expected_base_sha, "PR base SHA"
+                )
+                gates["pr_head_sha"] = _sha_gate(
+                    pr.get("head_sha"), args.expected_head_sha, "PR head SHA"
+                )
+                gates["closing_linkage"] = _closing_linkage_gate(
+                    pr.get("closing_issues"), task_number=args.task
+                )
+                reviews = pr.get("reviews", {})
+                review_items = reviews.get("items") if isinstance(reviews, dict) else []
+                review_items = review_items if isinstance(review_items, list) else []
+                if not review_items:
+                    gates["review_conclusion"] = _gate("fail", "no reviews submitted")
+                else:
+                    gates["review_conclusion"] = _gate(
+                        "pass",
+                        f"{len(review_items)} review(s) submitted",
+                    )
+                head_repo = pr.get("head_repository")
+                if head_repo == repository:
+                    gates["head_fixable"] = _gate("pass")
+                elif head_repo is None:
+                    gates["head_fixable"] = _gate("unknown")
+                else:
+                    gates["head_fixable"] = _gate(
+                        "fail", f"head from fork: {head_repo}"
+                    )
+
+    return gates
+
+
+def _closeout_cleanup_eligibility(
+    *,
+    repository: str | None,
+    observed: Mapping[str, Any],
+    gates: Mapping[str, Any],
+    branch: str | None,
+    remote_tip: str | None,
+    local_tip: str | None,
+    tree_equal: bool | None,
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    pr = observed.get("pr")
+    issue = observed.get("issue")
+    git = observed.get("git")
+    required = observed.get("required_checks")
+    if "snapshot_stability" not in gates:
+        reasons.append("final evidence recheck stability is not proven")
+    if not repository:
+        reasons.append("repository identity unavailable")
+    if not isinstance(pr, Mapping):
+        reasons.append("PR metadata unavailable")
+    if not isinstance(issue, Mapping):
+        reasons.append("Issue metadata unavailable")
+    if not isinstance(git, Mapping):
+        reasons.append("Git metadata unavailable")
+    if (
+        not isinstance(required, Mapping)
+        or required.get("configuration") != "plan-limited-403"
+    ):
+        reasons.append(
+            "Required Checks failure is not classified as GitHub plan-limit 403"
+        )
+    elif (
+        not isinstance(required.get("failure"), Mapping)
+        or required["failure"].get("reason") != "github-plan-limit-403"
+    ):
+        reasons.append("plan-limit 403 classification detail is unavailable")
+    for name in (
+        "pr_state",
+        "closing_linkage",
+        "issue_closure",
+        "pull_request_merge",
+        "head_sha",
+        "merge_sha",
+        "main_contains_merge",
+        "local_main_synced",
+        "project_done",
+        "final_codex_label",
+        "check_runs",
+        "unresolved_threads",
+        "snapshot_stability",
+    ):
+        if name in gates and not _gate_pass(gates, name):
+            reasons.append(f"{name} gate is not pass")
+    checks_ok, checks_detail = _checks_cleanup_status(
+        pr if isinstance(pr, Mapping) else None
+    )
+    if not checks_ok:
+        reasons.append(checks_detail)
+    if isinstance(git, Mapping):
+        merge_sha = pr.get("merge_commit_sha") if isinstance(pr, Mapping) else None
+        if git.get("branch") != "main":
+            reasons.append("current branch is not main")
+        if git.get("clean") is not True:
+            reasons.append("working tree is not clean")
+        if not (
+            isinstance(merge_sha, str)
+            and git.get("local_main_sha") == merge_sha
+            and git.get("origin_main_sha") == merge_sha
+        ):
+            reasons.append("local main, origin/main, and merge SHA are not identical")
+        branches = git.get("worktree_branches")
+        raw_branch_items = (
+            branches.get("items") if isinstance(branches, Mapping) else []
+        )
+        branch_items = raw_branch_items if isinstance(raw_branch_items, list) else []
+        if isinstance(branch, str) and branch in branch_items:
+            reasons.append("target branch is occupied by a worktree")
+    if isinstance(issue, Mapping) and isinstance(pr, Mapping):
+        closure_gate = _issue_closure_gate(issue, pr, repository=repository)
+        if closure_gate.get("status") == "unknown":
+            reasons.append(
+                f"issue_closure_linkage unknown: {closure_gate.get('detail')}"
+            )
+        elif closure_gate.get("status") == "fail":
+            reasons.append(
+                f"issue_closure_linkage blocked: {closure_gate.get('detail')}"
+            )
+        merge_gate = _pull_request_merge_gate(pr)
+        if merge_gate.get("status") == "unknown":
+            reasons.append(f"pull_request_merge unknown: {merge_gate.get('detail')}")
+        elif merge_gate.get("status") == "fail":
+            reasons.append(f"pull_request_merge blocked: {merge_gate.get('detail')}")
+    expected_head = pr.get("head_sha") if isinstance(pr, Mapping) else None
+    if not isinstance(branch, str) or not branch:
+        reasons.append("exact PR head branch unavailable")
+    if remote_tip != expected_head:
+        reasons.append("remote branch tip does not match reviewed PR head")
+    if local_tip != expected_head:
+        reasons.append("local branch tip does not match reviewed PR head")
+    if tree_equal is not True:
+        reasons.append("PR head tree does not match merge tree")
+    status = "eligible-under-capability-limited-policy" if not reasons else "blocked"
+    return {
+        "status": status,
+        "limitation_preserved": True,
+        "allowed_scope": "exact-task-branch-cleanup-only",
+        "required_checks_configuration": {
+            "status": "unknown",
+            "reason": "github-plan-limit-403",
+        },
+        "reasons": bounded_list(reasons),
+    }
+
+
+def _classify_required_checks_failure(result: CommandResult) -> dict[str, Any]:
+    combined = f"{result.stderr}\n{result.stdout}".casefold()
+    category = "unknown"
+    reason = "required-checks-query-failed"
+    http_status: int | None = None
+    if (
+        " 401" in combined
+        or "http 401" in combined
+        or "bad credentials" in combined
+        or "requires authentication" in combined
+    ):
+        category = "authentication"
+        reason = "github-authentication-failure"
+        http_status = 401
+    elif " 403" in combined or "http 403" in combined or "403" in combined:
+        http_status = 403
+        if (
+            "plan" in combined
+            or "upgrade" in combined
+            or "requires github pro" in combined
+            or "requires github team" in combined
+            or "private repositories require" in combined
+            or (
+                "branch protection" in combined
+                and (
+                    "private repositories" in combined
+                    or "not available" in combined
+                    or "not included" in combined
+                )
+            )
+        ):
+            category = "plan-limit"
+            reason = "github-plan-limit-403"
+        elif "rate limit" in combined or "secondary rate" in combined:
+            category = "rate-limit"
+            reason = "github-rate-limit-403"
+        elif (
+            "resource not accessible by integration" in combined
+            or "scope" in combined
+            or "sso" in combined
+        ):
+            category = "scope-or-permission"
+            reason = "github-scope-or-sso-403"
+        else:
+            category = "permission"
+            reason = "github-permission-403"
+    elif " 429" in combined or "http 429" in combined or "rate limit" in combined:
+        category = "rate-limit"
+        reason = "github-rate-limit"
+        http_status = 429
+    elif (
+        "could not resolve host" in combined
+        or "connection refused" in combined
+        or "operation timed out" in combined
+        or "network" in combined
+        or "proxyconnect" in combined
+    ):
+        category = "network"
+        reason = "network-failure"
+    elif "parse" in combined or "schema" in combined or "json" in combined:
+        category = "schema-or-parse"
+        reason = "github-schema-or-parse-failure"
+    elif " 5" in combined or "http 5" in combined:
+        category = "service"
+        reason = "github-service-failure"
+    return {
+        "category": category,
+        "reason": reason,
+        "http_status": http_status,
+        "command_id": result.command_id,
     }
 
 
@@ -818,33 +1651,22 @@ def _runner_source(
 ) -> dict[str, Any]:
     script = Path(__file__).resolve()
     digest = sha256_bytes(script.read_bytes())
-    trusted_source = __import__("os").environ.get("WORKFLOW_TRUSTED_RUNNER_SHA")
-    trusted_digest = __import__("os").environ.get(
-        "WORKFLOW_TRUSTED_TOOL_CONTENT_SHA256"
+    commit = _git_value(
+        runner,
+        [
+            "log",
+            "-1",
+            "--format=%H",
+            "--",
+            "tools/agent_workflow/workflow_evidence.py",
+        ],
+        command_id="git-runner-source-sha",
+        warnings=warnings,
     )
-    commit = None
-    if not is_sha(trusted_source):
-        commit = _git_value(
-            runner,
-            [
-                "log",
-                "-1",
-                "--format=%H",
-                "--",
-                "tools/agent_workflow/workflow_evidence.py",
-            ],
-            command_id="git-runner-source-sha",
-            warnings=warnings,
-        )
     return {
         "path": "tools/agent_workflow/workflow_evidence.py",
-        "source_sha": trusted_source
-        if is_sha(trusted_source)
-        else commit
-        if is_sha(commit)
-        else None,
-        "content_sha256": trusted_digest if isinstance(trusted_digest, str) else digest,
-        "trusted_bootstrap": is_sha(trusted_source),
+        "source_sha": commit if is_sha(commit) else None,
+        "content_sha256": digest,
     }
 
 
@@ -1000,6 +1822,73 @@ def _closing_linkage_gate(closing_issues: Any, *, task_number: int) -> dict[str,
     return _gate("pass" if exact else "fail", detail)
 
 
+def _pull_request_merge_gate(pr: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(pr, Mapping):
+        return _gate("unknown", "PR metadata unavailable")
+    state = str(pr.get("state", "")).upper()
+    if state != "MERGED":
+        return _gate("fail", f"PR state is {state or 'unknown'}")
+    if not isinstance(pr.get("merged_at"), str):
+        return _gate("unknown", "PR mergedAt unavailable")
+    if not isinstance(pr.get("merge_commit_sha"), str):
+        return _gate("unknown", "PR merge commit unavailable")
+    return _gate("pass")
+
+
+def _issue_closure_gate(
+    issue: Mapping[str, Any] | None,
+    pr: Mapping[str, Any] | None,
+    *,
+    repository: str | None,
+) -> dict[str, Any]:
+    if not isinstance(issue, Mapping):
+        return _gate("unknown", "Issue metadata unavailable")
+    if not isinstance(pr, Mapping):
+        return _gate("unknown", "PR metadata unavailable")
+    closure = issue.get("issue_closure")
+    if not isinstance(closure, Mapping):
+        return _gate("unknown", "issue closure evidence unavailable")
+    if closure.get("evidence_status") != "complete":
+        return _gate("unknown", str(closure.get("reason") or "partial evidence"))
+    if str(issue.get("state", "")).upper() != "CLOSED":
+        return _gate("fail", "issue-not-closed")
+    if closure.get("status") != "closed-by-pr":
+        return _gate("fail", str(closure.get("reason") or "not-closed-by-pr"))
+    if closure.get("closer_repository") != repository:
+        return _gate("fail", "closer-repository-mismatch")
+    if closure.get("closer_number") != pr.get("number"):
+        return _gate("fail", "closer-pr-number-mismatch")
+
+    refs = closure.get("closed_by_pull_requests")
+    ref_items = refs.get("items") if isinstance(refs, Mapping) else []
+    matching_refs = (
+        [
+            item
+            for item in ref_items
+            if isinstance(item, Mapping) and item.get("number") == pr.get("number")
+        ]
+        if isinstance(ref_items, list)
+        else []
+    )
+    if not matching_refs:
+        return _gate("fail", "closed-by-pr-reference-missing")
+    for item in matching_refs:
+        if (
+            item.get("repository") == repository
+            and str(item.get("state", "")).upper() == "MERGED"
+            and item.get("merged") is True
+            and isinstance(item.get("merged_at"), str)
+        ):
+            return _gate("pass")
+        if (
+            item.get("state") is None
+            or item.get("merged") is None
+            or item.get("merged_at") is None
+        ):
+            return _gate("unknown", "incomplete-closing-pr-metadata")
+    return _gate("fail", "closed-by-pr-reference-not-merged")
+
+
 def _pr_gates(
     pr: Mapping[str, Any] | None,
     threads: Mapping[str, Any],
@@ -1060,7 +1949,7 @@ def _base_snapshot(
     subject: Mapping[str, Any],
     repository: str | None,
     observed: Mapping[str, Any],
-    trusted: Mapping[str, Any],
+    execution_context: Mapping[str, Any],
     gates: Mapping[str, Any],
     warnings: Sequence[Mapping[str, Any]],
     limitations: Sequence[str],
@@ -1073,7 +1962,7 @@ def _base_snapshot(
         "operation": operation,
         "subject": dict(subject),
         "repository": repository,
-        "trusted_control": dict(trusted),
+        "execution_context": dict(execution_context),
         "observed": dict(observed),
         "gates": dict(sorted(gates.items())),
         "warnings": warning_items,
@@ -1174,11 +2063,210 @@ def _collect_task_pr(
     return observed, gates
 
 
+def _worktree_state_compatible_gate(
+    git: Mapping[str, Any], *, entry_point: str
+) -> dict[str, Any]:
+    """Gate worktree cleanliness per entry point.
+
+    delivery-start and implementation may accept a dirty worktree when the
+    changes are plausibly owned by the current Task.  final-validation,
+    pr-readiness, and review-remediation require a clean committed head.
+    """
+    clean = bool(git.get("clean"))
+    branch = git.get("branch")
+    staged = git.get("staged_files", {})
+    staged_items = staged.get("items") if isinstance(staged, dict) else []
+    changed = git.get("changed_files", {})
+    changed_items = changed.get("items") if isinstance(changed, dict) else []
+    status_entries = git.get("status_entries")
+
+    dirty_allowed = entry_point in {"delivery-start", "implementation"}
+    blocked: list[dict[str, Any]] = []
+
+    if clean:
+        return {
+            "status": "pass",
+            "observed_clean": True,
+            "detail": f"worktree clean; entry_point={entry_point}",
+        }
+
+    if not dirty_allowed:
+        blocked.append(
+            {
+                "gate": "worktree_state_compatible",
+                "reason": f"entry-point-{entry_point}-requires-clean-committed-head",
+                "detail": (
+                    f"entry_point={entry_point} requires a clean committed head; "
+                    f"observed_clean=False, status_entries={status_entries}"
+                ),
+            }
+        )
+        return {
+            "status": "fail",
+            "observed_clean": False,
+            "dirty_allowed": False,
+            "worktree_disposition": "stop",
+            "detail": blocked[0]["detail"],
+            "blocked": blocked,
+        }
+
+    # dirty but allowed — record full observations
+    staged_list = staged_items if isinstance(staged_items, list) else []
+    changed_list = changed_items if isinstance(changed_items, list) else []
+
+    gate: dict[str, Any] = {
+        "status": "pass",
+        "observed_clean": False,
+        "dirty_allowed": True,
+        "worktree_disposition": "continue-through-implementation",
+        "branch": branch,
+        "staged_files": staged_items,
+        "changed_files": changed_items,
+        "status_entries": status_entries,
+        "detail": (
+            f"dirty worktree allowed for entry_point={entry_point}; "
+            f"staged={len(staged_list)}, changed={len(changed_list)}, "
+            f"status_entries={status_entries}"
+        ),
+    }
+    # flag obviously untracked files for maintainer awareness
+    untracked: list[str] = []
+    status_lines = git.get("status") if isinstance(git, dict) else None
+    if isinstance(status_lines, str):
+        for line in status_lines.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("??"):
+                untracked.append(stripped.removeprefix("??").strip())
+    if untracked:
+        gate["untracked_observed"] = bounded_list(untracked)
+    return gate
+
+
+def _compute_preflight_disposition(
+    gates: Mapping[str, Any], *, entry_point: str
+) -> dict[str, Any]:
+    """Derive a terminal admission disposition from Preflight gates.
+
+    Only pass allows the workflow to proceed to writes.  Any other effective
+    result is a stop disposition that forbids auto-remediation.
+    """
+    failed_gates: list[dict[str, Any]] = []
+    unknown_gates: list[str] = []
+    for name, value in gates.items():
+        if not isinstance(value, dict):
+            continue
+        status = value.get("status")
+        if status == "fail":
+            failed_gates.append(
+                {"gate": name, "reason": value.get("detail", "no detail")}
+            )
+        elif status == "unknown":
+            unknown_gates.append(name)
+
+    # worktree gate may carry its own blocked list
+    worktree_gate = gates.get("worktree_state_compatible")
+    if isinstance(worktree_gate, dict):
+        wt_blocked = worktree_gate.get("blocked")
+        if isinstance(wt_blocked, list):
+            failed_gates.extend(wt_blocked)
+
+    # lifecycle conflict is a hard stop
+    lifecycle = gates.get("lifecycle_labels_exclusive")
+    if isinstance(lifecycle, dict) and lifecycle.get("status") == "fail":
+        failed_gates.append(
+            {
+                "gate": "lifecycle_consistency",
+                "reason": lifecycle.get("detail", "lifecycle-label-conflict"),
+            }
+        )
+
+    # identity conflict is a hard stop
+    for identity_gate in (
+        "origin_main",
+        "branch_base",
+        "branch_head",
+        "pr_identity",
+        "pr_base_sha",
+        "pr_head_sha",
+        "remote_head",
+    ):
+        gate_value = gates.get(identity_gate)
+        if isinstance(gate_value, dict) and gate_value.get("status") == "fail":
+            failed_gates.append(
+                {
+                    "gate": f"identity:{identity_gate}",
+                    "reason": gate_value.get("detail", "identity-mismatch"),
+                }
+            )
+
+    has_fail = bool(failed_gates)
+    has_critical_unknown = bool(unknown_gates)
+    pass_gate_count = sum(
+        1 for v in gates.values() if isinstance(v, dict) and v.get("status") == "pass"
+    )
+    fail_gate_count = sum(
+        1 for v in gates.values() if isinstance(v, dict) and v.get("status") == "fail"
+    )
+    unknown_gate_count = len(unknown_gates)
+
+    if has_fail:
+        return {
+            "status": "fail",
+            "disposition": "stop",
+            "workflow_may_continue": False,
+            "write_actions_allowed": False,
+            "auto_remediation_allowed": False,
+            "maintainer_action_required": True,
+            "failed_gates": failed_gates,
+            "gate_counts": {
+                "pass": pass_gate_count,
+                "fail": fail_gate_count,
+                "unknown": unknown_gate_count,
+            },
+        }
+
+    if has_critical_unknown:
+        return {
+            "status": "partial",
+            "disposition": "stop",
+            "workflow_may_continue": False,
+            "write_actions_allowed": False,
+            "auto_remediation_allowed": False,
+            "maintainer_action_required": True,
+            "failed_gates": [
+                {"gate": name, "reason": "unknown-critical-gate"}
+                for name in unknown_gates
+            ],
+            "gate_counts": {
+                "pass": pass_gate_count,
+                "fail": fail_gate_count,
+                "unknown": unknown_gate_count,
+            },
+        }
+
+    return {
+        "status": "pass",
+        "disposition": "proceed",
+        "workflow_may_continue": True,
+        "write_actions_allowed": True,
+        "auto_remediation_allowed": False,
+        "maintainer_action_required": False,
+        "failed_gates": [],
+        "gate_counts": {
+            "pass": pass_gate_count,
+            "fail": 0,
+            "unknown": 0,
+        },
+    }
+
+
 def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
+    _validate_delivery_entry_args(args)
     runner = CommandRunner(repo_root)
     warnings: list[dict[str, Any]] = []
     repository = _repository_slug(runner, args.repository, warnings)
     limitations: list[str] = []
+    observed: dict[str, Any]
     if repository is None:
         limitations.append("repository identity unavailable")
         observed = {
@@ -1192,7 +2280,7 @@ def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, 
         relationships = _relationship_snapshot(runner, repository, args.task, warnings)
         git = _git_snapshot(runner, warnings)
         observed = {"git": git, "issue": issue, "relationships": relationships}
-        gates = _issue_gates(
+        issue_gates = _issue_gates(
             issue,
             relationships,
             expected_title=args.expected_title,
@@ -1201,27 +2289,59 @@ def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, 
             forbidden_label="codex:blocked",
             expected_type_label="type:task",
         )
+        gates = dict(issue_gates)
         gates["repository"] = _gate("pass")
         gates["origin_fetch"] = _gate(git.get("origin_fetch", "unknown"))
         gates["origin_main"] = _sha_gate(
             git.get("origin_main_sha"), args.expected_main_sha, "origin/main SHA"
         )
-        gates["worktree_clean"] = _gate("pass" if git.get("clean") is True else "fail")
-    trusted = {
-        "trusted_sha": observed.get("git", {}).get("origin_main_sha"),
+        gates["worktree_state_compatible"] = _worktree_state_compatible_gate(
+            git, entry_point=args.entry_point
+        )
+        if issue is not None:
+            labels = set(issue.get("labels", {}).get("items", []))
+            gates["lifecycle_labels_exclusive"] = _lifecycle_labels_gate(
+                labels, required_label="codex:ready"
+            )
+            gates["project_status_known"] = _project_status_gate(
+                issue.get("project_status"), entry_point=args.entry_point
+            )
+        else:
+            gates["lifecycle_labels_exclusive"] = _gate(
+                "unknown", "Issue metadata unavailable"
+            )
+            gates["project_status_known"] = _gate(
+                "unknown", "Issue metadata unavailable"
+            )
+        gates["parent_blocking"] = _parent_state_gate(relationships)
+        gates.update(_entry_point_gates(args, runner, repository, observed, warnings))
+    subject: dict[str, Any] = {
+        "kind": "task",
+        "task_number": args.task,
+        "entry_point": args.entry_point,
+    }
+    if args.branch is not None:
+        subject["branch"] = args.branch
+    if args.pr is not None:
+        subject["pr_number"] = args.pr
+    execution_context = {
+        "object_base_sha": observed["git"].get("origin_main_sha"),
         "runner": _runner_source(runner, warnings),
     }
-    return _base_snapshot(
+    snapshot = _base_snapshot(
         operation="delivery-preflight",
-        subject={"kind": "task", "task_number": args.task},
+        subject=subject,
         repository=repository,
         observed=observed,
-        trusted=trusted,
+        execution_context=execution_context,
         gates=gates,
         warnings=warnings,
         limitations=limitations,
         operations=runner.counters(),
     )
+    disposition = _compute_preflight_disposition(gates, entry_point=args.entry_point)
+    snapshot["disposition"] = disposition
+    return snapshot
 
 
 def _task_pr_snapshot(
@@ -1251,19 +2371,30 @@ def _task_pr_snapshot(
         gates["repository"] = _gate("pass")
         issue = observed.get("issue")
         if isinstance(issue, dict):
+            if operation == "delivery-readiness":
+                labels = set(issue.get("labels", {}).get("items", []))
+                gates["lifecycle_labels_exclusive"] = _lifecycle_labels_gate(
+                    labels, required_label="codex:ready"
+                )
+                gates["project_status_known"] = _project_status_gate(
+                    issue.get("project_status")
+                )
             project = issue.get("project_status")
             gates["project_status_review"] = _gate(
                 "pass" if project == "Review" else "unknown", str(project)
             )
     pr = observed.get("pr")
-    trusted_sha = pr.get("base_sha") if isinstance(pr, dict) else None
-    trusted = {"trusted_sha": trusted_sha, "runner": _runner_source(runner, warnings)}
+    object_base_sha = pr.get("base_sha") if isinstance(pr, dict) else None
+    execution_context = {
+        "object_base_sha": object_base_sha,
+        "runner": _runner_source(runner, warnings),
+    }
     return _base_snapshot(
         operation=operation,
         subject={"kind": "task-pr", "task_number": args.task, "pr_number": args.pr},
         repository=repository,
         observed=observed,
-        trusted=trusted,
+        execution_context=execution_context,
         gates=gates,
         warnings=warnings,
         limitations=limitations,
@@ -1299,6 +2430,14 @@ def _closeout_plan(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
         git = observed.get("git", {})
         merge_sha = pr.get("merge_commit_sha") if isinstance(pr, dict) else None
         gates["merge_sha"] = _sha_gate(merge_sha, args.expected_merge_sha, "merge SHA")
+        gates["issue_closure"] = _issue_closure_gate(
+            issue if isinstance(issue, dict) else None,
+            pr if isinstance(pr, dict) else None,
+            repository=repository,
+        )
+        gates["pull_request_merge"] = _pull_request_merge_gate(
+            pr if isinstance(pr, dict) else None
+        )
         if isinstance(merge_sha, str):
             ancestry = runner.run(
                 [
@@ -1350,25 +2489,88 @@ def _closeout_plan(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
                 command_id="git-closeout-remote-branch",
                 warnings=warnings,
             )
+            remote_tip = _remote_branch_tip(remote_exists)
             local_result = runner.run(
                 ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
                 command_id="git-closeout-local-branch",
             )
+            local_tip = _git_value(
+                runner,
+                ["rev-parse", f"refs/heads/{branch}"],
+                command_id="git-closeout-local-branch-tip",
+                warnings=warnings,
+            )
+            tree_equal: bool | None = None
+            if isinstance(args.expected_head_sha, str) and isinstance(merge_sha, str):
+                tree = runner.run(
+                    ["git", "diff", "--quiet", args.expected_head_sha, merge_sha],
+                    command_id="git-closeout-tree-equality",
+                )
+                if tree.returncode == 0:
+                    tree_equal = True
+                elif tree.returncode == 1:
+                    tree_equal = False
+                else:
+                    warnings.append(command_warning(tree))
             observed["branch_cleanup"] = {
                 "exact_branch": safe_text(branch),
                 "remote_exists": bool(remote_exists),
+                "remote_tip": remote_tip,
                 "local_exists": local_result.returncode == 0,
+                "local_tip": local_tip if is_sha(local_tip) else None,
+                "tree_equal": tree_equal,
                 "apply_authorized": False,
+                "cleanup_eligibility": _closeout_cleanup_eligibility(
+                    repository=repository,
+                    observed=observed,
+                    gates=gates,
+                    branch=branch,
+                    remote_tip=remote_tip,
+                    local_tip=local_tip if is_sha(local_tip) else None,
+                    tree_equal=tree_equal,
+                ),
             }
+            expected_head = pr.get("head_sha") if isinstance(pr, dict) else None
+            gates["remote_branch_tip"] = _gate(
+                "pass" if remote_tip == expected_head else "fail"
+            )
+            gates["local_branch_tip"] = _gate(
+                "pass" if local_tip == expected_head else "fail"
+            )
+            gates["head_merge_tree_equal"] = _gate(
+                "pass" if tree_equal is True else "fail"
+            )
+            worktree_branches = git.get("worktree_branches", {})
+            branch_items = (
+                worktree_branches.get("items")
+                if isinstance(worktree_branches, dict)
+                else []
+            )
+            branch_items = branch_items if isinstance(branch_items, list) else []
+            gates["target_branch_not_worktree"] = _gate(
+                "pass" if branch not in branch_items else "fail"
+            )
+            required = observed.get("required_checks")
+            if (
+                isinstance(required, dict)
+                and required.get("configuration") == "plan-limited-403"
+            ):
+                gates["capability_limited_cleanup_eligibility"] = _gate(
+                    "unknown",
+                    "final evidence recheck is required before cleanup eligibility",
+                )
     pr = observed.get("pr")
-    trusted_sha = pr.get("merge_commit_sha") if isinstance(pr, dict) else None
-    trusted = {"trusted_sha": trusted_sha, "runner": _runner_source(runner, warnings)}
+    object_base_sha = pr.get("merge_commit_sha") if isinstance(pr, dict) else None
+    execution_context = {
+        "object_base_sha": object_base_sha,
+        "runner": _runner_source(runner, warnings),
+    }
     return _base_snapshot(
         operation="closeout-plan",
         subject={"kind": "task-pr", "task_number": args.task, "pr_number": args.pr},
         repository=repository,
         observed=observed,
-        trusted=trusted,
+        execution_context=execution_context,
         gates=gates,
         warnings=warnings,
         limitations=limitations + ["read-only plan; no branch deletion performed"],
@@ -1382,6 +2584,7 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
     repository = _repository_slug(runner, args.repository, warnings)
     limitations: list[str] = []
     git = _git_snapshot(runner, warnings)
+    observed: dict[str, Any]
     if repository is None:
         limitations.append("repository identity unavailable")
         observed = {
@@ -1396,7 +2599,10 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
         relationships = _relationship_snapshot(
             runner, repository, args.feature, warnings
         )
-        child_items = relationships.get("sub_issues", {}).get("items", [])
+        sub_issues = relationships.get("sub_issues")
+        child_items = (
+            sub_issues.get("items", []) if isinstance(sub_issues, dict) else []
+        )
         children: list[dict[str, Any]] = []
         for child in child_items[:MAX_CHILDREN]:
             if not isinstance(child, dict) or not isinstance(child.get("number"), int):
@@ -1428,10 +2634,9 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
                         )
                         if pull is None:
                             continue
-                        checks = (
-                            pull.get("checks")
-                            if isinstance(pull.get("checks"), dict)
-                            else {}
+                        raw_checks = pull.get("checks")
+                        checks: dict[str, Any] = (
+                            raw_checks if isinstance(raw_checks, dict) else {}
                         )
                         pull_summaries.append(
                             {
@@ -1477,20 +2682,26 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
             "pass" if relationships.get("sub_issues_complete") is True else "unknown",
             "direct-child inventory must be complete",
         )
+    direct_children = observed.get("direct_children")
+    direct_children_items = (
+        direct_children.get("items", []) if isinstance(direct_children, dict) else []
+    )
+    relationships_value = observed.get("relationships")
+    relationships_digest_source = (
+        relationships_value if isinstance(relationships_value, dict) else {}
+    )
     direct_numbers = [
         child.get("number")
-        for child in observed.get("direct_children", {}).get("items", [])
+        for child in direct_children_items
         if isinstance(child, dict) and isinstance(child.get("number"), int)
     ]
-    observed["direct_child_set_digest"] = observed.get("relationships", {}).get(
+    observed["direct_child_set_digest"] = relationships_digest_source.get(
         "sub_issue_set_digest"
     ) or sha256_json(sorted(direct_numbers))
-    observed["direct_child_evidence_digest"] = sha256_json(
-        observed.get("direct_children", {}).get("items", [])
-    )
-    observed["relationships_digest"] = sha256_json(observed.get("relationships", {}))
-    trusted = {
-        "trusted_sha": git.get("origin_main_sha"),
+    observed["direct_child_evidence_digest"] = sha256_json(direct_children_items)
+    observed["relationships_digest"] = sha256_json(relationships_digest_source)
+    execution_context = {
+        "object_base_sha": git.get("origin_main_sha"),
         "runner": _runner_source(runner, warnings),
     }
     return _base_snapshot(
@@ -1498,7 +2709,7 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
         subject={"kind": "feature", "feature_number": args.feature},
         repository=repository,
         observed=observed,
-        trusted=trusted,
+        execution_context=execution_context,
         gates=gates,
         warnings=warnings,
         limitations=limitations,
@@ -1543,6 +2754,11 @@ def _collect_for_recheck(
         namespace.pr = subject.get("pr_number")
         if not isinstance(namespace.task, int) or not isinstance(namespace.pr, int):
             raise WorkflowToolError("snapshot Task/PR identity is invalid")
+        observed = previous.get("observed")
+        pr = observed.get("pr") if isinstance(observed, Mapping) else None
+        if isinstance(pr, Mapping):
+            namespace.expected_head_sha = pr.get("head_sha")
+            namespace.expected_merge_sha = pr.get("merge_commit_sha")
         current = _closeout_plan(namespace, repo_root)
         current["operation"] = "closeout-final"
     elif operation == "feature-audit-snapshot":
@@ -1562,26 +2778,31 @@ def _stability_projection(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     observed = snapshot.get("observed", {})
     if not isinstance(observed, dict):
         return {}
-    pr = observed.get("pr") if isinstance(observed.get("pr"), dict) else {}
-    issue = (
-        observed.get("issue")
-        if isinstance(observed.get("issue"), dict)
-        else observed.get("feature")
-        if isinstance(observed.get("feature"), dict)
+    raw_pr = observed.get("pr")
+    pr: dict[str, Any] = raw_pr if isinstance(raw_pr, dict) else {}
+    raw_issue = observed.get("issue")
+    raw_feature = observed.get("feature")
+    issue: dict[str, Any] = (
+        raw_issue
+        if isinstance(raw_issue, dict)
+        else raw_feature
+        if isinstance(raw_feature, dict)
         else {}
     )
-    git = observed.get("git") if isinstance(observed.get("git"), dict) else {}
-    threads = (
-        observed.get("review_threads")
-        if isinstance(observed.get("review_threads"), dict)
-        else {}
-    )
+    raw_git = observed.get("git")
+    git: dict[str, Any] = raw_git if isinstance(raw_git, dict) else {}
+    raw_threads = observed.get("review_threads")
+    threads: dict[str, Any] = raw_threads if isinstance(raw_threads, dict) else {}
     return {
         "repository": snapshot.get("repository"),
         "subject": snapshot.get("subject"),
         "issue_number": issue.get("number") if isinstance(issue, dict) else None,
         "issue_title": issue.get("title") if isinstance(issue, dict) else None,
         "issue_state": issue.get("state") if isinstance(issue, dict) else None,
+        "issue_closed_at": issue.get("closed_at") if isinstance(issue, dict) else None,
+        "issue_closure": issue.get("issue_closure")
+        if isinstance(issue, dict)
+        else None,
         "issue_content_sha256": issue.get("content_sha256")
         if isinstance(issue, dict)
         else None,
@@ -1644,6 +2865,44 @@ def _recheck(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
     current["gates"]["snapshot_stability"] = _gate(
         "pass" if not changed else "fail", ", ".join(changed)
     )
+    if current.get("operation") == "closeout-final":
+        observed = current.get("observed")
+        gates = current.get("gates")
+        if isinstance(observed, dict) and isinstance(gates, dict):
+            cleanup = observed.get("branch_cleanup")
+            pr = observed.get("pr")
+            branch = pr.get("head_branch") if isinstance(pr, dict) else None
+            if isinstance(cleanup, dict):
+                cleanup["cleanup_eligibility"] = _closeout_cleanup_eligibility(
+                    repository=current.get("repository")
+                    if isinstance(current.get("repository"), str)
+                    else None,
+                    observed=observed,
+                    gates=gates,
+                    branch=branch,
+                    remote_tip=cleanup.get("remote_tip")
+                    if isinstance(cleanup.get("remote_tip"), str)
+                    else None,
+                    local_tip=cleanup.get("local_tip")
+                    if isinstance(cleanup.get("local_tip"), str)
+                    else None,
+                    tree_equal=cleanup.get("tree_equal")
+                    if isinstance(cleanup.get("tree_equal"), bool)
+                    else None,
+                )
+                eligibility = cleanup["cleanup_eligibility"]
+                required = observed.get("required_checks")
+                if (
+                    isinstance(required, dict)
+                    and required.get("configuration") == "plan-limited-403"
+                ):
+                    gates["capability_limited_cleanup_eligibility"] = _gate(
+                        "pass"
+                        if eligibility["status"]
+                        == "eligible-under-capability-limited-policy"
+                        else "fail",
+                        "exact task branch cleanup only; required checks remain unknown",
+                    )
     current["snapshot_id"] = (
         f"ev-{sha256_json({key: value for key, value in current.items() if key != 'snapshot_id'})[:16]}"
     )
@@ -1683,6 +2942,16 @@ def _build_parser() -> argparse.ArgumentParser:
     _common(delivery)
     _task_args(delivery)
     delivery.add_argument("--expected-main-sha")
+    delivery.add_argument(
+        "--entry-point",
+        default="delivery-start",
+        choices=list(DELIVERY_ENTRY_POINTS),
+        help="stable semantic entry point for this delivery invocation",
+    )
+    delivery.add_argument("--branch", help="expected Task branch name")
+    delivery.add_argument("--expected-base-sha", help="expected branch base SHA")
+    delivery.add_argument("--expected-head-sha", help="expected branch head SHA")
+    delivery.add_argument("--pr", type=int, help="expected PR number")
 
     readiness = sub.add_parser("delivery-readiness", help="Task PR readiness snapshot")
     _common(readiness)

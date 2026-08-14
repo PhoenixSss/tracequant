@@ -1,0 +1,1074 @@
+{
+  "schema_version": "1.0",
+  "material_set_id": "wsl2-codex-environment-task-v1",
+  "scope": "Environment and execution-capability diagnostics only; no Validation Runner, final Rules or Task #65 candidate results.",
+  "document_targets": {
+    "agent_workflow_design_handbook": {
+      "title": "代理开发工作流设计指导手册",
+      "required_sections": [
+        "适用范围与前置条件",
+        "冻结输入与权威来源",
+        "标准执行步骤与阶段边界",
+        "命令、预期输出与检查清单",
+        "常见失败、诊断、恢复与回滚",
+        "独立 Review、人工 Merge 与安全边界",
+        "可复用模板、案例与项目特定限制"
+      ]
+    },
+    "technical_sharing_article": {
+      "title": "代理工作流 Token 优化技术分享文章",
+      "required_sections": [
+        "问题背景与历史基线",
+        "假设、实验变量与控制变量",
+        "实验隔离、统计口径与质量门槛",
+        "前后流程与架构对照",
+        "Token、Guardian、命令、质量与时长结果",
+        "成功、失败与反直觉案例",
+        "采用、调整、否决方案及证据",
+        "可推广结论、项目限制与研究边界"
+      ]
+    }
+  },
+  "materials": [
+    {
+      "material_id": "mat-fact-001",
+      "category": "fact",
+      "title": "WSL2 目标环境身份",
+      "summary": "Ubuntu 24.04.4 LTS、WSL2 kernel、ext4 /home 仓库路径和 Remote WSL/Codex 可用性已经记录。",
+      "source_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        }
+      ],
+      "claim_type": "fact",
+      "evidence_strength": "direct",
+      "public_status": "public",
+      "redaction_notes": "User name and absolute home path normalized.",
+      "license_or_attribution": null,
+      "document_uses": [
+        {
+          "document": "agent_workflow_design_handbook",
+          "section": "适用范围与前置条件",
+          "usage": "claim"
+        },
+        {
+          "document": "technical_sharing_article",
+          "section": "问题背景与历史基线",
+          "usage": "claim"
+        }
+      ],
+      "asset_paths": []
+    },
+    {
+      "material_id": "mat-fact-002",
+      "category": "fact",
+      "title": "WSL 原生工具链与版本契约",
+      "summary": "系统诊断使用 /usr/bin/python3，项目 Python 固定为 3.13 并由 uv 管理，uv 固定为 0.12.1。",
+      "source_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        },
+        {
+          "kind": "config",
+          "path_or_id": ".python-version",
+          "sha256": "49a506dd32096b010d75205acf3430c9ae6c40351888129499e5a5e487126c93",
+          "locator": "entire file"
+        },
+        {
+          "kind": "config",
+          "path_or_id": ".github/workflows/ci.yml",
+          "sha256": "a73b2e12664dca4b52e29d393a771378ab31bbe7b888d0583025deaf42ba6fa6",
+          "locator": "Python/uv setup and validation steps"
+        }
+      ],
+      "claim_type": "fact",
+      "evidence_strength": "corroborated",
+      "public_status": "public",
+      "redaction_notes": null,
+      "license_or_attribution": null,
+      "document_uses": [
+        {
+          "document": "agent_workflow_design_handbook",
+          "section": "适用范围与前置条件",
+          "usage": "checklist"
+        },
+        {
+          "document": "agent_workflow_design_handbook",
+          "section": "命令、预期输出与检查清单",
+          "usage": "procedure"
+        }
+      ],
+      "asset_paths": []
+    },
+    {
+      "material_id": "mat-fact-003",
+      "category": "fact",
+      "title": "CI-equivalent 验证通过",
+      "summary": "环境诊断时 lock、pytest、Ruff、format、Mypy 和 diff 检查全部通过。",
+      "source_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        }
+      ],
+      "claim_type": "fact",
+      "evidence_strength": "direct",
+      "public_status": "public",
+      "redaction_notes": "Raw command logs remain external.",
+      "license_or_attribution": null,
+      "document_uses": [
+        {
+          "document": "agent_workflow_design_handbook",
+          "section": "命令、预期输出与检查清单",
+          "usage": "example"
+        },
+        {
+          "document": "technical_sharing_article",
+          "section": "实验隔离、统计口径与质量门槛",
+          "usage": "claim"
+        }
+      ],
+      "asset_paths": []
+    },
+    {
+      "material_id": "mat-comparison-001",
+      "category": "comparison",
+      "title": "Windows 与 WSL2 能力对照",
+      "summary": "WSL2 改善 Python、uv、仓库文件系统、临时 Git 和 GitHub 凭据可见性，但正式 Git metadata 仍保留 approval。",
+      "source_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/benchmarks/task-65-round-2/environment-current-windows.md",
+          "sha256": "e471431e3dc06c78dbe8349194f750b59805d7629a752ec21e82f29b08038989",
+          "locator": "/"
+        },
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
+          "sha256": "cfac0f706ade85c6ce8c29d3ea41d59eee60a64fef6493a2c502244d96de91d4",
+          "locator": "WSL2 Codex 能力与审批矩阵"
+        },
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        }
+      ],
+      "claim_type": "derived",
+      "evidence_strength": "corroborated",
+      "public_status": "public",
+      "redaction_notes": "Comparison is capability-level, not Token-level.",
+      "license_or_attribution": null,
+      "document_uses": [
+        {
+          "document": "technical_sharing_article",
+          "section": "前后流程与架构对照",
+          "usage": "chart"
+        },
+        {
+          "document": "agent_workflow_design_handbook",
+          "section": "可复用模板、案例与项目特定限制",
+          "usage": "example"
+        }
+      ],
+      "asset_paths": [
+        "docs/workflows/wsl2-codex-environment/visuals/windows-wsl2-comparison.csv",
+        "docs/workflows/wsl2-codex-environment/visuals/workflow-before-after.mmd"
+      ]
+    },
+    {
+      "material_id": "mat-anomaly-001",
+      "category": "anomaly",
+      "title": "WSL2 未消除 Codex approval 边界",
+      "summary": "临时 Git 可直接运行，但 uv cache、正式 Git metadata 和 GitHub 网络仍需要 approval。",
+      "source_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
+          "sha256": "cfac0f706ade85c6ce8c29d3ea41d59eee60a64fef6493a2c502244d96de91d4",
+          "locator": "WSL2 Codex 能力与审批矩阵"
+        },
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        }
+      ],
+      "claim_type": "fact",
+      "evidence_strength": "direct",
+      "public_status": "public",
+      "redaction_notes": null,
+      "license_or_attribution": null,
+      "document_uses": [
+        {
+          "document": "agent_workflow_design_handbook",
+          "section": "独立 Review、人工 Merge 与安全边界",
+          "usage": "warning"
+        },
+        {
+          "document": "technical_sharing_article",
+          "section": "成功、失败与反直觉案例",
+          "usage": "claim"
+        }
+      ],
+      "asset_paths": [
+        "docs/workflows/wsl2-codex-environment/visuals/approval-boundaries.mmd"
+      ]
+    },
+    {
+      "material_id": "mat-anomaly-002",
+      "category": "anomaly",
+      "title": "无代理访问只部分可用",
+      "summary": "临时无代理环境中 API endpoint 可达，但 github.com 和 Git remote 超时，因此不能作为正式路径。",
+      "source_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        }
+      ],
+      "claim_type": "fact",
+      "evidence_strength": "direct",
+      "public_status": "public",
+      "redaction_notes": "Proxy credentials and local port are excluded.",
+      "license_or_attribution": null,
+      "document_uses": [
+        {
+          "document": "agent_workflow_design_handbook",
+          "section": "常见失败、诊断、恢复与回滚",
+          "usage": "warning"
+        },
+        {
+          "document": "technical_sharing_article",
+          "section": "成功、失败与反直觉案例",
+          "usage": "example"
+        }
+      ],
+      "asset_paths": []
+    },
+    {
+      "material_id": "mat-decision-001",
+      "category": "decision",
+      "title": "采用 WSL2 + ext4 作为目标环境",
+      "summary": "选择 WSL2 原生工具链与 Linux filesystem，否决继续依赖 WindowsApps、WinGet 私有路径和宿主 keyring。",
+      "source_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/benchmarks/task-65-round-2/environment-current-windows.md",
+          "sha256": "e471431e3dc06c78dbe8349194f750b59805d7629a752ec21e82f29b08038989",
+          "locator": "/"
+        },
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        },
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
+          "sha256": "cfac0f706ade85c6ce8c29d3ea41d59eee60a64fef6493a2c502244d96de91d4",
+          "locator": "WSL2 Codex 能力与审批矩阵"
+        }
+      ],
+      "claim_type": "recommendation",
+      "evidence_strength": "corroborated",
+      "public_status": "public",
+      "redaction_notes": null,
+      "license_or_attribution": null,
+      "document_uses": [
+        {
+          "document": "technical_sharing_article",
+          "section": "采用、调整、否决方案及证据",
+          "usage": "claim"
+        },
+        {
+          "document": "agent_workflow_design_handbook",
+          "section": "适用范围与前置条件",
+          "usage": "recommendation"
+        }
+      ],
+      "asset_paths": []
+    },
+    {
+      "material_id": "mat-decision-002",
+      "category": "decision",
+      "title": "保留精确 approval，延后最终 Rules",
+      "summary": "环境 Task 记录安全边界，不为了全部变绿配置宽泛 Rules；最终最小权限 Rules 由独立 Task 验证。",
+      "source_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
+          "sha256": "cfac0f706ade85c6ce8c29d3ea41d59eee60a64fef6493a2c502244d96de91d4",
+          "locator": "WSL2 Codex 能力与审批矩阵"
+        },
+        {
+          "kind": "config",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/runner-environment-contract.md",
+          "sha256": "033ba2d2b7759de515a3c376d765fc720083d8d1cf6e3be0f6ce3af9819b6aca",
+          "locator": "/"
+        },
+        {
+          "kind": "config",
+          "path_or_id": "docs/workflows/benchmarks/task-65-round-2/protocol.md",
+          "sha256": "de8423d4b42c7627e2bcdd4c4e3c1ae213cec62e800773d6d0b92c82d752146c",
+          "locator": "§12 材料归档"
+        }
+      ],
+      "claim_type": "recommendation",
+      "evidence_strength": "derived",
+      "public_status": "public",
+      "redaction_notes": null,
+      "license_or_attribution": null,
+      "document_uses": [
+        {
+          "document": "agent_workflow_design_handbook",
+          "section": "独立 Review、人工 Merge 与安全边界",
+          "usage": "warning"
+        },
+        {
+          "document": "technical_sharing_article",
+          "section": "采用、调整、否决方案及证据",
+          "usage": "claim"
+        }
+      ],
+      "asset_paths": [
+        "docs/workflows/wsl2-codex-environment/visuals/approval-boundaries.mmd"
+      ]
+    },
+    {
+      "material_id": "mat-communication-001",
+      "category": "communication",
+      "title": "能力分类可编辑数据",
+      "summary": "13 个能力类别按 direct、approval-required、partial 和 prohibited 统计，分母是能力行而非命令次数。",
+      "source_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
+          "sha256": "cfac0f706ade85c6ce8c29d3ea41d59eee60a64fef6493a2c502244d96de91d4",
+          "locator": "WSL2 Codex 能力与审批矩阵"
+        }
+      ],
+      "claim_type": "derived",
+      "evidence_strength": "direct",
+      "public_status": "public",
+      "redaction_notes": null,
+      "license_or_attribution": null,
+      "document_uses": [
+        {
+          "document": "technical_sharing_article",
+          "section": "前后流程与架构对照",
+          "usage": "chart"
+        },
+        {
+          "document": "agent_workflow_design_handbook",
+          "section": "命令、预期输出与检查清单",
+          "usage": "checklist"
+        }
+      ],
+      "asset_paths": [
+        "docs/workflows/wsl2-codex-environment/visuals/capability-matrix.csv"
+      ]
+    },
+    {
+      "material_id": "mat-communication-002",
+      "category": "communication",
+      "title": "环境迁移与审批边界图",
+      "summary": "提供 Windows → WSL2 迁移图和 Skill/sandbox/Guardian/人工门禁关系图的 Mermaid 可编辑源。",
+      "source_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/benchmarks/task-65-round-2/environment-current-windows.md",
+          "sha256": "e471431e3dc06c78dbe8349194f750b59805d7629a752ec21e82f29b08038989",
+          "locator": "/"
+        },
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
+          "sha256": "cfac0f706ade85c6ce8c29d3ea41d59eee60a64fef6493a2c502244d96de91d4",
+          "locator": "WSL2 Codex 能力与审批矩阵"
+        },
+        {
+          "kind": "config",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/runner-environment-contract.md",
+          "sha256": "033ba2d2b7759de515a3c376d765fc720083d8d1cf6e3be0f6ce3af9819b6aca",
+          "locator": "/"
+        }
+      ],
+      "claim_type": "derived",
+      "evidence_strength": "corroborated",
+      "public_status": "public",
+      "redaction_notes": "No credentials, user names or local proxy port.",
+      "license_or_attribution": null,
+      "document_uses": [
+        {
+          "document": "technical_sharing_article",
+          "section": "前后流程与架构对照",
+          "usage": "diagram"
+        },
+        {
+          "document": "agent_workflow_design_handbook",
+          "section": "标准执行步骤与阶段边界",
+          "usage": "diagram"
+        }
+      ],
+      "asset_paths": [
+        "docs/workflows/wsl2-codex-environment/visuals/workflow-before-after.mmd",
+        "docs/workflows/wsl2-codex-environment/visuals/approval-boundaries.mmd"
+      ]
+    },
+    {
+      "material_id": "mat-research-001",
+      "category": "research",
+      "title": "本 Task 不产生 Token 优化结论",
+      "summary": "本 Task 只建立环境与能力诊断；Token、Guardian turn、命令数、质量和时长效果必须由 Task #65 candidate 对照实验产生。",
+      "source_refs": [
+        {
+          "kind": "config",
+          "path_or_id": "docs/workflows/benchmarks/task-65-round-2/protocol.md",
+          "sha256": "de8423d4b42c7627e2bcdd4c4e3c1ae213cec62e800773d6d0b92c82d752146c",
+          "locator": "§12 材料归档"
+        },
+        {
+          "kind": "config",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/runner-environment-contract.md",
+          "sha256": "033ba2d2b7759de515a3c376d765fc720083d8d1cf6e3be0f6ce3af9819b6aca",
+          "locator": "/"
+        }
+      ],
+      "claim_type": "fact",
+      "evidence_strength": "direct",
+      "public_status": "public",
+      "redaction_notes": null,
+      "license_or_attribution": null,
+      "document_uses": [
+        {
+          "document": "technical_sharing_article",
+          "section": "Token、Guardian、命令、质量与时长结果",
+          "usage": "warning"
+        },
+        {
+          "document": "technical_sharing_article",
+          "section": "可推广结论、项目限制与研究边界",
+          "usage": "claim"
+        }
+      ],
+      "asset_paths": []
+    },
+    {
+      "material_id": "mat-research-002",
+      "category": "research",
+      "title": "跨机器复现和长期成本仍未知",
+      "summary": "环境仅在一台机器完成验证；跨机器复现率、长期代理稳定性、磁盘与性能成本尚未测量。",
+      "source_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        },
+        {
+          "kind": "config",
+          "path_or_id": "docs/workflows/benchmarks/task-65-round-2/protocol.md",
+          "sha256": "de8423d4b42c7627e2bcdd4c4e3c1ae213cec62e800773d6d0b92c82d752146c",
+          "locator": "§12 材料归档"
+        }
+      ],
+      "claim_type": "inference",
+      "evidence_strength": "limited",
+      "public_status": "public",
+      "redaction_notes": null,
+      "license_or_attribution": null,
+      "document_uses": [
+        {
+          "document": "technical_sharing_article",
+          "section": "可推广结论、项目限制与研究边界",
+          "usage": "warning"
+        },
+        {
+          "document": "agent_workflow_design_handbook",
+          "section": "可复用模板、案例与项目特定限制",
+          "usage": "warning"
+        }
+      ],
+      "asset_paths": []
+    }
+  ],
+  "experimental_design": {
+    "hypothesis": "A WSL2 Linux-native environment removes Windows-specific tool and credential visibility failures while preserving explicit Codex safety approvals.",
+    "changed_variables": [
+      "Operating environment: native Windows to WSL2 Ubuntu",
+      "Repository filesystem: NTFS workspace to ext4 under /home",
+      "Toolchain: Windows aliases/private paths to WSL-native tools",
+      "Credential boundary: host keyring dependency to WSL-local gh login"
+    ],
+    "controlled_variables": [
+      "Same repository project and CI-equivalent validation commands",
+      "No Task #65 candidate implementation in this Task",
+      "No final Rules or Runner implementation",
+      "No raw credentials or rollouts committed"
+    ],
+    "prohibited_confounders": [
+      "Claiming Token effects from environment diagnostics",
+      "Weakening validation or review gates",
+      "Adding broad Rules to force direct success",
+      "Executing Task #65 candidate before the candidate control plane is frozen"
+    ],
+    "expected_effects": [
+      "Fewer Windows-specific executable and credential visibility failures",
+      "A reproducible environment contract for later Runner and Rules Tasks"
+    ],
+    "observed_effects": [
+      "WSL-native tools and ext4 repository were usable",
+      "Temporary Git under /tmp was direct",
+      "Formal Git metadata, user cache and GitHub network still required approval",
+      "No-proxy network remained partial"
+    ]
+  },
+  "cases": [
+    {
+      "case_id": "case-gh-auth-recovery",
+      "type": "recovery",
+      "title": "GitHub 认证失败与恢复",
+      "trigger": "gh auth status showed no logged-in host and HTTPS fetch could not obtain credentials.",
+      "timeline": [
+        "Initial diagnostic: gh and Git fetch failed.",
+        "WSL-local gh login and Git integration were configured.",
+        "Repository, Issue and PR reads passed.",
+        "Formal fetch passed through the approved path."
+      ],
+      "observed_behavior": "Network and TLS were available, but authenticated Git/GitHub operations failed until WSL-local login existed.",
+      "diagnosis": "Authentication, network and Git metadata permissions were separate failure domains.",
+      "response": "Use a revocable WSL-local gh login; do not copy the Windows credential directory.",
+      "outcome": "GitHub read and formal fetch became available, with approval retained.",
+      "generalizable_lesson": "Diagnose network, authentication and repository metadata separately.",
+      "project_specific_limit": "The exact scopes and approval routing remain repository-specific.",
+      "evidence_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        },
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
+          "sha256": "cfac0f706ade85c6ce8c29d3ea41d59eee60a64fef6493a2c502244d96de91d4",
+          "locator": "WSL2 Codex 能力与审批矩阵"
+        }
+      ]
+    },
+    {
+      "case_id": "case-uv-drift",
+      "type": "recovery",
+      "title": "uv 版本漂移与恢复",
+      "trigger": "Local uv differed from the CI-pinned uv version.",
+      "timeline": [
+        "Initial diagnostic recorded uv 0.12.0.",
+        "Maintainer aligned local and CI uv to 0.12.1.",
+        "Follow-up validation passed."
+      ],
+      "observed_behavior": "The project worked, but reproducibility was not satisfied.",
+      "diagnosis": "Functional success did not prove version parity.",
+      "response": "Pin uv to the CI version.",
+      "outcome": "Local and CI tool contracts aligned.",
+      "generalizable_lesson": "A reproducible environment needs version identity, not merely successful execution.",
+      "project_specific_limit": "Future upgrades require a coordinated CI and documentation change.",
+      "evidence_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        },
+        {
+          "kind": "config",
+          "path_or_id": ".github/workflows/ci.yml",
+          "sha256": "a73b2e12664dca4b52e29d393a771378ab31bbe7b888d0583025deaf42ba6fa6",
+          "locator": "Python/uv setup and validation steps"
+        }
+      ]
+    },
+    {
+      "case_id": "case-approval-remains",
+      "type": "unexpected",
+      "title": "WSL2 改善工具可见性但不消除 approval",
+      "trigger": "The migration was expected to remove many environment failures.",
+      "timeline": [
+        "Temporary Git in /tmp passed directly.",
+        "uv cache access required approval.",
+        "Formal Git metadata and GitHub network required approval."
+      ],
+      "observed_behavior": "OS-native tools were visible, while sandbox boundaries remained.",
+      "diagnosis": "The operating-system boundary and Codex sandbox boundary are independent.",
+      "response": "Classify the environment as ready-with-gaps and preserve exact approvals.",
+      "outcome": "The workflow is usable without claiming an approval-free environment.",
+      "generalizable_lesson": "Platform migration is not a substitute for permission design.",
+      "project_specific_limit": "Exact approval routes depend on current Codex policies.",
+      "evidence_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
+          "sha256": "cfac0f706ade85c6ce8c29d3ea41d59eee60a64fef6493a2c502244d96de91d4",
+          "locator": "WSL2 Codex 能力与审批矩阵"
+        },
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        }
+      ]
+    },
+    {
+      "case_id": "case-python-alias",
+      "type": "unexpected",
+      "title": "裸 python 缺失但 Python 环境完整",
+      "trigger": "The bare python command was missing.",
+      "timeline": [
+        "python was not found.",
+        "/usr/bin/python3 was available.",
+        "uv run python and all project validations passed."
+      ],
+      "observed_behavior": "Only the alias was missing.",
+      "diagnosis": "System and project Python entry points were valid.",
+      "response": "Use python3 for bootstrap and uv run python for project work.",
+      "outcome": "No global alias was installed.",
+      "generalizable_lesson": "Validate supported entry points rather than a single command name.",
+      "project_specific_limit": "A future third-party tool may explicitly require python.",
+      "evidence_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        },
+        {
+          "kind": "config",
+          "path_or_id": ".python-version",
+          "sha256": "49a506dd32096b010d75205acf3430c9ae6c40351888129499e5a5e487126c93",
+          "locator": "entire file"
+        }
+      ]
+    },
+    {
+      "case_id": "case-reversible-ref",
+      "type": "success",
+      "title": "可逆 GitHub 写权限探针",
+      "trigger": "GitHub write scope needed validation without creating an Issue or PR.",
+      "timeline": [
+        "Create a unique temporary remote ref.",
+        "Read and verify the ref.",
+        "Delete the ref.",
+        "Verify no remote ref or PR remained."
+      ],
+      "observed_behavior": "The operation succeeded after approval and cleaned fully.",
+      "diagnosis": "A Git ref was the smallest reversible object for this permission test.",
+      "response": "Require an explicit confirmation string and unique probe name.",
+      "outcome": "Write capability was verified with no persistent side effect.",
+      "generalizable_lesson": "Prefer unique, reversible and independently verifiable permission probes.",
+      "project_specific_limit": "Repository protection rules may differ on other repositories.",
+      "evidence_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        },
+        {
+          "kind": "config",
+          "path_or_id": "tools/wsl2_codex_diagnostic.py",
+          "sha256": "d812c0c7fdd90229fd657830ec383cdecafad9860d27332738d4bfea80bca2c8",
+          "locator": "CLI profiles and write-probe confirmation handling"
+        },
+        {
+          "kind": "validation",
+          "path_or_id": "tests/tools/test_wsl2_codex_diagnostic.py",
+          "sha256": "5cef64b0c9d302c79f0ebf5bb9740ff61e5110ffc9dbb0012da1ad00d62a378d",
+          "locator": "/"
+        }
+      ]
+    },
+    {
+      "case_id": "case-no-proxy-partial",
+      "type": "unexpected",
+      "title": "无代理访问仅部分成功",
+      "trigger": "Proxy variables were temporarily removed in child processes.",
+      "timeline": [
+        "api.github.com responded.",
+        "github.com timed out.",
+        "git ls-remote timed out."
+      ],
+      "observed_behavior": "One endpoint succeeded while the complete workflow did not.",
+      "diagnosis": "Endpoint-level success could not be generalized to GitHub workflow availability.",
+      "response": "Keep proxy + approval as the supported path and classify no-proxy as partial.",
+      "outcome": "The workflow avoids an unreliable direct-network dependency.",
+      "generalizable_lesson": "Test network capability by endpoint and protocol.",
+      "project_specific_limit": "Results may vary with ISP, DNS and proxy state.",
+      "evidence_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        }
+      ]
+    }
+  ],
+  "decisions": [
+    {
+      "decision_id": "decision-wsl2",
+      "question": "Which environment should be the supported Codex development target?",
+      "options_considered": [
+        "Continue repairing native Windows sandbox compatibility",
+        "Adopt WSL2 Ubuntu with Linux-native tools"
+      ],
+      "selected_option": "Adopt WSL2 Ubuntu with Linux-native tools",
+      "rejected_options": [
+        "Continue repairing WindowsApps, WinGet-private path and host-keyring compatibility as the long-term path"
+      ],
+      "rationale": "The WSL2 diagnostic verified native tool paths, ext4 repository use and direct temporary Git while keeping remaining approval boundaries explicit.",
+      "evidence_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/benchmarks/task-65-round-2/environment-current-windows.md",
+          "sha256": "e471431e3dc06c78dbe8349194f750b59805d7629a752ec21e82f29b08038989",
+          "locator": "/"
+        },
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        },
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
+          "sha256": "cfac0f706ade85c6ce8c29d3ea41d59eee60a64fef6493a2c502244d96de91d4",
+          "locator": "WSL2 Codex 能力与审批矩阵"
+        }
+      ],
+      "reversibility": "partially-reversible",
+      "rollback_trigger": "WSL2 cannot meet reliability, performance or compatibility requirements."
+    },
+    {
+      "decision_id": "decision-filesystem",
+      "question": "Where should the repository live?",
+      "options_considered": [
+        "WSL Linux filesystem under /home",
+        "Windows-mounted path under /mnt"
+      ],
+      "selected_option": "WSL Linux filesystem under /home",
+      "rejected_options": [
+        "Use /mnt/c or /mnt/d as the default development path"
+      ],
+      "rationale": "Linux filesystem semantics reduce cross-platform permission, case and file-mode ambiguity.",
+      "evidence_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        }
+      ],
+      "reversibility": "reversible",
+      "rollback_trigger": "The WSL filesystem becomes unavailable or lacks sufficient capacity."
+    },
+    {
+      "decision_id": "decision-python-entry",
+      "question": "Should the environment add a global python alias?",
+      "options_considered": [
+        "Use python3 and uv run python",
+        "Install python-is-python3 or create a global symlink"
+      ],
+      "selected_option": "Use python3 and uv run python",
+      "rejected_options": [
+        "Add global alias state without a demonstrated requirement"
+      ],
+      "rationale": "The verified system and project entry points already cover all commands.",
+      "evidence_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        },
+        {
+          "kind": "config",
+          "path_or_id": ".python-version",
+          "sha256": "49a506dd32096b010d75205acf3430c9ae6c40351888129499e5a5e487126c93",
+          "locator": "entire file"
+        }
+      ],
+      "reversibility": "reversible",
+      "rollback_trigger": "A required, non-configurable tool explicitly requires the bare python command."
+    },
+    {
+      "decision_id": "decision-uv-pin",
+      "question": "How should uv be versioned?",
+      "options_considered": [
+        "Pin to CI 0.12.1",
+        "Use the newest local uv release"
+      ],
+      "selected_option": "Pin to CI 0.12.1",
+      "rejected_options": [
+        "Allow local/CI drift"
+      ],
+      "rationale": "Version parity is part of the reproducibility contract.",
+      "evidence_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        },
+        {
+          "kind": "config",
+          "path_or_id": ".github/workflows/ci.yml",
+          "sha256": "a73b2e12664dca4b52e29d393a771378ab31bbe7b888d0583025deaf42ba6fa6",
+          "locator": "Python/uv setup and validation steps"
+        }
+      ],
+      "reversibility": "reversible",
+      "rollback_trigger": "A coordinated CI upgrade or required security fix."
+    },
+    {
+      "decision_id": "decision-gh-auth",
+      "question": "How should GitHub credentials be provided in WSL?",
+      "options_considered": [
+        "WSL-local revocable gh login",
+        "Copy the Windows credential directory or depend on host keyring visibility"
+      ],
+      "selected_option": "WSL-local revocable gh login",
+      "rejected_options": [
+        "Copy complete host credential material"
+      ],
+      "rationale": "The selected option is independently revocable and has a clear credential boundary.",
+      "evidence_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        },
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
+          "sha256": "cfac0f706ade85c6ce8c29d3ea41d59eee60a64fef6493a2c502244d96de91d4",
+          "locator": "WSL2 Codex 能力与审批矩阵"
+        }
+      ],
+      "reversibility": "reversible",
+      "rollback_trigger": "Credential leakage, excessive scope or login invalidation."
+    },
+    {
+      "decision_id": "decision-network",
+      "question": "Which network path is supported for formal GitHub operations?",
+      "options_considered": [
+        "Approved proxy-enabled path",
+        "Assume no-proxy direct access"
+      ],
+      "selected_option": "Approved proxy-enabled path",
+      "rejected_options": [
+        "Treat partial no-proxy success as a workflow guarantee"
+      ],
+      "rationale": "No-proxy access was partial while the approved proxy path passed.",
+      "evidence_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/current-diagnostic.json",
+          "sha256": "18d3d56679f915e98947e01a1cd2039641d6ee7156d300535a635eb95e40ec77",
+          "locator": "/"
+        }
+      ],
+      "reversibility": "reversible",
+      "rollback_trigger": "Proxy configuration or network policy changes and a new diagnostic validates another path."
+    },
+    {
+      "decision_id": "decision-rules-scope",
+      "question": "Should this Task configure broad Rules to remove approvals?",
+      "options_considered": [
+        "Record the boundary and defer minimum-permission Rules",
+        "Add broad Rules until diagnostics pass directly"
+      ],
+      "selected_option": "Record the boundary and defer minimum-permission Rules",
+      "rejected_options": [
+        "Widen permissions merely to make the environment appear fully green"
+      ],
+      "rationale": "This Task measures the boundary; the following Rules Task must independently validate exact command and path grants.",
+      "evidence_refs": [
+        {
+          "kind": "report",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
+          "sha256": "cfac0f706ade85c6ce8c29d3ea41d59eee60a64fef6493a2c502244d96de91d4",
+          "locator": "WSL2 Codex 能力与审批矩阵"
+        },
+        {
+          "kind": "config",
+          "path_or_id": "docs/workflows/wsl2-codex-environment/runner-environment-contract.md",
+          "sha256": "033ba2d2b7759de515a3c376d765fc720083d8d1cf6e3be0f6ce3af9819b6aca",
+          "locator": "/"
+        },
+        {
+          "kind": "config",
+          "path_or_id": "docs/workflows/benchmarks/task-65-round-2/protocol.md",
+          "sha256": "de8423d4b42c7627e2bcdd4c4e3c1ae213cec62e800773d6d0b92c82d752146c",
+          "locator": "§12 材料归档"
+        }
+      ],
+      "reversibility": "reversible",
+      "rollback_trigger": "The later Rules audit shows that proposed grants are too broad or unstable."
+    }
+  ],
+  "visuals": {
+    "workflow_before": "docs/workflows/wsl2-codex-environment/visuals/workflow-before-after.mmd",
+    "workflow_after": "docs/workflows/wsl2-codex-environment/visuals/workflow-before-after.mmd",
+    "state_matrix": "docs/workflows/wsl2-codex-environment/visuals/capability-matrix.csv",
+    "metric_tables": [
+      "docs/workflows/wsl2-codex-environment/visuals/windows-wsl2-comparison.csv"
+    ],
+    "charts": [
+      {
+        "title": "WSL2 capability classifications",
+        "editable_source": "docs/workflows/wsl2-codex-environment/visuals/capability-matrix.csv",
+        "data_source": "docs/workflows/wsl2-codex-environment/capability-matrix.md",
+        "counting_rule": "One row per capability category; repeated commands and diagnostic runs are not counted again.",
+        "redaction_status": "public-safe",
+        "target_document": "technical_sharing_article",
+        "target_section": "前后流程与架构对照"
+      }
+    ],
+    "screenshots": [],
+    "editable_sources_required": true,
+    "captions_and_source_notes_required": true
+  },
+  "research_notes": {
+    "cohort": "One WSL2 Ubuntu 24.04 environment on one maintainer machine; three diagnostic rounds.",
+    "comparability": "Environment capability comparison only. It is not a Task #65 Token experiment result.",
+    "incomparability_factors": [
+      "Different operating-system and control-plane conditions are intentionally changed variables",
+      "Network and proxy service state can vary over time",
+      "Raw Windows and WSL rollout command counts are not normalized in this Task"
+    ],
+    "counterintuitive_findings": [
+      "WSL2 did not remove Codex sandbox approvals",
+      "A missing bare python command did not mean Python was absent",
+      "One successful no-proxy API endpoint did not imply complete no-proxy GitHub access"
+    ],
+    "generalizable_principles": [
+      "Separate OS/tool visibility from sandbox permission boundaries",
+      "Separate network, authentication and Git metadata failure domains",
+      "Use reversible, unique and cleanup-verified write probes",
+      "Record unknown and not-measured fields instead of inferring them"
+    ],
+    "project_specific_limits": [
+      "uv 0.12.1 and Python 3.13 are current repository contracts",
+      "The repository currently relies on a machine-local proxy path",
+      "Exact Guardian routing is authoritative only in outer Codex rollout evidence"
+    ],
+    "rejected_hypotheses": [
+      "Migrating to WSL2 automatically removes all approval requirements",
+      "Bare python is required for this project",
+      "Partial no-proxy success is sufficient for formal workflow use"
+    ],
+    "remaining_unknowns": [
+      "Cross-machine reproduction success rate",
+      "Long-term proxy stability",
+      "WSL2 disk and performance overhead",
+      "Final minimum-permission Rules safety and effectiveness",
+      "Validation/Evidence Runner Token impact",
+      "Task #65 candidate Token, command, Guardian, quality and duration results"
+    ]
+  },
+  "migration_costs": {
+    "diagnostic_rounds": 3,
+    "manual_steps_observed": [
+      "WSL2 and VS Code Remote WSL environment setup",
+      "Repository clone into Linux filesystem",
+      "WSL-local GitHub CLI login",
+      "uv version alignment"
+    ],
+    "total_migration_duration": {
+      "status": "not-measured",
+      "reason": "No common start/end boundary was captured."
+    },
+    "disk_cost": {
+      "status": "not-measured"
+    },
+    "performance_cost": {
+      "status": "not-measured"
+    },
+    "maintenance_points": [
+      "Python and uv version drift",
+      "GitHub login and scopes",
+      "Proxy availability",
+      "WSL and extension updates",
+      "Approval policy drift"
+    ]
+  },
+  "evidence_index": "docs/workflows/wsl2-codex-environment/evidence-index.json",
+  "completeness": {
+    "required_categories": [
+      "fact",
+      "comparison",
+      "anomaly",
+      "decision",
+      "communication",
+      "research"
+    ],
+    "category_status": {
+      "fact": "complete",
+      "comparison": "complete",
+      "anomaly": "complete",
+      "decision": "complete",
+      "communication": "complete",
+      "research": "complete"
+    },
+    "handbook_material_map_complete": true,
+    "technical_article_material_map_complete": true,
+    "all_public_claims_have_evidence_refs": true,
+    "all_assets_have_source_and_redaction_status": true,
+    "success_case_recorded": true,
+    "failure_or_recovery_case_recorded": true,
+    "unexpected_case_recorded": true,
+    "rejected_options_recorded": true,
+    "remaining_unknowns_recorded": true,
+    "external_raw_evidence_sha_manifest_complete": true,
+    "delivery_identity_frozen": true,
+    "overall_status": "ready-for-independent-review-after-delivery-validation",
+    "task_material_register_present": true,
+    "dynamic_lifecycle_fields_have_authoritative_sources": true
+  },
+  "task_material_register": {
+    "path": "docs/workflows/publication-materials/task-material-register.md",
+    "role": "Cross-Task provenance checklist for repository and external publication/research materials.",
+    "update_policy": "Update at Delivery, independent Review and Closeout for every material-producing Task."
+  },
+  "external_evidence_manifest": {
+    "path": "docs/workflows/wsl2-codex-environment/external-evidence-manifest.json",
+    "sha256": "07e0715ed655641345ba7dd1e2e79b52dffe8f6c104058ddd9428d535146a76a",
+    "run_count": 3,
+    "file_count": 19,
+    "repository_inclusion_status": "committed-manifest-only"
+  },
+  "delivery_identity": {
+    "task_issue": "#82",
+    "parent_feature": "#77",
+    "epic": "#61",
+    "pull_request": "#100",
+    "branch": "82-task-reproducible-wsl2-codex-environment",
+    "base_sha": "a492f0b334f950f2613b4b2204e96bef413355be",
+    "dynamic_lifecycle_source_policy": "reviewed head and verdict come from independent Review evidence; merge commit, closeout status, branch cleanup and final Issue/Project status come from closeout evidence."
+  }
+}

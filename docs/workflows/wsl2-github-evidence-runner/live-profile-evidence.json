@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0",
+  "task": 84,
+  "pull_request": 102,
+  "evidence_type": "task84-live-fixed-profile",
+  "status": "partial",
+  "observed_at_utc": "2026-08-02T17:14:24.543886Z",
+  "command": [
+    "tools/agent_workflow/wsl2_github_evidence_runner.py",
+    "review",
+    "--task",
+    "84",
+    "--pr",
+    "102",
+    "--expected-base-sha",
+    "74a75872078221c38dbd132a1d438b0bb05c1870",
+    "--expected-head-sha",
+    "3814af3d95ece48ef03c59536dd025f5fb5511fb"
+  ],
+  "identity": {
+    "base_sha": "74a75872078221c38dbd132a1d438b0bb05c1870",
+    "head_sha": "3814af3d95ece48ef03c59536dd025f5fb5511fb"
+  },
+  "execution": {
+    "first_execution_direct": false,
+    "guardian_turns": "unavailable",
+    "approval_prompts": 1,
+    "elevated_executions": 1,
+    "exit_code": 3,
+    "duration_ms": 6984,
+    "stdout_bytes": 455,
+    "stdout_counting_policy": "include-terminal-newline",
+    "stdout_terminal_newline": true
+  },
+  "runner_result": {
+    "profile": "review",
+    "status": "partial",
+    "partial": true,
+    "api_calls": 6,
+    "runner_git_operations": 1,
+    "snapshot_id": "ev-c81fe3b05700f1b4",
+    "snapshot_fingerprint": "1d3f904a183501e70a5f6a0e792f6858b9cc0a5a3eacfea262dd9c68fe742fa3",
+    "result_path": ".agents/evidence.local/wsl2-github-runs/20260802T171424Z-be67899c3b66/result.json",
+    "result_sha256": "bce24d26f0b600d6cd92e75a56c4ffdcd85027bc6e39bb3fe4bb3ae3bc3df12d",
+    "unknown_gate_count": 1,
+    "unknown_gates": [
+      "required_checks_configuration"
+    ],
+    "status_gate_count": {
+      "pass": 18,
+      "fail": 0,
+      "unknown": 1
+    },
+    "quality_check": {
+      "status": "observed",
+      "name": "quality",
+      "state": "SUCCESS"
+    }
+  },
+  "tool_versions": {
+    "runner_version": "1.0.0",
+    "gh": "2.97.0",
+    "git": "2.43.0",
+    "codex": "0.146.0-alpha.9.2"
+  },
+  "external_locator": {
+    "codex_session_id": "unavailable",
+    "rollout_id": "unavailable",
+    "tool_chunk_id": "unavailable"
+  },
+  "repository_inclusion": {
+    "raw_result_committed": false,
+    "summary_committed": true
+  },
+  "claim_boundary": {
+    "supports": [
+      "one fixed profile invocation and its observed runtime/evidence metrics"
+    ],
+    "does_not_support": [
+      "Task #65 Token reduction",
+      "all profiles on all machines",
+      "workflow-wide before/after savings"
+    ]
+  }
+}

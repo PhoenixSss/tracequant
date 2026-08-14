@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0",
+  "task": 85,
+  "pull_request": null,
+  "evidence_type": "task85-live-skill-runner-migration",
+  "status": "not-measured",
+  "observed_at_utc": null,
+  "identity": {
+    "base_sha": "e1c3b587a5fa1a61217fb9160015472bc0e36154",
+    "material_capture_head": null,
+    "final_delivery_head": null
+  },
+  "static_audit": {
+    "status": null,
+    "legacy_command_path_count": null,
+    "skill_lines": null,
+    "digest_sha256": null
+  },
+  "fixed_path": {
+    "delivery_snapshot": {
+      "status": null,
+      "result_sha256": null,
+      "stdout_bytes": null,
+      "duration_ms": null
+    },
+    "workflow_delivery_validation": {
+      "status": null,
+      "command_count": null,
+      "result_sha256": null,
+      "stdout_bytes": null,
+      "duration_ms": null
+    },
+    "delivery_readiness_snapshot": {
+      "status": null,
+      "result_sha256": null,
+      "stdout_bytes": null,
+      "duration_ms": null
+    }
+  },
+  "observed_session": {
+    "model_visible_fixed_runner_invocations": null,
+    "legacy_runner_invocations": null,
+    "guardian_turns": "unavailable",
+    "approval_prompts": null,
+    "elevated_executions": null,
+    "codex_version": null
+  },
+  "rules": {
+    "fixed_entries_allow": null,
+    "direct_tools_not_allow": null,
+    "writes_remain_prompt_or_forbidden": null,
+    "prefix_tail_runner_reject": null
+  },
+  "bounded_expansion_examples": {
+    "evidence_partial_or_unknown": "test-backed-not-live",
+    "validation_failure": "test-backed-not-live",
+    "legacy_full_chain_used": false
+  },
+  "expected_vs_observed": [],
+  "repository_inclusion": {
+    "raw_evidence_committed": false,
+    "summary_committed": true
+  },
+  "claim_boundary": {
+    "token_reduction_claimed": false,
+    "task65_candidate_executed": false
+  }
+}

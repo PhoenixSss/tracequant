@@ -1,0 +1,305 @@
+{
+  "schema_version": "1.0",
+  "generated_at_utc": "2026-08-02T05:57:13Z",
+  "hash_algorithm": "sha256",
+  "source_policy": {
+    "raw_evidence_committed": false,
+    "absolute_local_paths_recorded": false,
+    "stdout_stderr_bodies_copied": false,
+    "credential_material_copied": false,
+    "repository_inclusion_status": "external-only"
+  },
+  "runs": [
+    {
+      "run_id": "20260801T133921Z-66016f44",
+      "purpose": "initial environment and capability diagnostic",
+      "logical_archive_name": "wsl2-environment-diagnostic/20260801T133921Z-66016f44",
+      "file_count": 10,
+      "files": [
+        {
+          "logical_name": "acceptance-gap-analysis.json",
+          "relative_name": "acceptance-gap-analysis.json",
+          "size_bytes": 534,
+          "sha256": "4aa91e6015b15fcd1584eb784836dce80c9b973e0ac05b1db355e1fa43ae4b2b",
+          "media_type": "application/json",
+          "parse_status": {
+            "format": "json",
+            "status": "pass",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "capability-matrix.json",
+          "relative_name": "capability-matrix.json",
+          "size_bytes": 2440,
+          "sha256": "efa4d633ef1f7dac947a67ad59fa731d9eed0fce06340065f18f2f47baff0bc4",
+          "media_type": "application/json",
+          "parse_status": {
+            "format": "json",
+            "status": "pass",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "commands.jsonl",
+          "relative_name": "commands.jsonl",
+          "size_bytes": 50205,
+          "sha256": "e233c68e3793ab26ae00fb15b3672fc62202447bb35a34c3e30843090848f825",
+          "media_type": "application/jsonl",
+          "parse_status": {
+            "format": "jsonl",
+            "status": "pass",
+            "records": 87,
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "diagnostic-report.md",
+          "relative_name": "diagnostic-report.md",
+          "size_bytes": 1593,
+          "sha256": "3da6026db1ae8741eff4efa0b6ff64c67c390182a4ff872f6ca900b320f19c00",
+          "media_type": "text/markdown",
+          "parse_status": {
+            "format": "md",
+            "status": "not-applicable",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "environment.json",
+          "relative_name": "environment.json",
+          "size_bytes": 5375,
+          "sha256": "4a10d1a33d99a44c301677f65d1ae62d49dc5c92604c2522a6074e1590d71420",
+          "media_type": "application/json",
+          "parse_status": {
+            "format": "json",
+            "status": "pass",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "git-github-summary.json",
+          "relative_name": "git-github-summary.json",
+          "size_bytes": 661,
+          "sha256": "76086a433872918f37f40edb3eb556ea55604169edb09bbd9c18bd7099d82ebd",
+          "media_type": "application/json",
+          "parse_status": {
+            "format": "json",
+            "status": "pass",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "guardian-approval-matrix.json",
+          "relative_name": "guardian-approval-matrix.json",
+          "size_bytes": 2440,
+          "sha256": "efa4d633ef1f7dac947a67ad59fa731d9eed0fce06340065f18f2f47baff0bc4",
+          "media_type": "application/json",
+          "parse_status": {
+            "format": "json",
+            "status": "pass",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "network-summary.json",
+          "relative_name": "network-summary.json",
+          "size_bytes": 757,
+          "sha256": "6885bfeb86facc31430e5cf41535f6afb6317619f024bfd365b1246cbc275419",
+          "media_type": "application/json",
+          "parse_status": {
+            "format": "json",
+            "status": "pass",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "validation-summary.json",
+          "relative_name": "validation-summary.json",
+          "size_bytes": 3795,
+          "sha256": "806b6559aa520c24b7224ed48bfb987ef0841d48aef0c576142ac4ad6c006ce2",
+          "media_type": "application/json",
+          "parse_status": {
+            "format": "json",
+            "status": "pass",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "windows-wsl2-comparison.json",
+          "relative_name": "windows-wsl2-comparison.json",
+          "size_bytes": 680,
+          "sha256": "0c8cf238ddc9e5aede54ce97573b87eda15452718efbaae381cc12b5f3100e63",
+          "media_type": "application/json",
+          "parse_status": {
+            "format": "json",
+            "status": "pass",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        }
+      ]
+    },
+    {
+      "run_id": "20260801T145709Z-followup",
+      "purpose": "GitHub authentication, fetch and formal repository write follow-up",
+      "logical_archive_name": "wsl2-environment-diagnostic/20260801T145709Z-followup",
+      "file_count": 5,
+      "files": [
+        {
+          "logical_name": "followup-environment.json",
+          "relative_name": "followup-environment.json",
+          "size_bytes": 3963,
+          "sha256": "bee69c2f448aac60a0df00a4c6f4af32ab8a562609e90c8654c0902be41676f0",
+          "media_type": "application/json",
+          "parse_status": {
+            "format": "json",
+            "status": "pass",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "followup-report.md",
+          "relative_name": "followup-report.md",
+          "size_bytes": 1839,
+          "sha256": "0005d39bb429677681fcef3ae7571e2325fbe23f0125bf4bee39e547b564a57a",
+          "media_type": "text/markdown",
+          "parse_status": {
+            "format": "md",
+            "status": "not-applicable",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "followup-validation.json",
+          "relative_name": "followup-validation.json",
+          "size_bytes": 3214,
+          "sha256": "ef94e1ff094fa553a9dd76e2e0f9ea54d97c29bc34243b4eaf55a36eeb0aa34b",
+          "media_type": "application/json",
+          "parse_status": {
+            "format": "json",
+            "status": "pass",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "formal-repository-write-probe.json",
+          "relative_name": "formal-repository-write-probe.json",
+          "size_bytes": 2314,
+          "sha256": "d4754f06a5d5cacf0fe26f6d2ead91ff09ad4249d3b3b53242869578d7dcd007",
+          "media_type": "application/json",
+          "parse_status": {
+            "format": "json",
+            "status": "pass",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "github-auth-fetch.json",
+          "relative_name": "github-auth-fetch.json",
+          "size_bytes": 2485,
+          "sha256": "bcce1c9d0269dd442003a0e4f2770c464fa43c6599dfa2a9748eb20a1c65523c",
+          "media_type": "application/json",
+          "parse_status": {
+            "format": "json",
+            "status": "pass",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        }
+      ]
+    },
+    {
+      "run_id": "20260801T152359Z-final-gaps",
+      "purpose": "reversible GitHub write and proxy comparison",
+      "logical_archive_name": "wsl2-environment-diagnostic/20260801T152359Z-final-gaps",
+      "file_count": 4,
+      "files": [
+        {
+          "logical_name": "cleanup-verification.json",
+          "relative_name": "cleanup-verification.json",
+          "size_bytes": 755,
+          "sha256": "b0fe0bd8edbc5fbed9470b393147f45a60485ab497c9d09d35cfd522568afcd1",
+          "media_type": "application/json",
+          "parse_status": {
+            "format": "json",
+            "status": "pass",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "final-gap-report.md",
+          "relative_name": "final-gap-report.md",
+          "size_bytes": 1861,
+          "sha256": "cc80547bcc8136595cf4f5594c3773d46ea7b23bdf5808dd51951693bc2a8c47",
+          "media_type": "text/markdown",
+          "parse_status": {
+            "format": "md",
+            "status": "not-applicable",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "github-write-probe.json",
+          "relative_name": "github-write-probe.json",
+          "size_bytes": 1425,
+          "sha256": "ece62238da571b92807a11da54f91533b987076520873fee5358ee775ce1f5ab",
+          "media_type": "application/json",
+          "parse_status": {
+            "format": "json",
+            "status": "pass",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        },
+        {
+          "logical_name": "proxy-comparison.json",
+          "relative_name": "proxy-comparison.json",
+          "size_bytes": 2583,
+          "sha256": "764f9238b3c7f6460e2f75a9bbbf4ec8b6bb75a5bf2f9eb0b41c952806c088ef",
+          "media_type": "application/json",
+          "parse_status": {
+            "format": "json",
+            "status": "pass",
+            "error": null
+          },
+          "redaction_status": "source-artifact-hashed-only-not-copied",
+          "repository_inclusion_status": "external-only"
+        }
+      ]
+    }
+  ]
+}
