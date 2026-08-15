@@ -32,11 +32,22 @@ ACTIVE_WORKFLOW_FILES = (
 
 APPROVED_TELEMETRY_REFERENCE_FILES = {
     "AGENTS.md": "normative statement that runtime telemetry is disabled",
+    "benchmarks/task-65-round-2-v2/manifests/generation-b-pinned-manifest.json": (
+        "B-generation pinned manifest recording the historical telemetry doc "
+        "reference verbatim as a known limitation"
+    ),
+    "benchmarks/task-65-round-2-v2/manifests/generation-a-pinned-manifest.json": (
+        "A-generation pinned manifest preserving the historical validation "
+        "closure path verbatim"
+    ),
     ".agents/skills/task-delivery/SKILL.md": (
         "preserved historical baseline Skill containing the former telemetry contract"
     ),
     ".agents/skills/task-pr-review/SKILL.md": (
         "preserved historical baseline Skill containing the former telemetry contract"
+    ),
+    "tests/benchmarks/test_generation_manifests.py": (
+        "regression assertions for the B-manifest stale telemetry-doc known limitation"
     ),
     "tests/tools/test_runtime_telemetry_removed.py": "removal regression assertions",
     "tests/tools/test_workflow_skills.py": "Skill regression assertion",

@@ -40,6 +40,11 @@ stop at the requested boundary.
 Read applicable `AGENTS.md` / `AGENTS.override.md` and
 `.agents/policies/command-execution.md`, `.agents/policies/workflow-evidence.md`.
 
+Shared lifecycle semantics are owned by `docs/development/issue-workflow.md`
+(§3 lifecycle metadata, §4 readiness, §6 Delivery, §10 remediation). Read the
+minimal needed section for the current phase; do not duplicate lifecycle prose
+in this Skill.
+
 Use the current repository Runner interfaces:
 
 ```bash
@@ -99,20 +104,11 @@ maintainer authorization.
 
 ## Lifecycle state
 
-Keep Codex labels separate from Project `Status`:
-
-| State | Codex label | Project Status |
-| --- | --- | --- |
-| specification incomplete | `codex:needs-spec` | `Inbox` / `Specifying` |
-| ready | `codex:ready` | `Ready` |
-| implementation active | `codex:ready` | `In Progress` |
-| PR or review active | `codex:ready` | `Review` |
-| blocked | `codex:blocked` | `Blocked` |
-| verified post-merge | `codex:ready` | `Done` |
-
-Implementation requires an open Task, `Ready` or `In Progress`,
-`codex:ready`, no `codex:blocked`, and this invocation. Stop before a state
-write if actual Project options differ.
+The label / Project `Status` mapping and readiness conditions are defined in
+`docs/development/issue-workflow.md` §3–§4; do not re-derive the table here.
+Implementation requires an open Task, `Ready` or `In Progress`, `codex:ready`,
+no `codex:blocked`, and this invocation. Stop before a state write if actual
+Project options differ.
 
 `codex:ready` and `codex:needs-spec` are mutually exclusive lifecycle labels.
 Their coexistence is a lifecycle conflict that fails Preflight; do not proceed.

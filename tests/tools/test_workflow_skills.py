@@ -151,19 +151,24 @@ def test_local_workflow_artifact_directories_are_exactly_ignored() -> None:
 # --- Evidence verdict matrix tests ---
 
 
-def test_review_skill_has_evidence_status_to_verdict_matrix() -> None:
+def test_review_skill_has_shared_owner_contract_and_exact_tokens() -> None:
     text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
-    assert "Evidence status" in text
-    assert "verdict matrix" in text
-    assert "partial" in text.casefold()
-    assert "any cause" in text.casefold()
-    assert "Conditional pass" in text
-    assert "never upgrades" in text.casefold()
-    assert "plan-limit 403" in text.casefold()
-    assert "do not merge" in text.casefold()
-    assert "Deterministic mapping" in text
-    assert "process success" in text.casefold()
-    assert "is not gate pass" in text
+    # Shared semantic owner referenced for verdict and remediation conditions.
+    assert "docs/development/pr-review.md" in text
+    assert "§8" in text
+    assert "§9" in text
+    # Exact executable verdict output tokens are retained.
+    assert "通过，可以人工合并" in text
+    assert "有条件通过，不得合并" in text
+    assert "不通过，需要修复" in text
+    # Head-change invalidation retained as a hard guard.
+    assert "REVIEW INVALIDATED — HEAD CHANGED" in text
+    # Executable procedure retained.
+    assert "workflow-review" in text
+    assert "recheck --snapshot-id" in text
+    # The full shared verdict mapping table is no longer duplicated in the Skill.
+    assert "### Deterministic mapping" not in text
+    assert "| Evidence `status` | Permitted verdict ceiling |" not in text
 
 
 def test_review_skill_requires_remediation_handoff_for_non_pass() -> None:
@@ -210,14 +215,13 @@ def test_review_skill_has_tool_discipline_section() -> None:
     assert "Search completeness" in text
 
 
-def test_review_skill_has_verdict_rules_subsection() -> None:
+def test_review_skill_has_minimal_verdict_summary_without_duplicated_rules() -> None:
     text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
-    assert "Verdict rules" in text
-    assert "unconditional pass" in text.casefold()
-    assert "evidence gate" in text.casefold()
-    assert "not_verified" in text
-    assert "groups or criteria" in text
-    assert "incomplete" in text.casefold()
+    # Minimal semantic summary with authoritative reference, not a full rule set.
+    assert "pr-review.md" in text
+    assert "PASS is the only mergeable state" in text
+    assert "CONDITIONAL is never mergeable" in text
+    assert "### Verdict rules" not in text
 
 
 def test_review_skill_runner_command_includes_skill_path() -> None:
