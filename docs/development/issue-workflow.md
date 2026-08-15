@@ -52,11 +52,19 @@ GitHub native metadata 是其机械事实。
 | Parent / Sub-issues / blocked-by / blocking | GitHub native metadata | 不在正文重复机械 metadata |
 | PR / merge identity | GitHub native（Squash Merge） | closeout 验证对象 |
 
+Issue Specification v2 的 `type:*` label 是 Issue classification 的权威 carrier。
+在本仓库的 personal-account 配置中，native Issue Type 不可用；如果机械 API
+同时返回 native type，Runner 只将其作为一致性校验。缺失 canonical label、多个
+互斥 type labels、native/label 冲突或未知 type 都必须 fail closed。`type:task`
+与 `type:bug` 是 implementation-bearing leaf，可进入 Delivery、PR 与
+Independent Review；`type:epic`、`type:feature`、`type:research` 不属于该
+implementation PR lifecycle。
+
 不得在 Issue 正文重复维护与 native relationship 等价的机械 metadata。
 
 ## 4. Readiness
 
-一个 Task 满足以下条件才可开始 Delivery：
+一个 implementation-bearing leaf 满足以下条件才可开始 Delivery：
 
 - `codex:ready` label 存在且无 `codex:blocked`；
 - Project Status = Ready（或等效 lifecycle 状态）；
@@ -117,7 +125,7 @@ intent 无法可靠解析时：**不要猜**。回退到 explicit Skill-name fal
   targeted validation → commit → push → PR → CI checks → delivery readiness →
   handoff for Independent Review。
 - 一个 Task 通常产生一个 PR（base = `main`）。
-- 实现只处理当前 leaf Task；不进行无关重构。
+- 实现只处理当前 implementation-bearing leaf；不进行无关重构。
 - 提交前必须完成 target validation；PR 创建前必须完成 delivery readiness
   验证（Runner 快照）。
 - Human Gate 事项未决时不得继续 Delivery（§9）。

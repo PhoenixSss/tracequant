@@ -74,6 +74,8 @@ query($owner:String!, $name:String!, $number:Int!) {
 LIFECYCLE_LABELS: Final = frozenset(
     {"codex:needs-spec", "codex:ready", "codex:blocked"}
 )
+CANONICAL_ISSUE_TYPES: Final = frozenset({"epic", "feature", "task", "bug", "research"})
+IMPLEMENTATION_BEARING_LEAF_TYPES: Final = ("type:task", "type:bug")
 KNOWN_PROJECT_STATUSES: Final = frozenset(
     {"Inbox", "Specifying", "Ready", "In Progress", "Review", "Blocked", "Done"}
 )
@@ -1678,7 +1680,7 @@ def _issue_gates(
     expected_state: str | None,
     required_label: str | None,
     forbidden_label: str | None,
-    expected_type_label: str | None,
+    expected_type_label: str | Sequence[str] | None,
 ) -> dict[str, Any]:
     gates: dict[str, Any] = {}
     if issue is None:
@@ -1709,17 +1711,76 @@ def _issue_gates(
             "pass" if forbidden_label not in labels else "fail"
         )
     if expected_type_label:
-        issue_type = relationships.get("issue_type")
-        matches_type = expected_type_label in labels or (
-            isinstance(issue_type, str)
-            and issue_type.casefold()
-            == expected_type_label.removeprefix("type:").casefold()
+        expected_types = (
+            [expected_type_label]
+            if isinstance(expected_type_label, str)
+            else list(expected_type_label)
         )
-        gates["issue_type"] = _gate(
-            "pass" if matches_type else "unknown", expected_type_label
+        gates["issue_type"] = _issue_type_gate(
+            labels,
+            relationships.get("issue_type"),
+            expected_types,
         )
     gates["formal_blockers"] = _formal_blockers_gate(relationships)
     return gates
+
+
+def _issue_type_gate(
+    labels: set[str],
+    native_issue_type: Any,
+    expected_types: Sequence[str],
+) -> dict[str, Any]:
+    """Validate the Issue Specification v2 type carrier and lifecycle kind.
+
+    Issue Specification v2 assigns classification semantics to ``type:*``
+    labels because native Issue Types are unavailable for the repository's
+    personal-account setup.  A native type, when returned by GitHub, is only
+    an independent consistency check; it cannot silently replace a missing
+    authoritative label.  This keeps Delivery and Review on the same
+    fail-closed contract.
+    """
+    label_types = sorted(
+        label.removeprefix("type:").casefold()
+        for label in labels
+        if isinstance(label, str) and label.startswith("type:")
+    )
+    native_type = (
+        native_issue_type.removeprefix("type:").casefold()
+        if isinstance(native_issue_type, str) and native_issue_type.strip()
+        else None
+    )
+    expected = sorted(
+        value.removeprefix("type:").casefold()
+        for value in expected_types
+        if isinstance(value, str)
+    )
+    if len(label_types) != 1:
+        if not label_types:
+            return _gate(
+                "fail",
+                "canonical type label is missing; native Issue Type cannot replace it",
+            )
+        return _gate(
+            "fail",
+            f"conflicting canonical type labels: {label_types}",
+        )
+    label_type = label_types[0]
+    if label_type not in CANONICAL_ISSUE_TYPES:
+        return _gate("fail", f"unsupported canonical Issue type: {label_type}")
+    if native_type is not None:
+        if native_type not in CANONICAL_ISSUE_TYPES:
+            return _gate("fail", f"unsupported native Issue Type: {native_type}")
+        if native_type != label_type:
+            return _gate(
+                "fail",
+                f"native Issue Type {native_type!r} conflicts with label type {label_type!r}",
+            )
+    if label_type not in expected:
+        return _gate(
+            "fail",
+            f"Issue type {label_type!r} is not allowed here; expected one of {expected}",
+        )
+    return _gate("pass", f"canonical Issue type: {label_type}")
 
 
 def _formal_blockers_gate(relationships: Mapping[str, Any]) -> dict[str, Any]:
@@ -2032,7 +2093,7 @@ def _collect_task_pr(
         expected_state=issue_expected_state,
         required_label="codex:ready",
         forbidden_label="codex:blocked",
-        expected_type_label="type:task",
+        expected_type_label=IMPLEMENTATION_BEARING_LEAF_TYPES,
     )
     gates["origin_fetch"] = _gate(observed["git"].get("origin_fetch", "unknown"))
     if pr_number is not None:
@@ -2287,7 +2348,7 @@ def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, 
             expected_state="OPEN",
             required_label="codex:ready",
             forbidden_label="codex:blocked",
-            expected_type_label="type:task",
+            expected_type_label=IMPLEMENTATION_BEARING_LEAF_TYPES,
         )
         gates = dict(issue_gates)
         gates["repository"] = _gate("pass")
@@ -2953,12 +3014,15 @@ def _build_parser() -> argparse.ArgumentParser:
     delivery.add_argument("--expected-head-sha", help="expected branch head SHA")
     delivery.add_argument("--pr", type=int, help="expected PR number")
 
-    readiness = sub.add_parser("delivery-readiness", help="Task PR readiness snapshot")
+    readiness = sub.add_parser(
+        "delivery-readiness", help="implementation-bearing leaf PR readiness snapshot"
+    )
     _common(readiness)
     _pr_args(readiness)
 
     review = sub.add_parser(
-        "pr-review-snapshot", help="independent PR review metadata snapshot"
+        "pr-review-snapshot",
+        help="independent implementation-bearing leaf PR review metadata snapshot",
     )
     _common(review)
     _pr_args(review)

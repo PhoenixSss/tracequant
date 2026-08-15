@@ -11,9 +11,9 @@ executable procedure（命令序列、权限行为、Runner argv 等）。
 
 ## 1. Purpose / Independence
 
-- Review 是对一个 Task PR 的**独立**质量门禁：fresh session 中由未参与
+- Review 是对一个 implementation-bearing leaf PR 的**独立**质量门禁：fresh session 中由未参与
   该 head 实现或 remediation 的 session 执行。
-- Review 的结论基于 current Task specification + effective diff +
+- Review 的结论基于 current leaf specification + effective diff +
   relevant code/tests/checks 的完整证据，不继承 Delivery 的 self-check
   结论（no Delivery verdict inheritance）。
 - Review 不修复 findings、不改变 Issue/PR/Project state、不 merge。
@@ -33,9 +33,14 @@ Review 对 repository / Issue / PR / Project 完全只读：不写文件、
 
 Review 锁定以下身份（确定性验证，非模型解读）：
 
-- target Task（number 为主键，current title 为 canonical）；
+- target implementation-bearing leaf（number 为主键，current title 为
+  canonical；Issue Specification v2 的 `type:task` 与 `type:bug` 均可审查）；
 - target PR（base / head SHA）；
-- 当前 Task specification（leaf body + 有效 spec）。
+- 当前 leaf specification（body + 有效 spec）。
+
+Review admission 使用与 Delivery 相同的 canonical Issue type contract：`type:*`
+label 是权威 carrier，native Issue Type（若可见）必须与 label 一致；缺失、冲突、
+未知或非 implementation-bearing leaf type 均 fail closed。
 
 ## 5. Head lock
 
