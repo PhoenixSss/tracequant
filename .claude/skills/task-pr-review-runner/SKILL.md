@@ -1,11 +1,11 @@
 ---
 name: task-pr-review-runner
-description: Independently and strictly read-only review one maintainer-specified Task PR in a fresh session. Lock base/head/effective diff, inspect the complete change, run Review Runners, classify findings, output one fixed verdict, and when the verdict is not passing emit a bounded remediation handoff for task-delivery-runner. Never fix, write GitHub state, submit a review, merge, close Issues, perform closeout, or assess Feature completion.
+description: Independently and strictly read-only review one maintainer-specified implementation-bearing leaf PR in a fresh session. Lock base/head/effective diff, inspect the complete change, run Review Runners, classify findings, output one fixed verdict, and when the verdict is not passing emit a bounded remediation handoff for task-delivery-runner. Never fix, write GitHub state, submit a review, merge, close Issues, perform closeout, or assess Feature completion.
 ---
 
 # Task PR review runner
 
-Use this Skill for one existing Task PR in a new session that did not
+Use this Skill for one existing implementation-bearing leaf PR in a new session that did not
 participate in specification interpretation, implementation, fixes, commit,
 push, or PR creation. Otherwise stop with:
 
@@ -163,9 +163,13 @@ deletion, closeout, or Feature completion assessment.
 
 ## Phase 1: identify and lock
 
-Generate `review`. Verify same-repository Task/PR, Task type/state, exact closing
-linkage, PR open and non-Draft, expected base/head, complete files/commits,
-checks, reviews, threads, mergeability, and Required-Checks classification.
+Generate `review`. Verify same-repository implementation-bearing leaf/PR,
+canonical Issue type/state, exact closing linkage, PR open and non-Draft,
+expected base/head, complete files/commits, checks, reviews, threads,
+mergeability, and Required-Checks classification. Issue Specification v2 admits
+`type:task` and `type:bug` for this lifecycle; the shared Runner contract uses
+the authoritative `type:*` label and fails closed on missing, conflicting,
+unknown, or non-reviewable types.
 
 Lock and report:
 

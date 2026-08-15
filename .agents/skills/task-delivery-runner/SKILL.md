@@ -166,7 +166,7 @@ unrelated, generated, secret-bearing, or prohibited files → fail.
 
 Generate the `delivery` snapshot. The snapshot provides deterministic
 identity facts: repository/origin, workspace, refs/worktrees, synchronized
-main identity, Task type/title/state, Parent identity,
+main identity, implementation-bearing leaf type/title/state, Parent identity,
 dependencies/Relationships metadata, labels, Project fields, blocker state,
 and PR head/base/checks when applicable. Verifying these mechanical facts
 does not require reading the full text of any source into the model context.
