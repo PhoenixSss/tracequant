@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "task-65-round-2-v2 normalized context input",
+  "description": "Normalized context input produced by the Claude transcript adapter from INPUT_CONTEXT_BEARING records (attachments with file/listing/todo content, compaction summaries, prompts). Context inputs are content that entered the session without a tool call; the access audit matches them against the same Class 2 / Class 3 forbidden identifiers so contamination via attachment / summary / snapshot input is detected. Context inputs are audited, never a substitute for access events.",
+  "protocol_identity": "task-65-round-2-v2",
+  "schema_version": 1,
+  "type": "object",
+  "required": [
+    "session_id",
+    "timestamp",
+    "source_type",
+    "target",
+    "raw_event_reference"
+  ],
+  "properties": {
+    "session_id": {"type": "string"},
+    "timestamp": {"type": "string"},
+    "source_type": {
+      "type": "string",
+      "enum": [
+        "attachment:file",
+        "attachment:agent_listing_delta",
+        "attachment:skill_listing",
+        "attachment:command_permissions",
+        "attachment:todo_reminder",
+        "summary",
+        "user-prompt",
+        "last-prompt",
+        "ai-title",
+        "system:compact_boundary",
+        "system:api_error"
+      ]
+    },
+    "target": {"type": "string"},
+    "raw_event_reference": {"type": "string"}
+  },
+  "additionalProperties": false
+}

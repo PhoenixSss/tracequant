@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tracequant.local/task-65-round-2-v2/generation-manifest.schema.json",
+  "title": "task-65-round-2-v2 generation manifest",
+  "description": "Explicit schemas for A/B pinned manifests, C/D templates, and C/D run-locked manifests.",
+  "protocol_identity": "task-65-round-2-v2",
+  "schema_version": 1,
+  "oneOf": [
+    {"$ref": "#/$defs/pinnedManifest"},
+    {"$ref": "#/$defs/templateManifest"},
+    {"$ref": "#/$defs/runLockedManifest"}
+  ],
+  "$defs": {
+    "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "projectionAction": {
+      "type": "string",
+      "enum": [
+        "INSTALL_GENERATION_VERSION",
+        "INHERIT_BUSINESS_BASE",
+        "ENSURE_ABSENT"
+      ]
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "EXECUTION_REQUIRED",
+        "VALIDATION_PRESENCE_REQUIRED",
+        "IDENTITY_REQUIRED",
+        "OPTIONAL_HISTORICAL_LIMITATION",
+        "CONDUCTOR_BENCHMARK_TOOLING"
+      ]
+    },
+    "pinnedPath": {
+      "type": "object",
+      "required": ["path", "role", "projection_action", "exists_at_source"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "role": {"$ref": "#/$defs/role"},
+        "projection_action": {"$ref": "#/$defs/projectionAction"},
+        "projection_reason": {"type": ["string", "null"]},
+        "exists_at_source": {"type": "boolean"},
+        "blob_id": {"$ref": "#/$defs/sha"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "file_mode": {"type": "string", "enum": ["100644", "100755"]}
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"properties": {"exists_at_source": {"const": true}}},
+          "then": {"required": ["blob_id", "sha256", "file_mode"]}
+        },
+        {
+          "if": {"properties": {"exists_at_source": {"const": false}}},
+          "then": {"required": ["projection_reason"]}
+        }
+      ]
+    },
+    "runLockedPath": {
+      "type": "object",
+      "required": [
+        "path",
+        "role",
+        "projection_action",
+        "exists_at_source",
+        "blob_id",
+        "sha256",
+        "file_mode"
+      ],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "role": {"$ref": "#/$defs/role"},
+        "projection_action": {"$ref": "#/$defs/projectionAction"},
+        "exists_at_source": {"const": true},
+        "blob_id": {"$ref": "#/$defs/sha"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "file_mode": {"type": "string", "enum": ["100644", "100755"]}
+      },
+      "additionalProperties": false
+    },
+    "pinnedClosure": {
+      "type": "object",
+      "required": ["definition", "paths"],
+      "properties": {
+        "definition": {"type": "string"},
+        "paths": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/pinnedPath"}
+        },
+        "source_absent_inherit_allowlist": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "runLockedClosure": {
+      "type": "object",
+      "required": ["definition", "paths"],
+      "properties": {
+        "definition": {"type": ["object", "string"]},
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/runLockedPath"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "sourceSelector": {
+      "type": "object",
+      "required": ["kind", "ref"],
+      "properties": {
+        "kind": {"const": "fixed-commit"},
+        "ref": {"const": "BENCHMARK_BASE_SHA"}
+      },
+      "additionalProperties": false
+    },
+    "closureDerivationRules": {
+      "type": "object",
+      "required": ["path_classes"],
+      "properties": {
+        "path_classes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["glob", "role"],
+            "properties": {
+              "glob": {"type": "string"},
+              "role": {"type": "string"}
+            }
+          }
+        },
+        "excluded_paths": {"type": "array", "items": {"type": "string"}},
+        "first_match_wins": {"const": true}
+      }
+    },
+    "fileIdentityRule": {
+      "type": "object",
+      "required": [
+        "generations",
+        "complete_source_path_set_identical",
+        "per_path_blob_identical",
+        "per_path_sha256_identical",
+        "allowed_differences",
+        "no_per_agent_pruned_closure",
+        "no_symlink",
+        "independent_materialization"
+      ],
+      "properties": {
+        "generations": {"const": ["C", "D"]},
+        "complete_source_path_set_identical": {"const": true},
+        "per_path_blob_identical": {"const": true},
+        "per_path_sha256_identical": {"const": true},
+        "allowed_differences": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "agent identity",
+              "discovery adapter",
+              "invocation identity",
+              "permission/runtime environment identity",
+              "session/evidence identity"
+            ]
+          }
+        },
+        "no_per_agent_pruned_closure": {"const": true},
+        "no_symlink": {"const": true},
+        "independent_materialization": {"const": true}
+      }
+    },
+    "pinnedManifest": {
+      "title": "A/B pinned generation manifest",
+      "type": "object",
+      "required": [
+        "schema_version",
+        "protocol_identity",
+        "kind",
+        "generation_id",
+        "agent_identity",
+        "workflow_source",
+        "closure",
+        "invocation",
+        "permission_profile",
+        "known_limitations"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "protocol_identity": {"const": "task-65-round-2-v2"},
+        "kind": {"const": "pinned"},
+        "generation_id": {"type": "string", "enum": ["A", "B"]},
+        "agent_identity": {"type": "string"},
+        "workflow_source": {
+          "type": "object",
+          "required": ["sha", "label"],
+          "properties": {
+            "sha": {"$ref": "#/$defs/sha"},
+            "label": {"type": "string"}
+          },
+          "additionalProperties": false
+        },
+        "closure": {"$ref": "#/$defs/pinnedClosure"},
+        "invocation": {"type": "object"},
+        "permission_profile": {"type": "object"},
+        "known_limitations": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "templateManifest": {
+      "title": "C/D current generation template manifest",
+      "type": "object",
+      "required": [
+        "schema_version",
+        "protocol_identity",
+        "kind",
+        "generation_id",
+        "agent_identity",
+        "source_selector",
+        "closure_derivation_rules",
+        "expected_workflow_path_classes",
+        "role_classification_rules",
+        "materializer_contract",
+        "validation_contract",
+        "invocation_contract",
+        "permission_discovery_identity",
+        "file_identity_rule"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "protocol_identity": {"const": "task-65-round-2-v2"},
+        "kind": {"const": "template"},
+        "generation_id": {"type": "string", "enum": ["C", "D"]},
+        "agent_identity": {"type": "object"},
+        "source_selector": {"$ref": "#/$defs/sourceSelector"},
+        "closure_derivation_rules": {"$ref": "#/$defs/closureDerivationRules"},
+        "expected_workflow_path_classes": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "role_classification_rules": {"type": "object"},
+        "materializer_contract": {"type": "object"},
+        "validation_contract": {"type": "object"},
+        "invocation_contract": {"type": "object"},
+        "permission_discovery_identity": {"type": "object"},
+        "file_identity_rule": {"$ref": "#/$defs/fileIdentityRule"}
+      },
+      "additionalProperties": false
+    },
+    "runLockedManifest": {
+      "title": "C/D run-locked generation manifest",
+      "type": "object",
+      "required": [
+        "schema_version",
+        "protocol_identity",
+        "kind",
+        "generation_id",
+        "agent_identity",
+        "source_selector",
+        "benchmark_base_sha",
+        "generated_by",
+        "generated_at_utc",
+        "generation_identity_digest",
+        "closure",
+        "validation_contract",
+        "invocation_contract"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "protocol_identity": {"const": "task-65-round-2-v2"},
+        "kind": {"const": "run_locked"},
+        "generation_id": {"type": "string", "enum": ["C", "D"]},
+        "agent_identity": {"type": "object"},
+        "source_selector": {"$ref": "#/$defs/sourceSelector"},
+        "benchmark_base_sha": {"$ref": "#/$defs/sha"},
+        "generated_by": {"type": "string", "minLength": 1},
+        "evaluation_id": {"type": "string", "minLength": 1},
+        "generated_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "generation_identity_digest": {"$ref": "#/$defs/sha256"},
+        "closure": {"$ref": "#/$defs/runLockedClosure"},
+        "validation_contract": {"type": "object"},
+        "invocation_contract": {"type": "object"}
+      },
+      "additionalProperties": false
+    }
+  }
+}
