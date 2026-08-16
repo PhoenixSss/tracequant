@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -445,6 +446,124 @@ def test_task_pr_profiles_are_fixed_and_pass(tmp_path: Path, profile: str) -> No
     completed = _run(repo, env, *_review_args(main_sha, head_sha, profile))
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout)["profile"] == profile
+
+
+def test_review_terminal_materializes_actual_producer_output(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    initial_digest = json.loads(
+        _run(repo, env, *_review_args(main_sha, head_sha)).stdout
+    )
+    initial_result = _result(repo, json.dumps(initial_digest))
+    recheck_digest = json.loads(
+        _run(
+            repo,
+            env,
+            "recheck",
+            "--snapshot-id",
+            initial_digest["snapshot_id"],
+            "--skill-path",
+            ".agents/skills/task-pr-review-runner/SKILL.md",
+        ).stdout
+    )
+    diff_sha = initial_result["scope"]["diff_digest"]
+    skill_relative = ".agents/skills/task-pr-review-runner/SKILL.md"
+    skill_sha = hashlib.sha256((repo / skill_relative).read_bytes()).hexdigest()
+    matrix = {
+        "task": 84,
+        "pr": 102,
+        "base_sha": main_sha,
+        "head_sha": head_sha,
+        "effective_diff_sha256": diff_sha,
+        "review_skill": {"path": skill_relative, "sha256": skill_sha},
+        "changed_file_groups": [{"name": "workflow", "files": ["task84.txt"]}],
+        "acceptance_criteria": [{"id": "AC-1", "status": "verified"}],
+        "evidence_gates": {
+            "review": "pass",
+            "validation": "pass",
+            "recheck": "pass",
+        },
+        "overall": "partial",
+    }
+    matrix_path = (
+        repo / ".agents" / "evidence.local" / "review-matrices" / "terminal.json"
+    )
+    matrix_path.parent.mkdir(parents=True, exist_ok=True)
+    matrix_bytes = json.dumps(
+        matrix, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    matrix_path.write_bytes(matrix_bytes)
+    payload = {
+        "schema_version": 1,
+        "kind": "independent-review-handoff",
+        "repository": "PhoenixSss/tracequant",
+        "task": 84,
+        "pr": 102,
+        "reviewed_base_sha": main_sha,
+        "reviewed_head_sha": head_sha,
+        "verdict": "FAIL",
+        "required_findings": [{"id": "F1", "severity": "High", "required": True}],
+        "required_remediation": [
+            {"id": "F1", "required": True, "description": "repair fixture"}
+        ],
+        "objective_gates": [],
+        "maintainer_decision_required": False,
+        "created_at": "2026-08-15T12:00:00Z",
+        "freshness": {"status": "fresh", "recheck": "pass"},
+        "review_evidence": {
+            "review_snapshot_id": initial_digest["snapshot_id"],
+            "recheck_snapshot_id": recheck_digest["snapshot_id"],
+            "effective_diff_sha256": diff_sha,
+            "evidence_matrix_path": ".agents/evidence.local/review-matrices/terminal.json",
+            "evidence_matrix_sha256": hashlib.sha256(matrix_bytes).hexdigest(),
+            "review_skill": {"path": skill_relative, "sha256": skill_sha},
+        },
+    }
+    payload_path = (
+        repo / ".agents" / "evidence.local" / "review-staging" / "terminal.json"
+    )
+    payload_path.parent.mkdir(parents=True, exist_ok=True)
+    payload_path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+    )
+    terminal = _run(
+        repo,
+        env,
+        "review-terminal",
+        "--task",
+        "84",
+        "--pr",
+        "102",
+        "--expected-base-sha",
+        main_sha,
+        "--expected-head-sha",
+        head_sha,
+        "--effective-diff-sha256",
+        diff_sha,
+        "--review-snapshot-id",
+        initial_digest["snapshot_id"],
+        "--recheck-snapshot-id",
+        recheck_digest["snapshot_id"],
+        "--payload",
+        ".agents/evidence.local/review-staging/terminal.json",
+        "--skill-path",
+        skill_relative,
+    )
+    assert terminal.returncode == 0, terminal.stdout + terminal.stderr
+    digest = json.loads(terminal.stdout)
+    assert digest["profile"] == "review-terminal"
+    assert digest["status"] == "pass"
+    assert len(digest["review_handoff_id"]) == 64
+    result = _result(repo, terminal.stdout)
+    assert result["terminal"]["review_handoff_id"] == digest["review_handoff_id"]
+    assert (
+        repo
+        / ".agents"
+        / "evidence.local"
+        / "review-handoffs"
+        / f"{digest['review_handoff_id']}.json"
+    ).is_file()
 
 
 def test_delivery_profile_is_task_only_and_read_only(tmp_path: Path) -> None:

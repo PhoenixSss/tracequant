@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Final
 
 SCHEMA_VERSION: Final = 1
-RUNNER_VERSION: Final = "1.3.0"
+RUNNER_VERSION: Final = "1.5.0"
 REPOSITORY: Final = "PhoenixSss/tracequant"
 OUTPUT_ROOT: Final = ".agents/evidence.local/wsl2-github-runs"
 RUNNER_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_runner.py"
@@ -61,7 +61,14 @@ DELIVERY_ENTRY_PARAMS: Final = {
         }
     ),
     "review-remediation": frozenset(
-        {"task", "expected_main_sha", "pr", "expected_base_sha", "expected_head_sha"}
+        {
+            "task",
+            "expected_main_sha",
+            "pr",
+            "expected_base_sha",
+            "expected_head_sha",
+            "review_handoff_id",
+        }
     ),
 }
 DELIVERY_PARAM_SPACE: Final = frozenset(
@@ -72,6 +79,7 @@ DELIVERY_PARAM_SPACE: Final = frozenset(
         "pr",
         "expected_base_sha",
         "expected_head_sha",
+        "review_handoff_id",
     }
 )
 REPOSITORY_PATTERN: Final = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -122,6 +130,7 @@ CANONICAL_PROFILES: Final[dict[str, tuple[str, tuple[str, ...]]]] = {
             "pr",
             "expected_base_sha",
             "expected_head_sha",
+            "review_handoff_id",
         ),
     ),
     "delivery-readiness": (
@@ -131,6 +140,19 @@ CANONICAL_PROFILES: Final[dict[str, tuple[str, tuple[str, ...]]]] = {
     "review": (
         "pr-review-snapshot",
         ("task", "pr", "expected_base_sha", "expected_head_sha"),
+    ),
+    "review-terminal": (
+        "review-terminal",
+        (
+            "task",
+            "pr",
+            "expected_base_sha",
+            "expected_head_sha",
+            "effective_diff_sha256",
+            "review_snapshot_id",
+            "recheck_snapshot_id",
+            "payload",
+        ),
     ),
     "pre-merge": (
         "pr-review-snapshot",
@@ -280,6 +302,7 @@ def _resolve_skill_identity(
         "delivery": ".agents/skills/task-delivery-runner/SKILL.md",
         "delivery-readiness": ".agents/skills/task-delivery-runner/SKILL.md",
         "review": ".agents/skills/task-pr-review-runner/SKILL.md",
+        "review-terminal": ".agents/skills/task-pr-review-runner/SKILL.md",
         "pre-merge": ".agents/skills/task-pr-review-runner/SKILL.md",
         "closeout-readonly": ".agents/skills/task-closeout/SKILL.md",
     }
@@ -408,6 +431,36 @@ def _snapshot_id(value: str) -> str:
     return value
 
 
+def _review_handoff_id(value: str) -> str:
+    if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise argparse.ArgumentTypeError(
+            "must be a 64-character content-addressed review handoff ID"
+        )
+    return value
+
+
+def _sha256_digest(value: str) -> str:
+    if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise argparse.ArgumentTypeError(
+            "must be a 64-character lowercase SHA-256 digest"
+        )
+    return value
+
+
+def _evidence_payload_path(value: str) -> str:
+    normalized = value.replace("\\", "/")
+    if (
+        not normalized.startswith(".agents/evidence.local/")
+        or normalized.startswith("/")
+        or ".." in Path(normalized).parts
+        or normalized.endswith("/")
+    ):
+        raise argparse.ArgumentTypeError(
+            "must be a file path under .agents/evidence.local/"
+        )
+    return normalized
+
+
 def _branch_name(value: str) -> str:
     if (
         not BRANCH_NAME_PATTERN.fullmatch(value)
@@ -454,6 +507,7 @@ def _build_parser() -> argparse.ArgumentParser:
     delivery.add_argument("--expected-base-sha", type=_sha)
     delivery.add_argument("--expected-head-sha", type=_sha)
     delivery.add_argument("--pr", type=_positive_int)
+    delivery.add_argument("--review-handoff-id", type=_review_handoff_id)
 
     for name in ("delivery-readiness", "review", "pre-merge"):
         subp = sub.add_parser(name)
@@ -467,6 +521,30 @@ def _build_parser() -> argparse.ArgumentParser:
             default=None,
             help="repo-relative path to the calling Skill's SKILL.md",
         )
+
+    review_terminal = sub.add_parser("review-terminal")
+    review_terminal.add_argument("--task", type=_positive_int, required=True)
+    review_terminal.add_argument("--pr", type=_positive_int, required=True)
+    review_terminal.add_argument("--expected-base-sha", type=_sha, required=True)
+    review_terminal.add_argument("--expected-head-sha", type=_sha, required=True)
+    review_terminal.add_argument(
+        "--effective-diff-sha256", type=_sha256_digest, required=True
+    )
+    review_terminal.add_argument(
+        "--review-snapshot-id", type=_snapshot_id, required=True
+    )
+    review_terminal.add_argument(
+        "--recheck-snapshot-id", type=_snapshot_id, required=True
+    )
+    review_terminal.add_argument(
+        "--payload", type=_evidence_payload_path, required=True
+    )
+    review_terminal.add_argument(
+        "--skill-path",
+        type=str,
+        default=None,
+        help="repo-relative path to the calling Skill's SKILL.md",
+    )
 
     closeout = sub.add_parser("closeout-readonly")
     closeout.add_argument("--task", type=_positive_int, required=True)
@@ -584,6 +662,27 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
             result.extend(["--expected-head-sha", args.expected_head_sha])
         if args.pr is not None:
             result.extend(["--pr", str(args.pr)])
+        if args.review_handoff_id is not None:
+            result.extend(["--review-handoff-id", args.review_handoff_id])
+    elif profile == "review-terminal":
+        result.extend(
+            [
+                "--pr",
+                str(args.pr),
+                "--expected-base-sha",
+                args.expected_base_sha,
+                "--expected-head-sha",
+                args.expected_head_sha,
+                "--effective-diff-sha256",
+                args.effective_diff_sha256,
+                "--review-snapshot-id",
+                args.review_snapshot_id,
+                "--recheck-snapshot-id",
+                args.recheck_snapshot_id,
+                "--payload",
+                args.payload,
+            ]
+        )
     elif profile in {"delivery-readiness", "review", "pre-merge"}:
         result.extend(
             [
@@ -726,6 +825,7 @@ def _compact_result(
     source_core = {
         key: value for key, value in snapshot.items() if key != "details_path"
     }
+
     subject = snapshot.get("subject")
     subject = subject if isinstance(subject, dict) else {}
     preflight_disposition = snapshot.get("disposition")
@@ -828,6 +928,48 @@ def _compact_result(
     }
 
 
+def _compact_terminal_result(
+    terminal: Mapping[str, Any],
+    *,
+    repo_root: Path,
+    profile: str,
+    caller_skill_path: str | None,
+    integrity: Mapping[str, str],
+    result_path: str,
+    started_at: datetime,
+    duration_ms: int,
+    run_id: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "runner_version": RUNNER_VERSION,
+        "profile": profile,
+        "status": "pass",
+        "partial": False,
+        "started_at": started_at.isoformat(),
+        "duration_ms": duration_ms,
+        "identity": {
+            "task": terminal.get("task"),
+            "pr": terminal.get("pr"),
+            "repository": REPOSITORY,
+            "base_sha": terminal.get("reviewed_base_sha"),
+            "head_sha": terminal.get("reviewed_head_sha"),
+        },
+        "terminal": dict(terminal),
+        "evidence": {
+            "run_id": run_id,
+            "result_path": result_path,
+            "review_handoff_id": terminal.get("review_handoff_id"),
+            "reference": terminal.get("reference"),
+        },
+        "integrity": {
+            "verification": "current-worktree-content",
+            "files": dict(integrity),
+            "skill": _resolve_skill_identity(repo_root, profile, caller_skill_path),
+        },
+    }
+
+
 def _exit_code(status: str) -> int:
     return {"pass": 0, "partial": 3, "fail": 4}.get(status, 2)
 
@@ -869,6 +1011,43 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise RunnerError("workflow evidence returned invalid JSON") from exc
         if not isinstance(snapshot, dict):
             raise RunnerError("workflow evidence result is not a JSON object")
+
+        if args.profile == "review-terminal":
+            if snapshot.get("status") != "pass":
+                raise RunnerError("review terminal did not produce a passing result")
+            duration_ms = round((time.monotonic() - started) * 1000)
+            result = _compact_terminal_result(
+                snapshot,
+                repo_root=repo_root,
+                profile=args.profile,
+                caller_skill_path=args.skill_path,
+                integrity=content_hashes,
+                result_path=result_path.relative_to(repo_root).as_posix(),
+                started_at=started_at,
+                duration_ms=duration_ms,
+                run_id=run_id,
+            )
+            payload = _json_dumps(result, pretty=True).encode("utf-8")
+            _atomic_write(result_path, payload)
+            result_sha = _sha256_bytes(payload)
+            print(
+                _json_dumps(
+                    {
+                        "duration_ms": duration_ms,
+                        "head_sha": result["identity"]["head_sha"],
+                        "pr": result["identity"]["pr"],
+                        "profile": args.profile,
+                        "reference": snapshot.get("reference"),
+                        "result_path": result_path.relative_to(repo_root).as_posix(),
+                        "result_sha256": result_sha,
+                        "review_handoff_id": snapshot.get("review_handoff_id"),
+                        "status": "pass",
+                        "task": result["identity"]["task"],
+                    }
+                ),
+                end="",
+            )
+            return 0
 
         pr_value = snapshot.get("observed", {}).get("pr")
         head_branch: str | None = None

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -62,6 +63,8 @@ elif args[:2] == ['ls-remote','--heads']:
     if state.get('remote_branch_exists',True): out(state.get('pr',{{}}).get('headRefOid','d'*40)+'\\trefs/heads/'+args[-1])
 elif args[:3] == ['show-ref','--verify','--quiet']:
     sys.exit(0 if state.get('local_branch_exists',True) else 1)
+elif args[:1] == ['merge-base']:
+    out(state.get('branch_base', state.get('origin_main','b'*40)))
 elif args[:2] == ['merge-base','--is-ancestor']:
     sys.exit(0 if state.get('merge_on_main', True) else 1)
 elif args[:2] == ['diff','--quiet']:
@@ -91,6 +94,8 @@ elif args[:2] == ['issue','view']:
 elif args[:2] == ['pr','view']:
     number=args[2]
     dump(state.get('prs',{{}}).get(number, state['pr']))
+elif args[:2] == ['pr','list']:
+    dump(state.get('active_prs',[]))
 elif args[:2] == ['pr','diff']:
     sys.stdout.write(state.get('diff','diff --git a/a b/a\\n'))
 elif args[:2] == ['api','graphql']:
@@ -282,6 +287,12 @@ def _write_repo(
         ".agents/evidence.local/\n.agents/validation.local/\n",
         encoding="utf-8",
     )
+    skill_path = repo / ".agents" / "skills" / "task-pr-review-runner" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("fixture review skill\n", encoding="utf-8")
+    delivery_skill = repo / ".agents" / "skills" / "task-delivery-runner" / "SKILL.md"
+    delivery_skill.parent.mkdir(parents=True)
+    delivery_skill.write_text("fixture delivery skill\n", encoding="utf-8")
     state_path = tmp_path / "state.json"
     state_path.write_text(json.dumps(state), encoding="utf-8")
     bin_dir = _write_fake_tools(tmp_path)
@@ -309,6 +320,8 @@ def _run(
 
 def test_help_for_all_commands() -> None:
     commands = (
+        "emit-review-handoff",
+        "review-terminal",
         "delivery-preflight",
         "delivery-readiness",
         "pr-review-snapshot",
@@ -1222,6 +1235,827 @@ def test_fetch_failure_is_explicit_unknown_gate(tmp_path: Path) -> None:
 SHA40 = "2" * 40
 
 
+def _run_implementation_preflight(
+    repo: Path,
+    env: dict[str, str],
+    *,
+    branch: str = "task/70-bootstrap",
+    expected_base: str = SHA40,
+) -> dict[str, Any]:
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "implementation",
+        "--branch",
+        branch,
+        "--expected-base-sha",
+        expected_base,
+    )
+    assert result.returncode == 0, result.stderr
+    return cast(dict[str, Any], json.loads(result.stdout))
+
+
+def test_implementation_bootstraps_missing_canonical_branch_from_locked_main(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state.update(
+        branch="main",
+        git_head=SHA40,
+        local_main=SHA40,
+        origin_main=SHA40,
+        local_branch_exists=False,
+        remote_branch_exists=False,
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env)
+    assert value["gates"]["branch_exists"]["status"] == "pass"
+    assert value["gates"]["branch_remote"]["status"] == "pass"
+    assert value["gates"]["branch_identity"]["status"] == "pass"
+    assert value["gates"]["branch_bootstrap"]["status"] == "pass"
+    assert value["gates"]["branch_base"]["status"] == "pass"
+    assert value["disposition"]["write_actions_allowed"] is True
+
+
+def test_implementation_reuses_existing_synced_canonical_branch(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state.update(
+        branch="main",
+        git_head=SHA40,
+        local_main=SHA40,
+        origin_main=SHA40,
+        local_branch_exists=True,
+        remote_branch_exists=True,
+        local_branch_tips={"task/70-bootstrap": "4" * 40},
+        branch_base=SHA40,
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env)
+    assert value["gates"]["branch_exists"]["status"] == "pass"
+    assert value["gates"]["branch_bootstrap"]["status"] == "pass"
+    assert value["gates"]["branch_base"]["status"] == "pass"
+    assert value["disposition"]["status"] == "pass"
+
+
+def test_implementation_rejects_existing_branch_with_wrong_base(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state.update(
+        branch="main",
+        git_head=SHA40,
+        local_main=SHA40,
+        origin_main=SHA40,
+        local_branch_exists=True,
+        remote_branch_exists=True,
+        local_branch_tips={"task/70-bootstrap": "4" * 40},
+        branch_base="9" * 40,
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env)
+    assert value["gates"]["branch_base"]["status"] == "fail"
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_implementation_rejects_branch_identity_and_worktree_ownership_conflicts(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state.update(
+        branch="main",
+        git_head=SHA40,
+        local_main=SHA40,
+        origin_main=SHA40,
+        local_branch_exists=False,
+        remote_branch_exists=False,
+        extra_worktree_branches=["task/70-bootstrap"],
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    identity_value = _run_implementation_preflight(repo, env, branch="foreign/branch")
+    assert identity_value["gates"]["branch_identity"]["status"] == "fail"
+    assert identity_value["disposition"]["write_actions_allowed"] is False
+
+    ownership_value = _run_implementation_preflight(repo, env)
+    assert ownership_value["gates"]["branch_bootstrap"]["status"] == "fail"
+    assert "another worktree" in ownership_value["gates"]["branch_bootstrap"]["detail"]
+    assert ownership_value["disposition"]["write_actions_allowed"] is False
+
+
+def test_implementation_rejects_dirty_missing_branch_bootstrap(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state.update(
+        branch="main",
+        git_head=SHA40,
+        local_main=SHA40,
+        origin_main=SHA40,
+        local_branch_exists=False,
+        remote_branch_exists=False,
+        status=[" M existing.py"],
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env)
+    assert value["gates"]["branch_bootstrap"]["status"] == "fail"
+    assert "clean worktree" in value["gates"]["branch_bootstrap"]["detail"]
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_implementation_checks_existing_active_pr_identity_before_write(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state.update(
+        branch="main",
+        git_head=SHA40,
+        local_main=SHA40,
+        origin_main=SHA40,
+        local_branch_exists=True,
+        remote_branch_exists=True,
+        local_branch_tips={"task/70-bootstrap": "4" * 40},
+        branch_base=SHA40,
+        active_prs=[
+            {
+                "number": 71,
+                "state": "OPEN",
+                "isDraft": False,
+                "headRefName": "task/70-bootstrap",
+                "headRefOid": "4" * 40,
+                "baseRefName": "main",
+                "baseRefOid": SHA40,
+                "closingIssuesReferences": [{"number": 70}],
+            }
+        ],
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env)
+    assert value["gates"]["active_pr_identity"]["status"] == "pass"
+    assert value["disposition"]["write_actions_allowed"] is True
+
+    state["active_prs"][0]["closingIssuesReferences"] = [{"number": 71}]
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    conflict = _run_implementation_preflight(repo, env)
+    assert conflict["gates"]["active_pr_identity"]["status"] == "fail"
+    assert conflict["disposition"]["write_actions_allowed"] is False
+
+    state["active_prs"].append(dict(state["active_prs"][0]))
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    multiple = _run_implementation_preflight(repo, env)
+    assert multiple["gates"]["active_pr_identity"]["status"] == "fail"
+    assert multiple["disposition"]["write_actions_allowed"] is False
+
+
+def _write_review_handoff(
+    repo: Path,
+    initial: dict[str, Any],
+    recheck: dict[str, Any],
+    *,
+    base_sha: str = SHA40,
+    head_sha: str = "4" * 40,
+    skill_relative: str = ".agents/skills/task-pr-review-runner/SKILL.md",
+    required_findings: list[dict[str, Any]] | None = None,
+    required_remediation: list[dict[str, Any]] | None = None,
+) -> str:
+    skill_path = repo / skill_relative
+    matrix_path = (
+        repo / ".agents" / "evidence.local" / "review-matrices" / "task-70-pr-71.json"
+    )
+    matrix = {
+        "task": 70,
+        "pr": 71,
+        "base_sha": base_sha,
+        "head_sha": head_sha,
+        "effective_diff_sha256": initial["observed"]["effective_diff"]["sha256"],
+        "review_skill": {
+            "path": skill_relative,
+            "sha256": hashlib.sha256(skill_path.read_bytes()).hexdigest(),
+        },
+        "changed_file_groups": [
+            {
+                "name": "workflow",
+                "files": ["tools/agent_workflow/workflow_evidence.py"],
+                "status": "partially_verified",
+                "evidence": ["test fixture"],
+                "findings": ["H1"],
+                "remaining_risk": "fixture",
+            }
+        ],
+        "acceptance_criteria": [
+            {
+                "id": "AC-1",
+                "text": "fixture",
+                "status": "partially_verified",
+                "implementation_evidence": ["test fixture"],
+                "validation_evidence": ["test fixture"],
+                "remaining_risk": "fixture",
+            }
+        ],
+        "evidence_gates": {
+            "review": "pass",
+            "validation": "pass",
+            "recheck": "pass",
+        },
+        "overall": "partial",
+    }
+    matrix_path.parent.mkdir(parents=True, exist_ok=True)
+    matrix_bytes = json.dumps(
+        matrix, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    matrix_path.write_bytes(matrix_bytes)
+    handoff: dict[str, Any] = {
+        "schema_version": 1,
+        "kind": "independent-review-handoff",
+        "repository": "owner/repo",
+        "task": 70,
+        "pr": 71,
+        "reviewed_base_sha": base_sha,
+        "reviewed_head_sha": head_sha,
+        "verdict": "FAIL",
+        "required_findings": required_findings
+        if required_findings is not None
+        else [{"id": "H1", "severity": "High", "required": True}],
+        "required_remediation": required_remediation
+        if required_remediation is not None
+        else [{"id": "H1", "required": True, "description": "fixture repair"}],
+        "objective_gates": [],
+        "maintainer_decision_required": False,
+        "created_at": "2026-08-15T00:00:00Z",
+        "freshness": {"status": "fresh", "recheck": "pass"},
+        "review_evidence": {
+            "effective_diff_sha256": initial["observed"]["effective_diff"]["sha256"],
+            "review_skill": {
+                "path": skill_relative,
+                "sha256": hashlib.sha256(skill_path.read_bytes()).hexdigest(),
+            },
+            "evidence_matrix_path": ".agents/evidence.local/review-matrices/task-70-pr-71.json",
+            "evidence_matrix_sha256": hashlib.sha256(matrix_bytes).hexdigest(),
+            "review_snapshot_id": initial["snapshot_id"],
+            "recheck_snapshot_id": recheck["snapshot_id"],
+        },
+    }
+    payload_path = (
+        repo / ".agents" / "evidence.local" / "review-staging" / "handoff-payload.json"
+    )
+    payload_path.parent.mkdir(parents=True, exist_ok=True)
+    payload_path.write_text(
+        json.dumps(handoff, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+    )
+    emitted = subprocess.run(
+        [
+            PYTHON,
+            str(SCRIPT),
+            "emit-review-handoff",
+            "--repo-root",
+            str(repo),
+            "--payload",
+            ".agents/evidence.local/review-staging/handoff-payload.json",
+        ],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert emitted.returncode == 0, emitted.stdout + emitted.stderr
+    evidence_id = str(json.loads(emitted.stdout)["evidence_id"])
+    destination = (
+        repo / ".agents" / "evidence.local" / "review-handoffs" / f"{evidence_id}.json"
+    )
+    assert destination.is_file()
+    return evidence_id
+
+
+def _review_remediation_fixture(
+    tmp_path: Path,
+) -> tuple[Path, Path, dict[str, str], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    state = _base_state()
+    state["git_head"] = "4" * 40
+    state["pr"]["headRepository"] = {"nameWithOwner": "owner/repo"}
+    state["issues"]["70"]["projectItems"] = [{"status": {"name": "Review"}}]
+    repo, state_path, env = _write_repo(tmp_path, state)
+    first = _run(repo, env, "pr-review-snapshot", "--task", "70", "--pr", "71")
+    assert first.returncode == 0, first.stderr
+    initial = json.loads(first.stdout)
+    second = _run(
+        repo,
+        env,
+        "pr-review-recheck",
+        "--snapshot-id",
+        initial["snapshot_id"],
+    )
+    assert second.returncode == 0, second.stderr
+    recheck = json.loads(second.stdout)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    return repo, state_path, env, state, initial, recheck
+
+
+def _run_review_remediation(
+    repo: Path,
+    env: dict[str, str],
+    *,
+    expected_base: str = SHA40,
+    expected_head: str = "4" * 40,
+    evidence_id: str = "0" * 64,
+) -> dict[str, Any]:
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "review-remediation",
+        "--pr",
+        "71",
+        "--expected-base-sha",
+        expected_base,
+        "--expected-head-sha",
+        expected_head,
+        "--review-handoff-id",
+        evidence_id,
+    )
+    assert result.returncode == 0, result.stderr
+    return cast(dict[str, Any], json.loads(result.stdout))
+
+
+def test_review_remediation_accepts_fresh_structured_handoff_without_submitted_review(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, _, initial, recheck = _review_remediation_fixture(tmp_path)
+    evidence_id = _write_review_handoff(repo, initial, recheck)
+    value = _run_review_remediation(repo, env, evidence_id=evidence_id)
+    assert value["gates"]["review_handoff"]["status"] == "pass"
+    assert value["gates"]["review_handoff_identity"]["status"] == "pass"
+    assert value["gates"]["review_handoff_evidence"]["status"] == "pass"
+    assert value["gates"]["review_handoff_freshness"]["status"] == "pass"
+    assert value["gates"]["implementation_head"]["status"] == "pass"
+    assert value["gates"]["review_conclusion"]["status"] == "pass"
+    assert value["observed"]["review_handoff"]["selected"]["evidence_id"] == evidence_id
+    assert value["disposition"]["write_actions_allowed"] is True
+
+
+def test_review_producer_emits_self_verifying_canonical_artifact(
+    tmp_path: Path,
+) -> None:
+    repo, _, _, _, initial, recheck = _review_remediation_fixture(tmp_path)
+    evidence_id = _write_review_handoff(repo, initial, recheck)
+    artifact = json.loads(
+        (
+            repo
+            / ".agents"
+            / "evidence.local"
+            / "review-handoffs"
+            / f"{evidence_id}.json"
+        ).read_text(encoding="utf-8")
+    )
+    unsigned = {key: value for key, value in artifact.items() if key != "evidence_id"}
+    assert (
+        artifact["evidence_id"]
+        == hashlib.sha256(
+            json.dumps(
+                unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+    )
+    assert artifact["review_evidence"]["evidence_matrix_path"].startswith(
+        ".agents/evidence.local/"
+    )
+
+
+def test_review_producer_rejects_symlinked_handoff_parent_without_external_write(
+    tmp_path: Path,
+) -> None:
+    repo, _, _, _, _, _ = _review_remediation_fixture(tmp_path)
+    evidence_root = repo / ".agents" / "evidence.local"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    handoff_dir = evidence_root / "review-handoffs"
+    try:
+        handoff_dir.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+    payload_path = evidence_root / "review-staging" / "malicious.json"
+    payload_path.parent.mkdir(parents=True, exist_ok=True)
+    payload_path.write_text("{}", encoding="utf-8")
+    emitted = subprocess.run(
+        [
+            PYTHON,
+            str(SCRIPT),
+            "emit-review-handoff",
+            "--repo-root",
+            str(repo),
+            "--payload",
+            ".agents/evidence.local/review-staging/malicious.json",
+        ],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert emitted.returncode != 0
+    assert list(outside.iterdir()) == []
+
+
+def test_review_terminal_materializes_and_exposes_same_evidence_id(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, _, initial, recheck = _review_remediation_fixture(tmp_path)
+    evidence_id = _write_review_handoff(repo, initial, recheck)
+    handoff_path = (
+        repo / ".agents" / "evidence.local" / "review-handoffs" / f"{evidence_id}.json"
+    )
+    payload_path = (
+        repo / ".agents" / "evidence.local" / "review-staging" / "terminal.json"
+    )
+    payload_path.write_text(handoff_path.read_text(encoding="utf-8"), encoding="utf-8")
+    handoff_path.unlink()
+    terminal = _run(
+        repo,
+        env,
+        "review-terminal",
+        "--repository",
+        "owner/repo",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+        "--expected-base-sha",
+        SHA40,
+        "--expected-head-sha",
+        "4" * 40,
+        "--effective-diff-sha256",
+        initial["observed"]["effective_diff"]["sha256"],
+        "--review-snapshot-id",
+        initial["snapshot_id"],
+        "--recheck-snapshot-id",
+        recheck["snapshot_id"],
+        "--payload",
+        ".agents/evidence.local/review-staging/terminal.json",
+    )
+    assert terminal.returncode == 0, terminal.stdout + terminal.stderr
+    result = json.loads(terminal.stdout)
+    assert result["status"] == "pass"
+    assert result["review_handoff_id"] == evidence_id
+    assert result["reference"].endswith(f"{evidence_id}.json")
+    assert handoff_path.is_file()
+    admitted = _run_review_remediation(repo, env, evidence_id=evidence_id)
+    assert admitted["gates"]["review_conclusion"]["status"] == "pass"
+
+
+def test_review_terminal_fails_closed_when_emission_parent_is_symlink(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, _, initial, recheck = _review_remediation_fixture(tmp_path)
+    evidence_id = _write_review_handoff(repo, initial, recheck)
+    handoff_path = (
+        repo / ".agents" / "evidence.local" / "review-handoffs" / f"{evidence_id}.json"
+    )
+    payload_path = (
+        repo / ".agents" / "evidence.local" / "review-staging" / "terminal.json"
+    )
+    payload_path.write_text(handoff_path.read_text(encoding="utf-8"), encoding="utf-8")
+    handoff_path.unlink()
+    outside = tmp_path / "terminal-outside"
+    outside.mkdir()
+    handoff_dir = handoff_path.parent
+    try:
+        handoff_dir.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+    terminal = _run(
+        repo,
+        env,
+        "review-terminal",
+        "--repository",
+        "owner/repo",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+        "--expected-base-sha",
+        SHA40,
+        "--expected-head-sha",
+        "4" * 40,
+        "--effective-diff-sha256",
+        initial["observed"]["effective_diff"]["sha256"],
+        "--review-snapshot-id",
+        initial["snapshot_id"],
+        "--recheck-snapshot-id",
+        recheck["snapshot_id"],
+        "--payload",
+        ".agents/evidence.local/review-staging/terminal.json",
+    )
+    assert terminal.returncode == 2
+    assert list(outside.iterdir()) == []
+
+
+def test_review_remediation_rejects_malformed_explicit_handoff(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, _, _, _ = _review_remediation_fixture(tmp_path)
+    evidence_id = "a" * 64
+    target = (
+        repo / ".agents" / "evidence.local" / "review-handoffs" / f"{evidence_id}.json"
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("{", encoding="utf-8")
+    value = _run_review_remediation(repo, env, evidence_id=evidence_id)
+    assert value["gates"]["review_handoff"]["status"] == "fail"
+    assert value["gates"]["review_conclusion"]["status"] == "fail"
+
+
+@pytest.mark.parametrize(
+    ("findings", "remediation"),
+    [
+        ([{}], [{"id": "H1", "required": True, "description": "repair"}]),
+        (
+            [{"severity": "High", "required": True}],
+            [{"id": "H1", "required": True, "description": "repair"}],
+        ),
+        (
+            [{"id": "H1", "severity": "High", "required": True}],
+            [{"id": "UNKNOWN", "required": True, "description": "repair"}],
+        ),
+        (
+            [{"id": "H1", "severity": "High", "required": False}],
+            [{"id": "H1", "required": True, "description": "repair"}],
+        ),
+        (
+            [{"id": "H1", "severity": "High", "required": True}],
+            [{"id": "H1", "required": True, "description": ""}],
+        ),
+        (
+            [
+                {"id": "H1", "severity": "High", "required": True},
+                {"id": "H1", "severity": "High", "required": True},
+            ],
+            [
+                {"id": "H1", "required": True, "description": "repair"},
+                {"id": "H1", "required": True, "description": "repair again"},
+            ],
+        ),
+        (
+            [{"id": "H1", "severity": "High", "required": True}],
+            [],
+        ),
+    ],
+)
+def test_review_remediation_rejects_invalid_required_remediation_binding(
+    tmp_path: Path,
+    findings: list[dict[str, Any]],
+    remediation: list[dict[str, Any]],
+) -> None:
+    repo, _, env, _, initial, recheck = _review_remediation_fixture(tmp_path)
+    evidence_id = _write_review_handoff(
+        repo,
+        initial,
+        recheck,
+        required_findings=findings,
+        required_remediation=remediation,
+    )
+    value = _run_review_remediation(repo, env, evidence_id=evidence_id)
+    assert value["gates"]["review_handoff_findings"]["status"] == "fail"
+    assert value["gates"]["review_conclusion"]["status"] == "fail"
+
+
+def test_review_remediation_rechecks_actual_skill_bytes(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, _, initial, recheck = _review_remediation_fixture(tmp_path)
+    evidence_id = _write_review_handoff(repo, initial, recheck)
+    (repo / ".agents" / "skills" / "task-pr-review-runner" / "SKILL.md").write_text(
+        "tampered review skill\n", encoding="utf-8"
+    )
+    value = _run_review_remediation(repo, env, evidence_id=evidence_id)
+    assert value["gates"]["review_handoff_evidence"]["status"] == "fail"
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_review_remediation_rejects_noncanonical_review_skill(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, _, initial, recheck = _review_remediation_fixture(tmp_path)
+    evidence_id = _write_review_handoff(
+        repo,
+        initial,
+        recheck,
+        skill_relative=".agents/skills/task-delivery-runner/SKILL.md",
+    )
+    value = _run_review_remediation(repo, env, evidence_id=evidence_id)
+    assert value["gates"]["review_handoff_evidence"]["status"] == "fail"
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_review_remediation_rechecks_snapshot_content_address(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, _, initial, recheck = _review_remediation_fixture(tmp_path)
+    evidence_id = _write_review_handoff(repo, initial, recheck)
+    snapshot_path = (
+        repo
+        / ".agents"
+        / "evidence.local"
+        / "snapshots"
+        / f"{initial['snapshot_id']}.json"
+    )
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    snapshot["observed"]["pr"]["head_sha"] = "5" * 40
+    snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+    value = _run_review_remediation(repo, env, evidence_id=evidence_id)
+    assert value["gates"]["review_handoff_evidence"]["status"] == "fail"
+
+
+def test_review_remediation_rechecks_matrix_content_address(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, _, initial, recheck = _review_remediation_fixture(tmp_path)
+    evidence_id = _write_review_handoff(repo, initial, recheck)
+    matrix_path = (
+        repo / ".agents" / "evidence.local" / "review-matrices" / "task-70-pr-71.json"
+    )
+    matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+    matrix["overall"] = "verified"
+    matrix_path.write_text(json.dumps(matrix), encoding="utf-8")
+    value = _run_review_remediation(repo, env, evidence_id=evidence_id)
+    assert value["gates"]["review_handoff_evidence"]["status"] == "fail"
+
+
+def test_review_remediation_rejects_conflicting_current_head_handoffs(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, _, initial, recheck = _review_remediation_fixture(tmp_path)
+    first_id = _write_review_handoff(repo, initial, recheck)
+    first_path = (
+        repo / ".agents" / "evidence.local" / "review-handoffs" / f"{first_id}.json"
+    )
+    second = json.loads(first_path.read_text(encoding="utf-8"))
+    second.pop("evidence_id")
+    second["required_findings"] = [
+        {"id": "H2", "severity": "Blocking", "required": True}
+    ]
+    second["required_remediation"] = [
+        {"id": "H2", "required": True, "description": "conflicting fixture"}
+    ]
+    payload_path = (
+        repo / ".agents" / "evidence.local" / "review-staging" / "second.json"
+    )
+    payload_path.write_text(
+        json.dumps(second, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+    )
+    emitted = subprocess.run(
+        [
+            PYTHON,
+            str(SCRIPT),
+            "emit-review-handoff",
+            "--repo-root",
+            str(repo),
+            "--payload",
+            ".agents/evidence.local/review-staging/second.json",
+        ],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert emitted.returncode == 0, emitted.stdout + emitted.stderr
+    second_id = json.loads(emitted.stdout)["evidence_id"]
+    assert second_id != first_id
+    value = _run_review_remediation(repo, env, evidence_id=first_id)
+    assert value["gates"]["review_handoff"]["status"] == "fail"
+    assert "ambiguous" in value["gates"]["review_handoff"]["detail"]
+
+
+def test_review_remediation_explicit_reference_is_not_hidden_by_unrelated_files(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, _, initial, recheck = _review_remediation_fixture(tmp_path)
+    evidence_id = _write_review_handoff(repo, initial, recheck)
+    directory = repo / ".agents" / "evidence.local" / "review-handoffs"
+    for index in range(101):
+        (directory / f"unrelated-{index:03d}.json").write_text(
+            json.dumps({"task": 999, "pr": 999}), encoding="utf-8"
+        )
+    value = _run_review_remediation(repo, env, evidence_id=evidence_id)
+    assert value["gates"]["review_handoff"]["status"] == "pass"
+
+
+def test_review_remediation_rejects_symlinked_explicit_reference(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, _, initial, recheck = _review_remediation_fixture(tmp_path)
+    evidence_id = _write_review_handoff(repo, initial, recheck)
+    target = (
+        repo / ".agents" / "evidence.local" / "review-handoffs" / f"{evidence_id}.json"
+    )
+    backup = target.with_suffix(".backup.json")
+    target.rename(backup)
+    try:
+        target.symlink_to(backup.name)
+    except OSError:
+        target.rename(backup)
+        return
+    value = _run_review_remediation(repo, env, evidence_id=evidence_id)
+    assert value["gates"]["review_handoff"]["status"] == "fail"
+
+
+def test_review_remediation_rejects_stale_handoff_after_head_drift(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, state, initial, recheck = _review_remediation_fixture(
+        tmp_path
+    )
+    evidence_id = _write_review_handoff(repo, initial, recheck)
+    state["pr"]["headRefOid"] = "5" * 40
+    state["git_head"] = "5" * 40
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    value = _run_review_remediation(
+        repo, env, expected_head="5" * 40, evidence_id=evidence_id
+    )
+    assert value["gates"]["pr_head_sha"]["status"] == "pass"
+    assert value["gates"]["review_handoff"]["status"] == "fail"
+    assert value["gates"]["review_handoff_freshness"]["status"] == "fail"
+    assert value["gates"]["review_conclusion"]["status"] == "fail"
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_review_remediation_invalidates_h1_after_remediation_head_h2(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, state, initial, recheck = _review_remediation_fixture(
+        tmp_path
+    )
+    evidence_id = _write_review_handoff(repo, initial, recheck, head_sha="4" * 40)
+    first = _run_review_remediation(repo, env, evidence_id=evidence_id)
+    assert first["disposition"]["write_actions_allowed"] is True
+
+    state["pr"]["headRefOid"] = "5" * 40
+    state["git_head"] = "5" * 40
+    state["diff"] = "diff --git a/file.py b/file.py\n+remediated\n"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    second = _run_review_remediation(
+        repo, env, expected_head="5" * 40, evidence_id=evidence_id
+    )
+    assert second["gates"]["pr_head_sha"]["status"] == "pass"
+    assert second["gates"]["review_handoff"]["status"] == "fail"
+    assert second["gates"]["review_conclusion"]["status"] == "fail"
+    assert second["disposition"]["write_actions_allowed"] is False
+
+
+def test_review_remediation_rejects_missing_handoff_and_submitted_review(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, _, _, _ = _review_remediation_fixture(tmp_path)
+    value = _run_review_remediation(repo, env)
+    assert value["gates"]["review_handoff"]["status"] == "fail"
+    assert value["gates"]["review_conclusion"]["status"] == "fail"
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_review_remediation_rejects_handoff_with_wrong_base_identity(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, _, initial, recheck = _review_remediation_fixture(tmp_path)
+    evidence_id = _write_review_handoff(repo, initial, recheck, base_sha="9" * 40)
+    value = _run_review_remediation(repo, env, evidence_id=evidence_id)
+    assert value["gates"]["review_handoff"]["status"] == "fail"
+    assert value["gates"]["review_handoff_identity"]["status"] == "fail"
+    assert value["gates"]["review_conclusion"]["status"] == "fail"
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_review_remediation_submitted_review_cannot_bypass_missing_handoff(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, state, _, _ = _review_remediation_fixture(tmp_path)
+    state["pr"]["reviews"] = [
+        {
+            "state": "COMMENTED",
+            "author": {"login": "reviewer"},
+            "submittedAt": "2026-08-15T00:00:00Z",
+        }
+    ]
+    # The fixture's state file was already updated to Review; rewrite only the PR evidence.
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    value = _run_review_remediation(repo, env)
+    assert value["gates"]["review_handoff"]["status"] == "fail"
+    assert value["gates"]["review_conclusion"]["status"] == "fail"
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
 def test_delivery_preflight_delivery_start_passes_with_ready_status(
     tmp_path: Path,
 ) -> None:
@@ -1828,8 +2662,10 @@ def test_worktree_delivery_start_allows_task_dirty(tmp_path: Path) -> None:
     assert value["disposition"]["workflow_may_continue"] is True
 
 
-def test_worktree_implementation_allows_task_dirty(tmp_path: Path) -> None:
-    """implementation with Task-owned dirty worktree → pass."""
+def test_worktree_implementation_dirty_branch_setup_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """implementation branch admission rejects a dirty worktree."""
     state = _dirty_state()
     repo, _, env = _write_repo(tmp_path, state)
     result = _run(
@@ -1848,9 +2684,10 @@ def test_worktree_implementation_allows_task_dirty(tmp_path: Path) -> None:
         SHA40,
     )
     assert result.returncode == 0, result.stderr
-    gate = json.loads(result.stdout)["gates"]["worktree_state_compatible"]
-    assert gate["status"] == "pass"
-    assert gate["dirty_allowed"] is True
+    value = json.loads(result.stdout)
+    assert value["gates"]["worktree_state_compatible"]["status"] == "pass"
+    assert value["gates"]["branch_bootstrap"]["status"] == "fail"
+    assert value["disposition"]["write_actions_allowed"] is False
 
 
 def test_worktree_final_validation_rejects_dirty(tmp_path: Path) -> None:

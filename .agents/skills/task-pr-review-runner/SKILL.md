@@ -264,6 +264,35 @@ independent session. Evaluate check/thread-only changes under current gates.
 Verify the recheck uses the same Skill identity as the initial review (same
 `--skill-path`). Skill identity drift invalidates the review.
 
+The Review terminal is mechanical. After the final stable recheck and after
+the verdict/findings payload is complete, write that bounded payload under the
+ignored evidence root and invoke the `review-terminal` profile of
+`tools/agent_workflow/wsl2_github_evidence_runner.py` with the locked Task,
+PR, base/head, diff, initial snapshot ID, final recheck snapshot ID, payload,
+and `--skill-path`. The terminal runner recollects the PR state, materializes
+the canonical evidence, self-verifies it, and returns the exact
+`review_handoff_id`. A non-zero terminal result is a failed review terminal;
+do not print a remediation-capable handoff or invent an ID.
+
+The terminal profile emits canonical evidence for PASS as well as remediation
+verdicts. CONDITIONAL/FAIL payloads must contain one valid required remediation
+entry for every required finding; PASS payloads contain empty finding and
+remediation lists. Only CONDITIONAL/FAIL evidence may authorize Delivery
+remediation.
+
+For every terminal verdict, the `review-terminal` profile writes the canonical
+structured review evidence described in `docs/development/pr-review.md` §9 to
+`.agents/evidence.local/review-handoffs/<evidence_id>.json`. Populate every
+identity, finding, freshness, evidence-snapshot, evidence-matrix, and
+maintainer-decision field from the current Review session. Compute
+`evidence_id` as the SHA-256 of the canonical JSON with the `evidence_id` field
+removed, and use that digest as the filename. This is an allowed ignored local
+evidence write; it is not a GitHub Review submission or any repository/GitHub
+state mutation. Materialize it through the repository producer boundary
+`tools/agent_workflow/workflow_evidence.py` using its `emit-review-handoff`
+subcommand from the bounded handoff payload; the producer returns the exact
+`evidence_id`.
+
 ## Evidence status and verdict mapping
 
 The Evidence Runner produces a process exit code and a `status` field
@@ -342,6 +371,12 @@ Rules:
   required;
 - state the defect and expected behavior, but do not design the implementation;
 - preserve finding IDs.
+- the structured artifact is mandatory for every terminal verdict; a text-only
+  handoff is not a valid remediation input. PASS artifacts contain empty
+  finding/remediation lists and cannot authorize Delivery remediation.
+- print the exact producer result in the final handoff as
+  `Canonical review handoff evidence: <evidence_id>`. Delivery remediation
+  must pass that identity as `--review-handoff-id`.
 
 End with this exact remediation prompt populated with current identities:
 
