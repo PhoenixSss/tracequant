@@ -19,10 +19,6 @@ The `AGENTS.md` file at the repo root is the primary behavior rule source: it de
 
 ## Commands
 
-`README.md` is the shared canonical repository guide (layout, commands, CI).
-The commands below are the Claude-side quick reference; keep them in sync with
-README and do not maintain a second complete copy.
-
 ```bash
 # Install dependencies (requires Python 3.13 and uv)
 uv sync --locked --dev
@@ -94,10 +90,14 @@ All internal datetimes must be timezone-aware UTC. Naive datetimes are explicitl
 
 ### Agent workflow tools (`tools/agent_workflow/`)
 
-Deterministic runner scripts for workflow evidence and validation; see
-`.agents/policies/workflow-evidence.md` for the authoritative evidence /
-validation contract. Local outputs go only to Git-ignored
-`.agents/evidence.local/` and `.agents/validation.local/`.
+Deterministic runner scripts for workflow evidence and validation:
+
+- `wsl2_github_evidence_runner.py` — captures read-only GitHub/Task/PR snapshots with content hashes
+- `wsl2_validation_runner.py` — compact validation profiles with exact argv and process cleanup
+- `workflow_common.py` — shared helpers: `CommandRunner`, JSON utilities, SHA hashing, path redaction, secret redaction
+- `workflow_evidence.py` / `workflow_validation.py` — evidence and validation domain logic
+
+Local outputs go only to Git-ignored `.agents/evidence.local/` and `.agents/validation.local/`.
 
 ### Claude Code skills (`.claude/skills/`)
 
@@ -110,7 +110,7 @@ Claude Code 专用的四个 Skill，与 `.agents/skills/` 中 Codex 的对应 Sk
 | `task-closeout` | Post-merge verification, state convergence, and Task-branch cleanup |
 | `feature-completion-audit` | Read-only audit of an open Feature against current main |
 
-Skills start only after the user identifies an existing Task, PR, or Feature. None may merge a PR. Natural-language entries (`实现 Issue #N` / `审查 PR #N` / `PR #N 已人工合并，请完成 closeout`) resolve through `AGENTS.md` routing and `docs/development/issue-workflow.md`; this table is the Claude-side Skill discovery reference.
+Skills start only after the user identifies an existing Task, PR, or Feature. None may merge a PR.
 
 ### Permissions (`.claude/settings.json`)
 
@@ -146,6 +146,5 @@ Prohibited without an approved architecture Issue: microservices, Kubernetes, di
 All work is tracked in GitHub Issues (the `PhoenixSss/tracequant` repo). The
 issue-driven workflow, leaf-Issue-first context acquisition, expansion
 triggers, and comments / Parent / Epic policies are defined in `AGENTS.md`
-and apply unchanged to Claude Code sessions; detailed lifecycle semantics
-live in `docs/development/issue-workflow.md`. Current work scope is read from
+and apply unchanged to Claude Code sessions. Current work scope is read from
 the active GitHub Issue and Project state, not from this file.

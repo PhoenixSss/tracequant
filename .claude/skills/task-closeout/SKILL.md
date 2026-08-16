@@ -34,11 +34,6 @@ Read applicable `AGENTS.md` / `AGENTS.override.md` and:
 .agents/policies/workflow-evidence.md
 ```
 
-Shared lifecycle semantics are owned by `docs/development/issue-workflow.md`
-(§11 manual Squash Merge boundary, §13 Closeout). Read the minimal needed
-section for the current phase; do not duplicate closeout-semantic prose in this
-Skill.
-
 Use the current repository Runner interfaces:
 
 ```bash

@@ -49,10 +49,6 @@ Read applicable `AGENTS.md` / `AGENTS.override.md` and:
 .agents/policies/workflow-evidence.md
 ```
 
-Shared lifecycle semantics are owned by `docs/development/issue-workflow.md`
-(§14 Feature Completion). Read the minimal needed section for the current
-phase; do not duplicate audit-semantic prose in this Skill.
-
 Audit the exact locked `origin/main` implementation and current Feature facts.
 Use the repository-defined operations:
 
