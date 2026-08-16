@@ -90,6 +90,13 @@ def test_failure_and_ambiguity_handling_is_defined() -> None:
     assert "bounded remediation handoff" in text
 
 
+def test_delivery_remediation_requires_review_handoff_for_both_agents() -> None:
+    for text in _skill_text("task-delivery-runner"):
+        assert "`review-remediation` requires the bounded handoff" in text
+        assert "stop before Runner or repair writes" in text
+        assert "generic snapshot fallback" in text
+
+
 def test_closeout_entry_owns_merge_identity_and_convergence() -> None:
     text = ISSUE_WORKFLOW.read_text(encoding="utf-8")
     assert "Closeout" in text

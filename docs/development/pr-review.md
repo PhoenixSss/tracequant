@@ -115,6 +115,11 @@ handoff，仅包含 Delivery Skill 修复所需的最小信息：
 
 handoff 不得包含完整历史、无关 findings 或主观偏好。
 
+Independent Review 保持 strict read-only，不向 GitHub 提交 Approve /
+Request changes / Comment Review。`review-remediation` 的 admission 不得依赖
+GitHub submitted Review；其语义输入是上述 bounded remediation handoff，
+Runner 只负责锁定 Task/PR/base/head 等机械身份。
+
 ## 10. Merge / Closeout interaction
 
 - merge 前必须存在当前 PR head 的 passing Review + maintainer manual

@@ -54,6 +54,8 @@ def test_delivery_runner_has_current_profiles_and_remediation_loop() -> None:
     assert "new independent review" in text
     assert "git add ." in text and "do not use" in text
     assert "lifecycle conflict" in text.casefold()
+    assert "`review-remediation` requires the bounded handoff" in text
+    assert "stop before Runner or repair writes" in text
 
 
 def test_review_runner_is_read_only_and_emits_bounded_remediation_handoff() -> None:
