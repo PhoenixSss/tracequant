@@ -57,6 +57,12 @@ APPROVED_TELEMETRY_REFERENCE_FILES = {
     "docs/workflows/context-retrieval-v2/before-after-retrieval.md": (
         "#87 retrieval before/after evidence noting Token telemetry remains disabled"
     ),
+    "docs/workflows/legacy-agent-workflow-cleanup.md": (
+        "Task #123 cleanup inventory and historical telemetry-era disposition"
+    ),
+    "docs/workflows/migration-acceptance/task-122-migration-acceptance-report.md": (
+        "Task #122 migration acceptance evidence recording telemetry boundary"
+    ),
 }
 
 LOCAL_ONLY_EXCLUSIONS = {
