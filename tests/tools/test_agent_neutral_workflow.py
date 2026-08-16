@@ -238,6 +238,10 @@ def test_agent_skills_guide_is_registry_and_navigation_only() -> None:
     assert "docs/development/issue-workflow.md" in text
     assert "docs/development/pr-review.md" in text
     assert "仓库外 Token 消耗分析边界" in text
+    assert "tools/agent_workflow/skill_path_audit.py" in text
+    assert "Final source-of-truth matrix" in text
+    assert "task-skill-" + "variants.json" not in text
+    assert "skill_variant_" + "provenance.py" not in text
     assert "## Review remediation" not in text
     assert "## Runner Delivery" not in text
     assert "## Independent Review" not in text

@@ -294,6 +294,17 @@ def test_targeted_profile_is_not_ci_equivalent(tmp_path: Path) -> None:
     assert stored["expected_command_count"] == 1
 
 
+def test_fixed_profile_test_paths_exist() -> None:
+    spec = json.loads(SPEC.read_text(encoding="utf-8"))
+    missing: list[str] = []
+    for profile in spec["profiles"].values():
+        for command in profile.get("commands", []):
+            for argument in command["argv"]:
+                if argument.startswith("tests/") and not (ROOT / argument).exists():
+                    missing.append(argument)
+    assert missing == []
+
+
 def test_post_merge_fails_closed_off_main_and_accepts_clean_main(
     tmp_path: Path,
 ) -> None:

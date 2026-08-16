@@ -74,23 +74,52 @@ docs/workflows/workflow-evidence.md
 
 不得提交。
 
-## Skill provenance 与对比入口
+## Skill identity 与历史基准验证
 
-历史 Skill 与 Runner Skill 的来源、哈希和共存约束记录在：
-
-```text
-docs/workflows/task-skill-variants.json
-docs/workflows/task-skill-ab.md
-```
-
-验证命令：
+当前 Skill 路径、共享语义引用、单一机械入口、历史基准路径与每个文件的
+SHA-256 由以下只读审计统一验证：
 
 ```bash
-tools/agent_workflow/skill_variant_provenance.py
+tools/agent_workflow/skill_path_audit.py
 ```
 
-在不含完整仓库历史的导出包中，可使用
-`--allow-missing-history` 只验证当前文件身份；正式仓库交付必须执行严格验证。
+审计输出明确区分 `active_skills`、`claude_skills` 与 `baseline_skills`。
+历史基准只保留为 frozen benchmark 输入，不是 current routing、失败回退或
+competing semantic owner。
+
+## Final source-of-truth matrix
+
+| Artifact family | Classification | Durable responsibility |
+| --- | --- | --- |
+| `AGENTS.md` | ACTIVE | repository invariants、leaf-first retrieval 与 natural-language workflow entry |
+| `docs/development/issue-workflow.md` | ACTIVE | shared lifecycle、readiness、Delivery、Closeout 与 Feature audit semantics |
+| `docs/development/pr-review.md` | ACTIVE | Independent Review semantics 与 verdict/remediation contract |
+| `CLAUDE.md` | ACTIVE | Claude-specific thin adapter 与 Skill discovery |
+| `.agents/skills/*-runner/`、`.agents/skills/task-closeout/`、`.agents/skills/feature-completion-audit/` | ACTIVE | Codex executable procedures |
+| `.claude/skills/` current four Skills | ACTIVE | Claude executable procedures |
+| fixed Evidence/Validation Runners、profiles、Rules 与 current tests | ACTIVE | deterministic Git/GitHub facts、identity/fail-closed gates 与 validation |
+| `.agents/skills/task-delivery/`、`.agents/skills/task-pr-review/` | HISTORICAL EVIDENCE ONLY | explicit benchmark baselines; maintainer-name-only |
+| `docs/workflows/task-skill-runner-migration/` 与 `docs/workflows/benchmarks/` | HISTORICAL EVIDENCE ONLY | frozen migration/benchmark/audit provenance |
+| Claude current Skills 中的 Codex/Claude permission-boundary 说明 | COMPATIBILITY ONLY | cross-agent adapter guidance; retained intentionally while both agents are supported |
+| retired Skill-variant provenance JSON/doc/tool/test bundle | DEAD / ABSENT | replaced by `skill_path_audit.py`; all stale current references removed |
+| removed trusted-runner、runtime usage-measurement 与 runtime manifest machinery | DEAD / ABSENT | no current responsibility; absence is regression-tested |
+
+当前没有 `UNCERTAIN` artifact。`COMPATIBILITY ONLY` 项仍有明确的双 Agent
+文档用途，未满足删除条件，因此有意保留。
+
+Current reference graph：
+
+```text
+Issue body (business specification)
+  -> AGENTS.md (repository invariants and entry resolution)
+  -> shared development docs (lifecycle / review semantics)
+  -> agent-specific current Skills (executable procedure)
+  -> fixed Evidence / Validation Runners (mechanical facts and checks)
+  -> Git / GitHub Issues, relationships, Projects, PRs and CI (durable state)
+```
+
+`.agents/evidence.local/` 与 `.agents/validation.local/` 仅保存 Git-ignored
+supporting evidence；它们不是 durable workflow state 或新的 source of truth。
 
 ## 仓库外 Token 消耗分析边界
 
