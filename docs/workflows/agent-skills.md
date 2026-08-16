@@ -64,6 +64,11 @@ PR #N 已人工合并，请完成 closeout
 
 不得提交。
 
+## Task #123 cleanup evidence
+
+- [Historical Task #122 Migration Acceptance Report](migration-acceptance/task-122-migration-acceptance-report.md)
+- [Task #123 Legacy Agent Workflow Cleanup Evidence](legacy-agent-workflow-cleanup.md)
+
 ## Skill identity 验证
 
 当前 Codex / Claude Skill 路径、共享语义引用、单一机械入口与每个文件的
