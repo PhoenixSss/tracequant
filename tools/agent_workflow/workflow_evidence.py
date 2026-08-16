@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
 import unicodedata
 from collections.abc import Mapping, Sequence
@@ -38,15 +37,6 @@ from workflow_common import (
 SCHEMA_VERSION: Final = 1
 EVIDENCE_ROOT: Final = ".agents/evidence.local"
 SNAPSHOT_SUBDIR: Final = "snapshots"
-REVIEW_HANDOFF_SUBDIR: Final = "review-handoffs"
-REVIEW_HANDOFF_SCHEMA_VERSION: Final = 1
-CANONICAL_REVIEW_SKILL_PATHS: Final = frozenset(
-    {
-        ".agents/skills/task-pr-review-runner/SKILL.md",
-        ".claude/skills/task-pr-review-runner/SKILL.md",
-    }
-)
-REVIEW_FINDING_ID_PATTERN: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 MAX_CHILDREN: Final = 50
 MAX_FILES: Final = 100
 
@@ -1188,1188 +1178,11 @@ def _validate_delivery_entry_args(args: argparse.Namespace) -> None:
             raise WorkflowToolError(f"invalid branch name: {value!r}")
 
 
-def _task_branch_identity_gate(branch: Any, task: int) -> dict[str, Any]:
-    """Require a branch name that carries the current Task identity.
-
-    New branches use ``task/<number>-<slug>``.  The two historical numeric
-    forms remain acceptable for safe reuse, but a branch with no Task identity
-    is never eligible for bootstrap or implementation admission.
-    """
-    if not isinstance(branch, str) or not branch:
-        return _gate("unknown", "Task branch name unavailable")
-    valid_names = (
-        f"task/{task}",
-        f"{task}-",
-        f"task-{task}-",
-    )
-    if (
-        branch == valid_names[0]
-        or branch.startswith(f"task/{task}-")
-        or branch.startswith(valid_names[1])
-        or branch == f"task-{task}"
-        or branch.startswith(valid_names[2])
-    ):
-        return _gate("pass", f"branch carries Task #{task} identity")
-    return _gate("fail", f"branch {branch!r} does not identify Task #{task}")
-
-
-def _is_canonical_new_task_branch(branch: str, task: int) -> bool:
-    """Return whether *branch* is valid for creating a new Task branch."""
-
-    prefix = f"task/{task}-"
-    return branch.startswith(prefix) and len(branch) > len(prefix)
-
-
-def _review_skill_identity_from_args(
-    args: argparse.Namespace, repo_root: Path
-) -> dict[str, str] | None:
-    """Validate and hash the canonical Review Skill supplied by a Runner."""
-
-    raw_path = getattr(args, "review_skill_path", None)
-    raw_sha256 = getattr(args, "review_skill_sha256", None)
-    if raw_path is None and raw_sha256 is None:
-        return None
-    if (
-        not isinstance(raw_path, str)
-        or raw_path not in CANONICAL_REVIEW_SKILL_PATHS
-        or not _is_sha256_digest(raw_sha256)
-    ):
-        raise WorkflowToolError("Review Skill identity is malformed or noncanonical")
-    path = repo_root / raw_path
-    if path.is_symlink() or not path.is_file():
-        raise WorkflowToolError("canonical Review Skill file is missing or unsafe")
-    try:
-        actual_sha256 = sha256_bytes(path.read_bytes())
-    except OSError as exc:
-        raise WorkflowToolError("canonical Review Skill file is unreadable") from exc
-    if actual_sha256 != raw_sha256:
-        raise WorkflowToolError("canonical Review Skill content address mismatches")
-    return {"path": raw_path, "sha256": raw_sha256}
-
-
-def _worktree_branch_items(git: Mapping[str, Any]) -> list[str]:
-    raw = git.get("worktree_branches")
-    items = raw.get("items") if isinstance(raw, Mapping) else []
-    return (
-        [item for item in items if isinstance(item, str)]
-        if isinstance(items, list)
-        else []
-    )
-
-
-def _branch_bootstrap_gate(
-    *,
-    git: Mapping[str, Any],
-    branch: str | None,
-    task: int,
-    expected_main_sha: str | None,
-    expected_base_sha: str | None,
-    branch_exists: bool,
-    local_tip: str | None,
-    remote_tip: str | None,
-    remote_available: bool,
-) -> dict[str, Any]:
-    """Decide whether implementation may create or reuse the Task branch.
-
-    This is intentionally read-only.  The Delivery Skill performs the actual
-    ``git switch -c`` or reuse after this gate passes.
-    """
-    identity = _task_branch_identity_gate(branch, task)
-    if identity.get("status") != "pass":
-        return identity
-    if not isinstance(branch, str):
-        return _gate("unknown", "Task branch name unavailable")
-
-    worktree_items = _worktree_branch_items(git)
-    reasons: list[str] = []
-    if branch in worktree_items and git.get("branch") != branch:
-        reasons.append("target branch is occupied by another worktree")
-    if git.get("clean") is not True:
-        reasons.append("branch setup requires a clean worktree")
-    if not branch_exists:
-        if not _is_canonical_new_task_branch(branch, task):
-            return _gate(
-                "fail",
-                "new Task branches must use canonical task/<issue>-<slug> naming",
-            )
-        if not remote_available:
-            reasons.append("remote branch existence unavailable")
-        elif remote_tip is not None:
-            reasons.append("remote branch already exists; ownership is ambiguous")
-        if git.get("branch") != "main":
-            reasons.append("bootstrap requires current branch main")
-        if git.get("head_sha") != expected_main_sha:
-            reasons.append("current HEAD does not equal expected main SHA")
-        if git.get("local_main_sha") != expected_main_sha:
-            reasons.append("local main does not equal expected main SHA")
-        if git.get("origin_main_sha") != expected_main_sha:
-            reasons.append("origin/main does not equal expected main SHA")
-        if expected_base_sha != expected_main_sha:
-            reasons.append("expected Task base is not the locked main SHA")
-        if reasons:
-            return _gate("fail", "; ".join(reasons))
-        return _gate("pass", f"branch {branch!r} absent; safe to bootstrap")
-
-    if not remote_available:
-        return _gate("unknown", "existing branch remote state unavailable")
-    if local_tip is None:
-        return _gate("unknown", "existing branch tip unavailable")
-    if remote_tip is not None and local_tip is not None and remote_tip != local_tip:
-        reasons.append("local and remote Task branch tips differ")
-    if reasons:
-        return _gate("fail", "; ".join(reasons))
-    return _gate("pass", f"existing branch {branch!r} is eligible for idempotent reuse")
-
-
-def _active_pr_identity_gate(
-    runner: CommandRunner,
-    repository: str,
-    *,
-    branch: str,
-    task: int,
-    expected_base_sha: str,
-    expected_head_sha: str | None,
-    branch_tip: str | None,
-    expected_pr: int | None,
-    warnings: list[dict[str, Any]],
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Check active PR ownership before implementation may write."""
-
-    result = runner.run(
-        [
-            "gh",
-            "pr",
-            "list",
-            "--repo",
-            repository,
-            "--head",
-            branch,
-            "--state",
-            "open",
-            "--limit",
-            "100",
-            "--json",
-            "number,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,closingIssuesReferences",
-        ],
-        command_id="gh-active-pr-identity",
-    )
-    if result.returncode != 0:
-        warnings.append(command_warning(result))
-        return _gate("unknown", "active PR identity unavailable"), []
-    raw = read_json_text(result.stdout, field="active PR identity")
-    if not isinstance(raw, list):
-        return _gate("unknown", "active PR identity response is malformed"), []
-    if len(raw) >= 100:
-        return _gate("fail", "active PR inventory may be truncated"), []
-
-    active: list[dict[str, Any]] = [
-        dict(item) for item in raw if isinstance(item, Mapping)
-    ]
-    if not active:
-        return _gate("pass", "no active PR for existing Task branch"), active
-    if len(active) != 1:
-        return (
-            _gate(
-                "fail",
-                f"multiple active PRs for branch {branch!r}: "
-                f"{[item.get('number') for item in active]}",
-            ),
-            active,
-        )
-
-    pr = active[0]
-    closing = pr.get("closingIssuesReferences")
-    closing_numbers = (
-        [
-            item.get("number")
-            for item in closing
-            if isinstance(item, Mapping) and isinstance(item.get("number"), int)
-        ]
-        if isinstance(closing, list)
-        else []
-    )
-    failures: list[str] = []
-    if pr.get("number") != expected_pr and expected_pr is not None:
-        failures.append(f"expected PR #{expected_pr}, observed #{pr.get('number')}")
-    if pr.get("headRefName") != branch:
-        failures.append(f"head branch={pr.get('headRefName')}")
-    if pr.get("baseRefName") != "main":
-        failures.append(f"base branch={pr.get('baseRefName')}")
-    if pr.get("baseRefOid") != expected_base_sha:
-        failures.append(f"base SHA={pr.get('baseRefOid')}")
-    if expected_head_sha is not None and pr.get("headRefOid") != expected_head_sha:
-        failures.append(f"head SHA={pr.get('headRefOid')}")
-    if (
-        expected_head_sha is None
-        and branch_tip is not None
-        and pr.get("headRefOid") != branch_tip
-    ):
-        failures.append(f"head SHA={pr.get('headRefOid')}, branch tip={branch_tip}")
-    if expected_head_sha is None and branch_tip is None:
-        failures.append("branch tip unavailable for active PR identity")
-    if closing_numbers != [task]:
-        failures.append(f"closing Issues={closing_numbers}")
-    if failures:
-        return _gate("fail", "; ".join(failures)), active
-    return _gate(
-        "pass", f"active PR #{pr.get('number')} belongs to Task #{task}"
-    ), active
-
-
-def _review_handoff_digest(value: Mapping[str, Any]) -> str:
-    unsigned = {key: item for key, item in value.items() if key != "evidence_id"}
-    return sha256_json(unsigned)
-
-
-def _safe_handoff_staging_path(repo_root: Path, raw_path: str) -> Path:
-    if not raw_path or raw_path.startswith("/") or "\\" in raw_path:
-        raise WorkflowToolError("handoff payload path must be repository-relative")
-    path = Path(raw_path)
-    if ".." in path.parts:
-        raise WorkflowToolError("handoff payload path traversal is not allowed")
-    root_path = _ensure_evidence_root(repo_root)
-    if root_path.is_symlink():
-        raise WorkflowToolError("ignored evidence root must not be a symlink")
-    root = root_path.resolve()
-    candidate = repo_root / path
-    try:
-        candidate.resolve(strict=False).relative_to(root)
-    except ValueError as exc:
-        raise WorkflowToolError(
-            "handoff payload must be inside the ignored evidence root"
-        ) from exc
-    current = candidate
-    while current != root_path:
-        if current.is_symlink():
-            raise WorkflowToolError("handoff payload path must not use a symlink")
-        current = current.parent
-    if candidate.is_symlink():
-        raise WorkflowToolError("handoff payload path must not be a symlink")
-    return candidate
-
-
-def _ensure_evidence_root(repo_root: Path) -> Path:
-    """Return the ignored evidence root without traversing a symlink."""
-
-    root_path = repo_root / EVIDENCE_ROOT
-    current = root_path
-    while current != repo_root:
-        if current.is_symlink():
-            raise WorkflowToolError("ignored evidence ancestry must not use a symlink")
-        current = current.parent
-    root_path = require_exact_ignored_directory(repo_root, EVIDENCE_ROOT)
-    return root_path
-
-
-def _ensure_handoff_directory(root: Path) -> Path:
-    """Create the handoff directory only when its complete ancestry is safe."""
-
-    directory = root / REVIEW_HANDOFF_SUBDIR
-    if directory.is_symlink():
-        raise WorkflowToolError("review handoff directory must not be a symlink")
-    directory.mkdir(parents=False, exist_ok=True)
-    if directory.is_symlink():
-        raise WorkflowToolError("review handoff directory must not be a symlink")
-    current = directory
-    while current != root:
-        if current.is_symlink():
-            raise WorkflowToolError("review handoff ancestry must not use a symlink")
-        current = current.parent
-    return directory
-
-
-def _materialize_review_handoff(
-    repo_root: Path, payload: Mapping[str, Any]
-) -> tuple[str, Path]:
-    """Materialize one content-addressed handoff in ignored local evidence."""
-
-    if not isinstance(payload, Mapping):
-        raise WorkflowToolError("review handoff payload must be a JSON object")
-    unsigned = dict(payload)
-    unsigned.pop("evidence_id", None)
-    evidence_id = sha256_json(unsigned)
-    supplied_id = payload.get("evidence_id")
-    if supplied_id is not None and supplied_id != evidence_id:
-        raise WorkflowToolError("review handoff evidence_id does not match content")
-    artifact = dict(unsigned)
-    artifact["evidence_id"] = evidence_id
-
-    root = _ensure_evidence_root(repo_root)
-    directory = _ensure_handoff_directory(root)
-    destination = directory / f"{evidence_id}.json"
-    if destination.exists() or destination.is_symlink():
-        if destination.is_symlink():
-            raise WorkflowToolError("review handoff destination must not be a symlink")
-        existing = read_json_file(destination)
-        if (
-            not isinstance(existing, Mapping)
-            or _review_handoff_digest(existing) != evidence_id
-        ):
-            raise WorkflowToolError(
-                "review handoff destination has conflicting content"
-            )
-        if dict(existing) != artifact:
-            raise WorkflowToolError("review handoff destination is not canonical")
-        return evidence_id, destination
-
-    atomic_write_json(destination, artifact)
-    return evidence_id, destination
-
-
-def _emit_review_terminal(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
-    """Finalize a review only after the stable evidence chain is revalidated."""
-
-    if not is_sha(args.expected_base_sha) or not is_sha(args.expected_head_sha):
-        raise WorkflowToolError("review terminal base/head identity is malformed")
-    if not _is_sha256_digest(args.effective_diff_sha256):
-        raise WorkflowToolError("review terminal effective diff identity is malformed")
-
-    payload_path = _safe_handoff_staging_path(repo_root, args.payload)
-    payload = read_json_file(payload_path)
-    if not isinstance(payload, Mapping):
-        raise WorkflowToolError("review terminal payload must be a JSON object")
-    root = _ensure_evidence_root(repo_root)
-    terminal_skill = _review_skill_identity_from_args(args, repo_root)
-
-    initial, initial_error = _read_review_snapshot(
-        root, args.review_snapshot_id, operation="pr-review-snapshot"
-    )
-    recheck, recheck_error = _read_review_snapshot(
-        root, args.recheck_snapshot_id, operation="pr-review-recheck"
-    )
-    problems: list[str] = []
-    if initial_error:
-        problems.append(f"initial review snapshot: {initial_error}")
-    if recheck_error:
-        problems.append(f"final recheck snapshot: {recheck_error}")
-    for snapshot, label in (
-        (initial, "initial review snapshot"),
-        (recheck, "final recheck snapshot"),
-    ):
-        for detail in _snapshot_identity_problems(
-            snapshot,
-            task=args.task,
-            pr=args.pr,
-            base_sha=args.expected_base_sha,
-            head_sha=args.expected_head_sha,
-            effective_diff_sha256=args.effective_diff_sha256,
-        ):
-            problems.append(f"{label}: {detail}")
-    if not (
-        isinstance(recheck, Mapping)
-        and isinstance(recheck.get("stability"), Mapping)
-        and recheck["stability"].get("stable") is True
-        and isinstance(recheck.get("gates"), Mapping)
-        and isinstance(recheck["gates"].get("snapshot_stability"), Mapping)
-        and recheck["gates"]["snapshot_stability"].get("status") == "pass"
-    ):
-        problems.append("final recheck did not prove stability")
-
-    initial_skill = (
-        initial.get("review_skill") if isinstance(initial, Mapping) else None
-    )
-    recheck_skill = (
-        recheck.get("review_skill") if isinstance(recheck, Mapping) else None
-    )
-    if initial_skill != recheck_skill:
-        problems.append("initial and recheck Review Skill identities differ")
-    if terminal_skill is not None and initial_skill != terminal_skill:
-        problems.append("snapshot Review Skill identity differs from terminal Skill")
-
-    # Recollect once after the supplied recheck. This closes the timing gap
-    # between the Review recheck and terminal artifact emission.
-    if isinstance(initial, Mapping):
-        current = _collect_for_recheck(
-            initial,
-            repo_root,
-            review_skill_path=(
-                terminal_skill.get("path") if terminal_skill is not None else None
-            ),
-            review_skill_sha256=(
-                terminal_skill.get("sha256") if terminal_skill is not None else None
-            ),
-        )
-        if isinstance(recheck, Mapping) and _stability_projection(
-            current
-        ) != _stability_projection(recheck):
-            problems.append("review state drifted after final recheck")
-        if terminal_skill is not None and current.get("review_skill") != terminal_skill:
-            problems.append("terminal recollection Review Skill identity mismatch")
-        for detail in _snapshot_identity_problems(
-            current,
-            task=args.task,
-            pr=args.pr,
-            base_sha=args.expected_base_sha,
-            head_sha=args.expected_head_sha,
-            effective_diff_sha256=args.effective_diff_sha256,
-        ):
-            problems.append(f"terminal recollection: {detail}")
-
-    review_evidence = payload.get("review_evidence")
-    if not isinstance(review_evidence, Mapping):
-        problems.append("terminal payload review evidence is missing")
-    else:
-        if review_evidence.get("review_snapshot_id") != args.review_snapshot_id:
-            problems.append("terminal payload initial snapshot ID mismatch")
-        if review_evidence.get("recheck_snapshot_id") != args.recheck_snapshot_id:
-            problems.append("terminal payload recheck snapshot ID mismatch")
-        if review_evidence.get("effective_diff_sha256") != args.effective_diff_sha256:
-            problems.append("terminal payload effective diff mismatch")
-        if (
-            terminal_skill is not None
-            and review_evidence.get("review_skill") != terminal_skill
-        ):
-            problems.append("terminal payload Review Skill identity mismatch")
-
-    unsigned = {key: item for key, item in payload.items() if key != "evidence_id"}
-    artifact = dict(unsigned)
-    artifact["evidence_id"] = sha256_json(unsigned)
-    artifact_id = artifact["evidence_id"]
-    candidate = _review_handoff_candidate(
-        artifact,
-        path=root / REVIEW_HANDOFF_SUBDIR / f"{artifact_id}.json",
-        repo_root=repo_root,
-        root=root,
-        repository=args.repository,
-        task=args.task,
-        pr=args.pr,
-        expected_base_sha=args.expected_base_sha,
-        expected_head_sha=args.expected_head_sha,
-    )
-    if not candidate["valid"]:
-        for category, details in candidate["categories"].items():
-            problems.extend(f"{category}: {detail}" for detail in details)
-    if problems:
-        raise WorkflowToolError(
-            "review terminal failed closed: " + "; ".join(problems[:20])
-        )
-
-    evidence_id, destination = _materialize_review_handoff(repo_root, artifact)
-    stored = read_json_file(destination)
-    if not isinstance(stored, Mapping) or dict(stored) != artifact:
-        raise WorkflowToolError("materialized review handoff failed self-verification")
-    stored_candidate = _review_handoff_candidate(
-        stored,
-        path=destination,
-        repo_root=repo_root,
-        root=root,
-        repository=args.repository,
-        task=args.task,
-        pr=args.pr,
-        expected_base_sha=args.expected_base_sha,
-        expected_head_sha=args.expected_head_sha,
-    )
-    if not stored_candidate["valid"]:
-        raise WorkflowToolError(
-            "materialized review handoff failed provenance validation"
-        )
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "status": "pass",
-        "task": args.task,
-        "pr": args.pr,
-        "repository": args.repository,
-        "reviewed_base_sha": args.expected_base_sha,
-        "reviewed_head_sha": args.expected_head_sha,
-        "effective_diff_sha256": args.effective_diff_sha256,
-        "verdict": stored.get("verdict"),
-        "review_handoff_id": evidence_id,
-        "reference": destination.relative_to(repo_root).as_posix(),
-        "final_recheck_snapshot_id": args.recheck_snapshot_id,
-    }
-
-
-def _is_sha256_digest(value: Any) -> bool:
-    return (
-        isinstance(value, str)
-        and len(value) == 64
-        and all(character in "0123456789abcdef" for character in value.casefold())
-    )
-
-
-def _safe_evidence_file(root: Path, relative: str) -> Path | None:
-    """Resolve one repo-relative file without symlinks or traversal."""
-
-    if not isinstance(relative, str) or not relative or relative.startswith("/"):
-        return None
-    path = Path(relative)
-    if ".." in path.parts or "\\" in relative:
-        return None
-    evidence_root = root.resolve()
-    candidate = root / path
-    try:
-        candidate.resolve(strict=False).relative_to(evidence_root)
-    except ValueError:
-        return None
-    current = candidate
-    while current != root:
-        if current.is_symlink():
-            return None
-        current = current.parent
-    if candidate.is_symlink():
-        return None
-    return candidate
-
-
-def _read_review_snapshot(
-    root: Path, snapshot_id: Any, *, operation: str
-) -> tuple[dict[str, Any] | None, str | None]:
-    if not isinstance(snapshot_id, str) or not re.fullmatch(
-        r"ev-[0-9a-f]{16}", snapshot_id
-    ):
-        return None, "snapshot identity is malformed"
-    path = _safe_evidence_file(root, f"{SNAPSHOT_SUBDIR}/{snapshot_id}.json")
-    if path is None or not path.is_file():
-        return None, "snapshot path is missing or unsafe"
-    try:
-        value = read_json_file(path)
-    except WorkflowToolError as exc:
-        return None, str(exc)
-    if not isinstance(value, dict):
-        return None, "snapshot is not a JSON object"
-    if value.get("schema_version") != SCHEMA_VERSION:
-        return None, "snapshot schema is unsupported"
-    core = {key: item for key, item in value.items() if key != "snapshot_id"}
-    expected_id = f"ev-{sha256_json(core)[:16]}"
-    if value.get("snapshot_id") != snapshot_id or expected_id != snapshot_id:
-        return None, "snapshot content address does not match"
-    if value.get("operation") != operation:
-        return None, "snapshot operation does not match"
-    return value, None
-
-
-def _snapshot_identity_problems(
-    snapshot: Mapping[str, Any] | None,
-    *,
-    task: int,
-    pr: int,
-    base_sha: str,
-    head_sha: str,
-    effective_diff_sha256: str,
-) -> list[str]:
-    problems: list[str] = []
-    if not isinstance(snapshot, Mapping):
-        return ["snapshot content is unavailable"]
-    subject = snapshot.get("subject")
-    if not isinstance(subject, Mapping):
-        problems.append("snapshot subject is missing")
-    elif subject.get("task_number") != task or subject.get("pr_number") != pr:
-        problems.append("snapshot Task/PR identity mismatch")
-    observed = snapshot.get("observed")
-    observed = observed if isinstance(observed, Mapping) else {}
-    observed_pr = observed.get("pr")
-    observed_pr = observed_pr if isinstance(observed_pr, Mapping) else {}
-    if (
-        observed_pr.get("base_sha") != base_sha
-        or observed_pr.get("head_sha") != head_sha
-    ):
-        problems.append("snapshot base/head identity mismatch")
-    diff = observed.get("effective_diff")
-    if not isinstance(diff, Mapping) or diff.get("sha256") != effective_diff_sha256:
-        problems.append("snapshot effective diff identity mismatch")
-    gates = snapshot.get("gates")
-    required_gates = (
-        "repository",
-        "issue_available",
-        "issue_state",
-        "issue_type",
-        "label:codex:ready",
-        "label-not:codex:blocked",
-        "project_status_review",
-        "pr_available",
-        "pr_state",
-        "not_draft",
-        "closing_linkage",
-        "base_sha",
-        "head_sha",
-        "check_runs",
-        "required_checks_configuration",
-        "unresolved_threads",
-    )
-    if not isinstance(gates, Mapping):
-        problems.append("snapshot gates are missing")
-    else:
-        for gate_name in required_gates:
-            gate = gates.get(gate_name)
-            if not isinstance(gate, Mapping) or gate.get("status") not in {
-                "pass",
-                "partial",
-                "unknown",
-                "fail",
-            }:
-                problems.append(f"snapshot gate {gate_name} is incomplete")
-        for gate_name in (
-            "repository",
-            "issue_available",
-            "issue_state",
-            "issue_type",
-            "label:codex:ready",
-            "label-not:codex:blocked",
-            "project_status_review",
-            "pr_available",
-            "pr_state",
-            "not_draft",
-            "closing_linkage",
-            "base_sha",
-            "head_sha",
-        ):
-            gate = gates.get(gate_name)
-            if isinstance(gate, Mapping) and gate.get("status") != "pass":
-                problems.append(f"snapshot identity gate {gate_name} is not pass")
-    return problems
-
-
-def _safe_repo_evidence_file(repo_root: Path, relative: Any) -> Path | None:
-    if not isinstance(relative, str) or not relative.startswith(f"{EVIDENCE_ROOT}/"):
-        return None
-    root = repo_root / EVIDENCE_ROOT
-    return _safe_evidence_file(root, relative.removeprefix(f"{EVIDENCE_ROOT}/"))
-
-
-def _safe_repo_skill_file(repo_root: Path, relative: Any) -> Path | None:
-    if not isinstance(relative, str) or not (
-        relative.startswith(".agents/skills/") or relative.startswith(".claude/skills/")
-    ):
-        return None
-    if not relative.endswith("/SKILL.md"):
-        return None
-    root = repo_root
-    return _safe_evidence_file(root, relative)
-
-
-def _matrix_problems(
-    repo_root: Path,
-    evidence: Mapping[str, Any],
-    *,
-    task: int,
-    pr: int,
-    base_sha: str,
-    head_sha: str,
-    effective_diff_sha256: str,
-    skill_path: str,
-    skill_sha256: str,
-) -> list[str]:
-    problems: list[str] = []
-    matrix_path = _safe_repo_evidence_file(
-        repo_root, evidence.get("evidence_matrix_path")
-    )
-    if matrix_path is None or not matrix_path.is_file():
-        return ["evidence matrix path is missing or unsafe"]
-    try:
-        matrix_bytes = matrix_path.read_bytes()
-        matrix = read_json_file(matrix_path)
-    except (OSError, WorkflowToolError) as exc:
-        return [f"evidence matrix cannot be read: {exc}"]
-    if not isinstance(matrix, Mapping):
-        problems.append("evidence matrix is not a JSON object")
-        return problems
-    claimed_digest = evidence.get("evidence_matrix_sha256")
-    if not _is_sha256_digest(claimed_digest):
-        problems.append("evidence matrix digest is malformed")
-    elif sha256_bytes(matrix_bytes) != claimed_digest:
-        problems.append("evidence matrix content address does not match")
-    expected_values = {
-        "task": task,
-        "pr": pr,
-        "base_sha": base_sha,
-        "head_sha": head_sha,
-        "effective_diff_sha256": effective_diff_sha256,
-    }
-    for key, expected in expected_values.items():
-        if matrix.get(key) != expected:
-            problems.append(f"evidence matrix {key} identity mismatch")
-    if not isinstance(matrix.get("changed_file_groups"), list):
-        problems.append("evidence matrix changed_file_groups is incomplete")
-    if not isinstance(matrix.get("acceptance_criteria"), list):
-        problems.append("evidence matrix acceptance_criteria is incomplete")
-    gates = matrix.get("evidence_gates")
-    if not isinstance(gates, Mapping) or any(
-        gates.get(key) not in {"pass", "partial", "unknown", "fail"}
-        for key in ("review", "validation", "recheck")
-    ):
-        problems.append("evidence matrix evidence_gates is incomplete")
-    if matrix.get("overall") not in {"verified", "partial", "not_verified"}:
-        problems.append("evidence matrix overall status is invalid")
-    matrix_skill = matrix.get("review_skill")
-    if not isinstance(matrix_skill, Mapping):
-        problems.append("evidence matrix Review Skill identity is missing")
-    elif (
-        matrix_skill.get("path") != skill_path
-        or matrix_skill.get("sha256") != skill_sha256
-    ):
-        problems.append("evidence matrix Review Skill identity mismatch")
-    return problems
-
-
-def _review_handoff_candidate(
-    value: Mapping[str, Any],
-    *,
-    path: Path,
-    repo_root: Path,
-    root: Path,
-    repository: str,
-    task: int,
-    pr: int,
-    expected_base_sha: str,
-    expected_head_sha: str,
-) -> dict[str, Any]:
-    categories: dict[str, list[str]] = {
-        "identity": [],
-        "evidence": [],
-        "freshness": [],
-        "findings": [],
-        "maintainer_decision": [],
-    }
-
-    def problem(category: str, detail: str) -> None:
-        categories[category].append(detail)
-
-    if value.get("schema_version") != REVIEW_HANDOFF_SCHEMA_VERSION:
-        problem("evidence", "unsupported handoff schema")
-    if value.get("kind") != "independent-review-handoff":
-        problem("evidence", "handoff kind is invalid")
-    if value.get("repository") != repository:
-        problem("identity", "handoff repository mismatch")
-    if value.get("task") != task:
-        problem("identity", "handoff Task mismatch")
-    if value.get("pr") != pr:
-        problem("identity", "handoff PR mismatch")
-
-    reviewed_base = value.get("reviewed_base_sha")
-    reviewed_head = value.get("reviewed_head_sha")
-    if reviewed_base != expected_base_sha:
-        problem("identity", "reviewed base SHA mismatch")
-    if reviewed_head != expected_head_sha:
-        problem("identity", "stale or mismatched reviewed head SHA")
-    if not is_sha(reviewed_base) or not is_sha(reviewed_head):
-        problem("identity", "reviewed base/head SHA is malformed")
-
-    verdict = value.get("verdict")
-    if verdict in {"通过，可以人工合并", "PASS"}:
-        normalized_verdict = "PASS"
-    elif verdict in {"有条件通过，不得合并", "CONDITIONAL"}:
-        normalized_verdict = "CONDITIONAL"
-    elif verdict in {"不通过，需要修复", "FAIL"}:
-        normalized_verdict = "FAIL"
-    else:
-        normalized_verdict = None
-        problem("findings", "remediation verdict must be CONDITIONAL or FAIL")
-
-    findings = value.get("required_findings")
-    finding_items = findings if isinstance(findings, list) else []
-    if not isinstance(findings, list):
-        problem("findings", "required_findings must be a list")
-    valid_severities = {"Blocking", "High", "Medium"}
-    finding_ids: list[str] = []
-    for finding in finding_items:
-        if not isinstance(finding, Mapping):
-            problem("findings", "finding entry is malformed")
-            continue
-        finding_id = finding.get("id")
-        if (
-            not isinstance(finding_id, str)
-            or REVIEW_FINDING_ID_PATTERN.fullmatch(finding_id) is None
-        ):
-            problem("findings", "finding ID is missing")
-        else:
-            if finding_id in finding_ids:
-                problem("findings", f"duplicate required finding ID: {finding_id}")
-            finding_ids.append(finding_id)
-        if finding.get("severity") not in valid_severities:
-            problem("findings", "finding severity is not Blocking/High/Medium")
-        if finding.get("required") is not True:
-            problem("findings", "finding is not marked required")
-    objective_gates = value.get("objective_gates")
-    if not isinstance(objective_gates, list):
-        problem("findings", "objective_gates must be a list")
-        objective_gates = []
-    if normalized_verdict == "FAIL" and not finding_items:
-        problem("findings", "FAIL handoff has no required finding")
-    if (
-        normalized_verdict == "CONDITIONAL"
-        and not finding_items
-        and not objective_gates
-    ):
-        problem("findings", "CONDITIONAL handoff has no finding or objective gate")
-
-    remediation = value.get("required_remediation")
-    remediation_items = remediation if isinstance(remediation, list) else []
-    if not isinstance(remediation, list):
-        problem("findings", "required_remediation must be a list")
-    remediation_ids: list[str] = []
-    for item in remediation_items:
-        if not isinstance(item, Mapping):
-            problem("findings", "required remediation entry is malformed")
-            continue
-        remediation_id = item.get("id")
-        if (
-            not isinstance(remediation_id, str)
-            or REVIEW_FINDING_ID_PATTERN.fullmatch(remediation_id) is None
-        ):
-            problem("findings", "required remediation ID is missing or invalid")
-        else:
-            if remediation_id in remediation_ids:
-                problem(
-                    "findings", f"duplicate required remediation ID: {remediation_id}"
-                )
-            remediation_ids.append(remediation_id)
-        if item.get("required") is not True:
-            problem("findings", "required remediation is not marked required")
-        description = item.get("description")
-        if not isinstance(description, str) or not description.strip():
-            problem("findings", "required remediation description is empty")
-
-    if normalized_verdict == "FAIL" and not remediation_items:
-        problem("findings", "FAIL handoff has no required remediation")
-    if set(finding_ids) != set(remediation_ids) or len(finding_ids) != len(
-        remediation_ids
-    ):
-        problem(
-            "findings",
-            "required_findings and required_remediation are not one-to-one",
-        )
-    if normalized_verdict == "PASS" and (finding_ids or remediation_ids):
-        problem("findings", "PASS handoff must not contain required remediation")
-
-    maintainer_required = value.get("maintainer_decision_required")
-    if maintainer_required is not False:
-        problem("maintainer_decision", "maintainer decision is required or unavailable")
-
-    freshness = value.get("freshness")
-    if not isinstance(freshness, Mapping):
-        problem("freshness", "freshness evidence is missing")
-        freshness = {}
-    if freshness.get("status") != "fresh" or freshness.get("recheck") != "pass":
-        problem("freshness", "review freshness/recheck is not pass")
-
-    evidence = value.get("review_evidence")
-    if not isinstance(evidence, Mapping):
-        problem("evidence", "review evidence identity is missing")
-        evidence = {}
-    review_snapshot_id = evidence.get("review_snapshot_id")
-    recheck_snapshot_id = evidence.get("recheck_snapshot_id")
-    diff_digest = evidence.get("effective_diff_sha256")
-    if not _is_sha256_digest(diff_digest):
-        problem("evidence", "effective diff evidence digest is malformed")
-    skill = evidence.get("review_skill")
-    if not isinstance(skill, Mapping):
-        problem("evidence", "review Skill identity is missing")
-    else:
-        skill_path = skill.get("path")
-        if (
-            not isinstance(skill_path, str)
-            or skill_path not in CANONICAL_REVIEW_SKILL_PATHS
-        ):
-            problem(
-                "evidence",
-                "review Skill path is not the canonical independent task-pr-review Skill",
-            )
-        if not _is_sha256_digest(skill.get("sha256")):
-            problem("evidence", "review Skill digest is malformed")
-    if not isinstance(value.get("created_at"), str) or not value.get("created_at"):
-        problem("evidence", "handoff creation timestamp is missing")
-    matrix_path = evidence.get("evidence_matrix_path")
-    if not isinstance(matrix_path, str):
-        problem("evidence", "evidence matrix path is missing")
-
-    evidence_id = value.get("evidence_id")
-    if not _is_sha256_digest(evidence_id) or evidence_id != _review_handoff_digest(
-        value
-    ):
-        problem("evidence", "content address does not match handoff content")
-    if path.stem != evidence_id:
-        problem("evidence", "handoff filename is not its content address")
-
-    if not categories["evidence"]:
-        skill = evidence.get("review_skill")
-        skill_path = skill.get("path") if isinstance(skill, Mapping) else None
-        skill_digest = skill.get("sha256") if isinstance(skill, Mapping) else None
-        skill_file = (
-            _safe_repo_skill_file(repo_root, skill_path)
-            if isinstance(skill_path, str)
-            else None
-        )
-        if skill_file is None or not skill_file.is_file():
-            problem("evidence", "Review Skill path is missing or unsafe")
-        elif not _is_sha256_digest(skill_digest):
-            problem("evidence", "Review Skill digest is malformed")
-        else:
-            try:
-                actual_skill_digest = sha256_bytes(skill_file.read_bytes())
-            except OSError:
-                actual_skill_digest = None
-            if actual_skill_digest != skill_digest:
-                problem("evidence", "Review Skill content address does not match")
-
-        initial, initial_error = _read_review_snapshot(
-            root, review_snapshot_id, operation="pr-review-snapshot"
-        )
-        initial_problems = _snapshot_identity_problems(
-            initial,
-            task=task,
-            pr=pr,
-            base_sha=expected_base_sha,
-            head_sha=expected_head_sha,
-            effective_diff_sha256=diff_digest,
-        )
-        if initial_error:
-            initial_problems.insert(0, initial_error)
-        for detail in initial_problems:
-            problem("evidence", f"initial review snapshot: {detail}")
-
-        recheck, recheck_error = _read_review_snapshot(
-            root, recheck_snapshot_id, operation="pr-review-recheck"
-        )
-        recheck_problems = _snapshot_identity_problems(
-            recheck,
-            task=task,
-            pr=pr,
-            base_sha=expected_base_sha,
-            head_sha=expected_head_sha,
-            effective_diff_sha256=diff_digest,
-        )
-        if recheck_error:
-            recheck_problems.insert(0, recheck_error)
-        if not (
-            isinstance(recheck, Mapping)
-            and isinstance(recheck.get("stability"), Mapping)
-            and recheck["stability"].get("stable") is True
-            and isinstance(recheck.get("gates"), Mapping)
-            and isinstance(recheck["gates"].get("snapshot_stability"), Mapping)
-            and recheck["gates"]["snapshot_stability"].get("status") == "pass"
-        ):
-            recheck_problems.append("recheck did not prove stability")
-        for detail in recheck_problems:
-            problem("freshness", f"review recheck snapshot: {detail}")
-
-        if isinstance(skill_path, str) and isinstance(skill_digest, str):
-            matrix_problems = _matrix_problems(
-                repo_root,
-                evidence,
-                task=task,
-                pr=pr,
-                base_sha=expected_base_sha,
-                head_sha=expected_head_sha,
-                effective_diff_sha256=diff_digest,
-                skill_path=skill_path,
-                skill_sha256=skill_digest,
-            )
-            for detail in matrix_problems:
-                problem("evidence", detail)
-
-    valid = not any(categories.values())
-    return {
-        "valid": valid,
-        "categories": categories,
-        "task": value.get("task"),
-        "pr": value.get("pr"),
-        "reviewed_base_sha": reviewed_base,
-        "reviewed_head_sha": reviewed_head,
-        "verdict": normalized_verdict,
-        "evidence_id": evidence_id,
-        "path": path.relative_to(root.parent.parent).as_posix(),
-    }
-
-
-def _review_handoff_snapshot(
-    repo_root: Path,
-    *,
-    repository: str,
-    task: int,
-    pr: int,
-    expected_base_sha: str,
-    expected_head_sha: str,
-    evidence_id: Any,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    root = _ensure_evidence_root(repo_root)
-    directory = _ensure_handoff_directory(root)
-    candidates: list[dict[str, Any]] = []
-    invalid_files: list[str] = []
-    if not isinstance(evidence_id, str) or not re.fullmatch(
-        r"[0-9a-f]{64}", evidence_id
-    ):
-        return _review_handoff_failure(
-            "explicit review handoff evidence_id is missing or malformed",
-            categories={
-                "identity": "fail",
-                "evidence": "fail",
-                "freshness": "fail",
-                "findings": "fail",
-                "maintainer_decision": "fail",
-            },
-        )
-
-    target = _safe_evidence_file(root, f"{REVIEW_HANDOFF_SUBDIR}/{evidence_id}.json")
-    if target is None or not target.is_file():
-        return _review_handoff_failure(
-            "explicit review handoff evidence is missing or unsafe",
-            categories={
-                "identity": "fail",
-                "evidence": "fail",
-                "freshness": "fail",
-                "findings": "fail",
-                "maintainer_decision": "fail",
-            },
-        )
-
-    def collect(path: Path) -> None:
-        if path.is_symlink():
-            if path == target:
-                invalid_files.append(path.name)
-            return
-        try:
-            value = read_json_file(path)
-        except WorkflowToolError:
-            if path == target:
-                invalid_files.append(path.name)
-            return
-        if not isinstance(value, Mapping):
-            if path == target:
-                invalid_files.append(path.name)
-            return
-        if value.get("task") != task or value.get("pr") != pr:
-            return
-        candidates.append(
-            _review_handoff_candidate(
-                value,
-                path=path,
-                repo_root=repo_root,
-                root=root,
-                repository=repository,
-                task=task,
-                pr=pr,
-                expected_base_sha=expected_base_sha,
-                expected_head_sha=expected_head_sha,
-            )
-        )
-
-    collect(target)
-    # This is conflict detection only.  Evidence discovery is the explicit
-    # target above; the complete scan has no arbitrary cap and never selects a
-    # different artifact.  Stale artifacts for an older head remain usable
-    # only for that older head and do not hide a current conflict.
-    for path in sorted(directory.glob("*.json")):
-        if path != target:
-            collect(path)
-
-    selected = next(
-        (
-            candidate
-            for candidate in candidates
-            if candidate["path"].endswith(f"review-handoffs/{evidence_id}.json")
-        ),
-        None,
-    )
-    if selected is not None and selected["valid"]:
-        if selected.get("verdict") == "PASS":
-            return _review_handoff_failure(
-                "PASS review evidence cannot authorize remediation",
-                candidates=candidates,
-                invalid_files=invalid_files,
-                categories={
-                    "identity": "pass",
-                    "evidence": "pass",
-                    "freshness": "pass",
-                    "findings": "fail",
-                    "maintainer_decision": "pass",
-                },
-            )
-        conflicts = [
-            candidate
-            for candidate in candidates
-            if candidate is not selected
-            and candidate.get("reviewed_base_sha") == expected_base_sha
-            and candidate.get("reviewed_head_sha") == expected_head_sha
-        ]
-        if conflicts:
-            return _review_handoff_failure(
-                "ambiguous or conflicting current-head review handoff evidence",
-                candidates=candidates,
-                invalid_files=invalid_files,
-                categories={
-                    "identity": "fail",
-                    "evidence": "fail",
-                    "freshness": "fail",
-                    "findings": "fail",
-                    "maintainer_decision": "fail",
-                },
-            )
-        gates = {
-            "review_handoff": _gate(
-                "pass", "canonical independent-review handoff is valid"
-            ),
-            "review_handoff_identity": _gate("pass"),
-            "review_handoff_evidence": _gate("pass"),
-            "review_handoff_freshness": _gate("pass"),
-            "review_handoff_findings": _gate("pass"),
-            "review_handoff_maintainer_decision": _gate("pass"),
-        }
-        return {
-            "status": "pass",
-            "candidate_count": len(candidates),
-            "selected": selected,
-            "invalid_files": invalid_files,
-        }, gates
-
-    if selected is None:
-        detail = "explicit review handoff evidence was not a target candidate"
-    elif candidates:
-        detail = "stale or invalid review handoff"
-    else:
-        detail = "invalid review handoff evidence"
-    categories: dict[str, str] = {
-        "identity": "fail",
-        "evidence": "fail",
-        "freshness": "fail",
-        "findings": "fail",
-        "maintainer_decision": "fail",
-    }
-    if selected is not None:
-        merged = {
-            category
-            for category, problems in selected["categories"].items()
-            if problems
-        }
-        for category in categories:
-            categories[category] = "fail" if category in merged else "pass"
-    return _review_handoff_failure(
-        detail,
-        candidates=candidates,
-        invalid_files=invalid_files,
-        categories=categories,
-    )
-
-
-def _review_handoff_failure(
-    detail: str,
-    *,
-    candidates: Sequence[Mapping[str, Any]] = (),
-    invalid_files: Sequence[str] = (),
-    categories: Mapping[str, str],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    gates = {
-        "review_handoff": _gate("fail", detail),
-        "review_handoff_identity": _gate(categories["identity"]),
-        "review_handoff_evidence": _gate(categories["evidence"]),
-        "review_handoff_freshness": _gate(categories["freshness"]),
-        "review_handoff_findings": _gate(categories["findings"]),
-        "review_handoff_maintainer_decision": _gate(categories["maintainer_decision"]),
-    }
-    return {
-        "status": "fail",
-        "candidate_count": len(candidates),
-        "selected": None,
-        "invalid_files": list(invalid_files),
-        "detail": detail,
-    }, gates
-
-
 def _entry_point_gates(
     args: argparse.Namespace,
     runner: CommandRunner,
-    repo_root: Path,
     repository: str | None,
-    observed: dict[str, Any],
+    observed: Mapping[str, Any],
     warnings: list[dict[str, Any]],
 ) -> dict[str, Any]:
     gates: dict[str, Any] = {}
@@ -2383,65 +1196,14 @@ def _entry_point_gates(
             ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
             command_id="git-branch-exists",
         )
-        branch_is_present = branch_exists.returncode == 0
-        if branch_is_present:
+        if branch_exists.returncode == 0:
             gates["branch_exists"] = _gate("pass")
         elif branch_exists.returncode == 1:
-            if entry_point == "implementation":
-                gates["branch_exists"] = _gate(
-                    "pass", f"branch {branch!r} absent; bootstrap evaluation required"
-                )
-            else:
-                gates["branch_exists"] = _gate(
-                    "fail", f"branch {branch!r} does not exist"
-                )
+            gates["branch_exists"] = _gate("fail", f"branch {branch!r} does not exist")
         else:
             gates["branch_exists"] = _gate("unknown")
 
-        remote_tip: str | None = None
-        remote_available = True
-        local_branch_tip: str | None = None
-        if entry_point == "implementation" and repository:
-            if branch_is_present:
-                local_tip_result = runner.run(
-                    ["git", "rev-parse", f"refs/heads/{branch}"],
-                    command_id="git-implementation-branch-tip",
-                )
-                if local_tip_result.returncode == 0:
-                    local_branch_tip = local_tip_result.stdout.strip()
-                else:
-                    warnings.append(command_warning(local_tip_result))
-            remote_result = runner.run(
-                ["git", "ls-remote", "--heads", "origin", str(branch)],
-                command_id="git-implementation-remote-branch",
-            )
-            if remote_result.returncode == 0:
-                remote_tip = _remote_branch_tip(remote_result.stdout)
-                gates["branch_remote"] = _gate(
-                    "pass",
-                    "remote branch absent"
-                    if remote_tip is None
-                    else f"remote branch tip {remote_tip}",
-                )
-            else:
-                remote_available = False
-                warnings.append(command_warning(remote_result))
-                gates["branch_remote"] = _gate("unknown")
-
-            gates["branch_identity"] = _task_branch_identity_gate(branch, args.task)
-            gates["branch_bootstrap"] = _branch_bootstrap_gate(
-                git=git,
-                branch=branch,
-                task=args.task,
-                expected_main_sha=args.expected_main_sha,
-                expected_base_sha=args.expected_base_sha,
-                branch_exists=branch_is_present,
-                local_tip=local_branch_tip,
-                remote_tip=remote_tip,
-                remote_available=remote_available,
-            )
-
-        if args.expected_base_sha and repository and branch_is_present:
+        if args.expected_base_sha and repository:
             merge_base = runner.run(
                 [
                     "git",
@@ -2467,30 +1229,6 @@ def _entry_point_gates(
             else:
                 warnings.append(command_warning(merge_base))
                 gates["branch_base"] = _gate("unknown")
-        elif args.expected_base_sha and repository and entry_point == "implementation":
-            gates["branch_base"] = _gate(
-                "pass", "expected base is the source for safe branch bootstrap"
-            )
-
-        if (
-            entry_point == "implementation"
-            and repository
-            and branch_is_present
-            and isinstance(args.expected_base_sha, str)
-        ):
-            active_gate, active_prs = _active_pr_identity_gate(
-                runner,
-                repository,
-                branch=branch,
-                task=args.task,
-                expected_base_sha=args.expected_base_sha,
-                expected_head_sha=args.expected_head_sha,
-                branch_tip=local_branch_tip,
-                expected_pr=args.pr,
-                warnings=warnings,
-            )
-            observed["active_prs"] = bounded_list(active_prs)
-            gates["active_pr_identity"] = active_gate
 
     if entry_point in {"final-validation", "pr-readiness"}:
         branch = args.branch
@@ -2510,11 +1248,6 @@ def _entry_point_gates(
         else:
             warnings.append(command_warning(head_result))
             gates["branch_head"] = _gate("unknown")
-
-    if entry_point == "review-remediation":
-        gates["implementation_head"] = _sha_gate(
-            git.get("head_sha"), args.expected_head_sha, "implementation HEAD"
-        )
 
     if entry_point == "pr-readiness":
         branch = args.branch
@@ -2614,7 +1347,8 @@ def _entry_point_gates(
     if entry_point == "review-remediation":
         if repository and args.pr is not None:
             pr = _pr_view(runner, repository, args.pr, warnings)
-            observed["pr"] = pr
+            observed_copy = dict(observed)
+            observed_copy["pr"] = pr
             if pr is None:
                 gates["pr_available"] = _gate("unknown", "PR metadata unavailable")
             else:
@@ -2633,35 +1367,15 @@ def _entry_point_gates(
                 gates["closing_linkage"] = _closing_linkage_gate(
                     pr.get("closing_issues"), task_number=args.task
                 )
-                handoff, handoff_gates = _review_handoff_snapshot(
-                    repo_root,
-                    repository=repository,
-                    task=args.task,
-                    pr=args.pr,
-                    expected_base_sha=args.expected_base_sha,
-                    expected_head_sha=args.expected_head_sha,
-                    evidence_id=args.review_handoff_id,
-                )
-                observed["review_handoff"] = handoff
-                gates.update(handoff_gates)
-                if handoff.get("status") == "pass":
-                    selected = handoff.get("selected")
-                    evidence_id = (
-                        selected.get("evidence_id")
-                        if isinstance(selected, Mapping)
-                        else None
-                    )
-                    gates["review_conclusion"] = _gate(
-                        "pass",
-                        f"canonical independent-review handoff {evidence_id} verified",
-                    )
+                reviews = pr.get("reviews", {})
+                review_items = reviews.get("items") if isinstance(reviews, dict) else []
+                review_items = review_items if isinstance(review_items, list) else []
+                if not review_items:
+                    gates["review_conclusion"] = _gate("fail", "no reviews submitted")
                 else:
                     gates["review_conclusion"] = _gate(
-                        "fail",
-                        str(
-                            handoff.get("detail")
-                            or "no valid independent-review handoff/evidence"
-                        ),
+                        "pass",
+                        f"{len(review_items)} review(s) submitted",
                     )
                 head_repo = pr.get("head_repository")
                 if head_repo == repository:
@@ -3600,9 +2314,7 @@ def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, 
                 "unknown", "Issue metadata unavailable"
             )
         gates["parent_blocking"] = _parent_state_gate(relationships)
-        gates.update(
-            _entry_point_gates(args, runner, repo_root, repository, observed, warnings)
-        )
+        gates.update(_entry_point_gates(args, runner, repository, observed, warnings))
     subject: dict[str, Any] = {
         "kind": "task",
         "task_number": args.task,
@@ -3677,7 +2389,7 @@ def _task_pr_snapshot(
         "object_base_sha": object_base_sha,
         "runner": _runner_source(runner, warnings),
     }
-    snapshot = _base_snapshot(
+    return _base_snapshot(
         operation=operation,
         subject={"kind": "task-pr", "task_number": args.task, "pr_number": args.pr},
         repository=repository,
@@ -3688,13 +2400,6 @@ def _task_pr_snapshot(
         limitations=limitations,
         operations=runner.counters(),
     )
-    review_skill = _review_skill_identity_from_args(args, repo_root)
-    if review_skill is not None:
-        snapshot["review_skill"] = review_skill
-        snapshot["snapshot_id"] = (
-            f"ev-{sha256_json({key: value for key, value in snapshot.items() if key != 'snapshot_id'})[:16]}"
-        )
-    return snapshot
 
 
 def _closeout_plan(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
@@ -4022,11 +2727,7 @@ def _snapshot_path(repo_root: Path, snapshot_id: str) -> Path:
 
 
 def _collect_for_recheck(
-    previous: Mapping[str, Any],
-    repo_root: Path,
-    *,
-    review_skill_path: str | None = None,
-    review_skill_sha256: str | None = None,
+    previous: Mapping[str, Any], repo_root: Path
 ) -> dict[str, Any]:
     operation = previous.get("operation")
     subject = previous.get("subject")
@@ -4041,8 +2742,6 @@ def _collect_for_recheck(
         expected_head_sha=None,
         expected_main_sha=None,
         expected_merge_sha=None,
-        review_skill_path=review_skill_path,
-        review_skill_sha256=review_skill_sha256,
     )
     if operation in {"delivery-readiness", "pr-review-snapshot"}:
         namespace.task = subject.get("task_number")
@@ -4148,22 +2847,7 @@ def _recheck(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
     previous = read_json_file(path)
     if not isinstance(previous, dict):
         raise WorkflowToolError("snapshot is not an object")
-    review_skill_path = getattr(args, "review_skill_path", None)
-    review_skill_sha256 = getattr(args, "review_skill_sha256", None)
-    previous_skill = previous.get("review_skill")
-    if isinstance(previous_skill, Mapping):
-        if review_skill_path != previous_skill.get(
-            "path"
-        ) or review_skill_sha256 != previous_skill.get("sha256"):
-            raise WorkflowToolError("recheck Review Skill identity drifted")
-    elif review_skill_path is not None or review_skill_sha256 is not None:
-        raise WorkflowToolError("initial snapshot has no Review Skill identity")
-    current = _collect_for_recheck(
-        previous,
-        repo_root,
-        review_skill_path=review_skill_path,
-        review_skill_sha256=review_skill_sha256,
-    )
+    current = _collect_for_recheck(previous, repo_root)
     before = _stability_projection(previous)
     after = _stability_projection(current)
     changed = sorted(
@@ -4246,39 +2930,11 @@ def _pr_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--expected-head-sha")
 
 
-def _review_skill_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--review-skill-path")
-    parser.add_argument("--review-skill-sha256")
-
-
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate compact, read-only workflow evidence snapshots."
     )
     sub = parser.add_subparsers(dest="command", required=True)
-
-    emit_handoff = sub.add_parser(
-        "emit-review-handoff",
-        help="materialize one content-addressed independent-review handoff",
-    )
-    emit_handoff.add_argument("--repo-root", default=".")
-    emit_handoff.add_argument("--payload", required=True)
-
-    review_terminal = sub.add_parser(
-        "review-terminal",
-        help="finalize a stable independent review and emit canonical evidence",
-    )
-    review_terminal.add_argument("--repo-root", default=".")
-    review_terminal.add_argument("--repository", required=True)
-    review_terminal.add_argument("--task", type=int, required=True)
-    review_terminal.add_argument("--pr", type=int, required=True)
-    review_terminal.add_argument("--expected-base-sha", required=True)
-    review_terminal.add_argument("--expected-head-sha", required=True)
-    review_terminal.add_argument("--effective-diff-sha256", required=True)
-    review_terminal.add_argument("--review-snapshot-id", required=True)
-    review_terminal.add_argument("--recheck-snapshot-id", required=True)
-    review_terminal.add_argument("--payload", required=True)
-    _review_skill_args(review_terminal)
 
     delivery = sub.add_parser(
         "delivery-preflight", help="Task and repository preflight snapshot"
@@ -4296,9 +2952,6 @@ def _build_parser() -> argparse.ArgumentParser:
     delivery.add_argument("--expected-base-sha", help="expected branch base SHA")
     delivery.add_argument("--expected-head-sha", help="expected branch head SHA")
     delivery.add_argument("--pr", type=int, help="expected PR number")
-    delivery.add_argument(
-        "--review-handoff-id", help="explicit content-addressed review handoff ID"
-    )
 
     readiness = sub.add_parser("delivery-readiness", help="Task PR readiness snapshot")
     _common(readiness)
@@ -4309,7 +2962,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _common(review)
     _pr_args(review)
-    _review_skill_args(review)
 
     closeout = sub.add_parser(
         "closeout-plan", help="read-only post-merge closeout plan"
@@ -4336,8 +2988,6 @@ def _build_parser() -> argparse.ArgumentParser:
         recheck = sub.add_parser(name, help=help_text)
         _common(recheck)
         recheck.add_argument("--snapshot-id", required=True)
-        if name == "pr-review-recheck":
-            _review_skill_args(recheck)
     return parser
 
 
@@ -4346,23 +2996,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     repo_root = Path(args.repo_root).resolve()
     try:
-        if args.command == "emit-review-handoff":
-            payload_path = _safe_handoff_staging_path(repo_root, args.payload)
-            payload = read_json_file(payload_path)
-            if not isinstance(payload, Mapping):
-                raise WorkflowToolError("review handoff payload must be a JSON object")
-            evidence_id, destination = _materialize_review_handoff(repo_root, payload)
-            print_json(
-                {
-                    "schema_version": REVIEW_HANDOFF_SCHEMA_VERSION,
-                    "evidence_id": evidence_id,
-                    "reference": destination.relative_to(repo_root).as_posix(),
-                }
-            )
-            return 0
-        if args.command == "review-terminal":
-            print_json(_emit_review_terminal(args, repo_root))
-            return 0
         if args.command == "delivery-preflight":
             snapshot = _delivery_preflight(args, repo_root)
         elif args.command == "delivery-readiness":

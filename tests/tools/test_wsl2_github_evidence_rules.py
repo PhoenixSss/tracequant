@@ -148,26 +148,6 @@ def _decision(argv: list[str]) -> str:
         ],
         RUNNER
         + [
-            "review-terminal",
-            "--task",
-            "84",
-            "--pr",
-            "102",
-            "--expected-base-sha",
-            SHA,
-            "--expected-head-sha",
-            SHA,
-            "--effective-diff-sha256",
-            "b" * 64,
-            "--review-snapshot-id",
-            "ev-0123456789abcdef",
-            "--recheck-snapshot-id",
-            "ev-fedcba9876543210",
-            "--payload",
-            ".agents/evidence.local/review-staging/terminal.json",
-        ],
-        RUNNER
-        + [
             "pre-merge",
             "--task",
             "84",

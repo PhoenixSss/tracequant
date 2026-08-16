@@ -40,6 +40,11 @@ stop at the requested boundary.
 Read applicable `AGENTS.md` / `AGENTS.override.md` and
 `.agents/policies/command-execution.md`, `.agents/policies/workflow-evidence.md`.
 
+Shared lifecycle semantics are owned by `docs/development/issue-workflow.md`
+(§3 lifecycle metadata, §4 readiness, §6 Delivery, §10 remediation). Read the
+minimal needed section for the current phase; do not duplicate lifecycle prose
+in this Skill.
+
 Use the current repository Runner interfaces:
 
 ```bash
@@ -66,7 +71,7 @@ tools/agent_workflow/wsl2_github_evidence_runner.py delivery-readiness \
 | `implementation` | Phase 2 before branch/implementation writes | `--branch --expected-base-sha` |
 | `final-validation` | Phase 3 before commit + `workflow-delivery` | `--branch --expected-base-sha --expected-head-sha` |
 | `pr-readiness` | Phase 4 before PR creation/push | `--branch --expected-base-sha --expected-head-sha` |
-| `review-remediation` | Remediation before any repair edit | `--pr --expected-base-sha --expected-head-sha --review-handoff-id` |
+| `review-remediation` | Remediation before any repair edit | `--pr --expected-base-sha --expected-head-sha` |
 
 During implementation, use a matching targeted Validation profile only when
 needed: `targeted`, `targeted:tools-tests`, or `targeted:workflow-tests`.
@@ -99,20 +104,11 @@ maintainer authorization.
 
 ## Lifecycle state
 
-Keep Codex labels separate from Project `Status`:
-
-| State | Codex label | Project Status |
-| --- | --- | --- |
-| specification incomplete | `codex:needs-spec` | `Inbox` / `Specifying` |
-| ready | `codex:ready` | `Ready` |
-| implementation active | `codex:ready` | `In Progress` |
-| PR or review active | `codex:ready` | `Review` |
-| blocked | `codex:blocked` | `Blocked` |
-| verified post-merge | `codex:ready` | `Done` |
-
-Implementation requires an open Task, `Ready` or `In Progress`,
-`codex:ready`, no `codex:blocked`, and this invocation. Stop before a state
-write if actual Project options differ.
+The label / Project `Status` mapping and readiness conditions are defined in
+`docs/development/issue-workflow.md` §3–§4; do not re-derive the table here.
+Implementation requires an open Task, `Ready` or `In Progress`, `codex:ready`,
+no `codex:blocked`, and this invocation. Stop before a state write if actual
+Project options differ.
 
 `codex:ready` and `codex:needs-spec` are mutually exclusive lifecycle labels.
 Their coexistence is a lifecycle conflict that fails Preflight; do not proceed.
@@ -147,7 +143,7 @@ final; no auto-remediation or retry.
 | Entry point | Dirty worktree | Handling |
 |---|---|---|
 | `delivery-start` | Allowed | Full flow takes custody of existing changes |
-| `implementation` | Forbidden at branch admission | Branch creation/reuse must begin from a clean worktree; development may then create Task-owned changes |
+| `implementation` | Allowed | Phase continues development and commit |
 | `final-validation` | Forbidden | Must bind clean committed head |
 | `pr-readiness` | Forbidden | Local, remote, PR head must be stable |
 | `review-remediation` | Forbidden (fail-closed) | Must start from determinate reviewed head |
@@ -193,26 +189,9 @@ re-read lifecycle transitions only after readiness passes.
 
 Start from clean `main` unless facts prove a valid recovery point. Create or
 reuse one exact Task branch after verifying identity, history, scope, and
-ownership. For a missing branch, an `implementation` preflight PASS with
-`branch creation = pass` is the normal workflow authorization to create the
-new branch using only the canonical `task/<Task number>-<slug>` form:
-
-```text
-git switch -c task/<Task number>-<slug> <expected-base-sha>
-```
-
-Legacy numeric branch forms may be reused only when an existing branch is
-already proven to belong to the current Task; they are never used for new
-branch creation.
-
-Immediately verify the new branch, HEAD, base, and clean state. For an existing
-branch, switch to it only after the Runner proves identity/base/ownership and
-reuse it idempotently. Never reset, overwrite, or reuse a branch whose identity
-is ambiguous; a dirty worktree is fail-closed when branch creation is required.
-
-Implement the smallest correct change — follow scoped rules, preserve safety,
-add required tests/docs, inspect tracked and untracked scope. Do not weaken
-tests to obtain a pass.
+ownership. Implement the smallest correct change — follow scoped rules,
+preserve safety, add required tests/docs, inspect tracked and untracked scope.
+Do not weaken tests to obtain a pass.
 
 ## Phase 3: commit, final validation, and push
 
@@ -280,22 +259,7 @@ objective gate must be re-evaluated for an existing open Task PR.
 
 The remediation handoff must identify: Task and PR; reviewed head SHA; Review
 verdict; required Blocking, High, or Medium findings; unresolved objective
-gates; maintainer decisions, if any; and the canonical structured handoff
-artifact under `.agents/evidence.local/review-handoffs/<evidence_id>.json`.
-Pass the exact producer-emitted `<evidence_id>` as `--review-handoff-id`; the
-Runner loads only that content-addressed artifact and never selects evidence by
-an arbitrary directory scan.
-
-Run the `review-remediation` preflight with the expected base/head before any
-repair edit. A valid artifact is the conclusion carrier even when the PR has
-zero submitted GitHub Reviews. The preflight must fail closed for missing,
-malformed, stale, ambiguous, identity-mismatched, or maintainer-decision-
-required artifacts.
-
-Implementation admission also verifies any existing active PR for an existing
-Task branch before allowing writes: exactly one current-Task PR, canonical
-branch, expected base, and non-conflicting identity are required. Ambiguous,
-cross-Task, or mismatched active PRs fail closed before implementation.
+gates; maintainer decisions, if any.
 
 Re-read current Task, PR, branch, head, effective diff, checks, reviews, and
 threads. Verify that the PR is open, belongs to the expected Task branch, and

@@ -13,7 +13,8 @@ push, or PR creation. Otherwise stop with:
 本会话不能提供独立审查
 ```
 
-A Delivery handoff locates the object but is not correctness evidence.
+A Delivery handoff locates the object but is not correctness evidence
+(no-verdict-inheritance, `docs/development/pr-review.md` §1).
 
 ## Standard invocation
 
@@ -39,6 +40,11 @@ Read applicable agent rules and:
 .agents/policies/workflow-evidence.md
 ```
 
+Shared review semantics (fresh session, head lock, independent judgement,
+verdict semantics, remediation handoff) are owned by
+`docs/development/pr-review.md`. Read the minimal needed section for the
+current phase; do not duplicate review-semantic prose in this Skill.
+
 Use the current repository Runner interfaces in this order:
 
 ```bash
@@ -59,11 +65,10 @@ tools/agent_workflow/wsl2_github_evidence_runner.py \
 ```
 
 The `--skill-path` argument records the actual calling Skill identity in every
-artifact. The only accepted paths are the canonical independent Review Skills:
-`.agents/skills/task-pr-review-runner/SKILL.md` for Codex and
-`.claude/skills/task-pr-review-runner/SKILL.md` for Claude Code. The Runner
-re-hashes content independently and **fails closed** for every other path,
-including another Skill beneath an otherwise allowed root.
+artifact. Codex callers pass `.agents/skills/task-pr-review-runner/SKILL.md`;
+Claude Code callers pass `.claude/skills/task-pr-review-runner/SKILL.md`. The
+Runner re-hashes content independently and **fails closed** when the path is
+not within an allowed Skill root (`.agents/skills/` or `.claude/skills/`).
 
 The initial snapshot defines the reviewed identity. `workflow-review` is the
 independent CI-equivalent validation for the locked head. `recheck` verifies
@@ -255,111 +260,50 @@ independent session. Evaluate check/thread-only changes under current gates.
 Verify the recheck uses the same Skill identity as the initial review (same
 `--skill-path`). Skill identity drift invalidates the review.
 
-The Review terminal is mechanical. After the final stable recheck and after
-the verdict/findings payload is complete, write that bounded payload under the
-ignored evidence root and invoke the `review-terminal` profile of
-`tools/agent_workflow/wsl2_github_evidence_runner.py` with the locked Task,
-PR, base/head, diff, initial snapshot ID, final recheck snapshot ID, payload,
-and `--skill-path`. The terminal runner recollects the PR state, materializes
-the canonical evidence, self-verifies it, and returns the exact
-`review_handoff_id`. A non-zero terminal result is a failed review terminal;
-do not print a remediation-capable handoff or invent an ID.
-
-The terminal profile emits canonical evidence for PASS as well as remediation
-verdicts. CONDITIONAL/FAIL payloads must contain one valid required remediation
-entry for every required finding; PASS payloads contain empty finding and
-remediation lists. Only CONDITIONAL/FAIL evidence may authorize Delivery
-remediation.
-
-For every terminal verdict, the `review-terminal` profile writes the canonical
-structured review evidence described in `docs/development/pr-review.md` §9 to
-`.agents/evidence.local/review-handoffs/<evidence_id>.json`. Populate every
-identity, finding, freshness, evidence-snapshot, evidence-matrix, and
-maintainer-decision field from the current Review session. Compute
-`evidence_id` as the SHA-256 of the canonical JSON with the `evidence_id` field
-removed, and use that digest as the filename. This is an allowed ignored local
-evidence write; it is not a GitHub Review submission or any repository/GitHub
-state mutation. Materialize it through the repository producer boundary
-`tools/agent_workflow/workflow_evidence.py` using its `emit-review-handoff`
-subcommand from the bounded handoff payload; the producer returns the exact
-`evidence_id`.
-
-## Evidence status to verdict matrix
+## Evidence status and verdict mapping
 
 The Evidence Runner produces a process exit code and a `status` field
-(`pass`, `partial`, `fail`). Process success (exit code 0) is not gate pass.
-The Reviewer must read the `status` field and map it deterministically.
+(`pass`, `partial`, `fail`). Process success (exit code 0) is not gate pass:
+read the `status` field and map it deterministically.
 
-### Deterministic mapping
+Verdict conditions and the full mapping from evidence status, objective
+gates, and findings to PASS / CONDITIONAL / FAIL are authoritative in
+`docs/development/pr-review.md` §8. Read §8 when reaching a verdict; do not
+re-derive the mapping here.
 
-| Evidence `status` | Permitted verdict ceiling | Constraints |
-| --- | --- | --- |
-| `pass` | Pass | Only when all other gates also pass. |
-| `partial` (any cause) | Conditional pass — do not merge | Never upgrades to unconditional pass. |
-| `unknown` (plan-limit `403`) | Conditional pass — do not merge | Unless a formally committed fallback policy exists. |
-| `unknown` (other cause) | Review incomplete / failing | Insufficient evidence. |
-| `fail` | Review incomplete / failing | Cannot pass. |
-| Identity drift | Review incomplete / failing | Review identity compromised. |
-| Unsupported schema | Review incomplete / failing | Cannot evaluate. |
-| Lifecycle conflict | Review incomplete / failing | Cannot proceed. |
-
-### Plan-limit 403 — default disposition
-
-```text
-required_checks_configuration = unknown
-reason = github-plan-limit-403
-```
-
-**Default**: `Conditional pass — do not merge`.
-
-The Reviewer must not self-approve a fallback. Only apply a fallback when the
-repository has a formally committed, version-controlled policy that explicitly
-authorizes it, defines conditions and evidence burden deterministically, and
-the current evidence satisfies every condition.
-
-The fact that the `quality` check succeeded is not sufficient to prove the
-required-check configuration.
-
-### Recheck partial
-
-A `recheck` that returns `partial` keeps the evidence ceiling at Conditional.
-A `recheck` that returns `fail` or detects diff drift invalidates the review.
+Plan-limit `403` (`required_checks_configuration = unknown`) defaults to
+`Conditional pass — do not merge`; never self-approve a fallback without a
+formally committed capability-limited policy (pr-review.md §8). A `recheck`
+that returns `fail` or detects diff drift invalidates the review.
 
 ## Findings and verdicts
 
 Use exactly: Blocking, High, Medium, Low, and Nit. Cite precise files/lines, Task
 clauses, state, or validation evidence. Any unresolved Blocking/High/Medium
-finding prevents pass.
+finding prevents pass (pr-review.md §8).
 
-Output exactly one:
+Output exactly one verdict; the verdict conditions and severity-to-verdict
+mapping are authoritative in `docs/development/pr-review.md` §8:
 
 ```text
 通过，可以人工合并
 ```
 
-Only when all of: semantic review complete, acceptance criteria verified,
-no Blocking/High/Medium findings, all evidence gates pass, no identity drift.
-
 ```text
 有条件通过，不得合并
 ```
-
-When no Blocking/High/Medium code defect exists but an objective gate is
-`partial` or `unknown` under the plan-limit 403 default.
 
 ```text
 不通过，需要修复
 ```
 
-When a Blocking/High/Medium finding remains, scope/acceptance/validation fails,
-semantic review is incomplete, or identity/permission/safety boundaries fail.
+Minimal summary — apply the authoritative verdict mapping from pr-review.md
+§8: PASS is the only mergeable state; CONDITIONAL is never mergeable;
+incomplete evidence or an incomplete evidence matrix cannot produce PASS.
 
-### Verdict rules
-
-- No unconditional pass when any evidence gate is `partial`, `unknown`, or `fail`.
-- No unconditional pass when evidence matrix has `not_verified` groups or criteria.
-- Incomplete evidence matrix → ceiling is `不通过`.
-- Incomplete semantic review → do not claim "no Medium-or-above findings".
+Head change during review is review invalidation, not a verdict:
+`REVIEW INVALIDATED — HEAD CHANGED` (pr-review.md §8). The Reviewer never
+merges.
 
 ## Remediation handoff
 
@@ -386,19 +330,14 @@ Maintainer decision required:
 
 Rules:
 
-- include only findings that caused the non-passing verdict;
+- include only findings that caused the non-passing verdict; the bounded
+  handoff semantics are authoritative in `docs/development/pr-review.md` §9;
 - include objective gates that require recheck or waiting;
 - include decisions that cannot be resolved without maintainer authorization;
 - exclude Low and Nit findings unless the maintainer explicitly made them
   required;
 - state the defect and expected behavior, but do not design the implementation;
 - preserve finding IDs.
-- the structured artifact is mandatory for every terminal verdict; a text-only
-  handoff is not a valid remediation input. PASS artifacts contain empty
-  finding/remediation lists and cannot authorize Delivery remediation.
-- print the exact producer result in the final handoff as
-  `Canonical review handoff evidence: <evidence_id>`. Delivery remediation
-  must pass that identity as `--review-handoff-id`.
 
 End with this exact remediation prompt populated with current identities:
 

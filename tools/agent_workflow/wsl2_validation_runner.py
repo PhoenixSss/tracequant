@@ -68,6 +68,7 @@ CANONICAL_COMMANDS: Final[dict[str, tuple[str, ...]]] = {
         "--frozen",
         "pytest",
         "tests/tools/test_workflow_skills.py",
+        "tests/tools/test_skill_variant_provenance.py",
         "tests/tools/test_workflow_validation.py",
         "tests/tools/test_workflow_evidence.py",
         "tests/tools/test_wsl2_validation_runner.py",
@@ -231,26 +232,6 @@ def _load_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str]]:
 
 ALLOWED_SKILL_ROOTS: Final = (".agents/skills/", ".claude/skills/")
 SKILL_FILENAME: Final = "SKILL.md"
-CANONICAL_SKILL_PATHS: Final = {
-    "workflow-delivery": frozenset(
-        {
-            ".agents/skills/task-delivery-runner/SKILL.md",
-            ".claude/skills/task-delivery-runner/SKILL.md",
-        }
-    ),
-    "workflow-review": frozenset(
-        {
-            ".agents/skills/task-pr-review-runner/SKILL.md",
-            ".claude/skills/task-pr-review-runner/SKILL.md",
-        }
-    ),
-    "workflow-closeout": frozenset(
-        {
-            ".agents/skills/task-closeout/SKILL.md",
-            ".claude/skills/task-closeout/SKILL.md",
-        }
-    ),
-}
 
 
 def _resolve_skill_identity(
@@ -283,12 +264,6 @@ def _resolve_skill_identity(
         if not any(normalized.startswith(root) for root in ALLOWED_SKILL_ROOTS):
             raise RunnerError(
                 f"--skill-path must start with one of {ALLOWED_SKILL_ROOTS}: "
-                f"{caller_skill_path!r}"
-            )
-        canonical = CANONICAL_SKILL_PATHS.get(profile_name)
-        if canonical is not None and normalized not in canonical:
-            raise RunnerError(
-                f"--skill-path is not the canonical Skill for {profile_name}: "
                 f"{caller_skill_path!r}"
             )
         payload = _read_current_file(repo_root, normalized)

@@ -106,10 +106,6 @@ PR 修改 Skill、Runner、Rules 或 workflow governance 时，Reviewer 直接�
 
 非通过 Review 输出有界 remediation handoff：Task/PR、reviewed head、导致结论的
 Blocking/High/Medium finding、客观 gate 和需要维护者决定的事项。
-Review producer 同时 materialize `.agents/evidence.local/review-handoffs/<evidence_id>.json`
-并输出精确 `evidence_id`；Delivery 以 `--review-handoff-id` 精确加载并验证
-Skill、snapshot、matrix 和 handoff 的 provenance。Submitted GitHub Review 不能
-绕过 canonical evidence 的失败。
 
 `task-delivery-runner` 在同一 PR 上完成最小修复、回归测试、final Runner、push、
 checks 和 readiness。任何新 commit 都使旧 verdict 失效，必须由新的独立 Review
@@ -128,14 +124,10 @@ Token 分析在仓库外使用 Codex rollout JSONL 完成，不改变任何工�
 
 ## Provenance 与回滚
 
-当前 Runner Skill 与保留 baseline Skill 的来源和哈希由
-`tools/agent_workflow/skill_path_audit.py` 严格验证。历史 Skill 只作为维护者明确
-点名的对照，不是 Runner 失败回退路径。
+Skill family 来源和哈希见 `task-skill-variants.json`，严格验证使用
+`skill_variant_provenance.py`。历史 Skill 只作为维护者明确点名的对照，不是 Runner
+失败回退路径。
 
 回滚当前 Runner 机制时，必须在一个变更中同步回滚：消费 Skill、Runner、profiles、
 Rules、tests 和文档。回滚后仍只能存在一条完整机械路径；不得同时运行两套完整
 Validation/Evidence 链，也不得跳过独立 Review、人工 Merge 或对象 SHA 锁定。
-
-Independent Review 的 terminal 阶段使用现有 Evidence Runner 的
-`review-terminal` profile：final stable recheck 后由 runner materialize 并
-self-verify canonical review evidence，再输出 exact `review_handoff_id`。
