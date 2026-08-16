@@ -23,7 +23,6 @@ ACTIVE_WORKFLOW_FILES = (
     ".agents/skills/task-closeout/SKILL.md",
     ".agents/skills/feature-completion-audit/SKILL.md",
     "docs/workflows/agent-skills.md",
-    "docs/workflows/workflow-evidence.md",
     "tools/agent_workflow/workflow_common.py",
     "tools/agent_workflow/workflow_evidence.py",
     "tools/agent_workflow/workflow_validation.py",
@@ -32,12 +31,6 @@ ACTIVE_WORKFLOW_FILES = (
 
 APPROVED_TELEMETRY_REFERENCE_FILES = {
     "AGENTS.md": "normative statement that runtime telemetry is disabled",
-    ".agents/skills/task-delivery/SKILL.md": (
-        "preserved historical baseline Skill containing the former telemetry contract"
-    ),
-    ".agents/skills/task-pr-review/SKILL.md": (
-        "preserved historical baseline Skill containing the former telemetry contract"
-    ),
     "tests/tools/test_runtime_telemetry_removed.py": "removal regression assertions",
     "tests/tools/test_workflow_skills.py": "Skill regression assertion",
     "docs/workflows/benchmarks/task-65-round-2/README.md": (

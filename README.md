@@ -174,11 +174,11 @@ Local outputs are stored only in Git-ignored directories:
 .agents/validation.local/
 ```
 
-See `docs/workflows/workflow-evidence.md`. These tools do not replace semantic
+See `.agents/policies/workflow-evidence.md`. These tools do not replace semantic
 review, independent PR review, manual Merge, or Feature closeout.
 
 - [WSL2 GitHub evidence runner](docs/workflows/wsl2-github-evidence-runner/README.md): fixed read-only profiles, evidence snapshots, Git/GitHub approval boundaries, and live material capture.
-- [Agent workflow Skills](docs/workflows/agent-skills.md): current Runner Skills, retained historical baselines, source-of-truth ownership, and validation entry points.
+- [Agent workflow Skills](docs/workflows/agent-skills.md): current Codex/Claude Skills, source-of-truth ownership, and validation entry points.
 - [Validation Runner](docs/workflows/wsl2-validation-runner/README.md): fixed validation profiles, compact artifacts, exact argv, and process cleanup.
 - [Task Skill runner migration](docs/workflows/task-skill-runner-migration/README.md): historical migration record only; not an operational guide.
 

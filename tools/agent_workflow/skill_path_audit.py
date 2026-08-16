@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Final
 
-SCHEMA_VERSION: Final = 3
+SCHEMA_VERSION: Final = 4
 ACTIVE_SKILLS: Final = {
     "task-delivery-runner": Path(".agents/skills/task-delivery-runner/SKILL.md"),
     "task-pr-review-runner": Path(".agents/skills/task-pr-review-runner/SKILL.md"),
@@ -24,10 +24,6 @@ CLAUDE_SKILLS: Final = {
     "feature-completion-audit": Path(
         ".claude/skills/feature-completion-audit/SKILL.md"
     ),
-}
-BASELINE_SKILLS: Final = {
-    "task-delivery": Path(".agents/skills/task-delivery/SKILL.md"),
-    "task-pr-review": Path(".agents/skills/task-pr-review/SKILL.md"),
 }
 REQUIRED: Final = {
     "task-delivery-runner": (
@@ -174,26 +170,12 @@ def audit(repo_root: Path) -> tuple[dict[str, object], int]:
             violations.append(f"missing shared doc {relative}")
             totals["shared_doc_existence_violations"] += 1
 
-    baseline: dict[str, object] = {}
-    for name, relative in BASELINE_SKILLS.items():
-        path = repo_root / relative
-        text = path.read_text(encoding="utf-8")
-        if f"name: {name}" not in text:
-            violations.append(f"{name}: baseline name changed")
-        baseline[name] = {
-            "path": relative.as_posix(),
-            "lines": len(text.splitlines()),
-            "bytes": len(text.encode("utf-8")),
-            "sha256": _sha256(text),
-        }
-
     output: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "status": "pass" if not violations else "fail",
         "active_skills": results,
         "claude_skills": claude_results,
         "shared_docs": shared_docs,
-        "baseline_skills": baseline,
         "totals": totals,
         "violations": violations,
     }

@@ -37,7 +37,7 @@ stop at the requested boundary.
 
 ## Policies and Runner interface
 
-Read applicable `AGENTS.md` / `AGENTS.override.md` and
+Read applicable `AGENTS.md` and
 `.agents/policies/command-execution.md`, `.agents/policies/workflow-evidence.md`.
 
 Shared lifecycle semantics are owned by `docs/development/issue-workflow.md`

@@ -28,7 +28,7 @@ snapshots — and stop at the requested boundary.
 
 ## Policies and Runner interface
 
-Read applicable `AGENTS.md` / `AGENTS.override.md` and:
+Read applicable `AGENTS.md` and:
 
 ```text
 .agents/policies/workflow-evidence.md

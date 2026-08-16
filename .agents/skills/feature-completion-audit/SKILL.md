@@ -42,7 +42,7 @@ workflow reports.
 
 ## Policies and audit interface
 
-Read applicable `AGENTS.md` / `AGENTS.override.md` and:
+Read applicable `AGENTS.md` and:
 
 ```text
 .agents/policies/command-execution.md

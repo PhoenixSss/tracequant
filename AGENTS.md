@@ -172,11 +172,6 @@ Explicit Skill-name fallback (maintenance windows and edge cases): invoke
 `feature-completion-audit` by name (Codex: `.agents/skills/`, Claude:
 `.claude/skills/`).
 
-Historical `.agents/skills/task-delivery/SKILL.md` and
-`.agents/skills/task-pr-review/SKILL.md` are retained only as explicit benchmark
-baselines. Never select, combine, or fall back to them unless the maintainer
-names that exact Skill.
-
 When the user provides both a number and title, treat the number as the primary
 key and the current GitHub title as canonical. Stop before writes when they
 clearly identify different work.

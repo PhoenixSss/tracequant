@@ -75,8 +75,6 @@ def _copy_runner_repo(tmp_path: Path, *, name: str = "repo") -> Path:
     (repo / "tests").mkdir()
     for skill_dir in (".agents", ".claude"):
         for skill in (
-            "task-delivery",
-            "task-pr-review",
             "task-delivery-runner",
             "task-pr-review-runner",
             "task-closeout",

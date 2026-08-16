@@ -13,10 +13,6 @@ ACTIVE_SKILLS = {
     "feature-completion-audit": ROOT
     / ".agents/skills/feature-completion-audit/SKILL.md",
 }
-BASELINE_SKILLS = {
-    "task-delivery": ROOT / ".agents/skills/task-delivery/SKILL.md",
-    "task-pr-review": ROOT / ".agents/skills/task-pr-review/SKILL.md",
-}
 PATH_AUDIT = ROOT / "tools/agent_workflow/skill_path_audit.py"
 
 
@@ -115,7 +111,7 @@ def test_active_skills_have_bounded_failure_contract_without_evolution_traces() 
             assert trace not in text
 
 
-def test_path_audit_reports_clean_current_skills_and_preserved_baselines() -> None:
+def test_path_audit_reports_only_clean_current_skills() -> None:
     result = subprocess.run(
         [sys.executable, str(PATH_AUDIT)],
         cwd=ROOT,
@@ -129,13 +125,15 @@ def test_path_audit_reports_clean_current_skills_and_preserved_baselines() -> No
     assert value["status"] == "pass"
     assert value["totals"]["direct_command_path_count"] == 0
     assert value["totals"]["evolution_trace_count"] == 0
-    assert set(value["baseline_skills"]) == set(BASELINE_SKILLS)
+    assert "baseline_skills" not in value
 
 
-def test_historical_baseline_skill_names_are_unchanged() -> None:
-    for name, path in BASELINE_SKILLS.items():
-        text = path.read_text(encoding="utf-8")
-        assert f"name: {name}" in text
+def test_legacy_skill_directories_are_absent() -> None:
+    for relative in (
+        ".agents/skills/task-delivery",
+        ".agents/skills/task-pr-review",
+    ):
+        assert not (ROOT / relative).exists(), relative
 
 
 def test_local_workflow_artifact_directories_are_exactly_ignored() -> None:

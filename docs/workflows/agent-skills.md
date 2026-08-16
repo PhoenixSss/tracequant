@@ -1,7 +1,7 @@
 # Agent Workflow Skills
 
 本文件是 Agent-neutral workflow Skills 的**注册表 / 导航 / 兼容性入口**：
-列出当前 Skills、历史基准、共享语义 owner 与验证入口。共享生命周期语义由
+列出当前 Skills、共享语义 owner 与验证入口。共享生命周期语义由
 `docs/development/issue-workflow.md`（lifecycle 规范）与
 `docs/development/pr-review.md`（Independent Review 规范）权威定义；
 本文件不再复制生命周期语义或执行 procedure。
@@ -25,15 +25,6 @@ Claude Code 对应 Skill：
 .claude/skills/task-closeout/SKILL.md
 .claude/skills/feature-completion-audit/SKILL.md
 ```
-
-历史基准，仅在维护者明确点名时使用：
-
-```text
-.agents/skills/task-delivery/SKILL.md
-.agents/skills/task-pr-review/SKILL.md
-```
-
-不要在一个会话中组合历史基准与 Runner Skill。
 
 ## 共享语义与导航
 
@@ -62,7 +53,6 @@ PR #N 已人工合并，请完成 closeout
 ```text
 .agents/policies/workflow-evidence.md
 .agents/policies/command-execution.md
-docs/workflows/workflow-evidence.md
 ```
 
 本地 artifacts：
@@ -74,18 +64,18 @@ docs/workflows/workflow-evidence.md
 
 不得提交。
 
-## Skill identity 与历史基准验证
+## Skill identity 验证
 
-当前 Skill 路径、共享语义引用、单一机械入口、历史基准路径与每个文件的
+当前 Codex / Claude Skill 路径、共享语义引用、单一机械入口与每个文件的
 SHA-256 由以下只读审计统一验证：
 
 ```bash
 tools/agent_workflow/skill_path_audit.py
 ```
 
-审计输出明确区分 `active_skills`、`claude_skills` 与 `baseline_skills`。
-历史基准只保留为 frozen benchmark 输入，不是 current routing、失败回退或
-competing semantic owner。
+审计输出只覆盖 `active_skills` 与 `claude_skills`。已退役 Legacy Skill 不再位于
+active discovery namespace，也不再作为 current routing、失败回退或 competing
+semantic owner；其历史内容由 Git 历史及 frozen migration / benchmark evidence 保留。
 
 ## Final source-of-truth matrix
 
@@ -98,14 +88,15 @@ competing semantic owner。
 | `.agents/skills/*-runner/`、`.agents/skills/task-closeout/`、`.agents/skills/feature-completion-audit/` | ACTIVE | Codex executable procedures |
 | `.claude/skills/` current four Skills | ACTIVE | Claude executable procedures |
 | fixed Evidence/Validation Runners、profiles、Rules 与 current tests | ACTIVE | deterministic Git/GitHub facts、identity/fail-closed gates 与 validation |
-| `.agents/skills/task-delivery/`、`.agents/skills/task-pr-review/` | HISTORICAL EVIDENCE ONLY | explicit benchmark baselines; maintainer-name-only |
+| retired `.agents/skills/task-delivery/`、`.agents/skills/task-pr-review/` | DEAD / ABSENT | Legacy executable Skills 已退役；历史内容由 Git 历史及 frozen evidence 保留 |
 | `docs/workflows/task-skill-runner-migration/` 与 `docs/workflows/benchmarks/` | HISTORICAL EVIDENCE ONLY | frozen migration/benchmark/audit provenance |
 | Claude current Skills 中的 Codex/Claude permission-boundary 说明 | COMPATIBILITY ONLY | cross-agent adapter guidance; retained intentionally while both agents are supported |
 | retired Skill-variant provenance JSON/doc/tool/test bundle | DEAD / ABSENT | replaced by `skill_path_audit.py`; all stale current references removed |
 | removed trusted-runner、runtime usage-measurement 与 runtime manifest machinery | DEAD / ABSENT | no current responsibility; absence is regression-tested |
 
 当前没有 `UNCERTAIN` artifact。`COMPATIBILITY ONLY` 项仍有明确的双 Agent
-文档用途，未满足删除条件，因此有意保留。
+文档用途，未满足删除条件，因此有意保留。Legacy executable Skills 已完成 caller /
+routing / validator 收敛后删除，不再作为 compatibility runtime artifact 保留。
 
 Current reference graph：
 

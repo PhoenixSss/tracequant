@@ -31,8 +31,6 @@ from workflow_common import (
 SCHEMA_VERSION: Final = 1
 OUTPUT_DIR: Final = ".agents/validation.local"
 SKILLS: Final = (
-    "task-delivery",
-    "task-pr-review",
     "task-delivery-runner",
     "task-pr-review-runner",
     "task-closeout",
