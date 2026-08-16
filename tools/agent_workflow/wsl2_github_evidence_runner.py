@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Final
 
 SCHEMA_VERSION: Final = 1
-RUNNER_VERSION: Final = "1.5.0"
+RUNNER_VERSION: Final = "1.3.0"
 REPOSITORY: Final = "PhoenixSss/tracequant"
 OUTPUT_ROOT: Final = ".agents/evidence.local/wsl2-github-runs"
 RUNNER_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_runner.py"
@@ -61,14 +61,7 @@ DELIVERY_ENTRY_PARAMS: Final = {
         }
     ),
     "review-remediation": frozenset(
-        {
-            "task",
-            "expected_main_sha",
-            "pr",
-            "expected_base_sha",
-            "expected_head_sha",
-            "review_handoff_id",
-        }
+        {"task", "expected_main_sha", "pr", "expected_base_sha", "expected_head_sha"}
     ),
 }
 DELIVERY_PARAM_SPACE: Final = frozenset(
@@ -79,7 +72,6 @@ DELIVERY_PARAM_SPACE: Final = frozenset(
         "pr",
         "expected_base_sha",
         "expected_head_sha",
-        "review_handoff_id",
     }
 )
 REPOSITORY_PATTERN: Final = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -130,7 +122,6 @@ CANONICAL_PROFILES: Final[dict[str, tuple[str, tuple[str, ...]]]] = {
             "pr",
             "expected_base_sha",
             "expected_head_sha",
-            "review_handoff_id",
         ),
     ),
     "delivery-readiness": (
@@ -140,19 +131,6 @@ CANONICAL_PROFILES: Final[dict[str, tuple[str, tuple[str, ...]]]] = {
     "review": (
         "pr-review-snapshot",
         ("task", "pr", "expected_base_sha", "expected_head_sha"),
-    ),
-    "review-terminal": (
-        "review-terminal",
-        (
-            "task",
-            "pr",
-            "expected_base_sha",
-            "expected_head_sha",
-            "effective_diff_sha256",
-            "review_snapshot_id",
-            "recheck_snapshot_id",
-            "payload",
-        ),
     ),
     "pre-merge": (
         "pr-review-snapshot",
@@ -283,44 +261,6 @@ def _load_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str]]:
 
 ALLOWED_SKILL_ROOTS: Final = (".agents/skills/", ".claude/skills/")
 SKILL_FILENAME: Final = "SKILL.md"
-CANONICAL_SKILL_PATHS: Final = {
-    "delivery": frozenset(
-        {
-            ".agents/skills/task-delivery-runner/SKILL.md",
-            ".claude/skills/task-delivery-runner/SKILL.md",
-        }
-    ),
-    "delivery-readiness": frozenset(
-        {
-            ".agents/skills/task-delivery-runner/SKILL.md",
-            ".claude/skills/task-delivery-runner/SKILL.md",
-        }
-    ),
-    "review": frozenset(
-        {
-            ".agents/skills/task-pr-review-runner/SKILL.md",
-            ".claude/skills/task-pr-review-runner/SKILL.md",
-        }
-    ),
-    "review-terminal": frozenset(
-        {
-            ".agents/skills/task-pr-review-runner/SKILL.md",
-            ".claude/skills/task-pr-review-runner/SKILL.md",
-        }
-    ),
-    "pre-merge": frozenset(
-        {
-            ".agents/skills/task-pr-review-runner/SKILL.md",
-            ".claude/skills/task-pr-review-runner/SKILL.md",
-        }
-    ),
-    "closeout-readonly": frozenset(
-        {
-            ".agents/skills/task-closeout/SKILL.md",
-            ".claude/skills/task-closeout/SKILL.md",
-        }
-    ),
-}
 
 
 def _resolve_skill_identity(
@@ -340,7 +280,6 @@ def _resolve_skill_identity(
         "delivery": ".agents/skills/task-delivery-runner/SKILL.md",
         "delivery-readiness": ".agents/skills/task-delivery-runner/SKILL.md",
         "review": ".agents/skills/task-pr-review-runner/SKILL.md",
-        "review-terminal": ".agents/skills/task-pr-review-runner/SKILL.md",
         "pre-merge": ".agents/skills/task-pr-review-runner/SKILL.md",
         "closeout-readonly": ".agents/skills/task-closeout/SKILL.md",
     }
@@ -360,12 +299,6 @@ def _resolve_skill_identity(
                 f"--skill-path must start with one of {ALLOWED_SKILL_ROOTS}: "
                 f"{caller_skill_path!r}"
             )
-        canonical = CANONICAL_SKILL_PATHS.get(profile)
-        if canonical is not None and normalized not in canonical:
-            raise RunnerError(
-                f"--skill-path is not the canonical Skill for {profile}: "
-                f"{caller_skill_path!r}"
-            )
         payload = _read_current_file(repo_root, normalized)
         return {"path": normalized, "sha256": _sha256_bytes(payload)}
 
@@ -374,43 +307,6 @@ def _resolve_skill_identity(
         return None
     payload = _read_current_file(repo_root, relative_path)
     return {"path": relative_path, "sha256": _sha256_bytes(payload)}
-
-
-def _stored_recheck_skill_identity(
-    repo_root: Path, snapshot_id: str
-) -> dict[str, str] | None:
-    """Recover the Review Skill identity when recheck omits the optional path."""
-
-    snapshot_path = (
-        repo_root / ".agents/evidence.local/snapshots" / f"{snapshot_id}.json"
-    )
-    if snapshot_path.is_symlink():
-        raise RunnerError("recheck snapshot must not be a symlink")
-    try:
-        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise RunnerError("recheck snapshot does not exist") from exc
-    except json.JSONDecodeError as exc:
-        raise RunnerError("recheck snapshot is invalid JSON") from exc
-    if not isinstance(snapshot, dict):
-        raise RunnerError("recheck snapshot must be a JSON object")
-    skill = snapshot.get("review_skill")
-    if not isinstance(skill, dict):
-        return None
-    path = skill.get("path")
-    sha256 = skill.get("sha256")
-    review_paths = CANONICAL_SKILL_PATHS["review"]
-    if (
-        not isinstance(path, str)
-        or path not in review_paths
-        or not isinstance(sha256, str)
-        or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
-    ):
-        raise RunnerError("recheck snapshot Review Skill identity is invalid")
-    payload = _read_current_file(repo_root, path)
-    if _sha256_bytes(payload) != sha256:
-        raise RunnerError("recheck snapshot Review Skill content has drifted")
-    return {"path": path, "sha256": sha256}
 
 
 def _validate_spec(spec: Mapping[str, Any]) -> None:
@@ -512,36 +408,6 @@ def _snapshot_id(value: str) -> str:
     return value
 
 
-def _review_handoff_id(value: str) -> str:
-    if re.fullmatch(r"[0-9a-f]{64}", value) is None:
-        raise argparse.ArgumentTypeError(
-            "must be a 64-character content-addressed review handoff ID"
-        )
-    return value
-
-
-def _sha256_digest(value: str) -> str:
-    if re.fullmatch(r"[0-9a-f]{64}", value) is None:
-        raise argparse.ArgumentTypeError(
-            "must be a 64-character lowercase SHA-256 digest"
-        )
-    return value
-
-
-def _evidence_payload_path(value: str) -> str:
-    normalized = value.replace("\\", "/")
-    if (
-        not normalized.startswith(".agents/evidence.local/")
-        or normalized.startswith("/")
-        or ".." in Path(normalized).parts
-        or normalized.endswith("/")
-    ):
-        raise argparse.ArgumentTypeError(
-            "must be a file path under .agents/evidence.local/"
-        )
-    return normalized
-
-
 def _branch_name(value: str) -> str:
     if (
         not BRANCH_NAME_PATTERN.fullmatch(value)
@@ -588,7 +454,6 @@ def _build_parser() -> argparse.ArgumentParser:
     delivery.add_argument("--expected-base-sha", type=_sha)
     delivery.add_argument("--expected-head-sha", type=_sha)
     delivery.add_argument("--pr", type=_positive_int)
-    delivery.add_argument("--review-handoff-id", type=_review_handoff_id)
 
     for name in ("delivery-readiness", "review", "pre-merge"):
         subp = sub.add_parser(name)
@@ -602,30 +467,6 @@ def _build_parser() -> argparse.ArgumentParser:
             default=None,
             help="repo-relative path to the calling Skill's SKILL.md",
         )
-
-    review_terminal = sub.add_parser("review-terminal")
-    review_terminal.add_argument("--task", type=_positive_int, required=True)
-    review_terminal.add_argument("--pr", type=_positive_int, required=True)
-    review_terminal.add_argument("--expected-base-sha", type=_sha, required=True)
-    review_terminal.add_argument("--expected-head-sha", type=_sha, required=True)
-    review_terminal.add_argument(
-        "--effective-diff-sha256", type=_sha256_digest, required=True
-    )
-    review_terminal.add_argument(
-        "--review-snapshot-id", type=_snapshot_id, required=True
-    )
-    review_terminal.add_argument(
-        "--recheck-snapshot-id", type=_snapshot_id, required=True
-    )
-    review_terminal.add_argument(
-        "--payload", type=_evidence_payload_path, required=True
-    )
-    review_terminal.add_argument(
-        "--skill-path",
-        type=str,
-        default=None,
-        help="repo-relative path to the calling Skill's SKILL.md",
-    )
 
     closeout = sub.add_parser("closeout-readonly")
     closeout.add_argument("--task", type=_positive_int, required=True)
@@ -657,11 +498,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _evidence_argv(
-    args: argparse.Namespace,
-    repo_root: Path,
-    skill_identity: Mapping[str, str] | None = None,
-) -> list[str]:
+def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
     profile = str(args.profile)
     operation = CANONICAL_PROFILES[profile][0]
     base = [
@@ -709,7 +546,7 @@ def _evidence_argv(
             raise RunnerError(
                 "snapshot operation does not support this recheck profile"
             )
-        result = [
+        return [
             *base,
             recheck_command,
             "--snapshot-id",
@@ -719,16 +556,6 @@ def _evidence_argv(
             "--repository",
             REPOSITORY,
         ]
-        if previous_operation == "pr-review-snapshot" and skill_identity is not None:
-            result.extend(
-                [
-                    "--review-skill-path",
-                    skill_identity["path"],
-                    "--review-skill-sha256",
-                    skill_identity["sha256"],
-                ]
-            )
-        return result
 
     result = [
         *base,
@@ -757,36 +584,6 @@ def _evidence_argv(
             result.extend(["--expected-head-sha", args.expected_head_sha])
         if args.pr is not None:
             result.extend(["--pr", str(args.pr)])
-        if args.review_handoff_id is not None:
-            result.extend(["--review-handoff-id", args.review_handoff_id])
-    elif profile == "review-terminal":
-        result.extend(
-            [
-                "--pr",
-                str(args.pr),
-                "--expected-base-sha",
-                args.expected_base_sha,
-                "--expected-head-sha",
-                args.expected_head_sha,
-                "--effective-diff-sha256",
-                args.effective_diff_sha256,
-                "--review-snapshot-id",
-                args.review_snapshot_id,
-                "--recheck-snapshot-id",
-                args.recheck_snapshot_id,
-                "--payload",
-                args.payload,
-            ]
-        )
-        if skill_identity is not None:
-            result.extend(
-                [
-                    "--review-skill-path",
-                    skill_identity["path"],
-                    "--review-skill-sha256",
-                    skill_identity["sha256"],
-                ]
-            )
     elif profile in {"delivery-readiness", "review", "pre-merge"}:
         result.extend(
             [
@@ -798,15 +595,6 @@ def _evidence_argv(
                 args.expected_head_sha,
             ]
         )
-        if profile == "review" and skill_identity is not None:
-            result.extend(
-                [
-                    "--review-skill-path",
-                    skill_identity["path"],
-                    "--review-skill-sha256",
-                    skill_identity["sha256"],
-                ]
-            )
     elif profile == "closeout-readonly":
         result.extend(
             [
@@ -938,7 +726,6 @@ def _compact_result(
     source_core = {
         key: value for key, value in snapshot.items() if key != "details_path"
     }
-
     subject = snapshot.get("subject")
     subject = subject if isinstance(subject, dict) else {}
     preflight_disposition = snapshot.get("disposition")
@@ -1041,94 +828,6 @@ def _compact_result(
     }
 
 
-def _compact_terminal_result(
-    terminal: Mapping[str, Any],
-    *,
-    repo_root: Path,
-    profile: str,
-    caller_skill_path: str | None,
-    integrity: Mapping[str, str],
-    result_path: str,
-    started_at: datetime,
-    duration_ms: int,
-    run_id: str,
-) -> dict[str, Any]:
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "runner_version": RUNNER_VERSION,
-        "profile": profile,
-        "status": "pass",
-        "partial": False,
-        "started_at": started_at.isoformat(),
-        "duration_ms": duration_ms,
-        "identity": {
-            "task": terminal.get("task"),
-            "pr": terminal.get("pr"),
-            "repository": REPOSITORY,
-            "base_sha": terminal.get("reviewed_base_sha"),
-            "head_sha": terminal.get("reviewed_head_sha"),
-        },
-        "terminal": dict(terminal),
-        "evidence": {
-            "run_id": run_id,
-            "result_path": result_path,
-            "review_handoff_id": terminal.get("review_handoff_id"),
-            "reference": terminal.get("reference"),
-        },
-        "integrity": {
-            "verification": "current-worktree-content",
-            "files": dict(integrity),
-            "skill": _resolve_skill_identity(repo_root, profile, caller_skill_path),
-        },
-    }
-
-
-def _terminal_artifact_skill_identity(
-    repo_root: Path, terminal: Mapping[str, Any]
-) -> dict[str, str] | None:
-    """Read the emitted artifact's Review Skill identity without path escapes."""
-
-    reference = terminal.get("reference")
-    if not isinstance(reference, str) or not reference.startswith(
-        ".agents/evidence.local/"
-    ):
-        return None
-    if "\\" in reference or ".." in Path(reference).parts:
-        return None
-    candidate = repo_root / reference
-    evidence_root = repo_root / ".agents" / "evidence.local"
-    try:
-        candidate.resolve(strict=False).relative_to(evidence_root.resolve())
-    except ValueError:
-        return None
-    current = candidate
-    while current != evidence_root:
-        if current.is_symlink():
-            return None
-        current = current.parent
-    if candidate.is_symlink() or not candidate.is_file():
-        return None
-    try:
-        artifact = json.loads(candidate.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(artifact, dict):
-        return None
-    review_evidence = artifact.get("review_evidence")
-    skill = (
-        review_evidence.get("review_skill")
-        if isinstance(review_evidence, dict)
-        else None
-    )
-    if not isinstance(skill, dict):
-        return None
-    path = skill.get("path")
-    sha256 = skill.get("sha256")
-    if not isinstance(path, str) or not isinstance(sha256, str):
-        return None
-    return {"path": path, "sha256": sha256}
-
-
 def _exit_code(status: str) -> int:
     return {"pass": 0, "partial": 3, "fail": 4}.get(status, 2)
 
@@ -1143,14 +842,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         _, content_hashes = _load_inputs(repo_root)
         _require_output_root_ignored(repo_root)
         # Validate --skill-path early (before any GitHub queries)
-        skill_identity = _resolve_skill_identity(
-            repo_root, args.profile, args.skill_path
-        )
-        if args.profile == "recheck" and skill_identity is None:
-            skill_identity = _stored_recheck_skill_identity(repo_root, args.snapshot_id)
-            if skill_identity is not None:
-                args.skill_path = skill_identity["path"]
-        command = _evidence_argv(args, repo_root, skill_identity)
+        _resolve_skill_identity(repo_root, args.profile, args.skill_path)
+        command = _evidence_argv(args, repo_root)
         started_at = datetime.now(UTC)
         started = time.monotonic()
         run_id = f"{started_at.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:12]}"
@@ -1176,49 +869,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise RunnerError("workflow evidence returned invalid JSON") from exc
         if not isinstance(snapshot, dict):
             raise RunnerError("workflow evidence result is not a JSON object")
-
-        if args.profile == "review-terminal":
-            if snapshot.get("status") != "pass":
-                raise RunnerError("review terminal did not produce a passing result")
-            artifact_skill = _terminal_artifact_skill_identity(repo_root, snapshot)
-            if artifact_skill != skill_identity:
-                raise RunnerError(
-                    "review terminal Skill provenance does not match the invoking "
-                    "canonical Review Skill"
-                )
-            duration_ms = round((time.monotonic() - started) * 1000)
-            result = _compact_terminal_result(
-                snapshot,
-                repo_root=repo_root,
-                profile=args.profile,
-                caller_skill_path=args.skill_path,
-                integrity=content_hashes,
-                result_path=result_path.relative_to(repo_root).as_posix(),
-                started_at=started_at,
-                duration_ms=duration_ms,
-                run_id=run_id,
-            )
-            payload = _json_dumps(result, pretty=True).encode("utf-8")
-            _atomic_write(result_path, payload)
-            result_sha = _sha256_bytes(payload)
-            print(
-                _json_dumps(
-                    {
-                        "duration_ms": duration_ms,
-                        "head_sha": result["identity"]["head_sha"],
-                        "pr": result["identity"]["pr"],
-                        "profile": args.profile,
-                        "reference": snapshot.get("reference"),
-                        "result_path": result_path.relative_to(repo_root).as_posix(),
-                        "result_sha256": result_sha,
-                        "review_handoff_id": snapshot.get("review_handoff_id"),
-                        "status": "pass",
-                        "task": result["identity"]["task"],
-                    }
-                ),
-                end="",
-            )
-            return 0
 
         pr_value = snapshot.get("observed", {}).get("pr")
         head_branch: str | None = None

@@ -61,9 +61,3 @@ desktop.ini
 # Local workflow evidence and validation output
 .agents/evidence.local/
 .agents/validation.local/
-
-# Conductor-local benchmark fixture store (task-65-round-2-v2; never committed)
-.agents/benchmark-fixtures.local/
-
-# Local benchmark rollout / transcript artifacts (task-65-round-2-v2; never committed)
-.agents/rollout.local/

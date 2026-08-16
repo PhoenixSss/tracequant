@@ -7,13 +7,13 @@
 # output path.
 
 prefix_rule(
-    pattern = ["tools/agent_workflow/wsl2_github_evidence_runner.py", ["delivery", "delivery-readiness", "review", "review-terminal", "pre-merge", "closeout-readonly", "recheck"]],
+    pattern = ["tools/agent_workflow/wsl2_github_evidence_runner.py", ["delivery", "delivery-readiness", "review", "pre-merge", "closeout-readonly", "recheck"]],
     decision = "allow",
     justification = "Allow named fixed read-only Evidence Runner profiles; the Runner validates complete argv and object identities.",
 )
 
 prefix_rule(
-    pattern = ["tools/agent_workflow/wsl2_github_evidence_runner.py", ["delivery", "delivery-readiness", "review", "review-terminal", "pre-merge", "closeout-readonly", "recheck"], ["--repo", "--repository", "--api", "--graphql", "--gh-arg", "--git-arg", "--shell", "--exec", "--", "|", ">", "$(id)"]],
+    pattern = ["tools/agent_workflow/wsl2_github_evidence_runner.py", ["delivery", "delivery-readiness", "review", "pre-merge", "closeout-readonly", "recheck"], ["--repo", "--repository", "--api", "--graphql", "--gh-arg", "--git-arg", "--shell", "--exec", "--", "|", ">", "$(id)"]],
     decision = "forbidden",
     justification = "Block repository/API/command injection and shell metacharacter forms.",
 )

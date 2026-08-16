@@ -716,22 +716,6 @@ def test_validation_skill_path_outside_allowed_roots_fails(tmp_path: Path) -> No
     assert result.returncode == 2
 
 
-def test_workflow_review_rejects_other_in_repo_skill_path(tmp_path: Path) -> None:
-    repo = _copy_runner_repo(tmp_path)
-    bin_dir = _write_fake_tools(tmp_path, repo)
-    result = _run(
-        repo,
-        bin_dir,
-        "workflow-review",
-        "--base-sha",
-        "b" * 40,
-        "--skill-path",
-        ".agents/skills/task-delivery-runner/SKILL.md",
-    )
-    assert result.returncode == 2
-    assert "canonical Skill" in result.stderr
-
-
 def test_validation_skill_path_parent_traversal_fails(tmp_path: Path) -> None:
     """--skill-path with .. is rejected."""
     repo = _copy_runner_repo(tmp_path)
