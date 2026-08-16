@@ -1147,9 +1147,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             repo_root, args.profile, args.skill_path
         )
         if args.profile == "recheck" and skill_identity is None:
-            skill_identity = _stored_recheck_skill_identity(
-                repo_root, args.snapshot_id
-            )
+            skill_identity = _stored_recheck_skill_identity(repo_root, args.snapshot_id)
             if skill_identity is not None:
                 args.skill_path = skill_identity["path"]
         command = _evidence_argv(args, repo_root, skill_identity)
