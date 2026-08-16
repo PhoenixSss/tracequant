@@ -1328,6 +1328,38 @@ def test_skill_path_absolute_path_is_rejected(
     assert completed.returncode == 2
 
 
+def test_review_terminal_rejects_noncanonical_review_skill_path(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    completed = _run(
+        repo,
+        env,
+        "review-terminal",
+        "--task",
+        "84",
+        "--pr",
+        "102",
+        "--expected-base-sha",
+        main_sha,
+        "--expected-head-sha",
+        head_sha,
+        "--effective-diff-sha256",
+        "b" * 64,
+        "--review-snapshot-id",
+        "ev-0123456789abcdef",
+        "--recheck-snapshot-id",
+        "ev-fedcba9876543210",
+        "--payload",
+        ".agents/evidence.local/review-staging/terminal.json",
+        "--skill-path",
+        ".agents/skills/task-delivery-runner/SKILL.md",
+    )
+    assert completed.returncode == 2
+    assert "canonical Skill" in completed.stderr
+    assert _calls(state_path.with_name("gh-calls.jsonl")) == []
+
+
 def test_recheck_preserves_skill_identity(
     tmp_path: Path,
 ) -> None:
@@ -1355,6 +1387,33 @@ def test_recheck_preserves_skill_identity(
     assert second.returncode == 0, second.stderr
     value = _result(repo, second.stdout)
     assert value["integrity"]["skill"]["path"] == claude_skill
+
+
+def test_recheck_rejects_review_skill_identity_drift(
+    tmp_path: Path,
+) -> None:
+    repo, _, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    claude_skill = ".claude/skills/task-pr-review-runner/SKILL.md"
+    first = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--skill-path",
+        claude_skill,
+    )
+    assert first.returncode == 0
+    first_digest = json.loads(first.stdout)
+    second = _run(
+        repo,
+        env,
+        "recheck",
+        "--snapshot-id",
+        first_digest["snapshot_id"],
+        "--skill-path",
+        ".agents/skills/task-pr-review-runner/SKILL.md",
+    )
+    assert second.returncode == 2
+    assert "identity drifted" in second.stderr
 
 
 def test_skill_path_hash_mismatch_detected(

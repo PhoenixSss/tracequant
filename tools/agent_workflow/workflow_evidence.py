@@ -1215,6 +1215,40 @@ def _task_branch_identity_gate(branch: Any, task: int) -> dict[str, Any]:
     return _gate("fail", f"branch {branch!r} does not identify Task #{task}")
 
 
+def _is_canonical_new_task_branch(branch: str, task: int) -> bool:
+    """Return whether *branch* is valid for creating a new Task branch."""
+
+    prefix = f"task/{task}-"
+    return branch.startswith(prefix) and len(branch) > len(prefix)
+
+
+def _review_skill_identity_from_args(
+    args: argparse.Namespace, repo_root: Path
+) -> dict[str, str] | None:
+    """Validate and hash the canonical Review Skill supplied by a Runner."""
+
+    raw_path = getattr(args, "review_skill_path", None)
+    raw_sha256 = getattr(args, "review_skill_sha256", None)
+    if raw_path is None and raw_sha256 is None:
+        return None
+    if (
+        not isinstance(raw_path, str)
+        or raw_path not in CANONICAL_REVIEW_SKILL_PATHS
+        or not _is_sha256_digest(raw_sha256)
+    ):
+        raise WorkflowToolError("Review Skill identity is malformed or noncanonical")
+    path = repo_root / raw_path
+    if path.is_symlink() or not path.is_file():
+        raise WorkflowToolError("canonical Review Skill file is missing or unsafe")
+    try:
+        actual_sha256 = sha256_bytes(path.read_bytes())
+    except OSError as exc:
+        raise WorkflowToolError("canonical Review Skill file is unreadable") from exc
+    if actual_sha256 != raw_sha256:
+        raise WorkflowToolError("canonical Review Skill content address mismatches")
+    return {"path": raw_path, "sha256": raw_sha256}
+
+
 def _worktree_branch_items(git: Mapping[str, Any]) -> list[str]:
     raw = git.get("worktree_branches")
     items = raw.get("items") if isinstance(raw, Mapping) else []
@@ -1255,6 +1289,11 @@ def _branch_bootstrap_gate(
     if git.get("clean") is not True:
         reasons.append("branch setup requires a clean worktree")
     if not branch_exists:
+        if not _is_canonical_new_task_branch(branch, task):
+            return _gate(
+                "fail",
+                "new Task branches must use canonical task/<issue>-<slug> naming",
+            )
         if not remote_available:
             reasons.append("remote branch existence unavailable")
         elif remote_tip is not None:
@@ -1492,6 +1531,7 @@ def _emit_review_terminal(args: argparse.Namespace, repo_root: Path) -> dict[str
     if not isinstance(payload, Mapping):
         raise WorkflowToolError("review terminal payload must be a JSON object")
     root = _ensure_evidence_root(repo_root)
+    terminal_skill = _review_skill_identity_from_args(args, repo_root)
 
     initial, initial_error = _read_review_snapshot(
         root, args.review_snapshot_id, operation="pr-review-snapshot"
@@ -1527,14 +1567,36 @@ def _emit_review_terminal(args: argparse.Namespace, repo_root: Path) -> dict[str
     ):
         problems.append("final recheck did not prove stability")
 
+    initial_skill = (
+        initial.get("review_skill") if isinstance(initial, Mapping) else None
+    )
+    recheck_skill = (
+        recheck.get("review_skill") if isinstance(recheck, Mapping) else None
+    )
+    if initial_skill != recheck_skill:
+        problems.append("initial and recheck Review Skill identities differ")
+    if terminal_skill is not None and initial_skill != terminal_skill:
+        problems.append("snapshot Review Skill identity differs from terminal Skill")
+
     # Recollect once after the supplied recheck. This closes the timing gap
     # between the Review recheck and terminal artifact emission.
     if isinstance(initial, Mapping):
-        current = _collect_for_recheck(initial, repo_root)
+        current = _collect_for_recheck(
+            initial,
+            repo_root,
+            review_skill_path=(
+                terminal_skill.get("path") if terminal_skill is not None else None
+            ),
+            review_skill_sha256=(
+                terminal_skill.get("sha256") if terminal_skill is not None else None
+            ),
+        )
         if isinstance(recheck, Mapping) and _stability_projection(
             current
         ) != _stability_projection(recheck):
             problems.append("review state drifted after final recheck")
+        if terminal_skill is not None and current.get("review_skill") != terminal_skill:
+            problems.append("terminal recollection Review Skill identity mismatch")
         for detail in _snapshot_identity_problems(
             current,
             task=args.task,
@@ -1555,6 +1617,11 @@ def _emit_review_terminal(args: argparse.Namespace, repo_root: Path) -> dict[str
             problems.append("terminal payload recheck snapshot ID mismatch")
         if review_evidence.get("effective_diff_sha256") != args.effective_diff_sha256:
             problems.append("terminal payload effective diff mismatch")
+        if (
+            terminal_skill is not None
+            and review_evidence.get("review_skill") != terminal_skill
+        ):
+            problems.append("terminal payload Review Skill identity mismatch")
 
     unsigned = {key: item for key, item in payload.items() if key != "evidence_id"}
     artifact = dict(unsigned)
@@ -3671,7 +3738,7 @@ def _task_pr_snapshot(
         "object_base_sha": object_base_sha,
         "runner": _runner_source(runner, warnings),
     }
-    return _base_snapshot(
+    snapshot = _base_snapshot(
         operation=operation,
         subject={"kind": "task-pr", "task_number": args.task, "pr_number": args.pr},
         repository=repository,
@@ -3682,6 +3749,13 @@ def _task_pr_snapshot(
         limitations=limitations,
         operations=runner.counters(),
     )
+    review_skill = _review_skill_identity_from_args(args, repo_root)
+    if review_skill is not None:
+        snapshot["review_skill"] = review_skill
+        snapshot["snapshot_id"] = (
+            f"ev-{sha256_json({key: value for key, value in snapshot.items() if key != 'snapshot_id'})[:16]}"
+        )
+    return snapshot
 
 
 def _closeout_plan(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
@@ -4009,7 +4083,11 @@ def _snapshot_path(repo_root: Path, snapshot_id: str) -> Path:
 
 
 def _collect_for_recheck(
-    previous: Mapping[str, Any], repo_root: Path
+    previous: Mapping[str, Any],
+    repo_root: Path,
+    *,
+    review_skill_path: str | None = None,
+    review_skill_sha256: str | None = None,
 ) -> dict[str, Any]:
     operation = previous.get("operation")
     subject = previous.get("subject")
@@ -4024,6 +4102,8 @@ def _collect_for_recheck(
         expected_head_sha=None,
         expected_main_sha=None,
         expected_merge_sha=None,
+        review_skill_path=review_skill_path,
+        review_skill_sha256=review_skill_sha256,
     )
     if operation in {"delivery-readiness", "pr-review-snapshot"}:
         namespace.task = subject.get("task_number")
@@ -4129,7 +4209,22 @@ def _recheck(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
     previous = read_json_file(path)
     if not isinstance(previous, dict):
         raise WorkflowToolError("snapshot is not an object")
-    current = _collect_for_recheck(previous, repo_root)
+    review_skill_path = getattr(args, "review_skill_path", None)
+    review_skill_sha256 = getattr(args, "review_skill_sha256", None)
+    previous_skill = previous.get("review_skill")
+    if isinstance(previous_skill, Mapping):
+        if review_skill_path != previous_skill.get(
+            "path"
+        ) or review_skill_sha256 != previous_skill.get("sha256"):
+            raise WorkflowToolError("recheck Review Skill identity drifted")
+    elif review_skill_path is not None or review_skill_sha256 is not None:
+        raise WorkflowToolError("initial snapshot has no Review Skill identity")
+    current = _collect_for_recheck(
+        previous,
+        repo_root,
+        review_skill_path=review_skill_path,
+        review_skill_sha256=review_skill_sha256,
+    )
     before = _stability_projection(previous)
     after = _stability_projection(current)
     changed = sorted(
@@ -4212,6 +4307,11 @@ def _pr_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--expected-head-sha")
 
 
+def _review_skill_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--review-skill-path")
+    parser.add_argument("--review-skill-sha256")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate compact, read-only workflow evidence snapshots."
@@ -4239,6 +4339,7 @@ def _build_parser() -> argparse.ArgumentParser:
     review_terminal.add_argument("--review-snapshot-id", required=True)
     review_terminal.add_argument("--recheck-snapshot-id", required=True)
     review_terminal.add_argument("--payload", required=True)
+    _review_skill_args(review_terminal)
 
     delivery = sub.add_parser(
         "delivery-preflight", help="Task and repository preflight snapshot"
@@ -4272,6 +4373,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _common(review)
     _pr_args(review)
+    _review_skill_args(review)
 
     closeout = sub.add_parser(
         "closeout-plan", help="read-only post-merge closeout plan"
@@ -4298,6 +4400,8 @@ def _build_parser() -> argparse.ArgumentParser:
         recheck = sub.add_parser(name, help=help_text)
         _common(recheck)
         recheck.add_argument("--snapshot-id", required=True)
+        if name == "pr-review-recheck":
+            _review_skill_args(recheck)
     return parser
 
 

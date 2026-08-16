@@ -177,6 +177,11 @@ finding severity, freshness, and maintainer-decision state. A submitted GitHub
 Review is not required when this artifact is valid; an invalid, stale,
 malformed, ambiguous, or conflicting artifact remains fail-closed.
 
+The invoking Review Skill must be one of the two exact canonical paths:
+`.agents/skills/task-pr-review-runner/SKILL.md` or
+`.claude/skills/task-pr-review-runner/SKILL.md`. A different Skill beneath either
+allowed root is not valid provenance, even when its bytes are otherwise readable.
+
 The terminal path is mechanical: after the final stable recheck and verdict
 payload are complete, the Review adapter invokes the existing
 `wsl2_github_evidence_runner.py review-terminal` profile. The profile performs

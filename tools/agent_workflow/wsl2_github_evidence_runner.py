@@ -283,6 +283,44 @@ def _load_inputs(repo_root: Path) -> tuple[dict[str, Any], dict[str, str]]:
 
 ALLOWED_SKILL_ROOTS: Final = (".agents/skills/", ".claude/skills/")
 SKILL_FILENAME: Final = "SKILL.md"
+CANONICAL_SKILL_PATHS: Final = {
+    "delivery": frozenset(
+        {
+            ".agents/skills/task-delivery-runner/SKILL.md",
+            ".claude/skills/task-delivery-runner/SKILL.md",
+        }
+    ),
+    "delivery-readiness": frozenset(
+        {
+            ".agents/skills/task-delivery-runner/SKILL.md",
+            ".claude/skills/task-delivery-runner/SKILL.md",
+        }
+    ),
+    "review": frozenset(
+        {
+            ".agents/skills/task-pr-review-runner/SKILL.md",
+            ".claude/skills/task-pr-review-runner/SKILL.md",
+        }
+    ),
+    "review-terminal": frozenset(
+        {
+            ".agents/skills/task-pr-review-runner/SKILL.md",
+            ".claude/skills/task-pr-review-runner/SKILL.md",
+        }
+    ),
+    "pre-merge": frozenset(
+        {
+            ".agents/skills/task-pr-review-runner/SKILL.md",
+            ".claude/skills/task-pr-review-runner/SKILL.md",
+        }
+    ),
+    "closeout-readonly": frozenset(
+        {
+            ".agents/skills/task-closeout/SKILL.md",
+            ".claude/skills/task-closeout/SKILL.md",
+        }
+    ),
+}
 
 
 def _resolve_skill_identity(
@@ -322,6 +360,12 @@ def _resolve_skill_identity(
                 f"--skill-path must start with one of {ALLOWED_SKILL_ROOTS}: "
                 f"{caller_skill_path!r}"
             )
+        canonical = CANONICAL_SKILL_PATHS.get(profile)
+        if canonical is not None and normalized not in canonical:
+            raise RunnerError(
+                f"--skill-path is not the canonical Skill for {profile}: "
+                f"{caller_skill_path!r}"
+            )
         payload = _read_current_file(repo_root, normalized)
         return {"path": normalized, "sha256": _sha256_bytes(payload)}
 
@@ -330,6 +374,43 @@ def _resolve_skill_identity(
         return None
     payload = _read_current_file(repo_root, relative_path)
     return {"path": relative_path, "sha256": _sha256_bytes(payload)}
+
+
+def _stored_recheck_skill_identity(
+    repo_root: Path, snapshot_id: str
+) -> dict[str, str] | None:
+    """Recover the Review Skill identity when recheck omits the optional path."""
+
+    snapshot_path = (
+        repo_root / ".agents/evidence.local/snapshots" / f"{snapshot_id}.json"
+    )
+    if snapshot_path.is_symlink():
+        raise RunnerError("recheck snapshot must not be a symlink")
+    try:
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RunnerError("recheck snapshot does not exist") from exc
+    except json.JSONDecodeError as exc:
+        raise RunnerError("recheck snapshot is invalid JSON") from exc
+    if not isinstance(snapshot, dict):
+        raise RunnerError("recheck snapshot must be a JSON object")
+    skill = snapshot.get("review_skill")
+    if not isinstance(skill, dict):
+        return None
+    path = skill.get("path")
+    sha256 = skill.get("sha256")
+    review_paths = CANONICAL_SKILL_PATHS["review"]
+    if (
+        not isinstance(path, str)
+        or path not in review_paths
+        or not isinstance(sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
+    ):
+        raise RunnerError("recheck snapshot Review Skill identity is invalid")
+    payload = _read_current_file(repo_root, path)
+    if _sha256_bytes(payload) != sha256:
+        raise RunnerError("recheck snapshot Review Skill content has drifted")
+    return {"path": path, "sha256": sha256}
 
 
 def _validate_spec(spec: Mapping[str, Any]) -> None:
@@ -576,7 +657,11 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
+def _evidence_argv(
+    args: argparse.Namespace,
+    repo_root: Path,
+    skill_identity: Mapping[str, str] | None = None,
+) -> list[str]:
     profile = str(args.profile)
     operation = CANONICAL_PROFILES[profile][0]
     base = [
@@ -624,7 +709,7 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
             raise RunnerError(
                 "snapshot operation does not support this recheck profile"
             )
-        return [
+        result = [
             *base,
             recheck_command,
             "--snapshot-id",
@@ -634,6 +719,16 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
             "--repository",
             REPOSITORY,
         ]
+        if previous_operation == "pr-review-snapshot" and skill_identity is not None:
+            result.extend(
+                [
+                    "--review-skill-path",
+                    skill_identity["path"],
+                    "--review-skill-sha256",
+                    skill_identity["sha256"],
+                ]
+            )
+        return result
 
     result = [
         *base,
@@ -683,6 +778,15 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
                 args.payload,
             ]
         )
+        if skill_identity is not None:
+            result.extend(
+                [
+                    "--review-skill-path",
+                    skill_identity["path"],
+                    "--review-skill-sha256",
+                    skill_identity["sha256"],
+                ]
+            )
     elif profile in {"delivery-readiness", "review", "pre-merge"}:
         result.extend(
             [
@@ -694,6 +798,15 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
                 args.expected_head_sha,
             ]
         )
+        if profile == "review" and skill_identity is not None:
+            result.extend(
+                [
+                    "--review-skill-path",
+                    skill_identity["path"],
+                    "--review-skill-sha256",
+                    skill_identity["sha256"],
+                ]
+            )
     elif profile == "closeout-readonly":
         result.extend(
             [
@@ -970,6 +1083,52 @@ def _compact_terminal_result(
     }
 
 
+def _terminal_artifact_skill_identity(
+    repo_root: Path, terminal: Mapping[str, Any]
+) -> dict[str, str] | None:
+    """Read the emitted artifact's Review Skill identity without path escapes."""
+
+    reference = terminal.get("reference")
+    if not isinstance(reference, str) or not reference.startswith(
+        ".agents/evidence.local/"
+    ):
+        return None
+    if "\\" in reference or ".." in Path(reference).parts:
+        return None
+    candidate = repo_root / reference
+    evidence_root = repo_root / ".agents" / "evidence.local"
+    try:
+        candidate.resolve(strict=False).relative_to(evidence_root.resolve())
+    except ValueError:
+        return None
+    current = candidate
+    while current != evidence_root:
+        if current.is_symlink():
+            return None
+        current = current.parent
+    if candidate.is_symlink() or not candidate.is_file():
+        return None
+    try:
+        artifact = json.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(artifact, dict):
+        return None
+    review_evidence = artifact.get("review_evidence")
+    skill = (
+        review_evidence.get("review_skill")
+        if isinstance(review_evidence, dict)
+        else None
+    )
+    if not isinstance(skill, dict):
+        return None
+    path = skill.get("path")
+    sha256 = skill.get("sha256")
+    if not isinstance(path, str) or not isinstance(sha256, str):
+        return None
+    return {"path": path, "sha256": sha256}
+
+
 def _exit_code(status: str) -> int:
     return {"pass": 0, "partial": 3, "fail": 4}.get(status, 2)
 
@@ -984,8 +1143,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         _, content_hashes = _load_inputs(repo_root)
         _require_output_root_ignored(repo_root)
         # Validate --skill-path early (before any GitHub queries)
-        _resolve_skill_identity(repo_root, args.profile, args.skill_path)
-        command = _evidence_argv(args, repo_root)
+        skill_identity = _resolve_skill_identity(
+            repo_root, args.profile, args.skill_path
+        )
+        if args.profile == "recheck" and skill_identity is None:
+            skill_identity = _stored_recheck_skill_identity(
+                repo_root, args.snapshot_id
+            )
+            if skill_identity is not None:
+                args.skill_path = skill_identity["path"]
+        command = _evidence_argv(args, repo_root, skill_identity)
         started_at = datetime.now(UTC)
         started = time.monotonic()
         run_id = f"{started_at.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:12]}"
@@ -1015,6 +1182,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.profile == "review-terminal":
             if snapshot.get("status") != "pass":
                 raise RunnerError("review terminal did not produce a passing result")
+            artifact_skill = _terminal_artifact_skill_identity(repo_root, snapshot)
+            if artifact_skill != skill_identity:
+                raise RunnerError(
+                    "review terminal Skill provenance does not match the invoking "
+                    "canonical Review Skill"
+                )
             duration_ms = round((time.monotonic() - started) * 1000)
             result = _compact_terminal_result(
                 snapshot,

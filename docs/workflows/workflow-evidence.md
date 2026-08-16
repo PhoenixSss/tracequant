@@ -128,9 +128,9 @@ Token 分析在仓库外使用 Codex rollout JSONL 完成，不改变任何工�
 
 ## Provenance 与回滚
 
-Skill family 来源和哈希见 `task-skill-variants.json`，严格验证使用
-`skill_variant_provenance.py`。历史 Skill 只作为维护者明确点名的对照，不是 Runner
-失败回退路径。
+当前 Runner Skill 与保留 baseline Skill 的来源和哈希由
+`tools/agent_workflow/skill_path_audit.py` 严格验证。历史 Skill 只作为维护者明确
+点名的对照，不是 Runner 失败回退路径。
 
 回滚当前 Runner 机制时，必须在一个变更中同步回滚：消费 Skill、Runner、profiles、
 Rules、tests 和文档。回滚后仍只能存在一条完整机械路径；不得同时运行两套完整

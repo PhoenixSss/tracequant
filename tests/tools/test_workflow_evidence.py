@@ -1305,6 +1305,27 @@ def test_implementation_reuses_existing_synced_canonical_branch(
     assert value["disposition"]["status"] == "pass"
 
 
+@pytest.mark.parametrize("branch", ["task-70-legacy", "70-legacy", "task/70"])
+def test_implementation_rejects_legacy_name_for_new_branch(
+    tmp_path: Path, branch: str
+) -> None:
+    state = _base_state()
+    state.update(
+        branch="main",
+        git_head=SHA40,
+        local_main=SHA40,
+        origin_main=SHA40,
+        local_branch_exists=False,
+        remote_branch_exists=False,
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env, branch=branch)
+    assert value["gates"]["branch_identity"]["status"] == "pass"
+    assert value["gates"]["branch_bootstrap"]["status"] == "fail"
+    assert "canonical" in value["gates"]["branch_bootstrap"]["detail"]
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
 def test_implementation_rejects_existing_branch_with_wrong_base(
     tmp_path: Path,
 ) -> None:

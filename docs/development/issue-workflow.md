@@ -131,6 +131,8 @@ intent 无法可靠解析时：**不要猜**。回退到 explicit Skill-name fal
   `task/<Issue number>-<slug>` branch；维护者不需要手动创建正常 Task branch。
   已存在且 identity/base/ownership 可证明的 branch 幂等复用；其它情况
   fail closed。
+  新 branch 只能使用 `task/<Issue number>-<slug>`；历史 numeric branch 形式只可在
+  已存在且可证明属于当前 Task 时安全复用。
 - 实现只处理当前 implementation-bearing leaf；不进行无关重构。
 - 提交前必须完成 target validation；PR 创建前必须完成 delivery readiness
   验证（Runner 快照）。

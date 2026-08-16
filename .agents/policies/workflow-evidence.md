@@ -107,6 +107,11 @@ matrix. It does not discover a handoff by a capped directory scan. A GitHub
 submitted Review is optional additional evidence; it cannot bypass a missing,
 malformed, stale, ambiguous, or conflicting canonical artifact.
 
+Review provenance accepts only the exact canonical independent Review Skill paths
+`.agents/skills/task-pr-review-runner/SKILL.md` and
+`.claude/skills/task-pr-review-runner/SKILL.md`; another Skill under either root
+fails closed.
+
 Review terminal mechanics run after the final stable recheck: the existing
 `review-terminal` Evidence Runner profile recollects current state, materializes
 the artifact, self-verifies it, and exposes the exact ID. Terminal emission

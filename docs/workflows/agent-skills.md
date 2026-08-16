@@ -74,23 +74,16 @@ docs/workflows/workflow-evidence.md
 
 不得提交。
 
-## Skill provenance 与对比入口
+## Skill provenance 与验证入口
 
-历史 Skill 与 Runner Skill 的来源、哈希和共存约束记录在：
-
-```text
-docs/workflows/task-skill-variants.json
-docs/workflows/task-skill-ab.md
-```
+当前 Runner Skill 与保留的历史 baseline Skill 路径、哈希和共存约束由
+`skill_path_audit.py` 机械审计；它不接受历史 Skill 作为当前 Runner 的回退路径。
 
 验证命令：
 
 ```bash
-tools/agent_workflow/skill_variant_provenance.py
+tools/agent_workflow/skill_path_audit.py
 ```
-
-在不含完整仓库历史的导出包中，可使用
-`--allow-missing-history` 只验证当前文件身份；正式仓库交付必须执行严格验证。
 
 ## 仓库外 Token 消耗分析边界
 

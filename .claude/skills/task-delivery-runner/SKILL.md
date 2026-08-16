@@ -250,12 +250,16 @@ transitions only after readiness passes.
 Start from clean synchronized `main` unless current facts prove a valid recovery
 point. Create or reuse one exact Task branch after verifying its identity,
 history, scope, and ownership. For a missing branch, an `implementation`
-preflight PASS with `branch creation = pass` authorizes the normal workflow
-mechanic:
+preflight PASS with `branch creation = pass` authorizes creation using only the
+canonical `task/<Task number>-<slug>` form:
 
 ```text
 git switch -c task/<Task number>-<slug> <expected-base-sha>
 ```
+
+Legacy numeric branch forms may be reused only when an existing branch is
+already proven to belong to the current Task; they are never used for new
+branch creation.
 
 Immediately verify the new branch, HEAD, base, and clean state. For an existing
 branch, switch to it only after the Runner proves identity/base/ownership and

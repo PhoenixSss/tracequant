@@ -66,10 +66,11 @@ tools/agent_workflow/wsl2_github_evidence_runner.py \
 ```
 
 The `--skill-path` argument records the actual calling Skill identity in every
-artifact. Claude Code callers pass `.claude/skills/task-pr-review-runner/SKILL.md`;
-Codex callers pass `.agents/skills/task-pr-review-runner/SKILL.md`. The Runner
-re-hashes content independently and **fails closed** when the path is not within
-an allowed Skill root (`.agents/skills/` or `.claude/skills/`).
+artifact. The only accepted paths are the canonical independent Review Skills:
+`.claude/skills/task-pr-review-runner/SKILL.md` for Claude Code and
+`.agents/skills/task-pr-review-runner/SKILL.md` for Codex. The Runner re-hashes
+content independently and **fails closed** for every other path, including
+another Skill beneath an otherwise allowed root.
 
 The initial snapshot defines the reviewed identity. `workflow-review` is the
 independent CI-equivalent validation for the locked head. `recheck` verifies
