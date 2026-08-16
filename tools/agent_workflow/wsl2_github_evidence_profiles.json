@@ -25,7 +25,7 @@
         "expected_base_sha",
         "expected_head_sha"
       ],
-      "description": "Delivery handoff snapshot for a review-ready implementation-bearing leaf PR."
+      "description": "Delivery handoff snapshot for a review-ready Task PR."
     },
     "review": {
       "operation": "pr-review-snapshot",
@@ -35,7 +35,7 @@
         "expected_base_sha",
         "expected_head_sha"
       ],
-      "description": "Independent review admission snapshot for the locked implementation-bearing leaf PR base and head."
+      "description": "Independent review snapshot for the locked PR base and head."
     },
     "review-terminal": {
       "operation": "review-terminal",

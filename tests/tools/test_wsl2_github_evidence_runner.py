@@ -422,24 +422,6 @@ def test_review_profile_returns_required_schema_and_compact_digest(
     }
 
 
-def test_review_profile_accepts_bug_implementation_leaf(
-    tmp_path: Path,
-) -> None:
-    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["issue"]["labels"] = [
-        {"name": "type:bug"},
-        {"name": "codex:ready"},
-    ]
-    state["relationships"]["issueType"] = {"name": "Bug"}
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    completed = _run(repo, env, *_review_args(main_sha, head_sha))
-    assert completed.returncode == 0, completed.stderr
-    result = _result(repo, completed.stdout)
-    assert result["status"] == "pass"
-    assert result["identity"]["head_sha"] == head_sha
-
-
 @pytest.mark.parametrize("profile", ["delivery-readiness", "review", "pre-merge"])
 def test_task_pr_profiles_are_fixed_and_pass(tmp_path: Path, profile: str) -> None:
     repo, _, env, main_sha, head_sha = _prepare_repo(tmp_path)

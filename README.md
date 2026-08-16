@@ -180,6 +180,7 @@ review, independent PR review, manual Merge, or Feature closeout.
 - [WSL2 GitHub evidence runner](docs/workflows/wsl2-github-evidence-runner/README.md): fixed read-only profiles, evidence snapshots, Git/GitHub approval boundaries, and live material capture.
 - [Agent workflow Skills](docs/workflows/agent-skills.md): current Runner Skills, Review remediation, Closeout, and Feature audit.
 - [Validation Runner](docs/workflows/wsl2-validation-runner/README.md): fixed validation profiles, compact artifacts, exact argv, and process cleanup.
+- [Skill variants](docs/workflows/task-skill-ab.md): preserved historical Skill family and current Runner Skill family for controlled comparison.
 - [Task Skill runner migration](docs/workflows/task-skill-runner-migration/README.md): historical migration record only; not an operational guide.
 
 ## License

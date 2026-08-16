@@ -150,85 +150,76 @@ implementation / validation evidence. The leaf-Issue-first default does not
 apply to it. It must still limit acquisition to the hierarchy, state, and
 evidence the audit needs — not historical comments, unrelated docs / ADRs,
 the roadmap, sibling Feature history, or general workflow reports.
-## Natural-language workflow entry
 
-Workflow Skills start only after the user identifies an existing Task, Task PR,
-or Feature. They do not identify, split, plan, draft, choose, or create new
-Tasks. No workflow Skill may merge a Pull Request.
-
-Maintainers can start a workflow with Agent-neutral natural language:
-
-- `实现 Issue #N` → Delivery (readiness, implementation, PR, review handoff)
-- `审查 PR #N` → Independent Review (fresh session, read-only)
-- `PR #N 已人工合并，请完成 closeout` → Closeout (merge identity, convergence)
-- Feature completion audit request → `feature-completion-audit` (hierarchy-aware)
-
-Entry resolution contract and lifecycle semantics:
-`docs/development/issue-workflow.md` — read only the minimum relevant section.
-Independent Review shared semantics: `docs/development/pr-review.md`.
-
-Explicit Skill-name fallback (maintenance windows and edge cases): invoke
-`task-delivery-runner`, `task-pr-review-runner`, `task-closeout`, or
-`feature-completion-audit` by name (Codex: `.agents/skills/`, Claude:
-`.claude/skills/`).
+When the user explicitly invokes `task-delivery-runner`, first read
+`.agents/skills/task-delivery-runner/SKILL.md`. When the user explicitly invokes
+`task-pr-review-runner`, first read
+`.agents/skills/task-pr-review-runner/SKILL.md`.
 
 Historical `.agents/skills/task-delivery/SKILL.md` and
 `.agents/skills/task-pr-review/SKILL.md` are retained only as explicit benchmark
 baselines. Never select, combine, or fall back to them unless the maintainer
 names that exact Skill.
 
+When the user states that a Pull Request was manually merged and requests
+post-merge verification, state convergence, validation, or Task-branch cleanup,
+first read `.agents/skills/task-closeout/SKILL.md`.
+
+When the user requests an independent read-only completion audit of a specified
+open GitHub Feature before maintainer closeout, first read
+`.agents/skills/feature-completion-audit/SKILL.md`.
+
+Workflow Skills start only after the user identifies an existing Task, Task PR,
+or Feature. They do not identify, split, plan, draft, choose, or create new
+Tasks. No workflow Skill may merge a Pull Request.
+
+Independent PR Review must run in a fresh session that did not participate in
+implementation or remediation of the reviewed head. It is strictly read-only,
+does not submit a GitHub Review, does not fix findings, does not change
+Issue/PR/Project state, and does not merge. A non-passing Review may emit a
+bounded remediation handoff for `task-delivery-runner`; any new commit requires
+a new independent Review session.
+
 When the user provides both a number and title, treat the number as the primary
 key and the current GitHub title as canonical. Stop before writes when they
 clearly identify different work.
 
-## Independent Review
+A final merge decision requires a passing `task-pr-review-runner` result for the
+current PR head, followed by maintainer manual merge.
 
-Independent PR Review runs in a fresh session that did not participate in
-implementation or remediation of the reviewed head. It is strictly read-only,
-does not submit a GitHub Review, does not fix findings, and never merges. A
-non-passing Review emits a bounded remediation handoff for the Delivery Skill;
-any new commit requires a fresh independent Review session. Detailed shared
-semantics: `docs/development/pr-review.md`.
+Before a repository workflow Skill executes a command, it must read
+`.agents/policies/command-execution.md` and may read the optional ignored
+`.agents/execution-profile.local.toml`. The local profile selects an execution
+context only after the active Skill authorizes a command; it never expands
+workflow permissions.
 
-A final merge decision requires a passing Review for the current PR head,
-followed by maintainer manual merge.
-
-## Policies and evidence
+The repository does not run Task workflow Token telemetry. Token analysis is
+performed outside this repository from Codex rollout logs and maintainer-supplied
+Task metadata. Raw rollout logs and external Token reports must not be committed.
+External analysis never changes permissions, gates, findings, verdicts, Merge
+authorization, or completion evidence.
 
 Deterministic workflow facts and compact validation are governed by
-`.agents/policies/workflow-evidence.md`; workflow command execution by
-`.agents/policies/command-execution.md`. Runner front doors:
+`.agents/policies/workflow-evidence.md`. Runner Skills use the current repository
+front doors:
 
 ```text
 tools/agent_workflow/wsl2_github_evidence_runner.py
 tools/agent_workflow/wsl2_validation_runner.py
 ```
 
-Local evidence and validation artifacts stay in the exact ignored
+The executed Skill, Runner, profile/schema, repository head, and content hashes
+are recorded for reproducibility. Workflow object identities remain locked as
+required: Task base, PR base/head/effective diff, audited main, and merge SHA.
+There is no requirement to load a Skill or Runner from `main`, a PR base, or
+another commit.
+
+Local evidence and validation artifacts remain in exact ignored
 `.agents/evidence.local/` and `.agents/validation.local/` directories.
 
-The repository does not run Task workflow Token telemetry. Token analysis is
-performed outside this repository from Codex rollout logs and
-maintainer-supplied Task metadata. Raw rollout logs and external Token reports
-are never committed; external analysis never changes permissions, gates,
-findings, verdicts, Merge authorization, or completion evidence.
-
-## Source-of-truth principle
-
-Normative / semantic authority and mechanical / factual authority are separate
-layers. Current GitHub / Git / CI / Runner facts — Issue state, labels, Project
-Status, Parent, blocked-by / blocking, PR identity, base / head SHA, review
-head, merge identity, checks — are mechanical evidence: they can invalidate
-stale textual assumptions and trigger fail closed / Human Gate, but they are
-not business specification. The current leaf Issue body is the current
-work-item business specification and never overrides system / platform
-constraints, maintainer constraints, safety, repository hard invariants, or
-active durable architecture decisions. Full model:
-`docs/development/issue-workflow.md`.
-
-This root `AGENTS.md` remains the repository-level rule source. Repository
-Skills supplement these rules and do not override system, developer, user, or
-more specific scoped instructions.
+This root `AGENTS.md` remains the repository-level rule source. Repository Skills
+supplement these rules and do not override system, developer, user, or more
+specific scoped instructions.
 
 ## Implementation rules
 
