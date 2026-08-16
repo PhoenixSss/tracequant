@@ -97,6 +97,26 @@ structural completeness and evidence constraints.
 
 The self-review is an internal Delivery gate, not an independent review.
 
+For Review remediation, the canonical conclusion carrier is the structured
+independent-review handoff under
+`.agents/evidence.local/review-handoffs/<evidence_id>.json`. The Evidence Runner
+receives the producer-emitted `<evidence_id>` explicitly, loads exactly that
+artifact, and validates its content address and full provenance chain against
+the stored Review/recheck snapshots, actual Skill bytes, and actual evidence
+matrix. It does not discover a handoff by a capped directory scan. A GitHub
+submitted Review is optional additional evidence; it cannot bypass a missing,
+malformed, stale, ambiguous, or conflicting canonical artifact.
+
+Review provenance accepts only the exact canonical independent Review Skill paths
+`.agents/skills/task-pr-review-runner/SKILL.md` and
+`.claude/skills/task-pr-review-runner/SKILL.md`; another Skill under either root
+fails closed.
+
+Review terminal mechanics run after the final stable recheck: the existing
+`review-terminal` Evidence Runner profile recollects current state, materializes
+the artifact, self-verifies it, and exposes the exact ID. Terminal emission
+failure is a Review failure; a textual handoff cannot substitute for it.
+
 ## Local artifacts
 
 Tools may write only below the exact Git-ignored roots:
@@ -180,9 +200,16 @@ all write operations, auto-remediation, state modification, and re-invocation
 of the same profile to obtain `pass`.
 
 The `worktree_state_compatible` gate evaluates worktree cleanliness per
-entry point. `delivery-start` and `implementation` may accept a dirty
-worktree with Task-owned changes; `final-validation`, `pr-readiness`, and
-`review-remediation` require a clean committed head.
+entry point. `delivery-start` may accept a dirty worktree with Task-owned
+changes. Implementation branch admission additionally requires the branch
+setup gate to prove a clean worktree before creating or reusing the branch;
+`final-validation`, `pr-readiness`, and `review-remediation` require a clean
+committed head.
+
+When implementation preflight reports a safe missing-branch bootstrap, the
+Delivery Skill owns the authorized branch write. The Runner remains read-only;
+it only proves the exact-base, clean-main, ownership, remote, and worktree
+conditions required before `git switch -c`.
 
 ## Failure expansion
 

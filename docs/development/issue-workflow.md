@@ -125,6 +125,14 @@ intent 无法可靠解析时：**不要猜**。回退到 explicit Skill-name fal
   targeted validation → commit → push → PR → CI checks → delivery readiness →
   handoff for Independent Review。
 - 一个 Task 通常产生一个 PR（base = `main`）。
+- 正常 Ready Delivery 的 branch bootstrap 属于 workflow mechanics：在 clean
+  `main`、锁定 expected base、Task admission PASS、目标 branch 不存在且无
+  冲突时，Delivery 自动从精确 expected base 创建当前 canonical
+  `task/<Issue number>-<slug>` branch；维护者不需要手动创建正常 Task branch。
+  已存在且 identity/base/ownership 可证明的 branch 幂等复用；其它情况
+  fail closed。
+  新 branch 只能使用 `task/<Issue number>-<slug>`；历史 numeric branch 形式只可在
+  已存在且可证明属于当前 Task 时安全复用。
 - 实现只处理当前 implementation-bearing leaf；不进行无关重构。
 - 提交前必须完成 target validation；PR 创建前必须完成 delivery readiness
   验证（Runner 快照）。
@@ -170,6 +178,21 @@ Issue comments（Retrieval v2 comments default-off 仍适用）。
 
 - Review 非 passing 时输出 bounded remediation handoff（仅包含修复所需
   的最小信息）。
+- handoff 同时产生一个结构化、内容寻址的 ignored local evidence artifact；
+  该 artifact 绑定 Task、PR、reviewed base/head、verdict、required findings、
+  evidence identity、freshness 和 maintainer-decision-required 状态。它是
+  remediation 的 canonical conclusion carrier，不是 GitHub submitted Review。
+- Review producer 必须 materialize artifact 并在 textual handoff 中输出精确
+  `evidence_id`；Delivery 将该 identity 作为 `--review-handoff-id` 传入，
+  只读取该 content-addressed 文件，并机械验证实际 Skill、snapshot、
+  evidence matrix 与当前 PR head 的完整 provenance chain。
+- Review 的 final stable recheck 完成后，必须通过现有 `review-terminal`
+  runner profile 机械 materialize、self-verify 并输出该 artifact ID；terminal
+  emission 失败时不得产生可消费 handoff。PASS 也产生 canonical review
+  evidence，但只有 CONDITIONAL/FAIL artifact 可用于 remediation。
+- `review-remediation` admission 必须机械验证 artifact 与当前 PR head 的
+  一致性；submitted GitHub Review 只能作为附加 evidence，不能绕过缺失、
+  malformed、stale、ambiguous 或 conflicting canonical evidence。
 - Delivery Skill 按 handoff 修复，产生 new head。
 - 任何新 commit 都需要 **fresh independent re-review**；不得复用旧 verdict。
 

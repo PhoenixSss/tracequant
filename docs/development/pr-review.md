@@ -112,11 +112,84 @@ CONDITIONAL 与 FAIL 都输出 bounded remediation handoff（§9）；
 ## 9. Remediation handoff
 
 非 PASS 的 Review（CONDITIONAL / FAIL，见 §8）输出 bounded remediation
-handoff，仅包含 Delivery Skill 修复所需的最小信息：
+handoff，仅包含 Delivery Skill 修复所需的最小信息。每种 terminal verdict
+都必须同时产生 canonical review evidence；PASS 的 artifact 使用空的
+findings/remediation 列表，不能授权 Delivery remediation：
 
 - findings（severity、位置、失败场景、最小修改方向）；
 - 当前锁定的 base/head；
 - 重新 review 的要求（new head → fresh re-review）。
+
+除上述 bounded text handoff 外，Review terminal 必须在允许的 ignored local
+evidence root 写入一个 canonical structured review artifact：
+
+```text
+.agents/evidence.local/review-handoffs/<evidence_id>.json
+```
+
+Claude 与 Codex 使用相同的 evidence root。artifact 的 `evidence_id` 是对
+去除自身 `evidence_id` 字段后的 canonical JSON 做 SHA-256；文件名必须等于
+该 digest。最小字段为：
+
+```json
+{
+  "schema_version": 1,
+  "kind": "independent-review-handoff",
+  "repository": "PhoenixSss/tracequant",
+  "task": 0,
+  "pr": 0,
+  "reviewed_base_sha": "<SHA>",
+  "reviewed_head_sha": "<SHA>",
+  "verdict": "PASS | CONDITIONAL | FAIL",
+  "required_findings": [
+    {"id": "F1", "severity": "Blocking | High | Medium", "required": true}
+  ],
+  "required_remediation": [
+    {"id": "F1", "required": true, "description": "<bounded repair>"}
+  ],
+  "objective_gates": [],
+  "maintainer_decision_required": false,
+  "created_at": "<UTC timestamp>",
+  "freshness": {"status": "fresh", "recheck": "pass"},
+  "review_evidence": {
+    "review_snapshot_id": "<ev-id>",
+    "recheck_snapshot_id": "<ev-id>",
+    "effective_diff_sha256": "<SHA-256>",
+    "evidence_matrix_path": ".agents/evidence.local/<matrix>.json",
+    "evidence_matrix_sha256": "<SHA-256>",
+    "review_skill": {"path": "<Skill>/SKILL.md", "sha256": "<SHA-256>"}
+  },
+  "evidence_id": "<SHA-256>"
+}
+```
+
+The Review Skill materializes this artifact through the repository producer
+boundary `tools/agent_workflow/workflow_evidence.py` using its
+`emit-review-handoff` subcommand, which returns the exact `evidence_id` for the
+final textual handoff. This is an allowed local write
+under the ignored evidence root: Review remains read-only with respect to
+implementation files and all GitHub state, while local content-addressed
+evidence emission is required. The Delivery Runner receives that ID explicitly
+as `--review-handoff-id` and loads exactly that file. It validates the schema,
+content address, actual Review Skill bytes, actual matrix bytes, content-
+addressed snapshots, Task/PR/base/head identity, stable recheck identity,
+finding severity, freshness, and maintainer-decision state. A submitted GitHub
+Review is not required when this artifact is valid; an invalid, stale,
+malformed, ambiguous, or conflicting artifact remains fail-closed.
+
+The invoking Review Skill must be one of the two exact canonical paths:
+`.agents/skills/task-pr-review-runner/SKILL.md` or
+`.claude/skills/task-pr-review-runner/SKILL.md`. A different Skill beneath either
+allowed root is not valid provenance, even when its bytes are otherwise readable.
+
+The terminal path is mechanical: after the final stable recheck and verdict
+payload are complete, the Review adapter invokes the existing
+`wsl2_github_evidence_runner.py review-terminal` profile. The profile performs
+one final recollection, materializes the artifact, self-verifies the complete
+provenance chain, and exposes the exact `review_handoff_id`. Terminal failure
+is review failure; no consumable handoff may be printed. PASS reviews also
+materialize canonical evidence, while only CONDITIONAL/FAIL artifacts can
+authorize remediation.
 
 handoff 不得包含完整历史、无关 findings 或主观偏好。
 

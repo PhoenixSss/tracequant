@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "runner_version": "1.3.0",
+  "runner_version": "1.5.0",
   "repository": "PhoenixSss/tracequant",
   "profiles": {
     "delivery": {
@@ -12,7 +12,8 @@
         "branch",
         "pr",
         "expected_base_sha",
-        "expected_head_sha"
+        "expected_head_sha",
+        "review_handoff_id"
       ],
       "description": "Unified Delivery Invocation Preflight with lifecycle-conflict detection across five stable semantic entry points."
     },
@@ -35,6 +36,20 @@
         "expected_head_sha"
       ],
       "description": "Independent review admission snapshot for the locked implementation-bearing leaf PR base and head."
+    },
+    "review-terminal": {
+      "operation": "review-terminal",
+      "required_arguments": [
+        "task",
+        "pr",
+        "expected_base_sha",
+        "expected_head_sha",
+        "effective_diff_sha256",
+        "review_snapshot_id",
+        "recheck_snapshot_id",
+        "payload"
+      ],
+      "description": "Final stable independent-review terminal that materializes and verifies canonical evidence."
     },
     "pre-merge": {
       "operation": "pr-review-snapshot",

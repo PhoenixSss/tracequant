@@ -77,7 +77,7 @@ tools/agent_workflow/wsl2_github_evidence_runner.py delivery-readiness \
 | `implementation` | Phase 2 before branch/implementation writes | `--branch --expected-base-sha` |
 | `final-validation` | Phase 3 before commit/`workflow-delivery` | `--branch --expected-base-sha --expected-head-sha` |
 | `pr-readiness` | Phase 4 before PR creation/push verification | `--branch --expected-base-sha --expected-head-sha` |
-| `review-remediation` | Review remediation before any repair edit | `--pr --expected-base-sha --expected-head-sha` |
+| `review-remediation` | Review remediation before any repair edit | `--pr --expected-base-sha --expected-head-sha --review-handoff-id` |
 
 During implementation, use a matching targeted Validation profile only when
 needed:
@@ -202,7 +202,7 @@ schema, no artifact) → one strictly identical bounded retry or report blockage
 | Entry point | Dirty worktree | Handling |
 |---|---|---|
 | `delivery-start` | Allowed | Full flow takes custody of existing Task changes |
-| `implementation` | Allowed | Phase continues development, validation, and commit |
+| `implementation` | Forbidden at branch admission | Branch creation/reuse must begin from a clean worktree; development may then create Task-owned changes |
 | `final-validation` | Forbidden | Must bind clean committed head |
 | `pr-readiness` | Forbidden | Identity must be stable across local, remote, and PR head |
 | `review-remediation` | Forbidden (fail-closed) | Must start from determinate reviewed head |
@@ -249,7 +249,22 @@ transitions only after readiness passes.
 
 Start from clean synchronized `main` unless current facts prove a valid recovery
 point. Create or reuse one exact Task branch after verifying its identity,
-history, scope, and ownership.
+history, scope, and ownership. For a missing branch, an `implementation`
+preflight PASS with `branch creation = pass` authorizes creation using only the
+canonical `task/<Task number>-<slug>` form:
+
+```text
+git switch -c task/<Task number>-<slug> <expected-base-sha>
+```
+
+Legacy numeric branch forms may be reused only when an existing branch is
+already proven to belong to the current Task; they are never used for new
+branch creation.
+
+Immediately verify the new branch, HEAD, base, and clean state. For an existing
+branch, switch to it only after the Runner proves identity/base/ownership and
+reuse it idempotently. Never reset, overwrite, or reuse a branch whose identity
+is ambiguous; a dirty worktree is fail-closed when branch creation is required.
 
 Implement the smallest correct change. Follow scoped rules, preserve safety, add
 required tests/docs, inspect tracked and untracked scope, and do not weaken tests
@@ -342,6 +357,21 @@ The remediation handoff must identify:
 - required Blocking, High, or Medium findings;
 - unresolved objective gates;
 - maintainer decisions, if any.
+
+It must also include the canonical structured handoff artifact under
+`.agents/evidence.local/review-handoffs/<evidence_id>.json`. Pass the exact
+producer-emitted `<evidence_id>` as `--review-handoff-id`; the Runner loads
+only that content-addressed artifact and never selects evidence by an arbitrary
+directory scan. Run the
+`review-remediation` preflight with the expected base/head before any repair
+edit. A valid artifact is the conclusion carrier even when the PR has zero
+submitted GitHub Reviews; missing, malformed, stale, ambiguous,
+identity-mismatched, or maintainer-decision-required artifacts fail closed.
+
+Implementation admission also verifies any existing active PR for an existing
+Task branch before allowing writes: exactly one current-Task PR, canonical
+branch, expected base, and non-conflicting identity are required. Ambiguous,
+cross-Task, or mismatched active PRs fail closed before implementation.
 
 Re-read current Task, PR, branch, head, effective diff, checks, reviews, and
 threads by regenerating the `delivery-readiness` snapshot. Verify that the PR is
