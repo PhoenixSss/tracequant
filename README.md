@@ -101,6 +101,26 @@ Pull requests targeting `main` and pushes to `main` automatically run CI. The wo
 
 Internal datetimes must be timezone-aware and use UTC as the standard timezone. Naive datetimes are explicitly rejected. Time utilities are provided by `tracequant.core.time`.
 
+## Initial domain models
+
+The Research MVP exposes `InstrumentId`, `TimeRange`, and `OHLCVBar` from
+`tracequant.domain`. These are immutable internal public models with explicit
+validation and deterministic JSON-compatible `to_dict` / `from_dict` methods.
+
+`InstrumentId` is a single normalized ASCII identifier of at most 32 letters or
+digits, without venue or contract metadata. `TimeRange` and bar intervals use aware
+UTC half-open `[start, end)` semantics. OHLCV values are finite Python floats; volume
+is non-negative and OHLC relationships are validated. Zero and negative prices are
+intentionally accepted at this research-data boundary and may be constrained by
+later, more specific models.
+
+Shared tests keep reusable pytest fixtures in `tests/conftest.py` and deterministic,
+parameterizable factories in `tests/fixtures/domain.py`. Shared fixtures remain
+function-scoped, while one-test-only data stays in its test module. The factories use
+fixed UTC values and never read the clock, random state, environment, network, or
+filesystem. These initial models do not define an external versioned protocol and do
+not include exchange metadata, timeframes, precision rules, orders, or persistence.
+
 ## Configuration
 
 Application configuration is loaded explicitly with `tracequant.config.load_settings`.
