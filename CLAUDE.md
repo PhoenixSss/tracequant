@@ -13,7 +13,6 @@ The `AGENTS.md` file at the repo root is the primary behavior rule source: it de
 本项目同时保留 Codex（`.agents/`、`.codex/`）和 Claude Code（`.claude/`）的专用配置，这是有意的设计。在 Claude Code 中工作时：
 
 - **Skills**: 使用 `Skill` 工具调用 `.claude/skills/` 下的 Skill，不要手动 `Read` `.agents/skills/` 下的 Skill 文件。两套 Skill 各自适配对应工具的执行模型。
-- **Legacy skills**: `.agents/skills/task-delivery/` 和 `.agents/skills/task-pr-review/` 是历史基准，没有 `.claude/` 对应版本。除非维护者明确指定，否则不要使用它们。
 - **权限**: Claude Code 权限由 `.claude/settings.json` 控制。`.codex/rules/` 是 Codex 专用，Claude Code 忽略。
 - **标签**: `codex:ready`、`codex:blocked`、`codex:needs-spec` 等 GitHub Issue 标签不受工具环境影响，照常适用。
 

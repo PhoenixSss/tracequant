@@ -68,7 +68,6 @@ CANONICAL_COMMANDS: Final[dict[str, tuple[str, ...]]] = {
         "--frozen",
         "pytest",
         "tests/tools/test_workflow_skills.py",
-        "tests/tools/test_skill_variant_provenance.py",
         "tests/tools/test_workflow_validation.py",
         "tests/tools/test_workflow_evidence.py",
         "tests/tools/test_wsl2_validation_runner.py",

@@ -1,7 +1,7 @@
 # Task Workflow 第一轮 Token 优化实现记录
 
 > 历史说明：本文记录当时的实现。当前运行规范以 `agent-skills.md`、
-> `workflow-evidence.md` 和各 Runner 文档为准；跨 commit trusted-version
+> `.agents/policies/workflow-evidence.md` 和各 Runner 文档为准；跨 commit trusted-version
 > 控制面已经退役，不得按本文的历史路径执行。
 
 ## 结论边界

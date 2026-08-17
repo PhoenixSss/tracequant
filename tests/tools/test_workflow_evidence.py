@@ -1741,6 +1741,75 @@ def test_worktree_pr_readiness_rejects_dirty(tmp_path: Path) -> None:
     assert gate["dirty_allowed"] is False
 
 
+def test_review_remediation_accepts_read_only_review_without_github_submission(
+    tmp_path: Path,
+) -> None:
+    """A bounded read-only review handoff must not require a GitHub Review object."""
+    state = _base_state()
+    state["issues"]["70"]["projectItems"] = [{"status": {"name": "Review"}}]
+    state["pr"]["headRepository"] = {"nameWithOwner": "owner/repo"}
+    state["pr"]["reviews"] = []
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "review-remediation",
+        "--pr",
+        "71",
+        "--expected-base-sha",
+        SHA40,
+        "--expected-head-sha",
+        "4" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    gate = value["gates"]["review_conclusion"]
+    assert gate["status"] == "pass"
+    assert "GitHub submitted Review not required" in gate["detail"]
+    assert "observed_reviews=0" in gate["detail"]
+    assert value["disposition"]["workflow_may_continue"] is True
+    assert value["disposition"]["write_actions_allowed"] is True
+
+
+def test_review_remediation_still_fails_on_reviewed_head_mismatch(
+    tmp_path: Path,
+) -> None:
+    """Removing the GitHub-Review dependency must not weaken exact head locking."""
+    state = _base_state()
+    state["issues"]["70"]["projectItems"] = [{"status": {"name": "Review"}}]
+    state["pr"]["headRepository"] = {"nameWithOwner": "owner/repo"}
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "review-remediation",
+        "--pr",
+        "71",
+        "--expected-base-sha",
+        SHA40,
+        "--expected-head-sha",
+        "5" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["review_conclusion"]["status"] == "pass"
+    assert value["gates"]["pr_head_sha"]["status"] == "fail"
+    assert value["disposition"]["workflow_may_continue"] is False
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
 def test_worktree_review_remediation_rejects_dirty(tmp_path: Path) -> None:
     """review-remediation + dirty worktree → fail-closed."""
     state = _dirty_state()

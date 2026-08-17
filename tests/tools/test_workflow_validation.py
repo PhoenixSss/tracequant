@@ -77,7 +77,7 @@ def _write_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     (repo / "tests").mkdir(parents=True)
     (repo / "src").mkdir()
-    (repo / ".agents" / "skills" / "task-delivery").mkdir(parents=True)
+    (repo / ".agents" / "skills" / "task-delivery-runner").mkdir(parents=True)
     (repo / ".gitignore").write_text(
         ".agents/validation.local/\n.agents/evidence.local/\n",
         encoding="utf-8",
@@ -180,7 +180,7 @@ def test_base_sha_detects_governance_change_and_runs_skill_validator(
     validator.write_text("import sys\nprint('valid', sys.argv[1])\n", encoding="utf-8")
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
-    env["FAKE_CHANGED_FILE"] = ".agents/skills/task-delivery/SKILL.md"
+    env["FAKE_CHANGED_FILE"] = ".agents/skills/task-delivery-runner/SKILL.md"
     result = _run(
         repo,
         env,
@@ -195,7 +195,7 @@ def test_base_sha_detects_governance_change_and_runs_skill_validator(
     value = json.loads(result.stdout)
     assert value["base_sha"] == "a" * 40
     assert any(
-        item["command_id"] == "skill-task-delivery" for item in value["commands"]
+        item["command_id"] == "skill-task-delivery-runner" for item in value["commands"]
     )
 
 

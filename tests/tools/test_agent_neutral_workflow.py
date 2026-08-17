@@ -90,6 +90,13 @@ def test_failure_and_ambiguity_handling_is_defined() -> None:
     assert "bounded remediation handoff" in text
 
 
+def test_delivery_remediation_requires_review_handoff_for_both_agents() -> None:
+    for text in _skill_text("task-delivery-runner"):
+        assert "`review-remediation` requires the bounded handoff" in text
+        assert "stop before Runner or repair writes" in text
+        assert "generic snapshot fallback" in text
+
+
 def test_closeout_entry_owns_merge_identity_and_convergence() -> None:
     text = ISSUE_WORKFLOW.read_text(encoding="utf-8")
     assert "Closeout" in text
@@ -238,17 +245,39 @@ def test_agent_skills_guide_is_registry_and_navigation_only() -> None:
     assert "docs/development/issue-workflow.md" in text
     assert "docs/development/pr-review.md" in text
     assert "仓库外 Token 消耗分析边界" in text
+    assert "tools/agent_workflow/skill_path_audit.py" in text
+    assert "Final source-of-truth matrix" in text
+    assert "task-skill-" + "variants.json" not in text
+    assert "skill_variant_" + "provenance.py" not in text
     assert "## Review remediation" not in text
     assert "## Runner Delivery" not in text
     assert "## Independent Review" not in text
 
 
-def test_legacy_skills_are_preserved_not_deleted() -> None:
+def test_legacy_skills_are_retired_from_active_namespace() -> None:
     for relative in (
-        ".agents/skills/task-delivery/SKILL.md",
-        ".agents/skills/task-pr-review/SKILL.md",
+        ".agents/skills/task-delivery",
+        ".agents/skills/task-pr-review",
     ):
-        assert (ROOT / relative).is_file(), relative
-    guide = AGENT_SKILLS_GUIDE.read_text(encoding="utf-8")
-    assert "task-delivery" in guide
-    assert "task-pr-review" in guide
+        assert not (ROOT / relative).exists(), relative
+    agents = AGENTS.read_text(encoding="utf-8")
+    claude = CLAUDE_MD.read_text(encoding="utf-8")
+    assert ".agents/skills/task-delivery/SKILL.md" not in agents
+    assert ".agents/skills/task-pr-review/SKILL.md" not in agents
+    assert ".agents/skills/task-delivery/" not in claude
+    assert ".agents/skills/task-pr-review/" not in claude
+
+
+def test_current_skills_do_not_reference_missing_agents_override() -> None:
+    for skill_root in ACTIVE_SKILL_ROOTS:
+        for name in (*REVIEW_SKILLS, *LIFECYCLE_SKILLS):
+            text = (skill_root / name / "SKILL.md").read_text(encoding="utf-8")
+            assert "AGENTS.override.md" not in text, (skill_root, name)
+
+
+def test_workflow_evidence_policy_is_the_single_current_owner() -> None:
+    assert (ROOT / ".agents/policies/workflow-evidence.md").is_file()
+    assert not (ROOT / "docs/workflows/workflow-evidence.md").exists()
+    for path in (AGENTS, CLAUDE_MD, ROOT / "README.md", AGENT_SKILLS_GUIDE):
+        text = path.read_text(encoding="utf-8")
+        assert "docs/workflows/workflow-evidence.md" not in text, path

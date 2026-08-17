@@ -1370,13 +1370,15 @@ def _entry_point_gates(
                 reviews = pr.get("reviews", {})
                 review_items = reviews.get("items") if isinstance(reviews, dict) else []
                 review_items = review_items if isinstance(review_items, list) else []
-                if not review_items:
-                    gates["review_conclusion"] = _gate("fail", "no reviews submitted")
-                else:
-                    gates["review_conclusion"] = _gate(
-                        "pass",
-                        f"{len(review_items)} review(s) submitted",
-                    )
+                gates["review_conclusion"] = _gate(
+                    "pass",
+                    (
+                        "GitHub submitted Review not required: Independent Review is "
+                        "read-only; Delivery Skill validates the bounded handoff; this "
+                        "preflight locks PR/base/head identity "
+                        f"(observed_reviews={len(review_items)})."
+                    ),
+                )
                 head_repo = pr.get("head_repository")
                 if head_repo == repository:
                     gates["head_fixable"] = _gate("pass")

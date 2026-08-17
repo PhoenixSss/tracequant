@@ -40,7 +40,7 @@ boundary.
 
 ## Policies and Runner interface
 
-Read applicable `AGENTS.md` / `AGENTS.override.md` and:
+Read applicable `AGENTS.md` and:
 
 ```text
 .agents/policies/workflow-evidence.md
@@ -217,7 +217,11 @@ Dirty with unrelated, generated, secret-bearing, or prohibited files → fail.
 - Full flow, phase-specific, and new-session: execute Preflight once.
 - Same-invocation later phases: check local preconditions + drift; do not repeat.
 - Phase-specific calls stop at the requested boundary.
-- No existing handoff/artifact: generate one minimal read-only snapshot.
+- Initial Delivery with no handoff/artifact: generate one minimal read-only snapshot.
+- `review-remediation` requires the bounded handoff from the prior Independent
+  Review. Missing handoff, missing reviewed-head identity, or Task/PR/head mismatch
+  is a semantic admission failure: stop before Runner or repair writes. Do not use
+  the generic snapshot fallback to manufacture remediation authority.
 - Valid handoff/artifact bound to same Task/branch/base/head: reuse; regenerate
   only when missing, expired, contradictory, or insufficient.
 

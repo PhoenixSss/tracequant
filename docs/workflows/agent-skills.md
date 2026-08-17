@@ -1,7 +1,7 @@
 # Agent Workflow Skills
 
 本文件是 Agent-neutral workflow Skills 的**注册表 / 导航 / 兼容性入口**：
-列出当前 Skills、历史基准、共享语义 owner 与验证入口。共享生命周期语义由
+列出当前 Skills、共享语义 owner 与验证入口。共享生命周期语义由
 `docs/development/issue-workflow.md`（lifecycle 规范）与
 `docs/development/pr-review.md`（Independent Review 规范）权威定义；
 本文件不再复制生命周期语义或执行 procedure。
@@ -25,15 +25,6 @@ Claude Code 对应 Skill：
 .claude/skills/task-closeout/SKILL.md
 .claude/skills/feature-completion-audit/SKILL.md
 ```
-
-历史基准，仅在维护者明确点名时使用：
-
-```text
-.agents/skills/task-delivery/SKILL.md
-.agents/skills/task-pr-review/SKILL.md
-```
-
-不要在一个会话中组合历史基准与 Runner Skill。
 
 ## 共享语义与导航
 
@@ -62,7 +53,6 @@ PR #N 已人工合并，请完成 closeout
 ```text
 .agents/policies/workflow-evidence.md
 .agents/policies/command-execution.md
-docs/workflows/workflow-evidence.md
 ```
 
 本地 artifacts：
@@ -74,23 +64,58 @@ docs/workflows/workflow-evidence.md
 
 不得提交。
 
-## Skill provenance 与对比入口
+## Task #123 cleanup evidence
 
-历史 Skill 与 Runner Skill 的来源、哈希和共存约束记录在：
+- [Historical Task #122 Migration Acceptance Report](migration-acceptance/task-122-migration-acceptance-report.md)
+- [Task #123 Legacy Agent Workflow Cleanup Evidence](legacy-agent-workflow-cleanup.md)
 
-```text
-docs/workflows/task-skill-variants.json
-docs/workflows/task-skill-ab.md
-```
+## Skill identity 验证
 
-验证命令：
+当前 Codex / Claude Skill 路径、共享语义引用、单一机械入口与每个文件的
+SHA-256 由以下只读审计统一验证：
 
 ```bash
-tools/agent_workflow/skill_variant_provenance.py
+tools/agent_workflow/skill_path_audit.py
 ```
 
-在不含完整仓库历史的导出包中，可使用
-`--allow-missing-history` 只验证当前文件身份；正式仓库交付必须执行严格验证。
+审计输出只覆盖 `active_skills` 与 `claude_skills`。已退役 Legacy Skill 不再位于
+active discovery namespace，也不再作为 current routing、失败回退或 competing
+semantic owner；其历史内容由 Git 历史及 frozen migration / benchmark evidence 保留。
+
+## Final source-of-truth matrix
+
+| Artifact family | Classification | Durable responsibility |
+| --- | --- | --- |
+| `AGENTS.md` | ACTIVE | repository invariants、leaf-first retrieval 与 natural-language workflow entry |
+| `docs/development/issue-workflow.md` | ACTIVE | shared lifecycle、readiness、Delivery、Closeout 与 Feature audit semantics |
+| `docs/development/pr-review.md` | ACTIVE | Independent Review semantics 与 verdict/remediation contract |
+| `CLAUDE.md` | ACTIVE | Claude-specific thin adapter 与 Skill discovery |
+| `.agents/skills/*-runner/`、`.agents/skills/task-closeout/`、`.agents/skills/feature-completion-audit/` | ACTIVE | Codex executable procedures |
+| `.claude/skills/` current four Skills | ACTIVE | Claude executable procedures |
+| fixed Evidence/Validation Runners、profiles、Rules 与 current tests | ACTIVE | deterministic Git/GitHub facts、identity/fail-closed gates 与 validation |
+| retired `.agents/skills/task-delivery/`、`.agents/skills/task-pr-review/` | DEAD / ABSENT | Legacy executable Skills 已退役；历史内容由 Git 历史及 frozen evidence 保留 |
+| `docs/workflows/task-skill-runner-migration/` 与 `docs/workflows/benchmarks/` | HISTORICAL EVIDENCE ONLY | frozen migration/benchmark/audit provenance |
+| Claude current Skills 中的 Codex/Claude permission-boundary 说明 | COMPATIBILITY ONLY | cross-agent adapter guidance; retained intentionally while both agents are supported |
+| retired Skill-variant provenance JSON/doc/tool/test bundle | DEAD / ABSENT | replaced by `skill_path_audit.py`; all stale current references removed |
+| removed trusted-runner、runtime usage-measurement 与 runtime manifest machinery | DEAD / ABSENT | no current responsibility; absence is regression-tested |
+
+当前没有 `UNCERTAIN` artifact。`COMPATIBILITY ONLY` 项仍有明确的双 Agent
+文档用途，未满足删除条件，因此有意保留。Legacy executable Skills 已完成 caller /
+routing / validator 收敛后删除，不再作为 compatibility runtime artifact 保留。
+
+Current reference graph：
+
+```text
+Issue body (business specification)
+  -> AGENTS.md (repository invariants and entry resolution)
+  -> shared development docs (lifecycle / review semantics)
+  -> agent-specific current Skills (executable procedure)
+  -> fixed Evidence / Validation Runners (mechanical facts and checks)
+  -> Git / GitHub Issues, relationships, Projects, PRs and CI (durable state)
+```
+
+`.agents/evidence.local/` 与 `.agents/validation.local/` 仅保存 Git-ignored
+supporting evidence；它们不是 durable workflow state 或新的 source of truth。
 
 ## 仓库外 Token 消耗分析边界
 

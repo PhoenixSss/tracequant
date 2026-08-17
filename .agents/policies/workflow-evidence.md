@@ -184,6 +184,13 @@ entry point. `delivery-start` and `implementation` may accept a dirty
 worktree with Task-owned changes; `final-validation`, `pr-readiness`, and
 `review-remediation` require a clean committed head.
 
+For `review-remediation`, a GitHub submitted Review is **not** canonical
+admission evidence. Independent Review is strictly read-only and returns a
+bounded remediation handoff to the Delivery Skill. The Runner mechanically
+locks the open PR plus expected base/head identity and head fixability; the
+Delivery Skill is responsible for validating the supplied handoff. Any new
+commit invalidates the prior Review and requires a fresh independent re-review.
+
 ## Failure expansion
 
 `partial`, `unknown`, `fail`, drift, truncation, schema mismatch, or Runner

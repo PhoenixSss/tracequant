@@ -35,7 +35,7 @@ identity/lock, `recheck` for stability) — do not substitute direct `gh` or
 
 ## Policies and Runner interface
 
-Read applicable `AGENTS.md` / `AGENTS.override.md` and:
+Read applicable `AGENTS.md` and:
 
 ```text
 .agents/policies/workflow-evidence.md
