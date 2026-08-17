@@ -90,6 +90,9 @@ elif args[:2] == ['pr','view']:
     number=args[2]
     dump(state.get('prs',{{}}).get(number, state['pr']))
 elif args[:2] == ['pr','diff']:
+    if not state.get('diff_available', True):
+        sys.stderr.write('diff unavailable')
+        sys.exit(1)
     sys.stdout.write(state.get('diff','diff --git a/a b/a\\n'))
 elif args[:2] == ['api','graphql']:
     query=' '.join(args)
@@ -646,6 +649,151 @@ def test_closeout_plan_limit_cleanup_eligibility_is_separate(
     assert value["gates"]["capability_limited_cleanup_eligibility"]["status"] == (
         "unknown"
     )
+
+
+def test_closeout_accepts_matching_remote_task_branch(
+    tmp_path: Path,
+) -> None:
+    state = _completed_closeout_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "closeout-plan",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+        "--expected-head-sha",
+        "4" * 40,
+        "--expected-merge-sha",
+        "8" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    cleanup = value["observed"]["branch_cleanup"]
+    assert cleanup["remote_branch_state"] == "PRESENT"
+    assert value["gates"]["remote_branch_tip"]["status"] == "pass"
+
+
+def test_closeout_accepts_auto_deleted_remote_branch_and_allows_cleanup(
+    tmp_path: Path,
+) -> None:
+    state = _completed_closeout_state()
+    state["remote_branch_exists"] = False
+    repo, _, env = _write_repo(tmp_path, state)
+    first = _run(
+        repo,
+        env,
+        "closeout-plan",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+        "--expected-head-sha",
+        "4" * 40,
+        "--expected-merge-sha",
+        "8" * 40,
+    )
+    assert first.returncode == 0, first.stderr
+    first_value = json.loads(first.stdout)
+    assert first_value["observed"]["branch_cleanup"]["remote_branch_state"] == (
+        "ALREADY_DELETED"
+    )
+    assert first_value["gates"]["remote_branch_tip"]["status"] == "pass"
+
+    second = _run(
+        repo,
+        env,
+        "closeout-final",
+        "--snapshot-id",
+        first_value["snapshot_id"],
+    )
+    assert second.returncode == 0, second.stderr
+    value = json.loads(second.stdout)
+    assert value["gates"]["snapshot_stability"]["status"] == "pass"
+    assert (
+        value["observed"]["branch_cleanup"]["cleanup_eligibility"]["status"]
+        == "eligible-under-capability-limited-policy"
+    )
+
+
+def test_closeout_rejects_absent_remote_branch_when_pr_is_not_merged(
+    tmp_path: Path,
+) -> None:
+    state = _completed_closeout_state()
+    state["remote_branch_exists"] = False
+    state["pr"].update(state="OPEN", mergeCommit=None, mergedAt=None)
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "closeout-plan",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+        "--expected-head-sha",
+        "4" * 40,
+        "--expected-merge-sha",
+        "8" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["pull_request_merge"]["status"] == "fail"
+    assert value["gates"]["remote_branch_tip"]["status"] == "fail"
+
+
+def test_closeout_rejects_absent_remote_branch_when_local_tip_drifts(
+    tmp_path: Path,
+) -> None:
+    state = _completed_closeout_state()
+    state["remote_branch_exists"] = False
+    state["local_branch_tips"] = {"task-70": "5" * 40}
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "closeout-plan",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+        "--expected-head-sha",
+        "4" * 40,
+        "--expected-merge-sha",
+        "8" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["local_branch_tip"]["status"] == "fail"
+    assert value["gates"]["remote_branch_tip"]["status"] == "fail"
+
+
+def test_closeout_rejects_absent_remote_branch_without_effective_diff_identity(
+    tmp_path: Path,
+) -> None:
+    state = _completed_closeout_state()
+    state["remote_branch_exists"] = False
+    state["diff_available"] = False
+    repo, _, env = _write_repo(tmp_path, state)
+    result = _run(
+        repo,
+        env,
+        "closeout-plan",
+        "--task",
+        "70",
+        "--pr",
+        "71",
+        "--expected-head-sha",
+        "4" * 40,
+        "--expected-merge-sha",
+        "8" * 40,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["effective_diff_identity"]["status"] == "unknown"
+    assert value["gates"]["remote_branch_tip"]["status"] == "fail"
 
 
 def test_closeout_final_plan_limit_cleanup_eligibility_requires_stable_recheck(

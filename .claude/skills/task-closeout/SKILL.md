@@ -199,7 +199,11 @@ plan-limit `403`, cleanup may proceed only when all of the following hold:
   terminal states;
 - the final recheck is stable;
 - `local main == origin/main == merge SHA`;
-- local and remote Task branch tips equal the reviewed PR head;
+- local Task branch tip equals the reviewed PR head;
+- if the remote Task branch still exists, its tip equals the reviewed PR head;
+- if GitHub already deleted the remote branch, the Evidence Runner records
+  `remote_branch_state = ALREADY_DELETED` only after the same PR/head/merge,
+  effective-diff, squash-tree, and synchronized-main identity proof;
 - PR-head tree equals merge tree;
 - no worktree uses the branch;
 - the cleanup plan contains no other branch.
@@ -207,10 +211,12 @@ plan-limit `403`, cleanup may proceed only when all of the following hold:
 Authentication, scope, permission, rate-limit, network, schema, service, or
 other unknown failures keep cleanup blocked.
 
-Delete only the exact remote branch and verify absence. For local cleanup, use
-`git branch -d` first. Exact `-D` is allowed only after verified Squash Merge,
-remote absence, local tip equal to reviewed head, tree equality with main, no
-worktree use, and all other gates pass.
+Delete only the exact remote branch when it still exists and verify absence. A
+remote ref already absent after the recorded identity proof is not a failed
+gate. For local cleanup, use `git branch -d` first. Exact `-D` is allowed only
+after verified Squash Merge, remote presence/absence proof, local tip equal to
+reviewed head, tree equality with main, no worktree use, and all other gates
+pass.
 
 ## Cleanup-only recovery
 

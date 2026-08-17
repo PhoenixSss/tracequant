@@ -1399,6 +1399,8 @@ def _closeout_cleanup_eligibility(
     gates: Mapping[str, Any],
     branch: str | None,
     remote_tip: str | None,
+    remote_branch_state: str | None,
+    local_exists: bool | None,
     local_tip: str | None,
     tree_equal: bool | None,
 ) -> dict[str, Any]:
@@ -1442,6 +1444,7 @@ def _closeout_cleanup_eligibility(
         "final_codex_label",
         "check_runs",
         "unresolved_threads",
+        "effective_diff_identity",
         "snapshot_stability",
     ):
         if name in gates and not _gate_pass(gates, name):
@@ -1488,8 +1491,18 @@ def _closeout_cleanup_eligibility(
     expected_head = pr.get("head_sha") if isinstance(pr, Mapping) else None
     if not isinstance(branch, str) or not branch:
         reasons.append("exact PR head branch unavailable")
-    if remote_tip != expected_head:
-        reasons.append("remote branch tip does not match reviewed PR head")
+    if remote_branch_state == "PRESENT":
+        if remote_tip != expected_head:
+            reasons.append("remote branch tip does not match reviewed PR head")
+    elif remote_branch_state == "ALREADY_DELETED":
+        if not _gate_pass(gates, "remote_branch_tip"):
+            reasons.append(
+                "remote branch was auto-deleted but its replacement proof is not complete"
+            )
+    else:
+        reasons.append("remote branch state is unavailable")
+    if local_exists is not True:
+        reasons.append("local task branch is unavailable")
     if local_tip != expected_head:
         reasons.append("local branch tip does not match reviewed PR head")
     if tree_equal is not True:
@@ -1505,6 +1518,56 @@ def _closeout_cleanup_eligibility(
         },
         "reasons": bounded_list(reasons),
     }
+
+
+def _squash_merge_identity_proven(
+    *,
+    repository: str | None,
+    expected_pr_number: int | None,
+    observed: Mapping[str, Any],
+    gates: Mapping[str, Any],
+    local_exists: bool,
+    local_tip: str | None,
+    tree_equal: bool | None,
+) -> bool:
+    """Prove the reviewed PR and squash-merged result have one identity.
+
+    This deliberately checks the merged result and the reviewed PR identity,
+    rather than requiring the squash-merged PR head to be an ancestor of main.
+    """
+    pr = observed.get("pr")
+    if not isinstance(pr, Mapping):
+        return False
+    expected_head = pr.get("head_sha")
+    merge_sha = pr.get("merge_commit_sha")
+    if not is_sha(expected_head) or not is_sha(merge_sha):
+        return False
+    if expected_pr_number is not None and pr.get("number") != expected_pr_number:
+        return False
+    head_repository = pr.get("head_repository")
+    if head_repository is not None and head_repository != repository:
+        return False
+    if not local_exists or local_tip != expected_head or tree_equal is not True:
+        return False
+    effective_diff = observed.get("effective_diff")
+    if not isinstance(effective_diff, Mapping):
+        return False
+    if effective_diff.get("available") is not True or not is_sha(
+        effective_diff.get("sha256")
+    ):
+        return False
+    required_gates = (
+        "pr_state",
+        "head_sha",
+        "merge_sha",
+        "pull_request_merge",
+        "main_contains_merge",
+        "local_main_synced",
+        "local_branch_tip",
+        "head_merge_tree_equal",
+        "effective_diff_identity",
+    )
+    return all(_gate_pass(gates, name) for name in required_gates)
 
 
 def _classify_required_checks_failure(result: CommandResult) -> dict[str, Any]:
@@ -2483,15 +2546,31 @@ def _closeout_plan(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
                 if "codex:ready" in labels and "codex:blocked" not in labels
                 else "fail"
             )
+        effective_diff = observed.get("effective_diff")
+        gates["effective_diff_identity"] = _gate(
+            "pass"
+            if isinstance(effective_diff, dict)
+            and effective_diff.get("available") is True
+            and is_sha(effective_diff.get("sha256"))
+            else "unknown",
+            "PR effective diff digest must be available",
+        )
         branch = pr.get("head_branch") if isinstance(pr, dict) else None
         if isinstance(branch, str) and branch:
-            remote_exists = _git_value(
-                runner,
-                ["ls-remote", "--heads", "origin", branch],
+            remote_result = runner.run(
+                ["git", "ls-remote", "--heads", "origin", branch],
                 command_id="git-closeout-remote-branch",
-                warnings=warnings,
             )
-            remote_tip = _remote_branch_tip(remote_exists)
+            if remote_result.returncode != 0:
+                warnings.append(command_warning(remote_result))
+                remote_branch_state = "UNKNOWN"
+                remote_tip = None
+            elif not remote_result.stdout.strip():
+                remote_branch_state = "ALREADY_DELETED"
+                remote_tip = None
+            else:
+                remote_tip = _remote_branch_tip(remote_result.stdout)
+                remote_branch_state = "PRESENT" if remote_tip is not None else "UNKNOWN"
             local_result = runner.run(
                 ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
                 command_id="git-closeout-local-branch",
@@ -2503,9 +2582,16 @@ def _closeout_plan(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
                 warnings=warnings,
             )
             tree_equal: bool | None = None
-            if isinstance(args.expected_head_sha, str) and isinstance(merge_sha, str):
+            tree_head_sha = (
+                args.expected_head_sha
+                if isinstance(args.expected_head_sha, str)
+                else pr.get("head_sha")
+                if isinstance(pr, dict)
+                else None
+            )
+            if isinstance(tree_head_sha, str) and isinstance(merge_sha, str):
                 tree = runner.run(
-                    ["git", "diff", "--quiet", args.expected_head_sha, merge_sha],
+                    ["git", "diff", "--quiet", tree_head_sha, merge_sha],
                     command_id="git-closeout-tree-equality",
                 )
                 if tree.returncode == 0:
@@ -2514,9 +2600,46 @@ def _closeout_plan(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
                     tree_equal = False
                 else:
                     warnings.append(command_warning(tree))
+            expected_head = pr.get("head_sha") if isinstance(pr, dict) else None
+            gates["local_branch_tip"] = _gate(
+                "pass" if local_tip == expected_head else "fail",
+                "local task branch tip must match the recorded PR head",
+            )
+            gates["head_merge_tree_equal"] = _gate(
+                "pass" if tree_equal is True else "fail",
+                "PR head tree must equal the squash merge tree",
+            )
+            squash_identity_proven = _squash_merge_identity_proven(
+                repository=repository,
+                expected_pr_number=args.pr,
+                observed=observed,
+                gates=gates,
+                local_exists=local_result.returncode == 0,
+                local_tip=local_tip if is_sha(local_tip) else None,
+                tree_equal=tree_equal,
+            )
+            if remote_branch_state == "PRESENT":
+                remote_branch_gate = _gate(
+                    "pass"
+                    if remote_tip == expected_head and squash_identity_proven
+                    else "fail",
+                    "remote task branch and squash-merge identities must match",
+                )
+            elif remote_branch_state == "ALREADY_DELETED":
+                remote_branch_gate = _gate(
+                    "pass" if squash_identity_proven else "fail",
+                    "remote ref absence is accepted only with complete squash-merge identity proof",
+                )
+            else:
+                remote_branch_gate = _gate(
+                    "unknown",
+                    "remote task branch state could not be established",
+                )
+            gates["remote_branch_tip"] = remote_branch_gate
             observed["branch_cleanup"] = {
                 "exact_branch": safe_text(branch),
-                "remote_exists": bool(remote_exists),
+                "remote_exists": remote_branch_state == "PRESENT",
+                "remote_branch_state": remote_branch_state,
                 "remote_tip": remote_tip,
                 "local_exists": local_result.returncode == 0,
                 "local_tip": local_tip if is_sha(local_tip) else None,
@@ -2528,20 +2651,12 @@ def _closeout_plan(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
                     gates=gates,
                     branch=branch,
                     remote_tip=remote_tip,
+                    remote_branch_state=remote_branch_state,
+                    local_exists=local_result.returncode == 0,
                     local_tip=local_tip if is_sha(local_tip) else None,
                     tree_equal=tree_equal,
                 ),
             }
-            expected_head = pr.get("head_sha") if isinstance(pr, dict) else None
-            gates["remote_branch_tip"] = _gate(
-                "pass" if remote_tip == expected_head else "fail"
-            )
-            gates["local_branch_tip"] = _gate(
-                "pass" if local_tip == expected_head else "fail"
-            )
-            gates["head_merge_tree_equal"] = _gate(
-                "pass" if tree_equal is True else "fail"
-            )
             worktree_branches = git.get("worktree_branches", {})
             branch_items = (
                 worktree_branches.get("items")
@@ -2884,6 +2999,12 @@ def _recheck(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
                     branch=branch,
                     remote_tip=cleanup.get("remote_tip")
                     if isinstance(cleanup.get("remote_tip"), str)
+                    else None,
+                    remote_branch_state=cleanup.get("remote_branch_state")
+                    if isinstance(cleanup.get("remote_branch_state"), str)
+                    else None,
+                    local_exists=cleanup.get("local_exists")
+                    if isinstance(cleanup.get("local_exists"), bool)
                     else None,
                     local_tip=cleanup.get("local_tip")
                     if isinstance(cleanup.get("local_tip"), str)
