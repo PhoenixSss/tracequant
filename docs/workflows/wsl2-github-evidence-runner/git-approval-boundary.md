@@ -10,9 +10,9 @@ cleanup, or lifecycle permission.
 
 | Operation | Evidence Runner | Direct command policy | Reason |
 | --- | --- | --- | --- |
-| Task/PR/check/thread/Project read | Fixed internal query | Direct `gh` remains prompt/unmatched | Prevent arbitrary API and argument expansion. |
+| Task/PR/check/thread/Project read | Fixed internal query | Narrow direct `gh issue/pr/run/repo view` and `gh pr checks` prefixes are allowed; `gh api` remains prompt | Prevent arbitrary API and argument expansion. |
 | Changed files/commits/diff digest | Fixed internal query | Direct `gh pr diff/view` remains prompt/unmatched | Keep one audited entry. |
-| `git status`, `diff`, `log`, `rev-parse` | Fixed internal argv | Direct Git not broadly allow-listed | Equivalent read capability exists in the runner. |
+| `git status`, `rev-parse`, `merge-base`, `ls-files` | Fixed internal argv | Narrow direct prefixes are allowed | `diff`, `log`, `show`, branch, remote, and worktree shapes remain fail-closed because prefix rules cannot prove their full argv safe. |
 | `git ls-remote --heads origin ...` | Fixed internal argv | Direct command not broadly allow-listed | Current remote comparison without local ref mutation. |
 | `git fetch` | Never executed | `prompt` | Refreshes local remote-tracking refs and remains a separate approval decision. |
 | `git add`, `commit`, `switch`, `checkout` | Never executed | `prompt` | Repository writes or branch/worktree state changes. |

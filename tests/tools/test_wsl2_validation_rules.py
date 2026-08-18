@@ -59,6 +59,10 @@ def _execpolicy_decision(argv: list[str]) -> str:
         (RUNNER_ARGV + ["workflow-closeout", "--base-sha", "a" * 40], "allow"),
         (RUNNER_ARGV + ["targeted", "tests/tools"], "allow"),
         (RUNNER_ARGV + ["targeted", "arbitrary-value"], "allow"),
+        (
+            ["uv", "run", "--frozen", "ruff", "format", "--check", "."],
+            "allow",
+        ),
         (RUNNER_ARGV + ["targeted", "--command", "pytest"], "forbidden"),
         (RUNNER_ARGV + ["targeted", "--shell", "bash"], "forbidden"),
         (RUNNER_ARGV + ["targeted", "--exec", "anything"], "forbidden"),
@@ -98,6 +102,37 @@ def test_execpolicy_direct_interpreters_tools_and_shells_are_not_allowed(
 )
 def test_execpolicy_git_and_github_writes_do_not_allow(argv: list[str]) -> None:
     assert _execpolicy_decision(argv) in {"prompt", "forbidden", "unmatched"}
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["uv", "lock", "--check"],
+        ["uv", "run", "--frozen", "pytest"],
+        ["uv", "run", "--frozen", "ruff", "check", "."],
+        ["uv", "run", "--frozen", "mypy", "src", "tests"],
+        ["git", "diff", "--check"],
+    ],
+)
+def test_validation_shapes_with_unsafe_prefix_semantics_remain_fail_closed(
+    argv: list[str],
+) -> None:
+    assert _execpolicy_decision(argv) != "allow"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["uv", "run", "--frozen", "ruff", "format", "."],
+        ["uv", "run", "--frozen", "ruff", "check", "--fix", "."],
+        ["uv", "run", "--frozen", "mypy", "--install-types", "src", "tests"],
+        ["uv", "lock", "--check", "--upgrade"],
+    ],
+)
+def test_validation_mutation_shapes_do_not_become_allowed(
+    argv: list[str],
+) -> None:
+    assert _execpolicy_decision(argv) != "allow"
 
 
 def test_execpolicy_prefix_boundary_is_runner_enforced() -> None:

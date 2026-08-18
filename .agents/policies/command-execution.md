@@ -34,25 +34,6 @@ prompt          request approval
 A route is valid only for the exact Runner/profile/cwd contract. It cannot alter
 Task/PR IDs, base/head SHAs, repository, output paths, or profile semantics.
 
-## Full Access environment safety
-
-Agents may operate in a Full Access environment for this repository.
-
-Full Access changes the execution environment only. It does not expand task,
-Skill, repository, Git, GitHub, or maintainer authorization.
-
-Hard boundaries:
-
-- `/mnt/**` is read-only. Do not create, modify, rename, move, or delete files or directories under `/mnt/**`.
-- Write only within the active repository/worktree, repository-approved Git-ignored evidence/runtime paths, or `/tmp` for transient files.
-- Without explicit maintainer authorization, do not modify credentials or user-global configuration, including `~/.ssh/**`, `~/.config/gh/**`, `~/.gitconfig`, shell startup files, or global Codex/Claude configuration.
-- Do not modify unrelated repositories or unrelated user files.
-- Do not use `sudo` or modify system packages, services, or system configuration without explicit maintainer authorization.
-- Do not force-push, rewrite protected branch history, or destructively remove unidentified branches or worktrees.
-- Network access required by the task or workflow may be performed directly in the Full Access environment.
-
-Existing repository, GitHub, Skill, lifecycle, and fail-closed safety rules remain authoritative.
-
 ## Failure classification
 
 Before retrying, classify the failure:

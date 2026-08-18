@@ -204,17 +204,51 @@ def test_arbitrary_trailing_value_is_prefix_allowed_but_runner_owned() -> None:
 @pytest.mark.parametrize(
     "argv",
     [
-        ["gh", "api", "repos/PhoenixSss/tracequant/pulls/101"],
-        ["gh", "issue", "view", "84"],
-        ["gh", "pr", "view", "101"],
-        ["git", "status", "--short"],
-        ["git", "diff", "--check"],
         ["python3", "tools/agent_workflow/wsl2_github_evidence_runner.py", "review"],
         ["bash", "-c", "tools/agent_workflow/wsl2_github_evidence_runner.py review"],
         ["sh", "-c", "tools/agent_workflow/wsl2_github_evidence_runner.py review"],
     ],
 )
 def test_direct_tools_are_not_allowed(argv: list[str]) -> None:
+    assert _decision(argv) != "allow"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["git", "status", "--short"],
+        ["git", "rev-parse", "HEAD"],
+        ["git", "merge-base", "HEAD", "HEAD"],
+        ["git", "ls-files"],
+        ["gh", "issue", "view", "84"],
+        ["gh", "pr", "view", "101"],
+        ["gh", "pr", "checks", "101"],
+        ["gh", "run", "view", "101"],
+        ["gh", "repo", "view", "PhoenixSss/tracequant"],
+    ],
+)
+def test_narrow_read_only_queries_are_allowed(argv: list[str]) -> None:
+    assert _decision(argv) == "allow"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["gh", "api", "repos/PhoenixSss/tracequant/pulls/101"],
+        ["gh", "api", "--method", "GET", "repos/PhoenixSss/tracequant/pulls/101"],
+        ["git", "diff", "--check"],
+        ["git", "show", "--stat", "HEAD"],
+        ["git", "log", "-1"],
+        ["git", "branch", "--list"],
+        ["git", "branch", "--all", "--list"],
+        ["git", "branch", "-a"],
+        ["git", "remote", "-v"],
+        ["git", "worktree", "list"],
+    ],
+)
+def test_prefix_unsafe_or_unclassified_queries_remain_fail_closed(
+    argv: list[str],
+) -> None:
     assert _decision(argv) != "allow"
 
 
