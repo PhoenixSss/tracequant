@@ -79,8 +79,11 @@ The Runner:
 - propagates validation, timeout, interruption, and artifact-write failures as
   non-zero exits.
 
-The Rules file authorizes only fixed Runner profile prefixes. Prefix routing is
-not semantic acceptance: the Runner validates the complete argv.
+The Rules file authorizes fixed Runner profile prefixes and the current CI's
+explicit `uv run --frozen ruff format --check .` shape. Other direct validation
+commands remain fail-closed where prefix matching cannot prove their complete
+argv safe. Prefix routing is not semantic acceptance: the Runner validates the
+complete argv.
 
 ## Result contract
 

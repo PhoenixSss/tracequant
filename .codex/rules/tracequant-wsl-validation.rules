@@ -1,10 +1,11 @@
 # tracequant WSL2 Validation Runner rules
 #
-# Codex execpolicy uses prefix matching. These rules allow only named fixed
-# Runner profile prefixes. The Runner validates exact argv, cwd, repository,
-# profile schema, canonical commands, CI drift, preconditions, and output paths.
-# They do not allow generic Python, uv, shell wrappers, GitHub writes, push,
-# branch deletion, reset, clean, or arbitrary commands.
+# Codex execpolicy uses prefix matching. These rules allow named fixed Runner
+# profile prefixes plus only the explicit non-writing Ruff format-check shape.
+# The Runner validates exact argv, cwd, repository, profile schema, canonical
+# commands, CI drift, preconditions, and output paths. Ambiguous validation
+# shapes remain unmatched or prompt. They do not allow generic Python, uv, shell wrappers,
+# GitHub writes, push, branch deletion, reset, clean, or arbitrary commands.
 
 prefix_rule(
     pattern = ["tools/agent_workflow/wsl2_validation_runner.py", ["current-ci-equivalent", "targeted", "targeted:tools-tests", "targeted:workflow-tests", "post-merge"]],
@@ -28,6 +29,12 @@ prefix_rule(
     pattern = ["gh", "auth", "token"],
     decision = "forbidden",
     justification = "Do not print GitHub authentication tokens.",
+)
+
+prefix_rule(
+    pattern = ["uv", "run", "--frozen", "ruff", "format", "--check", "."],
+    decision = "allow",
+    justification = "Allow the current CI's explicit non-writing Ruff format-check shape; source formatting remains unmatched and approval-gated.",
 )
 
 prefix_rule(
