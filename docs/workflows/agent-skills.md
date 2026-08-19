@@ -64,6 +64,16 @@ PR #N 已人工合并，请完成 closeout
 
 不得提交。
 
+## Task #88 architecture audit
+
+The current Workflow execution map, Agent / Skill / Runner ownership matrix,
+fixed-mechanics coverage audit, evidence limitations, and follow-up candidate
+dispositions are recorded in
+[`task-workflow-architecture-audit.md`](task-workflow-architecture-audit.md).
+That document is an audit/design artifact only; it does not activate Runner,
+Context Compiler, batching, Review-session, Closeout, sandbox, approval, or
+quality-gate changes.
+
 ## Task #123 cleanup evidence
 
 - [Historical Task #122 Migration Acceptance Report](migration-acceptance/task-122-migration-acceptance-report.md)
