@@ -235,14 +235,19 @@ Target invariants retained without change:
 
 - current leaf Issue body is the canonical work-item specification;
 - Retrieval v2 remains the default/triggered retrieval contract;
-- Independent Review retains fresh-session semantic independence, strict
-  read-only behavior, complete effective-diff inspection, and no Delivery
-  verdict inheritance;
+- Independent Review retains semantic independence, strict read-only behavior,
+  complete effective-diff inspection, and no Delivery semantic verdict
+  inheritance;
 - reviewed object identity binds Task/PR/base/head/effective diff and changed
-  files; a new head invalidates the old semantic verdict;
+  files; a new head or relevant drift invalidates the old semantic verdict;
 - maintainer manual Squash Merge remains the only merge decision;
 - post-merge validation, exact object/branch safety, fail-closed gates, and
   Human Gate remain mandatory.
+
+These hard invariants do not choose a top-level session or isolation
+implementation. #89 defines the Review trust/isolation/invalidation contract,
+and #91 experimentally selects the final execution strategy; #88 does not
+choose a fresh root or an alternative isolation design.
 
 ## 5. Current → Target delta
 
@@ -390,9 +395,12 @@ hierarchy.
 3. **Independent Review fact contract** — #89 owns the final inheritance,
    isolation, and invalidation contract; #88 supplies only the ownership
    boundary and preserves semantic independence/strict read-only.
-4. **Review/context experiment** — #91 owns experiment choices concerning
-   Issue retrieval, Context Compiler hypotheses, and Review inputs; #88 does not
-   choose session strategy.
+4. **Review execution strategy experiment** — #91 consumes #89's
+   Review trust/isolation/invalidation contract and uses a fixed reviewed object
+   to compare Review isolation strategy × fact acquisition / bounded
+   fact-handoff strategy. It locks the final Review execution strategy; it does
+   not presuppose a Context Compiler or restore the old Issue × Context Compiler
+   four-arm experiment. #88 does not choose the final session strategy.
 5. **Closeout/recovery safety evaluation** — evaluate fixed side effects and
    recovery paths with exact object identity and failure injection before any
    move to a Runner-owned side-effect profile.
