@@ -111,10 +111,20 @@ def derive_comparability(dimensions: Mapping[str, object]) -> str:
 
 
 def derive_change_dimensions(
-    before_identity: Mapping[str, object], after_identity: Mapping[str, object]
+    before_identity: Mapping[str, object],
+    after_identity: Mapping[str, object],
+    *,
+    baseline_main_sha: object,
+    candidate_main_sha: object,
 ) -> dict[str, bool]:
     """Mechanically derive candidate and non-candidate change dimensions."""
-    dimensions = {"workflow_change": True}
+    dimensions = {
+        "workflow_change": (
+            _non_empty_string(baseline_main_sha)
+            and _non_empty_string(candidate_main_sha)
+            and baseline_main_sha != candidate_main_sha
+        )
+    }
     for dimension, fields in _COMPARABILITY_IDENTITY_FIELDS.items():
         dimensions[dimension] = any(
             before_identity.get(field) != after_identity.get(field) for field in fields
@@ -167,11 +177,11 @@ def _validate_identity(identity: object, prefix: str, violations: list[str]) -> 
 
 def _validate_rollouts(
     run: Mapping[str, Any], prefix: str, violations: list[str]
-) -> None:
+) -> set[str]:
     inventory = _sequence(run.get("rollout_inventory"))
     if inventory is None or len(inventory) == 0:
         violations.append(f"{prefix}.rollout_inventory must be a non-empty list")
-        return
+        return set()
 
     root_ids: set[str] = set()
     guardian_ids: set[str] = set()
@@ -236,6 +246,7 @@ def _validate_rollouts(
         violations.append(
             f"{prefix}.guardian_session_ids must match guardian rollout sessions"
         )
+    return all_ids
 
 
 def _validate_metrics(
@@ -273,7 +284,12 @@ def _validate_workflow_evidence(
         )
 
 
-def _validate_conductor(conductor: object, frozen: bool, violations: list[str]) -> None:
+def _validate_conductor(
+    conductor: object,
+    frozen: bool,
+    measured_session_ids: set[str],
+    violations: list[str],
+) -> None:
     value = _mapping(conductor)
     if value is None:
         violations.append("conductor must be an object")
@@ -297,6 +313,10 @@ def _validate_conductor(conductor: object, frozen: bool, violations: list[str]) 
         for field in ("session_id", "rollout_filename", "sha256"):
             if not _non_empty_string(item.get(field)):
                 violations.append(f"{prefix}.{field} must be a non-empty string")
+        if item.get("session_id") in measured_session_ids:
+            violations.append(
+                f"{prefix}.session_id must not overlap a measured root or guardian session"
+            )
         if not _sha256(item.get("sha256")):
             violations.append(f"{prefix}.sha256 must be a lowercase SHA-256")
         byte_size = item.get("byte_size")
@@ -345,6 +365,7 @@ def validate_record(record: Mapping[str, object], *, checkpoint: str) -> list[st
 
     runs = _mapping(record.get("runs"))
     run_identities: dict[str, Mapping[str, Any]] = {}
+    measured_session_ids: set[str] = set()
     if runs is None:
         violations.append("runs must be an object")
     else:
@@ -359,7 +380,7 @@ def validate_record(record: Mapping[str, object], *, checkpoint: str) -> list[st
             if identity is not None:
                 run_identities[name] = identity
             if checkpoint == "evidence_frozen":
-                _validate_rollouts(run, prefix, violations)
+                measured_session_ids.update(_validate_rollouts(run, prefix, violations))
                 _validate_metrics(run, prefix, violations)
                 _validate_workflow_evidence(run, prefix, violations)
 
@@ -375,10 +396,19 @@ def validate_record(record: Mapping[str, object], *, checkpoint: str) -> list[st
             effective_dimensions = dimensions
             if set(run_identities) == {"before", "after"}:
                 mechanically_derived = derive_change_dimensions(
-                    run_identities["before"], run_identities["after"]
+                    run_identities["before"],
+                    run_identities["after"],
+                    baseline_main_sha=record.get("baseline_main_sha"),
+                    candidate_main_sha=record.get("candidate_main_sha"),
                 )
+                if checkpoint == "pre_run":
+                    mechanically_derived["workflow_change"] = bool(
+                        dimensions.get("workflow_change")
+                    )
                 effective_dimensions = mechanically_derived
                 for field, actual in mechanically_derived.items():
+                    if checkpoint == "pre_run" and field == "workflow_change":
+                        continue
                     if dimensions.get(field) != actual:
                         violations.append(
                             f"comparability.dimensions.{field} must be {actual} "
@@ -423,7 +453,10 @@ def validate_record(record: Mapping[str, object], *, checkpoint: str) -> list[st
             )
 
     _validate_conductor(
-        record.get("conductor"), checkpoint == "evidence_frozen", violations
+        record.get("conductor"),
+        checkpoint == "evidence_frozen",
+        measured_session_ids,
+        violations,
     )
 
     if checkpoint == "evidence_frozen":

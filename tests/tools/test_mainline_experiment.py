@@ -157,6 +157,20 @@ def test_recorded_dimensions_must_match_before_after_identities() -> None:
     )
 
 
+def test_frozen_record_without_candidate_main_change_cannot_be_strict() -> None:
+    record = _frozen_record()
+    record["candidate_main_sha"] = record["baseline_main_sha"]
+    violations = EXPERIMENT.validate_record(record, checkpoint="evidence_frozen")
+    assert (
+        "comparability.dimensions.workflow_change must be False for BEFORE/AFTER identities"
+        in violations
+    )
+    assert (
+        "comparability.classification must be NOT_COMPARABLE for recorded dimensions"
+        in violations
+    )
+
+
 def test_adapter_cannot_mix_conductor_sessions_into_measured_run() -> None:
     identity = _example()["runs"]["before"]["experiment_identity"]
     run = EXPERIMENT.adapt_collected_run(
@@ -175,6 +189,16 @@ def test_adapter_cannot_mix_conductor_sessions_into_measured_run() -> None:
     )
     assert run["root_session_ids"] == ["measured-root"]
     assert "conductor" not in run
+
+
+def test_conductor_session_cannot_overlap_a_measured_session() -> None:
+    record = _frozen_record()
+    record["conductor"]["session_inventory"][0]["session_id"] = "before-root"
+    violations = EXPERIMENT.validate_record(record, checkpoint="evidence_frozen")
+    assert (
+        "conductor.session_inventory[0].session_id must not overlap a measured root or guardian session"
+        in violations
+    )
 
 
 def test_contamination_classification_is_explicit() -> None:
