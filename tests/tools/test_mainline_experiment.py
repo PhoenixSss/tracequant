@@ -4,7 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 ROOT = Path(__file__).parents[2]
 MODULE_PATH = ROOT / "tools/agent_workflow/mainline_experiment.py"
@@ -24,7 +24,7 @@ EXPERIMENT = _load_module()
 
 
 def _example() -> dict[str, Any]:
-    return json.loads(EXAMPLE_PATH.read_text(encoding="utf-8"))
+    return cast(dict[str, Any], json.loads(EXAMPLE_PATH.read_text(encoding="utf-8")))
 
 
 def _frozen_record() -> dict[str, Any]:
