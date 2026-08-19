@@ -71,6 +71,7 @@ def test_delivery_branch_bootstrap_contract_is_shared_by_both_skills() -> None:
             "task/<issue number>-<slug>",
             "--bootstrap-verify",
             "fail closed",
+            "clean worktree",
             "existing numeric",
             "branch forms may be reused",
         ):

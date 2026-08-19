@@ -120,7 +120,8 @@ intent 无法可靠解析时：**不要猜**。回退到 explicit Skill-name fal
 - Initial Task branch bootstrap is a shared workflow contract: Delivery locks
   the trusted `main`/base first, then the implementation preflight classifies
   the target branch. An existing branch is reusable only when Task identity,
-  ownership, and base are mechanically proven. A missing branch is creatable
+  ownership, base, and a clean worktree are mechanically proven. A missing
+  branch is creatable
   only when the worktree is clean, the current/local/remote `main` identities
   equal the locked base, no local/remote/worktree conflict exists, and the
   target uses canonical `task/<Issue number>-<slug>` naming. The Runner returns

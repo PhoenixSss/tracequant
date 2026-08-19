@@ -1252,6 +1252,8 @@ def _branch_bootstrap_gate(
         reasons.append("worktree branch inventory is truncated")
     if branch in worktree_items and git.get("branch") != branch:
         reasons.append("target branch is occupied by another worktree")
+    if branch_exists and git.get("clean") is not True:
+        return _gate("fail", "existing branch reuse requires a clean worktree")
 
     if not branch_exists:
         if bootstrap_verify:

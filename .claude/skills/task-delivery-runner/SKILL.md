@@ -256,8 +256,8 @@ point. Create or reuse one exact Task branch after verifying its identity,
 history, scope, and ownership. The implementation preflight classifies the
 branch state:
 
-- existing branch with proven Task identity, ownership, and locked base:
-  reuse it;
+- existing branch with proven Task identity, ownership, locked base, and a
+  clean worktree: reuse it;
 - absent branch with a clean locked `main`, no local/remote/worktree conflict,
   and the canonical `task/<Issue number>-<slug>` name: `branch_bootstrap = pass`
   is deterministic authorization for the Skill to create it;

@@ -1450,6 +1450,23 @@ def test_implementation_existing_valid_branch_is_reuse_authorized(
     assert value["disposition"]["status"] == "pass"
 
 
+def test_implementation_existing_dirty_branch_fails_closed(tmp_path: Path) -> None:
+    state = _safe_bootstrap_state()
+    state.update(
+        local_branch_exists=True,
+        remote_branch_exists=True,
+        local_branch_tips={"task/70-bootstrap": "4" * 40},
+        remote_branch_tips={"task/70-bootstrap": "4" * 40},
+        branch_base=SHA40,
+        status=[" M unrelated.py"],
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env)
+    assert value["gates"]["branch_bootstrap"]["status"] == "fail"
+    assert "clean worktree" in value["gates"]["branch_bootstrap"]["detail"]
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
 def test_implementation_existing_numeric_branch_can_only_be_reused(
     tmp_path: Path,
 ) -> None:
