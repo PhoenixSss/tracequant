@@ -56,6 +56,24 @@ def test_delivery_runner_has_current_profiles_and_remediation_loop() -> None:
     assert "lifecycle conflict" in text.casefold()
     assert "`review-remediation` requires the bounded handoff" in text
     assert "stop before Runner or repair writes" in text
+    assert "branch_bootstrap" in text
+    assert "--bootstrap-verify" in text
+
+
+def test_delivery_branch_bootstrap_contract_is_shared_by_both_skills() -> None:
+    for relative in (
+        ".agents/skills/task-delivery-runner/SKILL.md",
+        ".claude/skills/task-delivery-runner/SKILL.md",
+    ):
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        for phrase in (
+            "branch_bootstrap = pass",
+            "task/<Issue number>-<slug>",
+            "--bootstrap-verify",
+            "fail closed",
+            "existing numeric branch forms",
+        ):
+            assert phrase in text, (relative, phrase)
 
 
 def test_review_runner_is_read_only_and_emits_bounded_remediation_handoff() -> None:
@@ -97,7 +115,6 @@ def test_active_skills_have_bounded_failure_contract_without_evolution_traces() 
         "trusted-base",
         "trusted control",
         "predecessor",
-        "bootstrap",
         "old chain",
         "old path",
         "legacy path",

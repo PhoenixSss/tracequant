@@ -74,7 +74,7 @@ tools/agent_workflow/wsl2_github_evidence_runner.py delivery-readiness \
 | Entry point | Invoked at | Params beyond `--task`, `--expected-main-sha` |
 |---|---|---|
 | `delivery-start` | Phase 1 before any write | — |
-| `implementation` | Phase 2 before branch/implementation writes | `--branch --expected-base-sha` |
+| `implementation` | Phase 2 before branch/implementation writes | `--branch --expected-base-sha` (`--bootstrap-verify` after creation) |
 | `final-validation` | Phase 3 before commit/`workflow-delivery` | `--branch --expected-base-sha --expected-head-sha` |
 | `pr-readiness` | Phase 4 before PR creation/push verification | `--branch --expected-base-sha --expected-head-sha` |
 | `review-remediation` | Review remediation before any repair edit | `--pr --expected-base-sha --expected-head-sha` |
@@ -253,7 +253,30 @@ transitions only after readiness passes.
 
 Start from clean synchronized `main` unless current facts prove a valid recovery
 point. Create or reuse one exact Task branch after verifying its identity,
-history, scope, and ownership.
+history, scope, and ownership. The implementation preflight classifies the
+branch state:
+
+- existing branch with proven Task identity, ownership, and locked base:
+  reuse it;
+- absent branch with a clean locked `main`, no local/remote/worktree conflict,
+  and the canonical `task/<Issue number>-<slug>` name: `branch_bootstrap = pass`
+  is deterministic authorization for the Skill to create it;
+- ambiguous identity, ownership, or base: fail closed and require Human Gate.
+
+For the authorized new-branch path, the Skill creates directly from the locked
+base and never uses a noncanonical name such as `task-<Issue number>`:
+
+```text
+git switch -c task/<Issue number>-<slug> <LOCKED_MAIN_SHA>
+```
+
+Immediately rerun the implementation Evidence Runner with
+`--bootstrap-verify`. Continue only when it proves the actual branch name,
+HEAD and branch tip equal the locked base, branch base identity is correct, the
+worktree is clean, and no remote or other drift appeared. Existing numeric
+branch forms may be reused only when the Runner proves their Task ownership;
+they are never new-branch creation targets. The Runner supplies facts and
+classification; the Skill owns branch creation/reuse orchestration.
 
 Implement the smallest correct change. Follow scoped rules, preserve safety, add
 required tests/docs, inspect tracked and untracked scope, and do not weaken tests

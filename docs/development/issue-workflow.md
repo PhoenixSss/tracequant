@@ -117,6 +117,21 @@ intent 无法可靠解析时：**不要猜**。回退到 explicit Skill-name fal
   targeted validation → commit → push → PR → CI checks → delivery readiness →
   handoff for Independent Review。
 - 一个 Task 通常产生一个 PR（base = `main`）。
+- Initial Task branch bootstrap is a shared workflow contract: Delivery locks
+  the trusted `main`/base first, then the implementation preflight classifies
+  the target branch. An existing branch is reusable only when Task identity,
+  ownership, and base are mechanically proven. A missing branch is creatable
+  only when the worktree is clean, the current/local/remote `main` identities
+  equal the locked base, no local/remote/worktree conflict exists, and the
+  target uses canonical `task/<Issue number>-<slug>` naming. The Runner returns
+  the deterministic creation authorization; the Delivery Skill performs the
+  branch creation from that exact base and reruns mechanical verification
+  before implementation continues.
+- Noncanonical names such as `task-<Issue number>` are never new-branch
+  creation targets. Historical numeric forms may be reused only for an
+  existing branch whose ownership is proven. Ambiguous branch identity,
+  ownership, base, dirty bootstrap state, or post-creation drift fails closed
+  and enters Human Gate.
 - 实现只处理当前 leaf Task；不进行无关重构。
 - 提交前必须完成 target validation；PR 创建前必须完成 delivery readiness
   验证（Runner 快照）。

@@ -937,6 +937,44 @@ def test_delivery_entry_point_in_compact_digest(
     assert digest["entry_point"] == "delivery-start"
 
 
+def test_delivery_implementation_accepts_bootstrap_verification_mode(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, _ = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    _git(repo, "switch", "-q", "main")
+    _git(repo, "switch", "-q", "-c", "task/84-bootstrap")
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "implementation",
+        "--branch",
+        "task/84-bootstrap",
+        "--expected-base-sha",
+        main_sha,
+        "--bootstrap-verify",
+    )
+    assert completed.returncode == 0, completed.stderr
+    result = _result(repo, completed.stdout)
+    assert result["status"] == "pass"
+    digest = json.loads(completed.stdout)
+    snapshot = json.loads(
+        (repo / digest["result_path"])
+        .with_name("workflow-evidence.stdout.json")
+        .read_text(encoding="utf-8")
+    )
+    assert snapshot["gates"]["branch_bootstrap"]["status"] == "pass"
+    assert snapshot["gates"]["bootstrap_head"]["status"] == "pass"
+
+
 def test_delivery_lifecycle_conflict_ready_and_needs_spec_returns_fail(
     tmp_path: Path,
 ) -> None:
