@@ -115,6 +115,9 @@ task_or_fixed_patch_identity
 task_spec_hash
 base_sha
 expected_head_or_patch_identity
+effective_diff_sha256
+changed_files_manifest
+acceptance_criteria_ids
 model
 reasoning_effort
 guardian_model
@@ -132,6 +135,37 @@ expected-head fields as applicable. For a Task, record the Task/PR identity and
 the exact specification hash. BEFORE must use the frozen baseline identity;
 AFTER must use the frozen candidate `main` identity.
 
+### Reviewed-object freeze
+
+For each BEFORE and AFTER arm, the maintainer must freeze the exact reviewed
+object before that arm starts. The reviewed-object identity is the following
+tuple:
+
+```text
+base_sha
+expected_head_or_patch_identity
+effective_diff_sha256
+changed_files_manifest
+acceptance_criteria_ids
+```
+
+`effective_diff_sha256` is the SHA-256 of the complete effective diff from the
+frozen `base_sha` to the frozen reviewed head, using the same Delivery/Review
+evidence identity. `changed_files_manifest` is the complete deterministic list
+of repository-relative paths in that effective diff, using the existing
+changed-file inventory convention; record one exact path per entry, without
+globs or omitted files. `acceptance_criteria_ids` is the complete list of
+canonical Acceptance Criteria identifiers covered by the reviewed object,
+using the existing `AC-<n>` evidence-matrix convention rather than a free-form
+summary.
+
+These three fields are jointly required with `base_sha` and
+`expected_head_or_patch_identity` to bind an arm to one exact reviewed object.
+For arms intended to review the same object, all five values must match. If
+any value is missing or differs, stop the comparison and record
+`COMPARABILITY = NOT_COMPARABLE`; do not substitute a new head, diff, file
+list, or Acceptance Criteria set after the arm has started.
+
 ## 4. Manual BEFORE and AFTER records
 
 The maintainer manually starts each arm and records the start and end
@@ -146,6 +180,9 @@ For each arm, record:
 - each rollout's parent relationship (`root` has no parent; a Guardian entry
   names its root parent);
 - Git / PR / Issue and implementation or fixed-patch identity;
+- the frozen reviewed-object tuple (`effective_diff_sha256`,
+  `changed_files_manifest`, and `acceptance_criteria_ids`, together with the
+  base/head identity);
 - validation and Review results when they are inside the frozen boundary;
 - Token and duration;
 - root tool calls;
@@ -228,8 +265,9 @@ read-only evidence collection and freezes a snapshot containing, as applicable:
 
 At the final comparison freeze, both arm records must be present, the candidate
 `main` SHA must be complete, the contamination audit must be recorded, and the
-comparability judgment must be explicit. Evidence collection is outside the
-measured Token and duration and must never be merged into measured metrics.
+reviewed-object tuple for each arm must be complete. Evidence collection is
+outside the measured Token and duration and must never be merged into measured
+metrics.
 
 `KEEP` is a maintainer decision and requires all of the following to be
 supported by the frozen evidence:

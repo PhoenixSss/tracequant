@@ -30,6 +30,42 @@ Protocol: [mainline-before-after-revert-protocol.md](../mainline-before-after-re
 | `agent_invocation_granularity` | `FILL_ME` |
 | `guardian_admission` | `FILL_ME` |
 
+## Reviewed-object freeze — record separately for each arm
+
+Freeze this tuple before BEFORE and before AFTER starts. The three fields below
+must be recorded together with the arm's `base_sha` and
+`expected_head_or_patch_identity`; together they bind the exact reviewed
+object used by that arm. Use the existing `AC-<n>` Acceptance Criteria
+identifier convention and the complete repository-relative changed-file
+inventory (one exact path per entry, no globs).
+
+| Field | BEFORE | AFTER |
+| --- | --- | --- |
+| `effective_diff_sha256` | `FILL_ME` | `FILL_ME` |
+| `changed_files_manifest` | See below | See below |
+| `acceptance_criteria_ids` | `FILL_ME` | `FILL_ME` |
+
+### `changed_files_manifest`
+
+Record the complete deterministic path list for each arm's effective diff.
+
+BEFORE:
+
+```text
+FILL_ME — one repository-relative path per line
+```
+
+AFTER:
+
+```text
+FILL_ME — one repository-relative path per line
+```
+
+For arms intended to review the same object, all three values and the arm's
+base/head identity must match. If any value is missing or differs, stop the
+comparison and record `COMPARABILITY = NOT_COMPARABLE`; never replace it with a
+new head, diff, manifest, or Acceptance Criteria set after the arm starts.
+
 ## Measured boundary — freeze before BEFORE
 
 - Boundary owner: `FILL_ME`
