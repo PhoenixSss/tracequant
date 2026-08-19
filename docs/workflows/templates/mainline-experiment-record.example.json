@@ -2,7 +2,7 @@
   "schema_version": 1,
   "protocol_id": "workflow-mainline-before-after-revert-v1",
   "candidate_id": "issue-91-candidate-id",
-  "baseline_main_sha": "BASELINE_MAIN_SHA256",
+  "baseline_main_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "candidate_main_sha": null,
   "measured_boundary": {
     "start_condition": "fresh root session after frozen Task and runtime identity are supplied",
@@ -17,10 +17,10 @@
   "runs": {
     "before": {
       "experiment_identity": {
-        "task_or_fixed_patch_identity": "FIXED_TASK_OR_PATCH",
+        "task_or_fixed_patch_identity": "issue-91-fixed-workload-v1",
         "task_spec_hash": "0000000000000000000000000000000000000000000000000000000000000000",
-        "base_sha": "BASE_SHA",
-        "expected_head_or_patch_identity": "EXPECTED_HEAD_OR_PATCH",
+        "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "expected_head_or_patch_identity": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "model": "FIXED_MODEL",
         "reasoning_effort": "FIXED_EFFORT",
         "guardian_model": "FIXED_GUARDIAN_MODEL",
@@ -39,10 +39,10 @@
     },
     "after": {
       "experiment_identity": {
-        "task_or_fixed_patch_identity": "SAME_FIXED_TASK_OR_PATCH",
+        "task_or_fixed_patch_identity": "issue-91-fixed-workload-v1",
         "task_spec_hash": "0000000000000000000000000000000000000000000000000000000000000000",
-        "base_sha": "CANDIDATE_BASE_SHA",
-        "expected_head_or_patch_identity": "SAME_EXPECTED_HEAD_OR_PATCH",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "expected_head_or_patch_identity": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "model": "FIXED_MODEL",
         "reasoning_effort": "FIXED_EFFORT",
         "guardian_model": "FIXED_GUARDIAN_MODEL",

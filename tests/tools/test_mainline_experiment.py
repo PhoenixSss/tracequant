@@ -29,7 +29,7 @@ def _example() -> dict[str, Any]:
 
 def _frozen_record() -> dict[str, Any]:
     record = _example()
-    record["candidate_main_sha"] = "candidate-main-sha"
+    record["candidate_main_sha"] = "b" * 40
     for name in ("before", "after"):
         run = record["runs"][name]
         root_id = f"{name}-root"
@@ -159,6 +159,27 @@ def test_recorded_dimensions_must_match_before_after_identities() -> None:
     )
 
 
+def test_strict_comparability_requires_valid_main_and_same_workload_identity() -> None:
+    record = _frozen_record()
+    record["candidate_main_sha"] = "not-a-git-object"
+    record["runs"]["after"]["experiment_identity"]["task_or_fixed_patch_identity"] = (
+        "different-workload"
+    )
+    violations = EXPERIMENT.validate_record(record, checkpoint="evidence_frozen")
+    assert (
+        "candidate_main_sha must be a 40- or 64-character lowercase Git object identity"
+        in violations
+    )
+    assert (
+        "runs.before and runs.after experiment_identity.task_or_fixed_patch_identity must match for comparability"
+        in violations
+    )
+    assert (
+        "comparability.classification must be NOT_COMPARABLE for recorded dimensions"
+        in violations
+    )
+
+
 def test_frozen_record_without_candidate_main_change_cannot_be_strict() -> None:
     record = _frozen_record()
     record["candidate_main_sha"] = record["baseline_main_sha"]
@@ -195,12 +216,16 @@ def test_adapter_cannot_mix_conductor_sessions_into_measured_run() -> None:
 
 def test_conductor_session_cannot_overlap_a_measured_session() -> None:
     record = _frozen_record()
-    record["conductor"]["session_inventory"][0]["session_id"] = "before-root"
+    before_root = record["runs"]["before"]["rollout_inventory"][0]
+    conductor = record["conductor"]["session_inventory"][0]
+    for field in ("session_id", "rollout_filename", "sha256"):
+        conductor[field] = before_root[field]
     violations = EXPERIMENT.validate_record(record, checkpoint="evidence_frozen")
-    assert (
-        "conductor.session_inventory[0].session_id must not overlap a measured root or guardian session"
-        in violations
-    )
+    for field in ("session_id", "rollout_filename", "sha256"):
+        assert (
+            f"conductor.session_inventory[0].{field} must not overlap measured rollout identity"
+            in violations
+        )
 
 
 def test_before_after_runs_cannot_reuse_measured_rollout_identity() -> None:

@@ -84,6 +84,14 @@ def _sha256(value: object) -> bool:
     )
 
 
+def _git_or_patch_oid(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) in {40, 64}
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
 def _mapping(value: object) -> Mapping[str, Any] | None:
     return value if isinstance(value, Mapping) else None
 
@@ -120,8 +128,8 @@ def derive_change_dimensions(
     """Mechanically derive candidate and non-candidate change dimensions."""
     dimensions = {
         "workflow_change": (
-            _non_empty_string(baseline_main_sha)
-            and _non_empty_string(candidate_main_sha)
+            _git_or_patch_oid(baseline_main_sha)
+            and _git_or_patch_oid(candidate_main_sha)
             and baseline_main_sha != candidate_main_sha
         )
     }
@@ -173,6 +181,11 @@ def _validate_identity(identity: object, prefix: str, violations: list[str]) -> 
             violations.append(f"{prefix}.{field} must be a non-empty string")
     if not _sha256(value.get("task_spec_hash")):
         violations.append(f"{prefix}.task_spec_hash must be a lowercase SHA-256")
+    for field in ("base_sha", "expected_head_or_patch_identity"):
+        if not _git_or_patch_oid(value.get(field)):
+            violations.append(
+                f"{prefix}.{field} must be a 40- or 64-character lowercase object identity"
+            )
 
 
 def _validate_rollouts(
@@ -294,7 +307,7 @@ def _validate_workflow_evidence(
 def _validate_conductor(
     conductor: object,
     frozen: bool,
-    measured_session_ids: set[str],
+    measured_rollout_identities: Mapping[str, set[str]],
     violations: list[str],
 ) -> None:
     value = _mapping(conductor)
@@ -318,12 +331,13 @@ def _validate_conductor(
         if item.get("role") not in {"conductor", "evidence_collector"}:
             violations.append(f"{prefix}.role is invalid")
         for field in ("session_id", "rollout_filename", "sha256"):
-            if not _non_empty_string(item.get(field)):
+            item_value = item.get(field)
+            if not _non_empty_string(item_value):
                 violations.append(f"{prefix}.{field} must be a non-empty string")
-        if item.get("session_id") in measured_session_ids:
-            violations.append(
-                f"{prefix}.session_id must not overlap a measured root or guardian session"
-            )
+            elif item_value in measured_rollout_identities[field]:
+                violations.append(
+                    f"{prefix}.{field} must not overlap measured rollout identity"
+                )
         if not _sha256(item.get("sha256")):
             violations.append(f"{prefix}.sha256 must be a lowercase SHA-256")
         byte_size = item.get("byte_size")
@@ -347,6 +361,10 @@ def validate_record(record: Mapping[str, object], *, checkpoint: str) -> list[st
     for field in ("protocol_id", "candidate_id", "baseline_main_sha"):
         if not _non_empty_string(record.get(field)):
             violations.append(f"{field} must be a non-empty string")
+    if not _git_or_patch_oid(record.get("baseline_main_sha")):
+        violations.append(
+            "baseline_main_sha must be a 40- or 64-character lowercase Git object identity"
+        )
 
     boundary = _mapping(record.get("measured_boundary"))
     if boundary is None:
@@ -372,7 +390,11 @@ def validate_record(record: Mapping[str, object], *, checkpoint: str) -> list[st
 
     runs = _mapping(record.get("runs"))
     run_identities: dict[str, Mapping[str, Any]] = {}
-    measured_session_ids: set[str] = set()
+    measured_rollout_identities: dict[str, set[str]] = {
+        "session_id": set(),
+        "rollout_filename": set(),
+        "sha256": set(),
+    }
     measured_arm_rollout_identities: dict[str, dict[str, set[str]]] = {}
     if runs is None:
         violations.append("runs must be an object")
@@ -390,7 +412,8 @@ def validate_record(record: Mapping[str, object], *, checkpoint: str) -> list[st
             if checkpoint == "evidence_frozen":
                 rollout_identities = _validate_rollouts(run, prefix, violations)
                 measured_arm_rollout_identities[name] = rollout_identities
-                measured_session_ids.update(rollout_identities["session_id"])
+                for field, values in rollout_identities.items():
+                    measured_rollout_identities[field].update(values)
                 _validate_metrics(run, prefix, violations)
                 _validate_workflow_evidence(run, prefix, violations)
 
@@ -414,6 +437,18 @@ def validate_record(record: Mapping[str, object], *, checkpoint: str) -> list[st
         else:
             effective_dimensions = dimensions
             if set(run_identities) == {"before", "after"}:
+                for field in (
+                    "task_or_fixed_patch_identity",
+                    "task_spec_hash",
+                    "expected_head_or_patch_identity",
+                ):
+                    if run_identities["before"].get(field) != run_identities[
+                        "after"
+                    ].get(field):
+                        violations.append(
+                            f"runs.before and runs.after experiment_identity.{field} "
+                            "must match for comparability"
+                        )
                 mechanically_derived = derive_change_dimensions(
                     run_identities["before"],
                     run_identities["after"],
@@ -474,7 +509,7 @@ def validate_record(record: Mapping[str, object], *, checkpoint: str) -> list[st
     _validate_conductor(
         record.get("conductor"),
         checkpoint == "evidence_frozen",
-        measured_session_ids,
+        measured_rollout_identities,
         violations,
     )
 
@@ -482,6 +517,10 @@ def validate_record(record: Mapping[str, object], *, checkpoint: str) -> list[st
         candidate_sha = record.get("candidate_main_sha")
         if not _non_empty_string(candidate_sha):
             violations.append("candidate_main_sha must be frozen with evidence")
+        elif not _git_or_patch_oid(candidate_sha):
+            violations.append(
+                "candidate_main_sha must be a 40- or 64-character lowercase Git object identity"
+            )
         freeze = _mapping(record.get("evidence_freeze"))
         if freeze is None or not _non_empty_string(freeze.get("frozen_at")):
             violations.append("evidence_freeze.frozen_at must be a non-empty string")
