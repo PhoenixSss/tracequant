@@ -177,15 +177,19 @@ def _validate_identity(identity: object, prefix: str, violations: list[str]) -> 
 
 def _validate_rollouts(
     run: Mapping[str, Any], prefix: str, violations: list[str]
-) -> set[str]:
+) -> dict[str, set[str]]:
+    identities: dict[str, set[str]] = {
+        "session_id": set(),
+        "rollout_filename": set(),
+        "sha256": set(),
+    }
     inventory = _sequence(run.get("rollout_inventory"))
     if inventory is None or len(inventory) == 0:
         violations.append(f"{prefix}.rollout_inventory must be a non-empty list")
-        return set()
+        return identities
 
     root_ids: set[str] = set()
     guardian_ids: set[str] = set()
-    all_ids: set[str] = set()
     parent_pairs: list[tuple[str, str | None]] = []
     for index, raw_item in enumerate(inventory):
         item = _mapping(raw_item)
@@ -201,9 +205,9 @@ def _validate_rollouts(
         if not _non_empty_string(session_id):
             violations.append(f"{item_prefix}.session_id must be a non-empty string")
             continue
-        if session_id in all_ids:
+        if session_id in identities["session_id"]:
             violations.append(f"{item_prefix}.session_id must be unique")
-        all_ids.add(session_id)
+        identities["session_id"].add(session_id)
         if actor == "root":
             root_ids.add(session_id)
             if parent_id is not None:
@@ -220,8 +224,11 @@ def _validate_rollouts(
             (session_id, parent_id if isinstance(parent_id, str) else None)
         )
         for field in ("rollout_filename", "sha256"):
-            if not _non_empty_string(item.get(field)):
+            value = item.get(field)
+            if not _non_empty_string(value):
                 violations.append(f"{item_prefix}.{field} must be a non-empty string")
+            else:
+                identities[field].add(value)
         if not _sha256(item.get("sha256")):
             violations.append(f"{item_prefix}.sha256 must be a lowercase SHA-256")
         byte_size = item.get("byte_size")
@@ -246,7 +253,7 @@ def _validate_rollouts(
         violations.append(
             f"{prefix}.guardian_session_ids must match guardian rollout sessions"
         )
-    return all_ids
+    return identities
 
 
 def _validate_metrics(
@@ -366,6 +373,7 @@ def validate_record(record: Mapping[str, object], *, checkpoint: str) -> list[st
     runs = _mapping(record.get("runs"))
     run_identities: dict[str, Mapping[str, Any]] = {}
     measured_session_ids: set[str] = set()
+    measured_arm_rollout_identities: dict[str, dict[str, set[str]]] = {}
     if runs is None:
         violations.append("runs must be an object")
     else:
@@ -380,9 +388,20 @@ def validate_record(record: Mapping[str, object], *, checkpoint: str) -> list[st
             if identity is not None:
                 run_identities[name] = identity
             if checkpoint == "evidence_frozen":
-                measured_session_ids.update(_validate_rollouts(run, prefix, violations))
+                rollout_identities = _validate_rollouts(run, prefix, violations)
+                measured_arm_rollout_identities[name] = rollout_identities
+                measured_session_ids.update(rollout_identities["session_id"])
                 _validate_metrics(run, prefix, violations)
                 _validate_workflow_evidence(run, prefix, violations)
+
+        if set(measured_arm_rollout_identities) == {"before", "after"}:
+            before = measured_arm_rollout_identities["before"]
+            after = measured_arm_rollout_identities["after"]
+            for field in ("session_id", "rollout_filename", "sha256"):
+                if before[field] & after[field]:
+                    violations.append(
+                        f"runs.before and runs.after rollout {field} values must be disjoint"
+                    )
 
     comparability = _mapping(record.get("comparability"))
     if comparability is None:

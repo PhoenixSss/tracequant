@@ -34,6 +34,8 @@ def _frozen_record() -> dict[str, Any]:
         run = record["runs"][name]
         root_id = f"{name}-root"
         guardian_id = f"{name}-guardian"
+        root_hash_character = "1" if name == "before" else "3"
+        guardian_hash_character = "2" if name == "before" else "4"
         run["root_session_ids"] = [root_id]
         run["guardian_session_ids"] = [guardian_id]
         run["rollout_inventory"] = [
@@ -43,7 +45,7 @@ def _frozen_record() -> dict[str, Any]:
                 "parent_session_id": None,
                 "rollout_filename": f"{root_id}.jsonl",
                 "byte_size": 100,
-                "sha256": "1" * 64,
+                "sha256": root_hash_character * 64,
             },
             {
                 "actor": "guardian",
@@ -51,7 +53,7 @@ def _frozen_record() -> dict[str, Any]:
                 "parent_session_id": root_id,
                 "rollout_filename": f"{guardian_id}.jsonl",
                 "byte_size": 20,
-                "sha256": "2" * 64,
+                "sha256": guardian_hash_character * 64,
             },
         ]
         run["measured_metrics"] = {
@@ -93,7 +95,7 @@ def _frozen_record() -> dict[str, Any]:
             "parent_session_id": None,
             "rollout_filename": "collector.jsonl",
             "byte_size": 10,
-            "sha256": "3" * 64,
+            "sha256": "5" * 64,
         }
     ]
     return record
@@ -199,6 +201,26 @@ def test_conductor_session_cannot_overlap_a_measured_session() -> None:
         "conductor.session_inventory[0].session_id must not overlap a measured root or guardian session"
         in violations
     )
+
+
+def test_before_after_runs_cannot_reuse_measured_rollout_identity() -> None:
+    record = _frozen_record()
+    before_root = record["runs"]["before"]["rollout_inventory"][0]
+    after_root = record["runs"]["after"]["rollout_inventory"][0]
+    after_root.update(
+        {
+            "session_id": before_root["session_id"],
+            "rollout_filename": before_root["rollout_filename"],
+            "sha256": before_root["sha256"],
+        }
+    )
+    record["runs"]["after"]["root_session_ids"] = [before_root["session_id"]]
+    violations = EXPERIMENT.validate_record(record, checkpoint="evidence_frozen")
+    for field in ("session_id", "rollout_filename", "sha256"):
+        assert (
+            f"runs.before and runs.after rollout {field} values must be disjoint"
+            in violations
+        )
 
 
 def test_contamination_classification_is_explicit() -> None:
