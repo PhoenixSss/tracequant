@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -1398,7 +1398,7 @@ def _run_implementation_preflight(
         args.append("--bootstrap-verify")
     result = _run(repo, env, *args)
     assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
+    return cast(dict[str, Any], json.loads(result.stdout))
 
 
 def _safe_bootstrap_state() -> dict[str, Any]:
