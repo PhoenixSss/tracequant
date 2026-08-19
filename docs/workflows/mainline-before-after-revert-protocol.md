@@ -1,204 +1,280 @@
-# Workflow Mainline Before/After + Revert Protocol v1
+# Mainline Before/After + Revert Protocol
 
-This document owns the reusable experiment protocol for Workflow optimization
-candidates, including Issue #91. It defines how a future candidate is measured;
-it does not authorize or execute an experiment, select a business Task, change
-`main`, or optimize any candidate variable.
+This document is the authoritative, maintainer-operated protocol for measuring
+Workflow optimization candidates on the real `main` branch. It defines the
+manual operating procedure and the evidence that a maintainer or an
+independently started conductor should record. It does not authorize or
+execute an experiment, change `main`, select a candidate, or decide an outcome.
 
-The canonical machine-facing field contract is implemented by
-`tools/agent_workflow/mainline_experiment.py`. Raw rollout files and external
-Token reports remain outside the repository.
+The maintainer is the experiment orchestrator. The repository provides this
+protocol and the manual record template only; it does not provide an
+experiment runner, coordinator, watcher, validator, runtime state, or other
+experiment-specific automation.
 
-## 1. Mainline lifecycle and roles
+The record template is
+[`templates/mainline-experiment-record.template.md`](templates/mainline-experiment-record.template.md).
+Copy it outside the measured run, fill it manually, and freeze each section
+at the checkpoint described below.
 
-The formal sequence is fixed before execution:
+## 1. Roles and authority
+
+### Maintainer — experiment orchestrator
+
+The maintainer is responsible for all experiment orchestration and final
+decisions:
+
+- choose the baseline and candidate;
+- freeze the baseline and the measured boundary before BEFORE starts;
+- manually start BEFORE and AFTER runs;
+- separately start the read-only conductor/evidence collection;
+- approve the candidate Merge checkpoint through the normal workflow;
+- manually freeze BEFORE and AFTER evidence;
+- judge comparability from the frozen evidence;
+- decide `KEEP` or `REVERT`;
+- perform or explicitly authorize a Revert.
+
+No repository component added for this protocol may take any of those actions
+automatically.
+
+### Measured Agent
+
+Codex or Claude executes only the Workflow being measured. The Measured Agent
+does not:
+
+- start another experimental arm;
+- decide when to collect experiment statistics;
+- compare BEFORE and AFTER;
+- select a candidate or decide `KEEP` / `REVERT`;
+- Merge a candidate or Revert `main` automatically.
+
+### Conductor / evidence collection
+
+The maintainer starts the conductor or evidence collection independently after
+the relevant measured run has completed. It reads completed rollout, Git,
+GitHub, and evidence data and produces a read-only manual record. It:
+
+- is outside the measured run;
+- is excluded from measured Token and duration;
+- does not modify the implementation under test;
+- is not a resident sidecar monitor;
+- is not automatically started by a repository runtime service.
+
+The conductor may mechanically collect facts, but collection remains a
+maintainer-operated action and is not a new repository runtime capability.
+
+## 2. Mainline lifecycle
+
+The maintainer follows this sequence on real `main`:
 
 ```text
-baseline main
-→ freeze BEFORE record and measured boundary
-→ run BEFORE
-→ freeze BEFORE evidence
-→ apply the separately approved candidate to main
-→ freeze AFTER identity
-→ run AFTER with the same measured boundary
-→ freeze AFTER evidence
-→ decide keep or revert
-→ verify cleanup integrity
+maintainer freezes baseline main and the measured boundary
+→ maintainer manually starts BEFORE
+→ maintainer freezes BEFORE evidence
+→ candidate is implemented and merged to main through the normal workflow
+→ maintainer freezes candidate main identity
+→ maintainer manually starts AFTER with the same measured boundary
+→ maintainer freezes AFTER evidence
+→ independently started conductor/evidence collection is frozen outside the measured runs
+→ maintainer compares the frozen evidence
+→ maintainer decides KEEP or REVERT
+→ if REVERT is chosen, maintainer performs or explicitly authorizes it
+→ maintainer verifies revert and cleanup integrity
 ```
 
-The candidate reaches `main` only through its normal approved Task, PR,
-Independent Review, and maintainer manual Merge lifecycle. This protocol does
-not grant Merge or revert authority. A revert is a normal, mechanically
-identifiable Git revert through the repository's approved lifecycle; the
-experiment conductor must never rewrite history or switch `main` merely to
-simulate either arm.
+The candidate is not run in parallel on a Task branch for this protocol. A
+candidate Merge is a normal workflow checkpoint; this protocol grants no Merge
+authority. The protocol itself must not execute a BEFORE, AFTER, or Revert
+experiment.
 
-Three roles are kept separate:
+## 3. Pre-BEFORE boundary freeze
 
-- **Measured session** performs only the lifecycle boundary declared before the
-  run. Its Tokens, duration, Guardian, and tool metrics are the experiment data.
-- **Conductor** freezes identities, starts sessions, inventories artifacts, and
-  makes no measured implementation decisions. Its sessions are recorded under
-  `conductor` and excluded from both arms' metrics.
-- **Evidence collector** parses already-completed rollouts, hashes files, and
-  constructs the evidence snapshot. Collection begins only after the measured
-  end condition and its Tokens/duration are never added to a measured run.
+Before manually starting BEFORE, the maintainer creates a copy of the record
+template and freezes the measured lifecycle boundary. At minimum, record:
 
-## 2. Pre-run freeze
+- the start condition;
+- the end condition;
+- whether remediation is included;
+- whether Independent Review is included;
+- whether Merge is included;
+- whether Closeout is included;
+- that independently started conductor/evidence collection is excluded from
+  measured Token and duration;
+- the person, timestamp, and baseline identity that froze the boundary.
 
-Before starting BEFORE, create a record and pass
-`validate_record(record, checkpoint="pre_run")`. The record freezes:
+The boundary cannot be changed after observing results. If the boundary must
+change, record a new experiment rather than relabelling the existing result.
 
-- `protocol_id`, `candidate_id`, `baseline_main_sha`, candidate patch identity,
-  fixed Task or fixed-patch identity, Task specification hash, base and expected
-  head/patch identity;
-- model and reasoning effort for root and Guardian, CLI/runtime version,
-  approval policy, sandbox policy, and network mode;
-- Agent invocation granularity and Guardian admission source;
-- the measured start and end conditions and whether remediation, Independent
-  Review, Merge, and Closeout are inside the boundary;
-- the explicit rule `evidence_collection_excluded: true`.
+The pre-BEFORE identity freeze must include:
 
-The AFTER identity additionally freezes `candidate_main_sha` before AFTER
-starts. If the candidate SHA is not yet known when BEFORE begins, the approved
-candidate patch identity is frozen first and the resulting `candidate_main_sha`
-is appended before AFTER without changing the measured boundary. Boundary
-changes after observing results invalidate the comparison; they do not create
-a new version of the same run.
+```text
+protocol_id
+candidate_id
+baseline_main_sha
+candidate_main_sha (filled before AFTER)
+task_or_fixed_patch_identity
+task_spec_hash
+base_sha
+expected_head_or_patch_identity
+model
+reasoning_effort
+guardian_model
+guardian_effort
+cli_version
+approval_policy
+sandbox_policy
+network_mode
+agent_invocation_granularity
+guardian_admission
+```
 
-## 3. Comparability and candidate-effect isolation
+For a fixed patch, record the patch identity in both the candidate and the
+expected-head fields as applicable. For a Task, record the Task/PR identity and
+the exact specification hash. BEFORE must use the frozen baseline identity;
+AFTER must use the frozen candidate `main` identity.
 
-The record compares the arms across these formal dimensions:
+## 4. Manual BEFORE and AFTER records
 
-| Dimension | Meaning |
+The maintainer manually starts each arm and records the start and end
+conditions from the frozen boundary. The two arms use the same workload and
+boundary. Evidence collection starts only after the measured end condition and
+is not charged to either arm.
+
+For each arm, record:
+
+- root session IDs and Guardian session IDs;
+- exact rollout filenames, byte sizes, and SHA-256 hashes;
+- each rollout's parent relationship (`root` has no parent; a Guardian entry
+  names its root parent);
+- Git / PR / Issue and implementation or fixed-patch identity;
+- validation and Review results when they are inside the frozen boundary;
+- Token and duration;
+- root tool calls;
+- Guardian turns and Guardian Tokens;
+- validation command segments;
+- shell/tool invocation count;
+- repeated Git/GitHub acquisition;
+- compound invocation / command grouping;
+- manual intervention;
+- runtime identity and integrity evidence.
+
+The manual record must distinguish an unknown or unavailable value from zero.
+Do not infer candidate benefit from fewer Guardian turns, commands, or Tokens
+without checking the comparability dimensions below.
+
+## 5. Runtime comparability
+
+When comparing BEFORE and AFTER, explicitly record whether each dimension
+changed:
+
+| Dimension | What must be compared |
 | --- | --- |
-| `workflow_change` | the candidate under test |
-| `model_change` | root or Guardian model/effort change |
-| `cli_runtime_change` | CLI, runtime, OS, or execution-host change |
-| `sandbox_change` | sandbox or filesystem capability change |
-| `approval_policy_change` | approval/Guardian routing policy change |
-| `network_change` | network availability, proxy, or credential route change |
-| `agent_invocation_granularity_change` | root/subagent/session decomposition change |
-| `guardian_admission_change` | admission source or Guardian routing change |
+| `workflow_change` | the candidate implementation or fixed patch |
+| `model_change` | root and Guardian model and effort |
+| `cli_runtime_change` | CLI, runtime, operating system, and execution host |
+| `sandbox_change` | sandbox and filesystem capability |
+| `approval_policy_change` | approval and Guardian routing policy |
+| `network_change` | network availability, proxy, credentials, and route |
+| `agent_invocation_granularity_change` | root/subagent/session decomposition and command grouping |
+| `guardian_admission_change` | Guardian admission source or routing |
 
-`STRICT` requires `workflow_change=true` and every other dimension unchanged.
-Any recorded non-candidate change makes the result `CONDITIONAL` and requires a
-reason stating the affected interpretation. Missing or invalid dimensions, or
-no workflow change, are `NOT_COMPARABLE`. A reduction in Guardian turns,
-commands, or Tokens is never attributed to the candidate without considering
-invocation granularity, Guardian admission, sandbox/approval/network, and
-model/runtime differences.
+Use the following judgment:
 
-External summaries must render an unavoidable confound explicitly as:
+- `STRICT` only when the workflow changed and every other dimension is
+  unchanged and evidenced;
+- `CONDITIONAL` when a confound cannot be eliminated. Record the confound and
+  write exactly `COMPARABILITY = CONDITIONAL` in the conclusion;
+- `NOT_COMPARABLE` when the workflow change is absent or the required identity
+  is missing or cannot be trusted.
 
-```text
-COMPARABILITY = CONDITIONAL
-```
+`CONDITIONAL` is not strict causal proof. A descriptive difference may still be
+retained, but it must not be presented as an effect caused solely by the
+candidate.
 
-They must not describe that comparison as a strict causal result.
+## 6. Historical-answer contamination audit
 
-This classification controls causal claims, not whether descriptive evidence
-may be preserved. The protocol records these variables; it does not optimize
-them.
+When reusing the same Task or fixed patch, perform an audit if prior artifacts
+may be available. The maintainer decides whether the audit is needed, and the
+independently started conductor reads only the minimum metadata needed.
 
-## 4. Run and rollout evidence
-
-Each BEFORE and AFTER run records exact root and Guardian session IDs. Every
-rollout inventory entry contains:
+The audit must distinguish:
 
 ```text
-actor
-session_id
-parent_session_id
-rollout_filename
-byte_size
-sha256
+metadata-only exposure
+answer-bearing implementation access
 ```
 
-Guardian entries name their root parent; root entries have a null parent.
-Measured metrics include Tokens, duration, root tool calls, Guardian turns and
-Tokens, validation command segments, shell/tool invocation count, repeated
-Git/GitHub acquisition, compound invocation count, command grouping, and manual
-intervention. Admission source belongs to the frozen experiment identity.
-Count and duration fields are non-negative integers; command grouping and manual
-intervention are explicit lists, including an empty list when none occurred.
-Git/Issue/PR, validation, Review, and integrity evidence use structured status
-and evidence identities rather than placeholder objects. BEFORE base must equal
-the frozen baseline main, AFTER base must equal candidate main, and each run's
-implementation/fixed-patch evidence must equal its expected patch identity.
+Metadata-only exposure includes identity, size, hash, timestamp, or relationship
+facts that do not reveal the implementation answer. Answer-bearing access
+includes a source patch, implementation answer, review finding, generated
+solution, or any content that can teach the measured Agent the answer.
 
-The adapter `adapt_collected_run(...)` accepts only experiment identity,
-rollout inventory, and measured metrics. It intentionally has no conductor
-argument. Conductor session IDs, rollout filenames, sizes, hashes, and parent
-relationships are stored separately under `conductor`, making accidental metric
-inclusion detectable.
+Do not open a historical implementation or answer merely to prove that it was
+not opened. Record any unavoidable answer-bearing access as contamination or
+confounding; never relabel it as metadata-only.
 
-## 5. Historical-answer contamination
+## 7. Evidence freeze and decision
 
-Reusing a Task or fixed patch requires an access audit when prior artifacts may
-exist. The audit begins with known metadata and does not open a historical
-implementation, review answer, or rollout merely to prove that it exists.
-Every access is classified as exactly one of:
+After each run, the maintainer manually starts or authorizes independent
+read-only evidence collection and freezes a snapshot containing, as applicable:
 
-- `metadata_only_exposure`: identity, size, hash, timestamps, relationship, or
-  other facts that do not reveal the answer;
-- `answer_bearing_implementation_access`: source patch, implementation answer,
-  findings, generated solution, or other content that can teach the measured
-  session the answer.
+- Git / PR / Issue identity;
+- implementation or fixed-patch identity;
+- validation and Review result;
+- complete rollout inventory and hashes;
+- Token, duration, Guardian, and tool inventory;
+- runtime and comparability identity;
+- manual interventions;
+- integrity evidence and cleanup preconditions.
 
-Unavoidable answer-bearing exposure is reported as contamination/confounding;
-it is never relabelled metadata-only. The formal record must state
-`proactive_answer_access_prohibited: true`.
+At the final comparison freeze, both arm records must be present, the candidate
+`main` SHA must be complete, the contamination audit must be recorded, and the
+comparability judgment must be explicit. Evidence collection is outside the
+measured Token and duration and must never be merged into measured metrics.
 
-## 6. Evidence freeze and decision
+`KEEP` is a maintainer decision and requires all of the following to be
+supported by the frozen evidence:
 
-After each measured session ends, the collector freezes the following without
-charging collection to the measured run:
+- correctness passes;
+- the Quality Gate does not degrade;
+- the measured hypothesis is supported;
+- there is no unacceptable operational regression.
 
-- Git, Issue, PR, implementation/fixed-patch identities;
-- validation and Independent Review result within the declared boundary;
-- complete rollout inventory, Token, duration, Guardian/tool, runtime, command,
-  and manual-intervention evidence;
-- integrity hashes and cleanup preconditions.
+If any of those conditions fails, or the evidence is ambiguous or unavailable,
+the maintainer must choose `REVERT` or enter the applicable Human Gate; the
+record must not describe an unsupported `KEEP` as a result.
 
-At the final `evidence_frozen` checkpoint, the record must include a complete
-candidate main SHA, both run inventories and metrics, freeze timestamp,
-comparability classification, contamination audit, decision, and mechanical
-revert plan.
+## 8. Revert discipline and cleanup integrity
 
-The candidate may be `keep` only when correctness and the Quality Gate pass,
-the measured hypothesis is supported, and there is no unacceptable operational
-regression. It must be `revert` when any of those conditions fails. Ambiguous or
-unavailable evidence does not support `keep`; it triggers the applicable Human
-Gate or a separately authorized follow-up.
+Freeze a Revert plan even when the candidate is kept. Before a Revert, the
+maintainer checks:
 
-## 7. Revert and cleanup integrity
+- candidate identity and the target Revert commit;
+- the intended restored tree or current baseline, including approved intervening
+  mainline changes;
+- the normal Git/GitHub workflow and explicit authorization;
+- Issue, PR, branch, and Development linkage cleanup expectations;
+- that historical evidence will remain read-only and intact.
 
-The revert plan is frozen even when the candidate is kept. It identifies the
-candidate commit, the approved mechanical method (normally a Git revert), and
-the expected restored tree or intended current baseline. After an actual
-revert, independently verify:
+The maintainer performs or explicitly authorizes the Revert. The protocol does
+not implement an automatic Revert engine or a machine-enforced Revert
+validator. Afterward, the maintainer uses ordinary Git/GitHub read-only checks
+to confirm the restored tree, exact lifecycle cleanup, absence of stale
+Development linkage, and no mutation or deletion of historical evidence.
+Do not force-push, reset, or erase experiment evidence.
 
-- target tree equals the intended current baseline, accounting only for
-  explicitly approved intervening mainline changes;
-- exact Issue, PR, and Task branch lifecycle cleanup;
-- no stale Development linkage;
-- no mutation or deletion of historical experiment evidence.
+## 9. Scope boundary
 
-The revert is not performed by this protocol Task. A future experiment must
-use the normal Issue/PR/Review/manual-Merge workflow for both candidate and
-revert and must not force-push, reset, or erase evidence.
+This is a documentation Task. It does not add an experiment runner,
+coordinator, sidecar monitor, experiment-record validator, machine-enforced
+comparability gate, automatic rollout/session watcher, automatic Token
+collector, automatic BEFORE/AFTER or evidence orchestration, candidate
+selection, Merge/Revert automation, or #90-specific runtime state.
 
-## 8. Explicit exclusions
+It also does not run a historical benchmark, switch a candidate, execute a
+BEFORE/AFTER/Revert experiment, restore the old A/B/C/D benchmark architecture,
+modify sandbox/Full Access, Runner coverage, Independent Review strategy,
+Context Compiler, Agent command batching, or any other Workflow candidate.
 
-Protocol validation verifies the schema, documentation, adapter separation,
-and tests. It does not require a live Before/After/Revert run. It does not
-restore or invoke the historical A/B/C/D benchmark architecture, run any
-existing benchmark, choose a business Task, alter Runner coverage, change the
-Independent Review strategy, introduce a Context Compiler, batch Agent
-commands, or change sandbox/Full Access policy.
-
-The example at
-`docs/workflows/templates/mainline-experiment-record.example.json` is a
-pre-run template for Issue #91 or another approved Workflow candidate. Values
-must be replaced with exact identities before use.
+The protocol and manual Markdown template are sufficient for #91 and other
+approved Workflow candidates; a future need for automation requires a separate
+Task.
