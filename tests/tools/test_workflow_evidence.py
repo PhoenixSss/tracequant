@@ -5,7 +5,9 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+import pytest
 
 SCRIPT = Path(__file__).parents[2] / "tools" / "agent_workflow" / "workflow_evidence.py"
 PYTHON = os.environ.get("WORKFLOW_TEST_PYTHON", sys.executable)
@@ -57,9 +59,12 @@ elif args[:3] == ['worktree','list','--porcelain']:
     out('\\n'.join(lines))
 elif args[:3] == ['log','-1','--format=%H']: out(state.get('runner_source_sha','c'*40))
 elif args[:2] == ['ls-remote','--heads']:
-    if state.get('remote_branch_exists',True): out(state.get('pr',{{}}).get('headRefOid','d'*40)+'\\trefs/heads/'+args[-1])
+    if state.get('remote_branch_exists',True):
+        out(state.get('remote_branch_tips',{{}}).get(args[-1], state.get('pr',{{}}).get('headRefOid','d'*40))+'\\trefs/heads/'+args[-1])
 elif args[:3] == ['show-ref','--verify','--quiet']:
     sys.exit(0 if state.get('local_branch_exists',True) else 1)
+elif args[:1] == ['merge-base']:
+    out(state.get('branch_base', state.get('origin_main','b'*40)))
 elif args[:2] == ['merge-base','--is-ancestor']:
     sys.exit(0 if state.get('merge_on_main', True) else 1)
 elif args[:2] == ['diff','--quiet']:
@@ -1366,6 +1371,252 @@ def test_fetch_failure_is_explicit_unknown_gate(tmp_path: Path) -> None:
 # --- Delivery Preflight tests (new) ---
 
 SHA40 = "2" * 40
+
+
+def _run_implementation_preflight(
+    repo: Path,
+    env: dict[str, str],
+    *,
+    branch: str = "task/70-bootstrap",
+    expected_base: str = SHA40,
+    bootstrap_verify: bool = False,
+) -> dict[str, Any]:
+    args = [
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "implementation",
+        "--branch",
+        branch,
+        "--expected-base-sha",
+        expected_base,
+    ]
+    if bootstrap_verify:
+        args.append("--bootstrap-verify")
+    result = _run(repo, env, *args)
+    assert result.returncode == 0, result.stderr
+    return cast(dict[str, Any], json.loads(result.stdout))
+
+
+def _safe_bootstrap_state() -> dict[str, Any]:
+    state = _base_state()
+    state.update(
+        branch="main",
+        git_head=SHA40,
+        local_main=SHA40,
+        origin_main=SHA40,
+        local_branch_exists=False,
+        remote_branch_exists=False,
+        status=[],
+        extra_worktree_branches=[],
+    )
+    return state
+
+
+def test_implementation_missing_canonical_branch_authorizes_bootstrap(
+    tmp_path: Path,
+) -> None:
+    repo, _, env = _write_repo(tmp_path, _safe_bootstrap_state())
+    value = _run_implementation_preflight(repo, env)
+    assert value["gates"]["branch_exists"]["status"] == "pass"
+    assert value["gates"]["branch_identity"]["status"] == "pass"
+    assert value["gates"]["branch_remote"]["status"] == "pass"
+    assert value["gates"]["branch_base"]["status"] == "pass"
+    assert value["gates"]["branch_bootstrap"]["status"] == "pass"
+    assert "creation authorized" in value["gates"]["branch_bootstrap"]["detail"]
+    assert value["disposition"]["write_actions_allowed"] is True
+
+
+def test_implementation_existing_valid_branch_is_reuse_authorized(
+    tmp_path: Path,
+) -> None:
+    state = _safe_bootstrap_state()
+    state.update(
+        local_branch_exists=True,
+        remote_branch_exists=True,
+        local_branch_tips={"task/70-bootstrap": "4" * 40},
+        remote_branch_tips={"task/70-bootstrap": "4" * 40},
+        branch_base=SHA40,
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env)
+    assert value["gates"]["branch_state"]["status"] == "pass"
+    assert "reuse authorized" in value["gates"]["branch_state"]["detail"]
+    assert value["gates"]["branch_bootstrap"]["status"] == "pass"
+    assert value["gates"]["branch_base"]["status"] == "pass"
+    assert value["disposition"]["status"] == "pass"
+
+
+def test_implementation_existing_dirty_branch_fails_closed(tmp_path: Path) -> None:
+    state = _safe_bootstrap_state()
+    state.update(
+        local_branch_exists=True,
+        remote_branch_exists=True,
+        local_branch_tips={"task/70-bootstrap": "4" * 40},
+        remote_branch_tips={"task/70-bootstrap": "4" * 40},
+        branch_base=SHA40,
+        status=[" M unrelated.py"],
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env)
+    assert value["gates"]["branch_bootstrap"]["status"] == "fail"
+    assert "clean worktree" in value["gates"]["branch_bootstrap"]["detail"]
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_implementation_existing_numeric_branch_can_only_be_reused(
+    tmp_path: Path,
+) -> None:
+    state = _safe_bootstrap_state()
+    state.update(
+        local_branch_exists=True,
+        remote_branch_exists=True,
+        local_branch_tips={"task-70": "4" * 40},
+        remote_branch_tips={"task-70": "4" * 40},
+        branch_base=SHA40,
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env, branch="task-70")
+    assert value["gates"]["branch_identity"]["status"] == "pass"
+    assert value["gates"]["branch_bootstrap"]["status"] == "pass"
+
+
+@pytest.mark.parametrize("branch", ["task-70", "task/70", "foreign/branch"])
+def test_implementation_missing_noncanonical_or_unproven_branch_fails_closed(
+    tmp_path: Path, branch: str
+) -> None:
+    repo, _, env = _write_repo(tmp_path, _safe_bootstrap_state())
+    value = _run_implementation_preflight(repo, env, branch=branch)
+    assert value["disposition"]["write_actions_allowed"] is False
+    assert value["gates"]["branch_state"]["status"] == "fail"
+    assert value["gates"]["branch_bootstrap"]["status"] == "fail"
+    if branch == "foreign/branch":
+        assert value["gates"]["branch_identity"]["status"] == "fail"
+    else:
+        assert "canonical" in value["gates"]["branch_bootstrap"]["detail"]
+
+
+def test_implementation_existing_wrong_base_fails_closed(tmp_path: Path) -> None:
+    state = _safe_bootstrap_state()
+    state.update(
+        local_branch_exists=True,
+        remote_branch_exists=True,
+        local_branch_tips={"task/70-bootstrap": "4" * 40},
+        remote_branch_tips={"task/70-bootstrap": "4" * 40},
+        branch_base="9" * 40,
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env)
+    assert value["gates"]["branch_base"]["status"] == "fail"
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_implementation_dirty_missing_branch_fails_closed(tmp_path: Path) -> None:
+    state = _safe_bootstrap_state()
+    state["status"] = [" M unrelated.py"]
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env)
+    assert value["gates"]["branch_bootstrap"]["status"] == "fail"
+    assert "clean worktree" in value["gates"]["branch_bootstrap"]["detail"]
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_implementation_remote_conflict_on_missing_branch_fails_closed(
+    tmp_path: Path,
+) -> None:
+    state = _safe_bootstrap_state()
+    state["remote_branch_exists"] = True
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env)
+    assert value["gates"]["branch_bootstrap"]["status"] == "fail"
+    assert "ownership is ambiguous" in value["gates"]["branch_bootstrap"]["detail"]
+
+
+def test_implementation_worktree_ownership_conflict_fails_closed(
+    tmp_path: Path,
+) -> None:
+    state = _safe_bootstrap_state()
+    state["extra_worktree_branches"] = ["task/70-bootstrap"]
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env)
+    assert value["gates"]["branch_bootstrap"]["status"] == "fail"
+    assert "another worktree" in value["gates"]["branch_bootstrap"]["detail"]
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_implementation_existing_remote_tip_drift_fails_closed(tmp_path: Path) -> None:
+    state = _safe_bootstrap_state()
+    state.update(
+        local_branch_exists=True,
+        remote_branch_exists=True,
+        local_branch_tips={"task/70-bootstrap": "4" * 40},
+        remote_branch_tips={"task/70-bootstrap": "5" * 40},
+        branch_base=SHA40,
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env)
+    assert value["gates"]["branch_bootstrap"]["status"] == "fail"
+    assert "tips differ" in value["gates"]["branch_bootstrap"]["detail"]
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_bootstrap_then_reenter_implementation_verifies_and_continues(
+    tmp_path: Path,
+) -> None:
+    state = _safe_bootstrap_state()
+    repo, state_path, env = _write_repo(tmp_path, state)
+    initial = _run_implementation_preflight(repo, env)
+    assert initial["gates"]["branch_bootstrap"]["status"] == "pass"
+
+    state.update(
+        branch="task/70-bootstrap",
+        git_head=SHA40,
+        local_branch_exists=True,
+        local_branch_tips={"task/70-bootstrap": SHA40},
+        branch_base=SHA40,
+    )
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    verified = _run_implementation_preflight(repo, env, bootstrap_verify=True)
+    assert verified["gates"]["branch_bootstrap"]["status"] == "pass"
+    assert verified["gates"]["bootstrap_head"]["status"] == "pass"
+    assert verified["gates"]["worktree_state_compatible"]["status"] == "pass"
+    assert verified["disposition"]["workflow_may_continue"] is True
+
+
+def test_bootstrap_verification_requires_clean_worktree(tmp_path: Path) -> None:
+    state = _safe_bootstrap_state()
+    state.update(
+        branch="task/70-bootstrap",
+        git_head=SHA40,
+        local_branch_exists=True,
+        local_branch_tips={"task/70-bootstrap": SHA40},
+        branch_base=SHA40,
+        status=[" M drift.py"],
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env, bootstrap_verify=True)
+    assert value["gates"]["worktree_state_compatible"]["status"] == "fail"
+    assert value["gates"]["branch_bootstrap"]["status"] == "fail"
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_bootstrap_verification_detects_unexpected_drift(tmp_path: Path) -> None:
+    state = _safe_bootstrap_state()
+    state.update(
+        branch="task/70-bootstrap",
+        git_head="4" * 40,
+        local_branch_exists=True,
+        local_branch_tips={"task/70-bootstrap": "4" * 40},
+        branch_base=SHA40,
+    )
+    repo, _, env = _write_repo(tmp_path, state)
+    value = _run_implementation_preflight(repo, env, bootstrap_verify=True)
+    assert value["gates"]["bootstrap_head"]["status"] == "fail"
+    assert value["gates"]["branch_bootstrap"]["status"] == "fail"
+    assert value["disposition"]["write_actions_allowed"] is False
 
 
 def test_delivery_preflight_delivery_start_passes_with_ready_status(

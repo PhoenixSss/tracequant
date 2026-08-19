@@ -64,6 +64,9 @@ DELIVERY_ENTRY_PARAMS: Final = {
         {"task", "expected_main_sha", "pr", "expected_base_sha", "expected_head_sha"}
     ),
 }
+DELIVERY_OPTIONAL_PARAMS: Final = {
+    "implementation": frozenset({"bootstrap_verify"}),
+}
 DELIVERY_PARAM_SPACE: Final = frozenset(
     {
         "task",
@@ -72,6 +75,7 @@ DELIVERY_PARAM_SPACE: Final = frozenset(
         "pr",
         "expected_base_sha",
         "expected_head_sha",
+        "bootstrap_verify",
     }
 )
 REPOSITORY_PATTERN: Final = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -423,11 +427,12 @@ def _branch_name(value: str) -> str:
 
 def _validate_delivery_contract(args: argparse.Namespace) -> None:
     allowed = DELIVERY_ENTRY_PARAMS[args.entry_point]
+    optional = DELIVERY_OPTIONAL_PARAMS.get(args.entry_point, frozenset())
     supplied = {
         name for name in DELIVERY_PARAM_SPACE if getattr(args, name, None) is not None
     }
     missing = sorted(allowed - supplied)
-    extra = sorted(supplied - allowed)
+    extra = sorted(supplied - allowed - optional)
     if missing or extra:
         raise RunnerError(
             f"delivery entry-point {args.entry_point} parameter contract violation: "
@@ -454,6 +459,12 @@ def _build_parser() -> argparse.ArgumentParser:
     delivery.add_argument("--expected-base-sha", type=_sha)
     delivery.add_argument("--expected-head-sha", type=_sha)
     delivery.add_argument("--pr", type=_positive_int)
+    delivery.add_argument(
+        "--bootstrap-verify",
+        action="store_true",
+        default=None,
+        help="verify a newly created Task branch before implementation writes",
+    )
 
     for name in ("delivery-readiness", "review", "pre-merge"):
         subp = sub.add_parser(name)
@@ -584,6 +595,8 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
             result.extend(["--expected-head-sha", args.expected_head_sha])
         if args.pr is not None:
             result.extend(["--pr", str(args.pr)])
+        if args.bootstrap_verify is not None:
+            result.append("--bootstrap-verify")
     elif profile in {"delivery-readiness", "review", "pre-merge"}:
         result.extend(
             [

@@ -84,7 +84,6 @@ EVOLUTION_TRACES: Final = (
     "trusted-base",
     "trusted control",
     "predecessor",
-    "bootstrap",
     "old chain",
     "old path",
     "legacy path",

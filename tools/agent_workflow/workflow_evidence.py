@@ -111,6 +111,9 @@ DELIVERY_ENTRY_PARAMS: Final = {
         {"task", "expected_main_sha", "pr", "expected_base_sha", "expected_head_sha"}
     ),
 }
+DELIVERY_OPTIONAL_PARAMS: Final = {
+    "implementation": frozenset({"bootstrap_verify"}),
+}
 DELIVERY_PARAM_SPACE: Final = frozenset(
     {
         "task",
@@ -119,6 +122,7 @@ DELIVERY_PARAM_SPACE: Final = frozenset(
         "pr",
         "expected_base_sha",
         "expected_head_sha",
+        "bootstrap_verify",
     }
 )
 BRANCH_NAME_ALLOWED: Final = frozenset(
@@ -1151,11 +1155,12 @@ def _parent_state_gate(relationships: Mapping[str, Any]) -> dict[str, Any]:
 def _validate_delivery_entry_args(args: argparse.Namespace) -> None:
     entry_point = args.entry_point
     allowed = DELIVERY_ENTRY_PARAMS[entry_point]
+    optional = DELIVERY_OPTIONAL_PARAMS.get(entry_point, frozenset())
     supplied = {
         name for name in DELIVERY_PARAM_SPACE if getattr(args, name, None) is not None
     }
     missing = sorted(allowed - supplied)
-    extra = sorted(supplied - allowed)
+    extra = sorted(supplied - allowed - optional)
     if missing or extra:
         raise WorkflowToolError(
             f"delivery entry-point {entry_point} parameter contract violation: "
@@ -1178,6 +1183,142 @@ def _validate_delivery_entry_args(args: argparse.Namespace) -> None:
             raise WorkflowToolError(f"invalid branch name: {value!r}")
 
 
+def _task_branch_identity_gate(branch: Any, task: int) -> dict[str, Any]:
+    """Prove that a supplied branch name identifies the current Task.
+
+    Canonical ``task/<number>-<slug>`` names are required for creation.  The
+    older numeric forms remain valid only for an existing branch that is
+    independently proven safe to reuse.
+    """
+    if not isinstance(branch, str) or not branch:
+        return _gate("unknown", "Task branch name unavailable")
+    if (
+        branch == f"task/{task}"
+        or branch.startswith(f"task/{task}-")
+        or branch.startswith(f"{task}-")
+        or branch == f"task-{task}"
+        or branch.startswith(f"task-{task}-")
+    ):
+        return _gate("pass", f"branch carries Task #{task} identity")
+    return _gate("fail", f"branch {branch!r} does not identify Task #{task}")
+
+
+def _is_canonical_new_task_branch(branch: str, task: int) -> bool:
+    prefix = f"task/{task}-"
+    suffix = branch[len(prefix) :] if branch.startswith(prefix) else ""
+    return bool(suffix) and "/" not in suffix
+
+
+def _worktree_branch_items(git: Mapping[str, Any]) -> tuple[list[str], bool]:
+    raw = git.get("worktree_branches")
+    if not isinstance(raw, Mapping):
+        return [], False
+    items = raw.get("items")
+    return (
+        [item for item in items if isinstance(item, str)]
+        if isinstance(items, list)
+        else [],
+        raw.get("truncated") is True,
+    )
+
+
+def _branch_bootstrap_gate(
+    *,
+    git: Mapping[str, Any],
+    branch: str | None,
+    task: int,
+    expected_main_sha: str | None,
+    expected_base_sha: str | None,
+    branch_exists: bool | None,
+    local_tip: str | None,
+    remote_tip: str | None,
+    remote_available: bool,
+    bootstrap_verify: bool,
+) -> dict[str, Any]:
+    """Classify safe Task branch creation, reuse, or fail-closed state.
+
+    This function is deterministic and read-only.  The Delivery Skill owns the
+    branch creation/reuse procedure after the returned authorization.
+    """
+    identity = _task_branch_identity_gate(branch, task)
+    if identity.get("status") != "pass":
+        return identity
+    if not isinstance(branch, str) or branch_exists is None:
+        return _gate("unknown", "Task branch existence could not be established")
+
+    worktree_items, worktree_truncated = _worktree_branch_items(git)
+    reasons: list[str] = []
+    if worktree_truncated:
+        reasons.append("worktree branch inventory is truncated")
+    if branch in worktree_items and git.get("branch") != branch:
+        reasons.append("target branch is occupied by another worktree")
+    if branch_exists and git.get("clean") is not True:
+        return _gate("fail", "existing branch reuse requires a clean worktree")
+
+    if not branch_exists:
+        if bootstrap_verify:
+            return _gate("fail", "bootstrap verification requires the branch to exist")
+        if not _is_canonical_new_task_branch(branch, task):
+            return _gate(
+                "fail",
+                "new Task branches must use canonical task/<issue>-<slug> naming",
+            )
+        if not remote_available:
+            reasons.append("remote branch existence unavailable")
+        elif remote_tip is not None:
+            reasons.append("remote branch already exists; ownership is ambiguous")
+        if git.get("clean") is not True:
+            reasons.append("new branch bootstrap requires a clean worktree")
+        if git.get("branch") != "main":
+            reasons.append("bootstrap requires current branch main")
+        if git.get("head_sha") != expected_main_sha:
+            reasons.append("current HEAD does not equal expected main SHA")
+        if git.get("local_main_sha") != expected_main_sha:
+            reasons.append("local main does not equal expected main SHA")
+        if git.get("origin_main_sha") != expected_main_sha:
+            reasons.append("origin/main does not equal expected main SHA")
+        if expected_base_sha != expected_main_sha:
+            reasons.append("expected Task base is not the locked main SHA")
+        if reasons:
+            return _gate("fail", "; ".join(reasons))
+        return _gate(
+            "pass",
+            f"branch {branch!r} absent; branch creation authorized from locked base",
+        )
+
+    if not remote_available:
+        return _gate("unknown", "existing branch remote state unavailable")
+    if local_tip is None:
+        return _gate("unknown", "existing branch tip unavailable")
+    if remote_tip is not None and remote_tip != local_tip:
+        reasons.append("local and remote Task branch tips differ")
+    if bootstrap_verify:
+        if git.get("branch") != branch:
+            reasons.append(
+                "post-bootstrap current branch does not match expected branch"
+            )
+        if git.get("head_sha") != expected_base_sha:
+            reasons.append("post-bootstrap HEAD does not equal locked base SHA")
+        if local_tip != expected_base_sha:
+            reasons.append("post-bootstrap branch tip does not equal locked base SHA")
+        if git.get("local_main_sha") != expected_main_sha:
+            reasons.append("post-bootstrap local main does not equal locked main SHA")
+        if git.get("origin_main_sha") != expected_main_sha:
+            reasons.append("post-bootstrap origin/main does not equal locked main SHA")
+        if remote_tip is not None:
+            reasons.append("post-bootstrap remote branch unexpectedly exists")
+        if git.get("clean") is not True:
+            reasons.append("post-bootstrap worktree is not clean")
+    if reasons:
+        return _gate("fail", "; ".join(reasons))
+    if bootstrap_verify:
+        return _gate(
+            "pass",
+            f"post-bootstrap branch {branch!r}, HEAD, base, and clean state verified",
+        )
+    return _gate("pass", f"existing branch {branch!r} is eligible for idempotent reuse")
+
+
 def _entry_point_gates(
     args: argparse.Namespace,
     runner: CommandRunner,
@@ -1192,18 +1333,92 @@ def _entry_point_gates(
 
     if entry_point in {"implementation", "final-validation", "pr-readiness"}:
         branch = args.branch
+        bootstrap_verify = bool(getattr(args, "bootstrap_verify", False))
         branch_exists = runner.run(
             ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
             command_id="git-branch-exists",
         )
+        branch_is_present: bool | None
         if branch_exists.returncode == 0:
+            branch_is_present = True
             gates["branch_exists"] = _gate("pass")
         elif branch_exists.returncode == 1:
-            gates["branch_exists"] = _gate("fail", f"branch {branch!r} does not exist")
+            branch_is_present = False
+            if entry_point == "implementation":
+                gates["branch_exists"] = _gate(
+                    "pass",
+                    f"branch {branch!r} absent; bootstrap classification required",
+                )
+            else:
+                gates["branch_exists"] = _gate(
+                    "fail", f"branch {branch!r} does not exist"
+                )
         else:
+            branch_is_present = None
             gates["branch_exists"] = _gate("unknown")
 
-        if args.expected_base_sha and repository:
+        local_branch_tip: str | None = None
+        remote_tip: str | None = None
+        remote_available = True
+        if entry_point == "implementation" and repository:
+            if branch_is_present:
+                local_tip_result = runner.run(
+                    ["git", "rev-parse", f"refs/heads/{branch}"],
+                    command_id="git-implementation-branch-tip",
+                )
+                if local_tip_result.returncode == 0:
+                    local_branch_tip = local_tip_result.stdout.strip()
+                else:
+                    warnings.append(command_warning(local_tip_result))
+            remote_result = runner.run(
+                ["git", "ls-remote", "--heads", "origin", str(branch)],
+                command_id="git-implementation-remote-branch",
+            )
+            if remote_result.returncode == 0:
+                remote_tip = _remote_branch_tip(remote_result.stdout)
+                gates["branch_remote"] = _gate(
+                    "pass",
+                    "remote branch absent"
+                    if remote_tip is None
+                    else f"remote branch tip {remote_tip}",
+                )
+            else:
+                remote_available = False
+                warnings.append(command_warning(remote_result))
+                gates["branch_remote"] = _gate("unknown")
+
+            gates["branch_identity"] = _task_branch_identity_gate(branch, args.task)
+            gates["branch_bootstrap"] = _branch_bootstrap_gate(
+                git=git,
+                branch=branch,
+                task=args.task,
+                expected_main_sha=args.expected_main_sha,
+                expected_base_sha=args.expected_base_sha,
+                branch_exists=branch_is_present,
+                local_tip=local_branch_tip,
+                remote_tip=remote_tip,
+                remote_available=remote_available,
+                bootstrap_verify=bootstrap_verify,
+            )
+            bootstrap_gate = gates["branch_bootstrap"]
+            if branch_is_present:
+                if bootstrap_gate.get("status") == "pass":
+                    gates["branch_state"] = _gate(
+                        "pass",
+                        "post-bootstrap verification requested"
+                        if bootstrap_verify
+                        else "existing branch reuse authorized",
+                    )
+                else:
+                    gates["branch_state"] = bootstrap_gate
+            elif branch_is_present is False:
+                gates["branch_state"] = bootstrap_gate
+            else:
+                gates["branch_state"] = _gate(
+                    "unknown", "branch state classification unavailable"
+                )
+
+        if args.expected_base_sha and repository and branch_is_present:
             merge_base = runner.run(
                 [
                     "git",
@@ -1229,6 +1444,30 @@ def _entry_point_gates(
             else:
                 warnings.append(command_warning(merge_base))
                 gates["branch_base"] = _gate("unknown")
+        elif (
+            args.expected_base_sha
+            and repository
+            and entry_point == "implementation"
+            and branch_is_present is False
+        ):
+            gates["branch_base"] = _gate(
+                "pass" if args.expected_base_sha == args.expected_main_sha else "fail",
+                "locked base is the source for safe branch bootstrap"
+                if args.expected_base_sha == args.expected_main_sha
+                else "expected Task base is not the locked main SHA",
+            )
+
+        if bootstrap_verify and branch_is_present:
+            gates["bootstrap_head"] = _gate(
+                "pass"
+                if git.get("head_sha") == args.expected_base_sha
+                and local_branch_tip == args.expected_base_sha
+                else "fail",
+                "post-bootstrap HEAD and branch tip equal locked base SHA"
+                if git.get("head_sha") == args.expected_base_sha
+                and local_branch_tip == args.expected_base_sha
+                else "post-bootstrap HEAD or branch tip drifted from locked base SHA",
+            )
 
     if entry_point in {"final-validation", "pr-readiness"}:
         branch = args.branch
@@ -2129,7 +2368,7 @@ def _collect_task_pr(
 
 
 def _worktree_state_compatible_gate(
-    git: Mapping[str, Any], *, entry_point: str
+    git: Mapping[str, Any], *, entry_point: str, bootstrap_verify: bool = False
 ) -> dict[str, Any]:
     """Gate worktree cleanliness per entry point.
 
@@ -2145,7 +2384,9 @@ def _worktree_state_compatible_gate(
     changed_items = changed.get("items") if isinstance(changed, dict) else []
     status_entries = git.get("status_entries")
 
-    dirty_allowed = entry_point in {"delivery-start", "implementation"}
+    dirty_allowed = entry_point in {"delivery-start", "implementation"} and not (
+        entry_point == "implementation" and bootstrap_verify
+    )
     blocked: list[dict[str, Any]] = []
 
     if clean:
@@ -2361,7 +2602,9 @@ def _delivery_preflight(args: argparse.Namespace, repo_root: Path) -> dict[str, 
             git.get("origin_main_sha"), args.expected_main_sha, "origin/main SHA"
         )
         gates["worktree_state_compatible"] = _worktree_state_compatible_gate(
-            git, entry_point=args.entry_point
+            git,
+            entry_point=args.entry_point,
+            bootstrap_verify=bool(getattr(args, "bootstrap_verify", False)),
         )
         if issue is not None:
             labels = set(issue.get("labels", {}).get("items", []))
@@ -3075,6 +3318,12 @@ def _build_parser() -> argparse.ArgumentParser:
     delivery.add_argument("--expected-base-sha", help="expected branch base SHA")
     delivery.add_argument("--expected-head-sha", help="expected branch head SHA")
     delivery.add_argument("--pr", type=int, help="expected PR number")
+    delivery.add_argument(
+        "--bootstrap-verify",
+        action="store_true",
+        default=None,
+        help="verify a newly created Task branch before implementation writes",
+    )
 
     readiness = sub.add_parser("delivery-readiness", help="Task PR readiness snapshot")
     _common(readiness)

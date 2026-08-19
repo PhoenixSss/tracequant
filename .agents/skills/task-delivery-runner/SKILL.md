@@ -68,7 +68,7 @@ tools/agent_workflow/wsl2_github_evidence_runner.py delivery-readiness \
 | Entry point | Invoked at | Params beyond `--task`, `--expected-main-sha` |
 |---|---|---|
 | `delivery-start` | Phase 1 before any write | — |
-| `implementation` | Phase 2 before branch/implementation writes | `--branch --expected-base-sha` |
+| `implementation` | Phase 2 before branch/implementation writes | `--branch --expected-base-sha` (`--bootstrap-verify` after creation) |
 | `final-validation` | Phase 3 before commit + `workflow-delivery` | `--branch --expected-base-sha --expected-head-sha` |
 | `pr-readiness` | Phase 4 before PR creation/push | `--branch --expected-base-sha --expected-head-sha` |
 | `review-remediation` | Remediation before any repair edit | `--pr --expected-base-sha --expected-head-sha` |
@@ -193,9 +193,30 @@ re-read lifecycle transitions only after readiness passes.
 
 Start from clean `main` unless facts prove a valid recovery point. Create or
 reuse one exact Task branch after verifying identity, history, scope, and
-ownership. Implement the smallest correct change — follow scoped rules,
-preserve safety, add required tests/docs, inspect tracked and untracked scope.
-Do not weaken tests to obtain a pass.
+ownership. The implementation preflight classifies the branch state:
+
+- existing branch with proven Task identity, ownership, locked base, and a
+  clean worktree: reuse it;
+- absent branch with a clean locked `main`, no local/remote/worktree conflict,
+  and the canonical `task/<Issue number>-<slug>` name: `branch_bootstrap = pass`
+  is deterministic authorization for the Skill to create it;
+- ambiguous identity, ownership, or base: fail closed and require Human Gate.
+
+For the authorized new-branch path, the Skill creates directly from the locked
+base and never uses a noncanonical name such as `task-<Issue number>`:
+
+```text
+git switch -c task/<Issue number>-<slug> <LOCKED_MAIN_SHA>
+```
+
+Immediately rerun the implementation Evidence Runner with
+`--bootstrap-verify`. Continue only when it proves the actual branch name,
+HEAD and branch tip equal the locked base, branch base identity is correct, the
+worktree is clean, and no remote or other drift appeared. Existing numeric
+branch forms may be reused only when the Runner proves their Task ownership;
+they are never new-branch creation targets. Implement the smallest correct
+change — follow scoped rules, preserve safety, add required tests/docs, inspect
+tracked and untracked scope. Do not weaken tests to obtain a pass.
 
 ## Phase 3: commit, final validation, and push
 
