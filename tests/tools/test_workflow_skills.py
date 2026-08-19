@@ -65,13 +65,14 @@ def test_delivery_branch_bootstrap_contract_is_shared_by_both_skills() -> None:
         ".agents/skills/task-delivery-runner/SKILL.md",
         ".claude/skills/task-delivery-runner/SKILL.md",
     ):
-        text = (ROOT / relative).read_text(encoding="utf-8")
+        text = (ROOT / relative).read_text(encoding="utf-8").casefold()
         for phrase in (
             "branch_bootstrap = pass",
-            "task/<Issue number>-<slug>",
+            "task/<issue number>-<slug>",
             "--bootstrap-verify",
             "fail closed",
-            "existing numeric branch forms",
+            "existing numeric",
+            "branch forms may be reused",
         ):
             assert phrase in text, (relative, phrase)
 
