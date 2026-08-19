@@ -56,15 +56,25 @@ def _frozen_record() -> dict[str, Any]:
                 "sha256": guardian_hash_character * 64,
             },
         ]
-        run["measured_metrics"] = {
-            field: 0 for field in EXPERIMENT.MEASURED_METRIC_FIELDS
-        }
+        run["measured_metrics"] = {field: 0 for field in EXPERIMENT.COUNT_METRIC_FIELDS}
+        run["measured_metrics"]["command_grouping"] = []
+        run["measured_metrics"]["manual_intervention"] = []
+        expected_identity = run["experiment_identity"][
+            "expected_head_or_patch_identity"
+        ]
         run["workflow_evidence"] = {
-            "git_pr_issue_identity": {"issue": 90},
-            "implementation_or_fixed_patch_identity": "fixed-patch-sha",
-            "validation": {"status": "pass"},
-            "review_result": {"status": "excluded_by_boundary"},
-            "integrity": {"status": "pass"},
+            "git_pr_issue_identity": {
+                "git_sha": run["experiment_identity"]["base_sha"],
+                "issue": 90,
+                "pr": 146,
+            },
+            "implementation_or_fixed_patch_identity": expected_identity,
+            "validation": {"status": "pass", "evidence_identity": "validation-1"},
+            "review_result": {
+                "status": "excluded_by_boundary",
+                "evidence_identity": "boundary-review-false",
+            },
+            "integrity": {"status": "pass", "evidence_identity": "integrity-1"},
             "cleanup_preconditions": ["exact branch and linkage identities"],
         }
     record["evidence_freeze"] = {"frozen_at": "2026-08-19T00:00:00Z"}
@@ -166,10 +176,7 @@ def test_strict_comparability_requires_valid_main_and_same_workload_identity() -
         "different-workload"
     )
     violations = EXPERIMENT.validate_record(record, checkpoint="evidence_frozen")
-    assert (
-        "candidate_main_sha must be a 40- or 64-character lowercase Git object identity"
-        in violations
-    )
+    assert "candidate_main_sha must be a 40-character lowercase Git SHA" in violations
     assert (
         "runs.before and runs.after experiment_identity.task_or_fixed_patch_identity must match for comparability"
         in violations
@@ -177,6 +184,51 @@ def test_strict_comparability_requires_valid_main_and_same_workload_identity() -
     assert (
         "comparability.classification must be NOT_COMPARABLE for recorded dimensions"
         in violations
+    )
+
+
+def test_frozen_identity_closes_main_arm_and_implementation_chain() -> None:
+    record = _frozen_record()
+    record["runs"]["before"]["experiment_identity"]["base_sha"] = "d" * 40
+    record["runs"]["after"]["workflow_evidence"][
+        "implementation_or_fixed_patch_identity"
+    ] = "e" * 64
+    record["runs"]["after"]["workflow_evidence"]["git_pr_issue_identity"]["git_sha"] = (
+        "f" * 40
+    )
+    violations = EXPERIMENT.validate_record(record, checkpoint="evidence_frozen")
+    assert (
+        "runs.before.experiment_identity.base_sha must match baseline_main_sha"
+        in violations
+    )
+    assert (
+        "runs.after.workflow_evidence.implementation_or_fixed_patch_identity must match experiment_identity.expected_head_or_patch_identity"
+        in violations
+    )
+    assert (
+        "runs.after.workflow_evidence.git_pr_issue_identity.git_sha must match experiment_identity.base_sha"
+        in violations
+    )
+
+
+def test_frozen_metrics_and_workflow_evidence_reject_placeholders() -> None:
+    record = _frozen_record()
+    before = record["runs"]["before"]
+    before["measured_metrics"]["tokens"] = None
+    before["measured_metrics"]["command_grouping"] = 0
+    before["workflow_evidence"]["validation"] = {}
+    violations = EXPERIMENT.validate_record(record, checkpoint="evidence_frozen")
+    assert (
+        "runs.before.measured_metrics.tokens must be a non-negative integer"
+        in violations
+    )
+    assert "runs.before.measured_metrics.command_grouping must be a list" in violations
+    assert any(
+        "runs.before.workflow_evidence.validation.status" in item for item in violations
+    )
+    assert any(
+        "runs.before.workflow_evidence.validation.evidence_identity" in item
+        for item in violations
     )
 
 

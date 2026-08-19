@@ -120,6 +120,12 @@ Measured metrics include Tokens, duration, root tool calls, Guardian turns and
 Tokens, validation command segments, shell/tool invocation count, repeated
 Git/GitHub acquisition, compound invocation count, command grouping, and manual
 intervention. Admission source belongs to the frozen experiment identity.
+Count and duration fields are non-negative integers; command grouping and manual
+intervention are explicit lists, including an empty list when none occurred.
+Git/Issue/PR, validation, Review, and integrity evidence use structured status
+and evidence identities rather than placeholder objects. BEFORE base must equal
+the frozen baseline main, AFTER base must equal candidate main, and each run's
+implementation/fixed-patch evidence must equal its expected patch identity.
 
 The adapter `adapt_collected_run(...)` accepts only experiment identity,
 rollout inventory, and measured metrics. It intentionally has no conductor
