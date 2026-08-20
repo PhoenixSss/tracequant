@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -253,7 +254,7 @@ def test_unverifiable_source_identity_fails_closed() -> None:
 
 
 def test_nested_allowlists_reject_unknown_fields() -> None:
-    cases = (
+    cases: tuple[tuple[Callable[[dict[str, Any]], None], str], ...] = (
         (lambda value: value.update({"unknown": True}), "top-level"),
         (
             lambda value: value["workflow_identity"]["runner"].update(
