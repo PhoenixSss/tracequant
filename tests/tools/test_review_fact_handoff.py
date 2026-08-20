@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "tools/agent_workflow"))
 
-from review_fact_handoff import (  # noqa: E402, I001
+from review_fact_handoff import (  # type: ignore[import-not-found]  # noqa: E402, I001
     DRIFT_TYPES,
     build_handoff_from_snapshot,
     default_freshness_contract,
@@ -45,9 +45,7 @@ def _snapshot() -> dict[str, Any]:
                 "number": 71,
                 "base_sha": SHA40,
                 "head_sha": HEAD40,
-                "checks": {
-                    "items": [{"name": "quality", "state": "SUCCESS"}]
-                },
+                "checks": {"items": [{"name": "quality", "state": "SUCCESS"}]},
             },
             "effective_diff": {
                 "sha256": DIFF_SHA256,
@@ -59,29 +57,32 @@ def _snapshot() -> dict[str, Any]:
 
 
 def _handoff() -> dict[str, Any]:
-    return build_handoff_from_snapshot(
-        _snapshot(),
-        acceptance_criteria_ids=["AC-1", "AC-2"],
-        validation_facts={
-            "profile": "workflow-delivery",
-            "schema_version": 1,
-            "runner_identity": {"path": "validation", "sha256": SHA256},
-            "exit_code": 0,
-            "result_locator": ".agents/validation.local/run.json",
-            "result_sha256": SHA256,
-        },
-        workflow_identity={
-            "profile": "delivery-readiness",
-            "schema_version": 1,
-            "runner": {"path": "runner", "content_sha256": SHA256},
-            "skill": {"path": "skill", "sha256": SHA256},
-        },
-        source_identity={
-            "repository": "owner/repo",
-            "source_locator": ".agents/evidence.local/snapshot.json",
-            "source_digest": SHA256,
-        },
-        created_at="2026-08-20T00:00:00+00:00",
+    return cast(
+        dict[str, Any],
+        build_handoff_from_snapshot(
+            _snapshot(),
+            acceptance_criteria_ids=["AC-1", "AC-2"],
+            validation_facts={
+                "profile": "workflow-delivery",
+                "schema_version": 1,
+                "runner_identity": {"path": "validation", "sha256": SHA256},
+                "exit_code": 0,
+                "result_locator": ".agents/validation.local/run.json",
+                "result_sha256": SHA256,
+            },
+            workflow_identity={
+                "profile": "delivery-readiness",
+                "schema_version": 1,
+                "runner": {"path": "runner", "content_sha256": SHA256},
+                "skill": {"path": "skill", "sha256": SHA256},
+            },
+            source_identity={
+                "repository": "owner/repo",
+                "source_locator": ".agents/evidence.local/snapshot.json",
+                "source_digest": SHA256,
+            },
+            created_at="2026-08-20T00:00:00+00:00",
+        ),
     )
 
 

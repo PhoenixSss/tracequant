@@ -12,7 +12,7 @@ import pytest
 
 ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT / "tools/agent_workflow"))
-from review_fact_handoff import (  # noqa: E402, I001
+from review_fact_handoff import (  # type: ignore[import-not-found]  # noqa: E402, I001
     build_handoff_from_snapshot,
     write_handoff,
 )

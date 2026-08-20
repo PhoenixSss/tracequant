@@ -3320,9 +3320,7 @@ def _stability_projection(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     handoff = observed.get("review_fact_handoff")
     handoff = handoff if isinstance(handoff, dict) else {}
     execution_context = snapshot.get("execution_context")
-    execution_context = (
-        execution_context if isinstance(execution_context, dict) else {}
-    )
+    execution_context = execution_context if isinstance(execution_context, dict) else {}
     return {
         "repository": snapshot.get("repository"),
         "subject": snapshot.get("subject"),

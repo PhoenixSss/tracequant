@@ -159,13 +159,19 @@ def validate_handoff_structure(
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             violations.append(f"{field} must be a positive integer")
     task_spec_hash = handoff.get("task_spec_hash")
-    if not isinstance(task_spec_hash, str) or not is_sha(task_spec_hash) or len(task_spec_hash) != 64:
+    if (
+        not isinstance(task_spec_hash, str)
+        or not is_sha(task_spec_hash)
+        or len(task_spec_hash) != 64
+    ):
         violations.append("task_spec_hash must be a 64-character SHA-256")
     for field in ("base_sha", "head_sha"):
         value = handoff.get(field)
         if not isinstance(value, str) or not is_sha(value) or len(value) != 40:
             violations.append(f"{field} must be a 40-character Git SHA")
-    _require_sha(handoff.get("effective_diff_sha256"), "effective_diff_sha256", violations)
+    _require_sha(
+        handoff.get("effective_diff_sha256"), "effective_diff_sha256", violations
+    )
 
     files = handoff.get("changed_files_manifest")
     if not isinstance(files, list) or not files:
@@ -178,7 +184,9 @@ def validate_handoff_structure(
     ac_ids = handoff.get("acceptance_criteria_ids")
     if not isinstance(ac_ids, list) or not ac_ids:
         violations.append("acceptance_criteria_ids must be a non-empty list")
-    elif any(not isinstance(item, str) or not _AC_ID.fullmatch(item) for item in ac_ids):
+    elif any(
+        not isinstance(item, str) or not _AC_ID.fullmatch(item) for item in ac_ids
+    ):
         violations.append("acceptance_criteria_ids must contain only AC-N identifiers")
     elif ac_ids != sorted(set(ac_ids), key=lambda item: int(item[3:])):
         violations.append("acceptance_criteria_ids must be ordered and unique")
@@ -204,14 +212,18 @@ def validate_handoff_structure(
             }
             for index, item in enumerate(raw_checks["observed"]):
                 if not isinstance(item, Mapping):
-                    violations.append(f"raw_check_facts.observed[{index}] must be an object")
+                    violations.append(
+                        f"raw_check_facts.observed[{index}] must be an object"
+                    )
                 else:
                     extra = sorted(set(item) - allowed_check_fields)
                     if extra:
                         violations.append(
                             f"raw_check_facts.observed[{index}] has non-mechanical fields: {extra}"
                         )
-        _require_mapping(raw_checks.get("required"), "raw_check_facts.required", violations)
+        _require_mapping(
+            raw_checks.get("required"), "raw_check_facts.required", violations
+        )
         required = raw_checks.get("required")
         if isinstance(required, Mapping):
             extra = sorted(set(required) - {"configuration", "contexts", "failure"})
@@ -235,9 +247,7 @@ def validate_handoff_structure(
             }
         )
         if extra:
-            violations.append(
-                f"validation_facts has non-mechanical fields: {extra}"
-            )
+            violations.append(f"validation_facts has non-mechanical fields: {extra}")
         for field in (
             "profile",
             "schema_version",
@@ -255,10 +265,18 @@ def validate_handoff_structure(
         if not isinstance(validation.get("exit_code"), int):
             violations.append("validation_facts.exit_code must be an integer")
         if not _is_relative_repo_path(validation.get("result_locator")):
-            violations.append("validation_facts.result_locator must be repository-relative")
+            violations.append(
+                "validation_facts.result_locator must be repository-relative"
+            )
         result_sha = validation.get("result_sha256")
-        if not isinstance(result_sha, str) or not is_sha(result_sha) or len(result_sha) != 64:
-            violations.append("validation_facts.result_sha256 must be a 64-character SHA-256")
+        if (
+            not isinstance(result_sha, str)
+            or not is_sha(result_sha)
+            or len(result_sha) != 64
+        ):
+            violations.append(
+                "validation_facts.result_sha256 must be a 64-character SHA-256"
+            )
 
     workflow = handoff.get("workflow_identity")
     _require_mapping(workflow, "workflow_identity", violations)
@@ -281,8 +299,14 @@ def validate_handoff_structure(
         if not isinstance(source.get("source_locator"), str):
             violations.append("source_identity.source_locator must be a string")
         source_digest = source.get("source_digest")
-        if not isinstance(source_digest, str) or not is_sha(source_digest) or len(source_digest) != 64:
-            violations.append("source_identity.source_digest must be a 64-character SHA-256")
+        if (
+            not isinstance(source_digest, str)
+            or not is_sha(source_digest)
+            or len(source_digest) != 64
+        ):
+            violations.append(
+                "source_identity.source_digest must be a 64-character SHA-256"
+            )
         if expected_repository and source.get("repository") != expected_repository:
             violations.append("source_identity.repository does not match repository")
 
@@ -290,10 +314,16 @@ def validate_handoff_structure(
     _require_mapping(freshness, "freshness_contract", violations)
     if isinstance(freshness, Mapping):
         invalidations = freshness.get("invalidate_on")
-        if not isinstance(invalidations, list) or set(invalidations) != set(DRIFT_TYPES):
-            violations.append("freshness_contract.invalidate_on must list all supported drift types")
+        if not isinstance(invalidations, list) or set(invalidations) != set(
+            DRIFT_TYPES
+        ):
+            violations.append(
+                "freshness_contract.invalidate_on must list all supported drift types"
+            )
         if not isinstance(freshness.get("revalidate_current_facts"), list):
-            violations.append("freshness_contract.revalidate_current_facts must be a list")
+            violations.append(
+                "freshness_contract.revalidate_current_facts must be a list"
+            )
         if freshness.get("requires_new_semantic_context_on_object_drift") is not True:
             violations.append(
                 "freshness_contract must require a new semantic context on object drift"
@@ -310,7 +340,9 @@ def validate_handoff_structure(
     return violations
 
 
-def load_handoff(path: Path, *, expected_repository: str | None = None) -> tuple[dict[str, Any], str]:
+def load_handoff(
+    path: Path, *, expected_repository: str | None = None
+) -> tuple[dict[str, Any], str]:
     """Load and structurally validate one handoff, returning value and digest."""
     if path.is_symlink():
         raise ReviewFactHandoffError("handoff path must not be a symlink")
@@ -324,7 +356,9 @@ def load_handoff(path: Path, *, expected_repository: str | None = None) -> tuple
         raise ReviewFactHandoffError(f"handoff is not valid JSON: {path}") from exc
     if not isinstance(value, dict):
         raise ReviewFactHandoffError("handoff must be a JSON object")
-    violations = validate_handoff_structure(value, expected_repository=expected_repository)
+    violations = validate_handoff_structure(
+        value, expected_repository=expected_repository
+    )
     if violations:
         raise ReviewFactHandoffError("; ".join(violations))
     return value, sha256_bytes(raw)
@@ -338,13 +372,13 @@ def resolve_handoff_path(repo_root: Path, value: str) -> Path:
     root = (repo_root / HANDOFF_ROOT).resolve()
     path = (repo_root / candidate).resolve()
     if path == root or root not in path.parents:
-        raise ReviewFactHandoffError(
-            f"handoff path must be under {HANDOFF_ROOT}/"
-        )
+        raise ReviewFactHandoffError(f"handoff path must be under {HANDOFF_ROOT}/")
     return path
 
 
-def _current_changed_files(snapshot: Mapping[str, Any]) -> tuple[list[str] | None, str | None]:
+def _current_changed_files(
+    snapshot: Mapping[str, Any],
+) -> tuple[list[str] | None, str | None]:
     observed = snapshot.get("observed")
     observed = observed if isinstance(observed, Mapping) else {}
     diff = observed.get("effective_diff")
@@ -412,7 +446,9 @@ def validate_against_snapshot(
     diff = diff if isinstance(diff, Mapping) else {}
     repository = snapshot.get("repository")
     source = handoff.get("source_identity")
-    source_repository = source.get("repository") if isinstance(source, Mapping) else None
+    source_repository = (
+        source.get("repository") if isinstance(source, Mapping) else None
+    )
     if isinstance(repository, str) and source_repository != repository:
         errors.append("TASK_PR_IDENTITY_DRIFT: repository")
     comparisons = (
@@ -435,7 +471,9 @@ def validate_against_snapshot(
 
     if current_acceptance_criteria_ids is None:
         errors.append("TASK_SPEC_DRIFT: current acceptance_criteria_ids unavailable")
-    elif list(current_acceptance_criteria_ids) != handoff.get("acceptance_criteria_ids"):
+    elif list(current_acceptance_criteria_ids) != handoff.get(
+        "acceptance_criteria_ids"
+    ):
         errors.append("TASK_SPEC_DRIFT: acceptance_criteria_ids")
 
     current_checks = _current_raw_check_facts(snapshot)
@@ -524,12 +562,18 @@ def build_handoff_from_snapshot(
     return handoff
 
 
-def write_handoff(repo_root: Path, handoff: Mapping[str, Any], *, filename: str) -> Path:
+def write_handoff(
+    repo_root: Path, handoff: Mapping[str, Any], *, filename: str
+) -> Path:
     """Write a validated handoff to the exact ignored evidence root."""
     violations = validate_handoff_structure(handoff)
     if violations:
         raise ReviewFactHandoffError("; ".join(violations))
-    if not filename or Path(filename).name != filename or not filename.endswith(".json"):
+    if (
+        not filename
+        or Path(filename).name != filename
+        or not filename.endswith(".json")
+    ):
         raise ReviewFactHandoffError("handoff filename must be a simple .json filename")
     root = repo_root / HANDOFF_ROOT
     root.mkdir(parents=True, exist_ok=True)
