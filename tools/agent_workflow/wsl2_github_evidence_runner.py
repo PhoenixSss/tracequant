@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
+from review_fact_handoff import ReviewFactHandoffError, resolve_handoff_path
+
 SCHEMA_VERSION: Final = 1
 RUNNER_VERSION: Final = "1.3.0"
 REPOSITORY: Final = "PhoenixSss/tracequant"
@@ -26,6 +28,7 @@ SPEC_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_profiles.json"
 RULES_PATH: Final = ".codex/rules/tracequant-wsl-evidence.rules"
 EVIDENCE_TOOL_PATH: Final = "tools/agent_workflow/workflow_evidence.py"
 COMMON_TOOL_PATH: Final = "tools/agent_workflow/workflow_common.py"
+HANDOFF_TOOL_PATH: Final = "tools/agent_workflow/review_fact_handoff.py"
 STDIO_LIMIT_BYTES: Final = 8192
 SHA_PATTERN: Final = re.compile(r"^[0-9a-f]{40}$")
 SNAPSHOT_ID_PATTERN: Final = re.compile(r"^ev-[0-9a-f]{16}$")
@@ -95,6 +98,7 @@ IDENTITY_PATHS: Final = (
     RULES_PATH,
     EVIDENCE_TOOL_PATH,
     COMMON_TOOL_PATH,
+    HANDOFF_TOOL_PATH,
 )
 ALLOWED_ENV: Final = (
     "PATH",
@@ -478,6 +482,13 @@ def _build_parser() -> argparse.ArgumentParser:
             default=None,
             help="repo-relative path to the calling Skill's SKILL.md",
         )
+        if name == "review":
+            subp.add_argument(
+                "--handoff-path",
+                type=str,
+                default=None,
+                help="repo-relative bounded Review Fact Handoff JSON path",
+            )
 
     closeout = sub.add_parser("closeout-readonly")
     closeout.add_argument("--task", type=_positive_int, required=True)
@@ -557,7 +568,7 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
             raise RunnerError(
                 "snapshot operation does not support this recheck profile"
             )
-        return [
+        command = [
             *base,
             recheck_command,
             "--snapshot-id",
@@ -567,6 +578,9 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
             "--repository",
             REPOSITORY,
         ]
+        if args.skill_path is not None:
+            command.extend(["--skill-path", args.skill_path])
+        return command
 
     result = [
         *base,
@@ -608,6 +622,10 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
                 args.expected_head_sha,
             ]
         )
+        if args.skill_path is not None:
+            result.extend(["--skill-path", args.skill_path])
+        if profile == "review" and args.handoff_path is not None:
+            result.extend(["--handoff-path", args.handoff_path])
     elif profile == "closeout-readonly":
         result.extend(
             [
@@ -768,6 +786,8 @@ def _compact_result(
             "labels": issue.get("labels"),
             "project_status": issue.get("project_status"),
             "content_sha256": issue.get("content_sha256"),
+            "spec_sha256": issue.get("spec_sha256"),
+            "acceptance_criteria_ids": issue.get("acceptance_criteria_ids"),
             "closure": {
                 "status": issue_closure.get("status"),
                 "reason": issue_closure.get("reason"),
@@ -854,6 +874,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         repo_root = _find_repo_root(Path(__file__))
         _, content_hashes = _load_inputs(repo_root)
         _require_output_root_ignored(repo_root)
+        if args.profile == "review" and args.handoff_path is not None:
+            try:
+                resolve_handoff_path(repo_root, args.handoff_path)
+            except ReviewFactHandoffError as exc:
+                raise RunnerError(str(exc)) from exc
         # Validate --skill-path early (before any GitHub queries)
         _resolve_skill_identity(repo_root, args.profile, args.skill_path)
         command = _evidence_argv(args, repo_root)

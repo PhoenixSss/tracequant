@@ -285,7 +285,7 @@ def _write_repo(
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".gitignore").write_text(
-        ".agents/evidence.local/\n.agents/validation.local/\n",
+        ".agents/evidence.local/\n.agents/validation.local/\n__pycache__/\n",
         encoding="utf-8",
     )
     state_path = tmp_path / "state.json"

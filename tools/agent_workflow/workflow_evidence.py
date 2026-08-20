@@ -10,12 +10,19 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import unicodedata
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final
 
+from review_fact_handoff import (
+    ReviewFactHandoffError,
+    load_handoff,
+    resolve_handoff_path,
+    validate_against_snapshot,
+)
 from workflow_common import (
     CommandResult,
     CommandRunner,
@@ -190,6 +197,28 @@ query($owner:String!, $name:String!, $number:Int!) {
 def _normalize_title(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value)
     return " ".join(normalized.split()).casefold()
+
+
+def _acceptance_criteria_ids(body: str | None) -> list[str] | None:
+    """Extract deterministic AC identifiers from the current Task body."""
+    if not isinstance(body, str):
+        return None
+    in_section = False
+    identifiers: list[str] = []
+    for line in body.splitlines():
+        heading = re.match(r"^\s*#{1,6}\s+(.+?)\s*$", line)
+        if heading:
+            title = _normalize_title(heading.group(1)).rstrip(":：")
+            in_section = title in {
+                "acceptance criteria",
+                "acceptance criterion",
+                "验收标准",
+                "验收条件",
+            }
+            continue
+        if in_section and re.match(r"^\s*[-*]\s+\[[ xX]\]\s+", line):
+            identifiers.append(f"AC-{len(identifiers) + 1}")
+    return identifiers if in_section or identifiers else None
 
 
 def _gate(status: str, detail: str | None = None) -> dict[str, Any]:
@@ -460,6 +489,8 @@ def _issue_view(
         "number": value.get("number"),
         "title": safe_text(value.get("title")),
         "content_sha256": sha256_json(content_facts),
+        "spec_sha256": sha256_bytes(body.encode("utf-8")) if body is not None else None,
+        "acceptance_criteria_ids": _acceptance_criteria_ids(body),
         "body_characters": len(body) if body is not None else None,
         "comment_count": len(comment_facts),
         "state": safe_text(value.get("state")),
@@ -990,6 +1021,14 @@ def _normalize_checks(value: Any) -> dict[str, Any]:
                 "name": safe_text(name, limit=160),
                 "state": safe_text(normalized_state, limit=64),
                 "category": category,
+                "run_id": safe_text(
+                    item.get("databaseId") or item.get("id"), limit=160
+                ),
+                "started_at": safe_text(item.get("startedAt")),
+                "completed_at": safe_text(item.get("completedAt")),
+                "source_url": safe_text(
+                    item.get("detailsUrl") or item.get("url"), limit=512
+                ),
             }
         )
     count = len(items)
@@ -1941,11 +1980,20 @@ def _diff_digest(
         warnings.append(command_warning(result))
         return {"available": False, "sha256": None, "bytes": None, "lines": None}
     raw = result.stdout.encode("utf-8")
+    changed_files: list[str] = []
+    for line in result.stdout.splitlines():
+        if not line.startswith("diff --git a/"):
+            continue
+        marker = line[len("diff --git a/") :]
+        separator = marker.find(" b/")
+        if separator > 0:
+            changed_files.append(marker[separator + 3 :])
     return {
         "available": True,
         "sha256": sha256_bytes(raw),
         "bytes": len(raw),
         "lines": result.stdout.count("\n"),
+        "changed_files": bounded_list(sorted(set(changed_files)), item_limit=MAX_FILES),
     }
 
 
@@ -1954,6 +2002,7 @@ def _runner_source(
     warnings: list[dict[str, Any]],
 ) -> dict[str, Any]:
     script = Path(__file__).resolve()
+    handoff_script = script.with_name("review_fact_handoff.py")
     digest = sha256_bytes(script.read_bytes())
     commit = _git_value(
         runner,
@@ -1971,7 +2020,35 @@ def _runner_source(
         "path": "tools/agent_workflow/workflow_evidence.py",
         "source_sha": commit if is_sha(commit) else None,
         "content_sha256": digest,
+        "handoff_schema": {
+            "path": "tools/agent_workflow/review_fact_handoff.py",
+            "content_sha256": sha256_bytes(handoff_script.read_bytes()),
+        },
     }
+
+
+def _skill_identity(
+    repo_root: Path,
+    value: str | None,
+    *,
+    default: str = ".agents/skills/task-pr-review-runner/SKILL.md",
+) -> dict[str, Any]:
+    relative = value or default
+    normalized = relative.replace("\\", "/")
+    if (
+        normalized.startswith("/")
+        or ".." in normalized
+        or not normalized.endswith("/SKILL.md")
+        or not normalized.startswith((".agents/skills/", ".claude/skills/"))
+    ):
+        raise WorkflowToolError("workflow Skill path is invalid")
+    path = repo_root / normalized
+    if path.is_symlink() or not path.is_file():
+        # The outer WSL2 Runner verifies the caller Skill before collection.
+        # Keep the lower-level evidence tool usable in isolated test fixtures
+        # that intentionally contain only the workflow identity files.
+        return {"path": normalized, "sha256": None}
+    return {"path": normalized, "sha256": sha256_bytes(path.read_bytes())}
 
 
 def _issue_gates(
@@ -2691,11 +2768,68 @@ def _task_pr_snapshot(
             gates["project_status_review"] = _gate(
                 "pass" if project == "Review" else "unknown", str(project)
             )
+        if operation in {"pr-review-snapshot", "pr-review-recheck"}:
+            handoff_path = getattr(args, "handoff_path", None)
+            if isinstance(handoff_path, str):
+                try:
+                    path = resolve_handoff_path(repo_root, handoff_path)
+                    handoff, handoff_digest = load_handoff(
+                        path, expected_repository=repository
+                    )
+                    handoff_status = validate_against_snapshot(
+                        handoff,
+                        {"repository": repository, "observed": observed},
+                        handoff_digest=handoff_digest,
+                        current_acceptance_criteria_ids=(
+                            issue.get("acceptance_criteria_ids")
+                            if isinstance(issue, dict)
+                            and isinstance(issue.get("acceptance_criteria_ids"), list)
+                            else None
+                        ),
+                    )
+                    handoff_status["path"] = handoff_path
+                    observed["review_fact_handoff"] = handoff_status
+                    gates["review_fact_handoff"] = _gate(
+                        handoff_status["status"],
+                        "; ".join(handoff_status["invalidated"]),
+                    )
+                except ReviewFactHandoffError as exc:
+                    observed["review_fact_handoff"] = {
+                        "available": False,
+                        "status": "fail",
+                        "trusted": False,
+                        "strategy": "FAIL_CLOSED",
+                        "path": handoff_path,
+                        "invalidated": [str(exc)],
+                    }
+                    gates["review_fact_handoff"] = _gate("fail", str(exc))
+            else:
+                observed["review_fact_handoff"] = {
+                    "available": False,
+                    "status": "not-selected",
+                    "trusted": False,
+                    "strategy": "FULL_REACQUISITION",
+                }
     pr = observed.get("pr")
     object_base_sha = pr.get("base_sha") if isinstance(pr, dict) else None
+    is_review = operation in {"pr-review-snapshot", "pr-review-recheck"}
+    skill_default = (
+        ".agents/skills/task-pr-review-runner/SKILL.md"
+        if is_review
+        else ".agents/skills/task-delivery-runner/SKILL.md"
+    )
+    workflow_identity = {
+        "profile": "review" if is_review else operation,
+        "schema_version": SCHEMA_VERSION,
+        "runner": _runner_source(runner, warnings),
+        "skill": _skill_identity(
+            repo_root, getattr(args, "skill_path", None), default=skill_default
+        ),
+    }
     execution_context = {
         "object_base_sha": object_base_sha,
-        "runner": _runner_source(runner, warnings),
+        "runner": workflow_identity["runner"],
+        "workflow_identity": workflow_identity,
     }
     return _base_snapshot(
         operation=operation,
@@ -3087,7 +3221,7 @@ def _snapshot_path(repo_root: Path, snapshot_id: str) -> Path:
 
 
 def _collect_for_recheck(
-    previous: Mapping[str, Any], repo_root: Path
+    previous: Mapping[str, Any], repo_root: Path, skill_path: str | None
 ) -> dict[str, Any]:
     operation = previous.get("operation")
     subject = previous.get("subject")
@@ -3102,13 +3236,43 @@ def _collect_for_recheck(
         expected_head_sha=None,
         expected_main_sha=None,
         expected_merge_sha=None,
+        handoff_path=None,
+        skill_path=skill_path,
     )
+    previous_observed = previous.get("observed")
+    previous_observed = (
+        previous_observed if isinstance(previous_observed, Mapping) else {}
+    )
+    previous_handoff = previous_observed.get("review_fact_handoff")
+    if isinstance(previous_handoff, Mapping) and isinstance(
+        previous_handoff.get("path"), str
+    ):
+        namespace.handoff_path = previous_handoff["path"]
+    if namespace.skill_path is None:
+        previous_context = previous.get("execution_context")
+        previous_context = (
+            previous_context if isinstance(previous_context, Mapping) else {}
+        )
+        previous_identity = previous_context.get("workflow_identity")
+        previous_identity = (
+            previous_identity if isinstance(previous_identity, Mapping) else {}
+        )
+        previous_skill = previous_identity.get("skill")
+        if isinstance(previous_skill, Mapping) and isinstance(
+            previous_skill.get("path"), str
+        ):
+            namespace.skill_path = previous_skill["path"]
     if operation in {"delivery-readiness", "pr-review-snapshot"}:
         namespace.task = subject.get("task_number")
         namespace.pr = subject.get("pr_number")
         if not isinstance(namespace.task, int) or not isinstance(namespace.pr, int):
             raise WorkflowToolError("snapshot Task/PR identity is invalid")
-        current = _task_pr_snapshot(namespace, repo_root, "pr-review-recheck")
+        current_operation = (
+            "pr-review-recheck"
+            if operation == "pr-review-snapshot"
+            else "delivery-readiness-recheck"
+        )
+        current = _task_pr_snapshot(namespace, repo_root, current_operation)
     elif operation == "closeout-plan":
         namespace.task = subject.get("task_number")
         namespace.pr = subject.get("pr_number")
@@ -3153,6 +3317,12 @@ def _stability_projection(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     git: dict[str, Any] = raw_git if isinstance(raw_git, dict) else {}
     raw_threads = observed.get("review_threads")
     threads: dict[str, Any] = raw_threads if isinstance(raw_threads, dict) else {}
+    handoff = observed.get("review_fact_handoff")
+    handoff = handoff if isinstance(handoff, dict) else {}
+    execution_context = snapshot.get("execution_context")
+    execution_context = (
+        execution_context if isinstance(execution_context, dict) else {}
+    )
     return {
         "repository": snapshot.get("repository"),
         "subject": snapshot.get("subject"),
@@ -3199,6 +3369,8 @@ def _stability_projection(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         "direct_child_set_digest": observed.get("direct_child_set_digest"),
         "direct_child_evidence_digest": observed.get("direct_child_evidence_digest"),
         "relationships_digest": observed.get("relationships_digest"),
+        "review_fact_handoff": handoff,
+        "workflow_identity": execution_context.get("workflow_identity"),
     }
 
 
@@ -3207,7 +3379,7 @@ def _recheck(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
     previous = read_json_file(path)
     if not isinstance(previous, dict):
         raise WorkflowToolError("snapshot is not an object")
-    current = _collect_for_recheck(previous, repo_root)
+    current = _collect_for_recheck(previous, repo_root, args.skill_path)
     before = _stability_projection(previous)
     after = _stability_projection(current)
     changed = sorted(
@@ -3294,6 +3466,8 @@ def _pr_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--pr", type=int, required=True)
     parser.add_argument("--expected-base-sha")
     parser.add_argument("--expected-head-sha")
+    parser.add_argument("--handoff-path")
+    parser.add_argument("--skill-path")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -3360,6 +3534,7 @@ def _build_parser() -> argparse.ArgumentParser:
         recheck = sub.add_parser(name, help=help_text)
         _common(recheck)
         recheck.add_argument("--snapshot-id", required=True)
+        recheck.add_argument("--skill-path")
     return parser
 
 

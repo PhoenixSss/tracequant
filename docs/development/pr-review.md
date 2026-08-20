@@ -230,6 +230,12 @@ freshness_contract
 - 是否把 handoff 实现为 durable artifact 不由本文件预先决定；#91 可以
   实验 artifact 形式，但不能改变字段边界和重新校验要求。
 
+当前 runtime 允许 Review 入口通过显式的
+`.agents/evidence.local/review-handoffs/<file>.json` 输入路径消费该契约。
+未提供路径时继续使用 fresh top-level session + full reacquisition baseline；
+提供路径时必须先完成当前对象的机械 revalidation，失败即 fail closed，不得
+把旧 handoff 当作当前事实继续使用。
+
 Handoff **不得**包含或派生出以下字段：
 
 ```text

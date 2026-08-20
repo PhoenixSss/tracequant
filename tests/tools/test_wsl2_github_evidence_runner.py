@@ -11,6 +11,12 @@ from typing import Any
 import pytest
 
 ROOT = Path(__file__).parents[2]
+sys.path.insert(0, str(ROOT / "tools/agent_workflow"))
+from review_fact_handoff import (  # noqa: E402, I001
+    build_handoff_from_snapshot,
+    write_handoff,
+)
+
 RUNNER_REL = Path("tools/agent_workflow/wsl2_github_evidence_runner.py")
 IDENTITY_FILES = (
     RUNNER_REL,
@@ -18,6 +24,7 @@ IDENTITY_FILES = (
     Path(".codex/rules/tracequant-wsl-evidence.rules"),
     Path("tools/agent_workflow/workflow_evidence.py"),
     Path("tools/agent_workflow/workflow_common.py"),
+    Path("tools/agent_workflow/review_fact_handoff.py"),
 )
 REAL_GIT_OPTIONAL = shutil.which("git")
 assert REAL_GIT_OPTIONAL is not None
@@ -253,7 +260,7 @@ def _prepare_repo(
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, target)
     (repo / ".gitignore").write_text(
-        ".agents/evidence.local/\n.agents/validation.local/\n",
+        ".agents/evidence.local/\n.agents/validation.local/\n__pycache__/\n",
         encoding="utf-8",
         newline="\n",
     )
@@ -419,6 +426,77 @@ def test_review_profile_returns_required_schema_and_compact_digest(
     assert set(value["integrity"]["files"]) == {
         path.as_posix() for path in IDENTITY_FILES
     }
+
+
+def test_review_profile_consumes_verified_handoff_and_recheck_invalidates_drift(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["body"] = "## Acceptance Criteria\n- [ ] first\n- [ ] second\n"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    first = _run(repo, env, *_review_args(main_sha, head_sha))
+    assert first.returncode == 0, first.stderr
+    first_digest = json.loads(first.stdout)
+    snapshot_path = (
+        repo
+        / ".agents/evidence.local/snapshots"
+        / f"{first_digest['snapshot_id']}.json"
+    )
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    handoff = build_handoff_from_snapshot(
+        snapshot,
+        acceptance_criteria_ids=["AC-1", "AC-2"],
+        validation_facts={
+            "profile": "workflow-delivery",
+            "schema_version": 1,
+            "runner_identity": {"path": "validation", "sha256": "c" * 64},
+            "exit_code": 0,
+            "result_locator": ".agents/validation.local/result.json",
+            "result_sha256": "d" * 64,
+        },
+        workflow_identity=snapshot["execution_context"]["workflow_identity"],
+        source_identity={
+            "repository": "PhoenixSss/tracequant",
+            "source_locator": ".agents/evidence.local/snapshot.json",
+            "source_digest": "e" * 64,
+        },
+    )
+    write_handoff(
+        repo,
+        handoff,
+        filename="task-84-review.json",
+    )
+    handoff_run = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--handoff-path",
+        ".agents/evidence.local/review-handoffs/task-84-review.json",
+    )
+    assert handoff_run.returncode == 0, handoff_run.stderr
+    handoff_digest = json.loads(handoff_run.stdout)
+    handoff_snapshot = json.loads(
+        (
+            repo
+            / ".agents/evidence.local/snapshots"
+            / f"{handoff_digest['snapshot_id']}.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert handoff_snapshot["gates"]["review_fact_handoff"]["status"] == "pass"
+    assert (
+        handoff_snapshot["observed"]["review_fact_handoff"]["strategy"]
+        == "FRESH_ROOT_BOUNDED_HANDOFF"
+    )
+
+    handoff["head_sha"] = "f" * 40
+    (repo / ".agents/evidence.local/review-handoffs/task-84-review.json").write_text(
+        json.dumps(handoff), encoding="utf-8"
+    )
+    recheck = _run(repo, env, "recheck", "--snapshot-id", handoff_digest["snapshot_id"])
+    assert recheck.returncode == 4
+    recheck_digest = json.loads(recheck.stdout)
+    assert recheck_digest["status"] == "fail"
 
 
 @pytest.mark.parametrize("profile", ["delivery-readiness", "review", "pre-merge"])
