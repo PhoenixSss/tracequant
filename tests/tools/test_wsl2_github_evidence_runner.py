@@ -398,7 +398,7 @@ def _result(repo: Path, stdout: str) -> dict[str, Any]:
     return result
 
 
-def _validation_facts(repo: Path, head_sha: str) -> dict[str, Any]:
+def _validation_facts(repo: Path, base_sha: str, head_sha: str) -> dict[str, Any]:
     def digest(relative: Path) -> str:
         return hashlib.sha256((repo / relative).read_bytes()).hexdigest()
 
@@ -420,6 +420,7 @@ def _validation_facts(repo: Path, head_sha: str) -> dict[str, Any]:
     document = {
         "schema_version": 1,
         "profile": "workflow-delivery",
+        "base_sha": base_sha,
         "status": "pass",
         "repository": {"state": {"head_sha": head_sha, "clean": True}},
         "artifacts": {"result_json": locator},
@@ -443,6 +444,7 @@ def _validation_facts(repo: Path, head_sha: str) -> dict[str, Any]:
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_bytes(payload)
     return {
+        "base_sha": document["base_sha"],
         "profile": document["profile"],
         "schema_version": document["schema_version"],
         "runner_identity": identity,
@@ -513,7 +515,7 @@ def test_review_profile_consumes_verified_handoff_and_recheck_invalidates_drift(
     handoff = build_handoff_from_snapshot(
         snapshot,
         acceptance_criteria_ids=["AC-1", "AC-2"],
-        validation_facts=_validation_facts(repo, head_sha),
+        validation_facts=_validation_facts(repo, main_sha, head_sha),
         workflow_identity=snapshot["execution_context"]["workflow_identity"],
     )
     write_handoff(

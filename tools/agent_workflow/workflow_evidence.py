@@ -2826,6 +2826,9 @@ def _task_pr_snapshot(
                     acquire_current_validation_facts(
                         repo_root,
                         handoff["validation_facts"],
+                        expected_base_sha=pr.get("base_sha")
+                        if isinstance(pr.get("base_sha"), str)
+                        else None,
                         expected_head_sha=pr_head_sha
                         if isinstance(pr_head_sha, str)
                         else None,

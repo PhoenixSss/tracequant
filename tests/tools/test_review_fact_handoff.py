@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -9,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parents[2] / "tools/agent_workflow"))
 
 from review_fact_handoff import (  # type: ignore[import-not-found]  # noqa: E402, I001
     DRIFT_TYPES,
+    acquire_current_validation_facts,
     build_handoff_from_snapshot,
     default_freshness_contract,
     validate_against_snapshot,
@@ -44,6 +47,7 @@ def _workflow_identity() -> dict[str, Any]:
 
 def _validation_facts() -> dict[str, Any]:
     return {
+        "base_sha": SHA40,
         "profile": "workflow-delivery",
         "schema_version": 1,
         "runner_identity": {
@@ -109,15 +113,115 @@ def _snapshot() -> dict[str, Any]:
     }
 
 
-def _handoff() -> dict[str, Any]:
+def _handoff(validation_facts: dict[str, Any] | None = None) -> dict[str, Any]:
     return cast(
         dict[str, Any],
         build_handoff_from_snapshot(
             _snapshot(),
             acceptance_criteria_ids=["AC-1", "AC-2"],
-            validation_facts=_validation_facts(),
+            validation_facts=validation_facts or _validation_facts(),
             workflow_identity=_workflow_identity(),
             created_at="2026-08-20T00:00:00+00:00",
+        ),
+    )
+
+
+def _write_validation_result(
+    repo: Path,
+    *,
+    base_sha: Any = SHA40,
+    head_sha: Any = HEAD40,
+    clean: bool = True,
+    include_base: bool = True,
+) -> dict[str, Any]:
+    identity_paths = {
+        "path": "tools/agent_workflow/wsl2_validation_runner.py",
+        "profile_spec_path": "tools/agent_workflow/wsl2_validation_profiles.json",
+        "rules_path": ".codex/rules/tracequant-wsl-validation.rules",
+        "workflow_validation_path": "tools/agent_workflow/workflow_validation.py",
+        "skill_path": ".agents/skills/task-delivery-runner/SKILL.md",
+    }
+    digests: dict[str, str] = {}
+    for key, relative in identity_paths.items():
+        target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"validation identity")
+        digests[key] = hashlib.sha256(target.read_bytes()).hexdigest()
+    identity = {
+        "path": identity_paths["path"],
+        "sha256": digests["path"],
+        "profile_spec_path": identity_paths["profile_spec_path"],
+        "profile_spec_sha256": digests["profile_spec_path"],
+        "rules_path": identity_paths["rules_path"],
+        "rules_sha256": digests["rules_path"],
+        "workflow_validation_path": identity_paths["workflow_validation_path"],
+        "workflow_validation_sha256": digests["workflow_validation_path"],
+        "skill": {
+            "path": identity_paths["skill_path"],
+            "sha256": digests["skill_path"],
+        },
+    }
+    locator = ".agents/validation.local/wsl2-runs/run/result.json"
+    document: dict[str, Any] = {
+        "schema_version": 1,
+        "profile": "workflow-delivery",
+        "status": "pass",
+        "repository": {"state": {"head_sha": head_sha, "clean": clean}},
+        "artifacts": {"result_json": locator},
+        "integrity": {
+            "verification": "current-worktree-content",
+            "repository_head_sha": head_sha,
+            "repository_clean": clean,
+            "runner_path": identity["path"],
+            "runner_sha256": identity["sha256"],
+            "profile_spec_path": identity["profile_spec_path"],
+            "profile_spec_sha256": identity["profile_spec_sha256"],
+            "rules_path": identity["rules_path"],
+            "rules_sha256": identity["rules_sha256"],
+            "workflow_validation_path": identity["workflow_validation_path"],
+            "workflow_validation_sha256": identity["workflow_validation_sha256"],
+            "skill": identity["skill"],
+        },
+    }
+    if include_base:
+        document["base_sha"] = base_sha
+    payload = (json.dumps(document, sort_keys=True) + "\n").encode()
+    result_path = repo / locator
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_bytes(payload)
+    return {
+        "base_sha": base_sha,
+        "profile": document["profile"],
+        "schema_version": document["schema_version"],
+        "runner_identity": identity,
+        "exit_code": 0,
+        "result_locator": locator,
+        "result_sha256": hashlib.sha256(payload).hexdigest(),
+    }
+
+
+def _acquire_validation(
+    tmp_path: Path,
+    *,
+    base_sha: Any = SHA40,
+    head_sha: Any = HEAD40,
+    clean: bool = True,
+    include_base: bool = True,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    facts = _write_validation_result(
+        tmp_path,
+        base_sha=base_sha,
+        head_sha=head_sha,
+        clean=clean,
+        include_base=include_base,
+    )
+    return cast(
+        tuple[dict[str, Any] | None, list[str]],
+        acquire_current_validation_facts(
+            tmp_path,
+            facts,
+            expected_base_sha=SHA40,
+            expected_head_sha=HEAD40,
         ),
     )
 
@@ -160,6 +264,52 @@ def test_current_validation_facts_match_handoff() -> None:
     )
     assert result["status"] == "pass"
     assert result["trusted"] is True
+
+
+def test_validation_base_and_head_match_reviewed_object(tmp_path: Path) -> None:
+    current, errors = _acquire_validation(tmp_path)
+    assert errors == []
+    assert current is not None
+    result = validate_against_snapshot(
+        _handoff(current),
+        _snapshot(),
+        current_acceptance_criteria_ids=["AC-1", "AC-2"],
+        current_validation_facts=current,
+    )
+    assert result["status"] == "pass"
+    assert result["trusted"] is True
+
+
+def test_validation_base_mismatch_fails_even_when_head_matches(tmp_path: Path) -> None:
+    current, errors = _acquire_validation(tmp_path, base_sha=HEAD40)
+    assert current is None
+    assert any("base identity mismatch" in error for error in errors)
+
+
+def test_validation_base_missing_fails_closed(tmp_path: Path) -> None:
+    current, errors = _acquire_validation(tmp_path, include_base=False)
+    assert current is None
+    assert any("base identity is unavailable" in error for error in errors)
+
+
+def test_validation_base_unknown_fails_closed(tmp_path: Path) -> None:
+    current, errors = _acquire_validation(tmp_path, base_sha="UNKNOWN")
+    assert current is None
+    assert any("base identity is unavailable" in error for error in errors)
+
+
+def test_validation_base_and_head_match_but_clean_fails_closed(
+    tmp_path: Path,
+) -> None:
+    current, errors = _acquire_validation(tmp_path, clean=False)
+    assert current is None
+    assert any("repository was not clean" in error for error in errors)
+
+
+def test_validation_head_mismatch_remains_fail_closed(tmp_path: Path) -> None:
+    current, errors = _acquire_validation(tmp_path, head_sha="e" * 40)
+    assert current is None
+    assert any("head identity mismatch" in error for error in errors)
 
 
 def test_stale_or_mismatched_validation_facts_fail_closed() -> None:

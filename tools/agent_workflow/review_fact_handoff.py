@@ -81,6 +81,7 @@ REQUIRED_FAILURE_FIELDS: Final = frozenset(
 )
 VALIDATION_FIELDS: Final = frozenset(
     {
+        "base_sha",
         "profile",
         "schema_version",
         "runner_identity",
@@ -505,6 +506,12 @@ def validate_handoff_structure(
         violations,
     )
     if validation_mapping is not None:
+        _require_sha_length(
+            validation_mapping.get("base_sha"),
+            "validation_facts.base_sha",
+            40,
+            violations,
+        )
         profile = validation_mapping.get("profile")
         _require_string(
             profile,
@@ -753,12 +760,13 @@ def acquire_current_validation_facts(
     repo_root: Path,
     validation_facts: Mapping[str, Any],
     *,
+    expected_base_sha: str | None,
     expected_head_sha: str | None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Read and normalize the canonical validation Runner result for a handoff.
 
     The handoff contains only a locator and digest.  The current result file is
-    the canonical mechanical source; its repository/head, profile, schema, and
+    the canonical mechanical source; its repository/base/head, profile, schema, and
     Runner/Skill identities must all be present and internally verified before
     the facts can be compared with the handoff.
     """
@@ -792,6 +800,7 @@ def acquire_current_validation_facts(
 
     schema_version = document.get("schema_version")
     profile = document.get("profile")
+    base_sha = document.get("base_sha")
     status = document.get("status")
     artifacts = document.get("artifacts")
     integrity = document.get("integrity")
@@ -807,6 +816,12 @@ def acquire_current_validation_facts(
         errors.append("validation result profile is not canonical")
     if status != "pass":
         errors.append("validation result is not a passing current fact")
+    if not is_sha(base_sha):
+        errors.append("validation result base identity is unavailable")
+    elif not is_sha(expected_base_sha):
+        errors.append("expected validation base identity is unavailable")
+    elif base_sha != expected_base_sha:
+        errors.append("validation result base identity mismatch")
     if not isinstance(artifacts, Mapping) or artifacts.get("result_json") != locator:
         errors.append("validation result locator identity mismatch")
     if not isinstance(repository_state, Mapping):
@@ -910,6 +925,7 @@ def acquire_current_validation_facts(
         and identity is not None
     ):
         canonical = {
+            "base_sha": base_sha,
             "profile": profile,
             "schema_version": schema_version,
             "runner_identity": identity,
@@ -1038,10 +1054,19 @@ def validate_against_snapshot(
     validation = handoff.get("validation_facts")
     if current_validation_facts is None:
         errors.append("VALIDATION_DRIFT: current validation facts unavailable")
-    elif not isinstance(validation, Mapping) or dict(validation) != dict(
-        current_validation_facts
-    ):
-        errors.append("VALIDATION_DRIFT: validation_facts")
+    else:
+        if not isinstance(validation, Mapping) or dict(validation) != dict(
+            current_validation_facts
+        ):
+            errors.append("VALIDATION_DRIFT: validation_facts")
+        validation_base = current_validation_facts.get("base_sha")
+        expected_base = pr.get("base_sha")
+        if not is_sha(validation_base):
+            errors.append("VALIDATION_DRIFT: validation base identity unavailable")
+        elif not is_sha(expected_base):
+            errors.append("VALIDATION_DRIFT: reviewed base identity unavailable")
+        elif validation_base != expected_base:
+            errors.append("VALIDATION_DRIFT: validation base identity mismatch")
 
     if current_workflow_identity is None:
         execution_context = snapshot.get("execution_context")

@@ -222,7 +222,7 @@ freshness_contract
 - `task_id` / `pr_id` 必须绑定同一 repository；`task_spec_hash`、base、
   head、diff、manifest 和 AC identifiers 共同定义一个 reviewed object。
 - `raw_check_facts` 与 `validation_facts` 只记录可重查的原始状态、profile、
-  result locator 和 digest，不把它们改写成质量或合并结论。
+  validated base identity、result locator 和 digest，不把它们改写成质量或合并结论。
 - `source_identity` 必须能说明来源对象、查询或 profile identity；
   `freshness_contract` 必须说明哪些当前条件不再满足时 handoff 失效。
 - `created_at` 记录产生时间，但不得单独作为 freshness 证明；本契约不
