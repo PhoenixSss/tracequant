@@ -74,6 +74,37 @@ The initial snapshot defines the reviewed identity. `workflow-review` is the
 independent CI-equivalent validation for the locked head. `recheck` verifies
 stability before verdict.
 
+## Optional bounded Review Fact Handoff
+
+The formal baseline remains fresh top-level Review root plus full mechanical
+fact reacquisition. A maintainer may explicitly provide a bounded JSON handoff
+to the Review entry:
+
+```text
+tools/agent_workflow/wsl2_github_evidence_runner.py review \
+  --task <TASK> --pr <PR> \
+  --expected-base-sha <LOCKED_BASE_SHA> \
+  --expected-head-sha <LOCKED_HEAD_SHA> \
+  --handoff-path .agents/evidence.local/review-handoffs/<FILE>.json \
+  --skill-path .agents/skills/task-pr-review-runner/SKILL.md
+```
+
+With `--handoff-path`, the Runner accepts only the exact bounded mechanical
+fields from `docs/development/pr-review.md` §11.4. Unknown or prohibited
+semantic fields, malformed input, missing source identity, incompatible schema,
+or any Task/PR/spec/base/head/diff/changed-file/check drift fail closed. The
+Runner reports `FRESH_ROOT_BOUNDED_HANDOFF` only after it revalidates the
+current object; the handoff never replaces `workflow-review`, current checks,
+the stability `recheck`, or semantic Review judgment. The handoff also carries
+an explicit freshness contract covering all eight drift types and must not
+contain Delivery conclusions or an old Review verdict.
+
+No `--handoff-path` preserves the existing `FULL_REACQUISITION` path and its
+semantics. A valid handoff is a candidate mechanical input only: the Reviewer
+still independently reads the complete effective diff, maps every applicable
+Acceptance Criterion, judges correctness/safety/risk, and forms findings and
+the verdict in a fresh semantic context.
+
 For `partial`, `unknown`, `fail`, truncation, schema mismatch, or drift, inspect
 only the named facts or failed commands. Semantic review may read any code or
 context needed to judge correctness.

@@ -94,6 +94,24 @@ def test_review_runner_is_read_only_and_emits_bounded_remediation_handoff() -> N
     assert "task-delivery-runner 修复" in text
 
 
+def test_review_runner_exposes_explicit_bounded_fact_handoff_mode() -> None:
+    for relative in (
+        ".agents/skills/task-pr-review-runner/SKILL.md",
+        ".claude/skills/task-pr-review-runner/SKILL.md",
+    ):
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        for phrase in (
+            "FRESH_ROOT_BOUNDED_HANDOFF",
+            "--handoff-path",
+            "FULL_REACQUISITION",
+            "all eight drift types",
+            "fail closed",
+            "Delivery conclusions",
+            "fresh semantic context",
+        ):
+            assert phrase in text, (relative, phrase)
+
+
 def test_closeout_and_feature_audit_keep_manual_gates() -> None:
     closeout = ACTIVE_SKILLS["task-closeout"].read_text(encoding="utf-8")
     audit = ACTIVE_SKILLS["feature-completion-audit"].read_text(encoding="utf-8")
