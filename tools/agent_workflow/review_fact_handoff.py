@@ -110,6 +110,15 @@ WORKFLOW_RUNNER_FIELDS: Final = frozenset(
 WORKFLOW_SCHEMA_FIELDS: Final = frozenset({"path", "content_sha256"})
 WORKFLOW_SKILL_FIELDS: Final = frozenset({"path", "sha256"})
 SOURCE_FIELDS: Final = frozenset({"repository", "source_locator", "source_digest"})
+SOURCE_STABLE_FIELDS: Final = (
+    "schema_version",
+    "repository",
+    "subject",
+    "execution_context",
+    "observed",
+    "gates",
+    "limitations",
+)
 FRESHNESS_FIELDS: Final = frozenset(
     {
         "invalidate_on",
@@ -342,20 +351,21 @@ def _validate_source_identity(
     return source
 
 
+def _stable_source_projection(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Select canonical source facts, excluding operation-phase metadata."""
+    return {field: snapshot.get(field) for field in SOURCE_STABLE_FIELDS}
+
+
 def source_identity_for_snapshot(snapshot: Mapping[str, Any]) -> dict[str, str]:
-    """Return the only source identity this handoff schema can independently verify."""
+    """Return the source identity that remains stable across review phases."""
     repository = snapshot.get("repository")
-    snapshot_id = snapshot.get("snapshot_id")
     if not isinstance(repository, str) or not repository:
         raise ReviewFactHandoffError("current source repository is unavailable")
-    if not isinstance(snapshot_id, str) or not _SOURCE_LOCATOR.fullmatch(
-        f"snapshot:{snapshot_id}"
-    ):
-        raise ReviewFactHandoffError("current source snapshot identity is unavailable")
+    stable_digest = sha256_json(_stable_source_projection(snapshot))
     return {
         "repository": repository,
-        "source_locator": f"snapshot:{snapshot_id}",
-        "source_digest": sha256_json(snapshot),
+        "source_locator": f"snapshot:ev-{stable_digest[:16]}",
+        "source_digest": stable_digest,
     }
 
 

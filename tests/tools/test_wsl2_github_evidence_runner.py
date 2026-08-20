@@ -545,6 +545,30 @@ def test_review_profile_consumes_verified_handoff_and_recheck_invalidates_drift(
         == "FRESH_ROOT_BOUNDED_HANDOFF"
     )
 
+    stable_recheck = _run(
+        repo,
+        env,
+        "recheck",
+        "--snapshot-id",
+        handoff_digest["snapshot_id"],
+    )
+    assert stable_recheck.returncode == 0, stable_recheck.stderr
+    stable_value = _result(repo, stable_recheck.stdout)
+    assert stable_value["stability"]["stable"] is True
+    assert stable_value["stability"]["changed_fields"]["items"] == []
+    assert stable_value["evidence"]["source_operation"] == "pr-review-recheck"
+    stable_snapshot = json.loads(
+        (repo / stable_value["evidence"]["source_details_path"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert stable_snapshot["operation"] == "pr-review-recheck"
+    assert stable_snapshot["observed"]["review_fact_handoff"]["status"] == "pass"
+    assert not any(
+        item.startswith("HANDOFF_SCHEMA_DRIFT")
+        for item in stable_snapshot["observed"]["review_fact_handoff"]["invalidated"]
+    )
+
     handoff["head_sha"] = "f" * 40
     (repo / ".agents/evidence.local/review-handoffs/task-84-review.json").write_text(
         json.dumps(handoff), encoding="utf-8"
@@ -1390,6 +1414,7 @@ def test_recheck_preserves_skill_identity(
     assert second.returncode == 0, second.stderr
     value = _result(repo, second.stdout)
     assert value["integrity"]["skill"]["path"] == claude_skill
+    assert value["stability"]["stable"] is True
 
 
 def test_skill_path_hash_mismatch_detected(

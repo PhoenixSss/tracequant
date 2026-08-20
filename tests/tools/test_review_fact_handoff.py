@@ -14,6 +14,7 @@ from review_fact_handoff import (  # type: ignore[import-not-found]  # noqa: E40
     acquire_current_validation_facts,
     build_handoff_from_snapshot,
     default_freshness_contract,
+    source_identity_for_snapshot,
     validate_against_snapshot,
     validate_handoff_structure,
 )
@@ -264,6 +265,28 @@ def test_current_validation_facts_match_handoff() -> None:
     )
     assert result["status"] == "pass"
     assert result["trusted"] is True
+
+
+def test_review_phase_operation_does_not_change_stable_source_identity() -> None:
+    initial = _snapshot()
+    recheck = _snapshot()
+    recheck["operation"] = "pr-review-recheck"
+    recheck["snapshot_id"] = "ev-fedcba9876543210"
+
+    assert source_identity_for_snapshot(initial) == source_identity_for_snapshot(
+        recheck
+    )
+    result = validate_against_snapshot(
+        _handoff(),
+        recheck,
+        current_acceptance_criteria_ids=["AC-1", "AC-2"],
+        current_validation_facts=_validation_facts(),
+    )
+    assert result["status"] == "pass"
+    assert result["trusted"] is True
+    assert not any(
+        item.startswith("HANDOFF_SCHEMA_DRIFT") for item in result["invalidated"]
+    )
 
 
 def test_validation_base_and_head_match_reviewed_object(tmp_path: Path) -> None:
