@@ -222,19 +222,13 @@ freshness_contract
 - `task_id` / `pr_id` 必须绑定同一 repository；`task_spec_hash`、base、
   head、diff、manifest 和 AC identifiers 共同定义一个 reviewed object。
 - `raw_check_facts` 与 `validation_facts` 只记录可重查的原始状态、profile、
-  validated base identity、result locator 和 digest，不把它们改写成质量或合并结论。
+  result locator 和 digest，不把它们改写成质量或合并结论。
 - `source_identity` 必须能说明来源对象、查询或 profile identity；
   `freshness_contract` 必须说明哪些当前条件不再满足时 handoff 失效。
 - `created_at` 记录产生时间，但不得单独作为 freshness 证明；本契约不
   预设一个可绕过 object revalidation 的固定 TTL。
 - 是否把 handoff 实现为 durable artifact 不由本文件预先决定；#91 可以
   实验 artifact 形式，但不能改变字段边界和重新校验要求。
-
-当前 runtime 允许 Review 入口通过显式的
-`.agents/evidence.local/review-handoffs/<file>.json` 输入路径消费该契约。
-未提供路径时继续使用 fresh top-level session + full reacquisition baseline；
-提供路径时必须先完成当前对象的机械 revalidation，失败即 fail closed，不得
-把旧 handoff 当作当前事实继续使用。
 
 Handoff **不得**包含或派生出以下字段：
 

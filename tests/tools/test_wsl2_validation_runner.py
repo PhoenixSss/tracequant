@@ -575,7 +575,6 @@ def test_workflow_profiles_require_base_sha_and_run_one_bounded_command(
         stored = json.loads((repo / digest["result_path"]).read_text())
         assert stored["commands"][0]["id"] == "workflow-validation"
         assert stored["commands"][0]["exit_code"] == 0
-        assert stored["base_sha"] == base_sha
 
 
 def test_workflow_closeout_requires_clean_synchronized_main(tmp_path: Path) -> None:
