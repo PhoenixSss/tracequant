@@ -19,8 +19,10 @@ from typing import Any, Final
 
 from review_fact_handoff import (
     ReviewFactHandoffError,
+    acquire_current_validation_facts,
     load_handoff,
     resolve_handoff_path,
+    source_identity_for_snapshot,
     validate_against_snapshot,
 )
 from workflow_common import (
@@ -2768,48 +2770,6 @@ def _task_pr_snapshot(
             gates["project_status_review"] = _gate(
                 "pass" if project == "Review" else "unknown", str(project)
             )
-        if operation in {"pr-review-snapshot", "pr-review-recheck"}:
-            handoff_path = getattr(args, "handoff_path", None)
-            if isinstance(handoff_path, str):
-                try:
-                    path = resolve_handoff_path(repo_root, handoff_path)
-                    handoff, handoff_digest = load_handoff(
-                        path, expected_repository=repository
-                    )
-                    handoff_status = validate_against_snapshot(
-                        handoff,
-                        {"repository": repository, "observed": observed},
-                        handoff_digest=handoff_digest,
-                        current_acceptance_criteria_ids=(
-                            issue.get("acceptance_criteria_ids")
-                            if isinstance(issue, dict)
-                            and isinstance(issue.get("acceptance_criteria_ids"), list)
-                            else None
-                        ),
-                    )
-                    handoff_status["path"] = handoff_path
-                    observed["review_fact_handoff"] = handoff_status
-                    gates["review_fact_handoff"] = _gate(
-                        handoff_status["status"],
-                        "; ".join(handoff_status["invalidated"]),
-                    )
-                except ReviewFactHandoffError as exc:
-                    observed["review_fact_handoff"] = {
-                        "available": False,
-                        "status": "fail",
-                        "trusted": False,
-                        "strategy": "FAIL_CLOSED",
-                        "path": handoff_path,
-                        "invalidated": [str(exc)],
-                    }
-                    gates["review_fact_handoff"] = _gate("fail", str(exc))
-            else:
-                observed["review_fact_handoff"] = {
-                    "available": False,
-                    "status": "not-selected",
-                    "trusted": False,
-                    "strategy": "FULL_REACQUISITION",
-                }
     pr = observed.get("pr")
     object_base_sha = pr.get("base_sha") if isinstance(pr, dict) else None
     is_review = operation in {"pr-review-snapshot", "pr-review-recheck"}
@@ -2831,6 +2791,93 @@ def _task_pr_snapshot(
         "runner": workflow_identity["runner"],
         "workflow_identity": workflow_identity,
     }
+    if is_review:
+        handoff_path = getattr(args, "handoff_path", None)
+        source_observed = dict(observed)
+        source_observed["review_fact_handoff"] = {
+            "available": False,
+            "status": "not-selected",
+            "trusted": False,
+            "strategy": "FULL_REACQUISITION",
+        }
+        source_snapshot = _base_snapshot(
+            operation=operation,
+            subject={
+                "kind": "task-pr",
+                "task_number": args.task,
+                "pr_number": args.pr,
+            },
+            repository=repository,
+            observed=source_observed,
+            execution_context=execution_context,
+            gates=gates,
+            warnings=warnings,
+            limitations=limitations,
+            operations=runner.counters(),
+        )
+        if isinstance(handoff_path, str):
+            try:
+                path = resolve_handoff_path(repo_root, handoff_path)
+                handoff, handoff_digest = load_handoff(
+                    path, expected_repository=repository
+                )
+                pr_head_sha = pr.get("head_sha") if isinstance(pr, Mapping) else None
+                current_validation_facts, validation_errors = (
+                    acquire_current_validation_facts(
+                        repo_root,
+                        handoff["validation_facts"],
+                        expected_head_sha=pr_head_sha
+                        if isinstance(pr_head_sha, str)
+                        else None,
+                    )
+                )
+                handoff_status = validate_against_snapshot(
+                    handoff,
+                    source_snapshot,
+                    handoff_digest=handoff_digest,
+                    current_acceptance_criteria_ids=(
+                        issue.get("acceptance_criteria_ids")
+                        if isinstance(issue, dict)
+                        and isinstance(issue.get("acceptance_criteria_ids"), list)
+                        else None
+                    ),
+                    current_validation_facts=current_validation_facts,
+                    current_workflow_identity=workflow_identity,
+                    current_source_identity=source_identity_for_snapshot(
+                        source_snapshot
+                    ),
+                )
+                if validation_errors:
+                    handoff_status["invalidated"] = list(
+                        dict.fromkeys(
+                            handoff_status["invalidated"]
+                            + [
+                                f"VALIDATION_DRIFT: {item}"
+                                for item in validation_errors
+                            ]
+                        )
+                    )
+                    handoff_status["status"] = "fail"
+                    handoff_status["trusted"] = False
+                    handoff_status["strategy"] = "FAIL_CLOSED"
+                handoff_status["path"] = handoff_path
+                observed["review_fact_handoff"] = handoff_status
+                gates["review_fact_handoff"] = _gate(
+                    handoff_status["status"],
+                    "; ".join(handoff_status["invalidated"]),
+                )
+            except ReviewFactHandoffError as exc:
+                observed["review_fact_handoff"] = {
+                    "available": False,
+                    "status": "fail",
+                    "trusted": False,
+                    "strategy": "FAIL_CLOSED",
+                    "path": handoff_path,
+                    "invalidated": [str(exc)],
+                }
+                gates["review_fact_handoff"] = _gate("fail", str(exc))
+        else:
+            observed["review_fact_handoff"] = source_observed["review_fact_handoff"]
     return _base_snapshot(
         operation=operation,
         subject={"kind": "task-pr", "task_number": args.task, "pr_number": args.pr},

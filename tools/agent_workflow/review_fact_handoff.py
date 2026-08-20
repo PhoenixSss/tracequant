@@ -68,6 +68,68 @@ DRIFT_TYPES: Final = (
 )
 _AC_ID = re.compile(r"^AC-[0-9]+$")
 _RELATIVE_PATH = re.compile(r"^[^/].*$")
+_SOURCE_LOCATOR = re.compile(r"^snapshot:ev-[0-9a-f]{16}$")
+
+RAW_CHECK_FIELDS: Final = frozenset({"observed", "required"})
+CHECK_ITEM_FIELDS: Final = frozenset(
+    {"name", "state", "category", "run_id", "started_at", "completed_at", "source_url"}
+)
+BOUNDED_LIST_FIELDS: Final = frozenset({"items", "count", "truncated"})
+REQUIRED_CHECK_FIELDS: Final = frozenset({"configuration", "contexts", "failure"})
+REQUIRED_FAILURE_FIELDS: Final = frozenset(
+    {"category", "reason", "http_status", "command_id"}
+)
+VALIDATION_FIELDS: Final = frozenset(
+    {
+        "profile",
+        "schema_version",
+        "runner_identity",
+        "exit_code",
+        "result_locator",
+        "result_sha256",
+    }
+)
+VALIDATION_RUNNER_FIELDS: Final = frozenset(
+    {
+        "path",
+        "sha256",
+        "profile_spec_path",
+        "profile_spec_sha256",
+        "rules_path",
+        "rules_sha256",
+        "workflow_validation_path",
+        "workflow_validation_sha256",
+        "skill",
+    }
+)
+WORKFLOW_FIELDS: Final = frozenset({"profile", "schema_version", "runner", "skill"})
+WORKFLOW_RUNNER_FIELDS: Final = frozenset(
+    {"path", "source_sha", "content_sha256", "handoff_schema"}
+)
+WORKFLOW_SCHEMA_FIELDS: Final = frozenset({"path", "content_sha256"})
+WORKFLOW_SKILL_FIELDS: Final = frozenset({"path", "sha256"})
+SOURCE_FIELDS: Final = frozenset({"repository", "source_locator", "source_digest"})
+FRESHNESS_FIELDS: Final = frozenset(
+    {
+        "invalidate_on",
+        "revalidate_current_facts",
+        "requires_new_semantic_context_on_object_drift",
+    }
+)
+VALIDATION_PROFILES: Final = frozenset(
+    {"workflow-delivery", "workflow-review", "workflow-closeout"}
+)
+VALIDATION_IDENTITY_PATHS: Final = {
+    "path": "tools/agent_workflow/wsl2_validation_runner.py",
+    "profile_spec_path": "tools/agent_workflow/wsl2_validation_profiles.json",
+    "rules_path": ".codex/rules/tracequant-wsl-validation.rules",
+    "workflow_validation_path": "tools/agent_workflow/workflow_validation.py",
+}
+VALIDATION_SKILL_NAMES: Final = {
+    "workflow-delivery": "task-delivery-runner",
+    "workflow-review": "task-pr-review-runner",
+    "workflow-closeout": "task-closeout",
+}
 
 
 class ReviewFactHandoffError(WorkflowToolError):
@@ -85,7 +147,9 @@ def default_freshness_contract() -> dict[str, Any]:
             "task_spec_and_acceptance_criteria",
             "checks_and_required_configuration",
             "validation_result_freshness",
+            "validation_facts",
             "workflow_identity",
+            "source_identity",
         ],
         "requires_new_semantic_context_on_object_drift": True,
     }
@@ -126,6 +190,172 @@ def _require_sha(value: Any, field: str, violations: list[str]) -> None:
 def _require_mapping(value: Any, field: str, violations: list[str]) -> None:
     if not isinstance(value, Mapping):
         violations.append(f"{field} must be an object")
+
+
+def _exact_fields(
+    value: Any,
+    field: str,
+    allowed: frozenset[str],
+    required: frozenset[str],
+    violations: list[str],
+) -> Mapping[str, Any] | None:
+    """Validate one bounded object and reject every unspecified field."""
+    if not isinstance(value, Mapping):
+        violations.append(f"{field} must be an object")
+        return None
+    extra = sorted(set(value) - allowed)
+    missing = sorted(required - set(value))
+    if extra:
+        violations.append(f"{field} has unknown fields: {extra}")
+    if missing:
+        violations.extend(f"{field} missing field: {item}" for item in missing)
+    return value
+
+
+def _require_string(
+    value: Any, field: str, violations: list[str], *, non_empty: bool = True
+) -> None:
+    if not isinstance(value, str) or (non_empty and not value):
+        violations.append(f"{field} must be a string")
+
+
+def _require_sha_length(
+    value: Any, field: str, length: int, violations: list[str]
+) -> None:
+    if not isinstance(value, str) or not is_sha(value) or len(value) != length:
+        violations.append(f"{field} must be a {length}-character SHA")
+
+
+def _validate_bounded_list(
+    value: Any, field: str, violations: list[str], *, item_type: type = str
+) -> None:
+    bounded = _exact_fields(
+        value,
+        field,
+        BOUNDED_LIST_FIELDS,
+        frozenset(BOUNDED_LIST_FIELDS),
+        violations,
+    )
+    if bounded is None:
+        return
+    items = bounded.get("items")
+    if not isinstance(items, list) or any(
+        not isinstance(item, item_type) for item in items
+    ):
+        violations.append(f"{field}.items must be a list of {item_type.__name__}")
+    if not isinstance(bounded.get("truncated"), bool):
+        violations.append(f"{field}.truncated must be a boolean")
+    if type(bounded.get("count")) is not int or bounded["count"] < 0:
+        violations.append(f"{field}.count must be a non-negative integer")
+
+
+def _validate_workflow_identity(
+    value: Any, field: str, violations: list[str]
+) -> Mapping[str, Any] | None:
+    workflow = _exact_fields(
+        value, field, WORKFLOW_FIELDS, frozenset(WORKFLOW_FIELDS), violations
+    )
+    if workflow is None:
+        return None
+    if not isinstance(workflow.get("profile"), str) or not workflow["profile"]:
+        violations.append(f"{field}.profile must be a non-empty string")
+    if workflow.get("schema_version") != SCHEMA_VERSION:
+        violations.append(f"{field}.schema_version must be {SCHEMA_VERSION}")
+
+    runner = _exact_fields(
+        workflow.get("runner"),
+        f"{field}.runner",
+        WORKFLOW_RUNNER_FIELDS,
+        frozenset(WORKFLOW_RUNNER_FIELDS),
+        violations,
+    )
+    if runner is not None:
+        _require_string(runner.get("path"), f"{field}.runner.path", violations)
+        _require_sha_length(
+            runner.get("source_sha"), f"{field}.runner.source_sha", 40, violations
+        )
+        _require_sha_length(
+            runner.get("content_sha256"),
+            f"{field}.runner.content_sha256",
+            64,
+            violations,
+        )
+        schema = _exact_fields(
+            runner.get("handoff_schema"),
+            f"{field}.runner.handoff_schema",
+            WORKFLOW_SCHEMA_FIELDS,
+            frozenset(WORKFLOW_SCHEMA_FIELDS),
+            violations,
+        )
+        if schema is not None:
+            _require_string(
+                schema.get("path"),
+                f"{field}.runner.handoff_schema.path",
+                violations,
+            )
+            _require_sha_length(
+                schema.get("content_sha256"),
+                f"{field}.runner.handoff_schema.content_sha256",
+                64,
+                violations,
+            )
+
+    skill = _exact_fields(
+        workflow.get("skill"),
+        f"{field}.skill",
+        WORKFLOW_SKILL_FIELDS,
+        frozenset(WORKFLOW_SKILL_FIELDS),
+        violations,
+    )
+    if skill is not None:
+        _require_string(skill.get("path"), f"{field}.skill.path", violations)
+        _require_sha_length(
+            skill.get("sha256"), f"{field}.skill.sha256", 64, violations
+        )
+    return workflow
+
+
+def _validate_source_identity(
+    value: Any,
+    field: str,
+    violations: list[str],
+    *,
+    expected_repository: str | None = None,
+) -> Mapping[str, Any] | None:
+    source = _exact_fields(
+        value, field, SOURCE_FIELDS, frozenset(SOURCE_FIELDS), violations
+    )
+    if source is None:
+        return None
+    _require_string(source.get("repository"), f"{field}.repository", violations)
+    locator = source.get("source_locator")
+    if not isinstance(locator, str) or not _SOURCE_LOCATOR.fullmatch(locator):
+        violations.append(
+            f"{field}.source_locator must identify a canonical evidence snapshot"
+        )
+    _require_sha_length(
+        source.get("source_digest"), f"{field}.source_digest", 64, violations
+    )
+    if expected_repository and source.get("repository") != expected_repository:
+        violations.append(f"{field}.repository does not match repository")
+    return source
+
+
+def source_identity_for_snapshot(snapshot: Mapping[str, Any]) -> dict[str, str]:
+    """Return the only source identity this handoff schema can independently verify."""
+    repository = snapshot.get("repository")
+    snapshot_id = snapshot.get("snapshot_id")
+    if not isinstance(repository, str) or not repository:
+        raise ReviewFactHandoffError("current source repository is unavailable")
+    if not isinstance(snapshot_id, str) or not _SOURCE_LOCATOR.fullmatch(
+        f"snapshot:{snapshot_id}"
+    ):
+        raise ReviewFactHandoffError("current source snapshot identity is unavailable")
+    return {
+        "repository": repository,
+        "source_locator": f"snapshot:{snapshot_id}",
+        "source_digest": sha256_json(snapshot),
+    }
 
 
 def validate_handoff_structure(
@@ -192,139 +422,230 @@ def validate_handoff_structure(
         violations.append("acceptance_criteria_ids must be ordered and unique")
 
     raw_checks = handoff.get("raw_check_facts")
-    _require_mapping(raw_checks, "raw_check_facts", violations)
-    if isinstance(raw_checks, Mapping):
-        extra_check_fields = sorted(set(raw_checks) - {"observed", "required"})
-        if extra_check_fields:
-            violations.append(
-                f"raw_check_facts has non-mechanical fields: {extra_check_fields}"
-            )
-        if not isinstance(raw_checks.get("observed"), list):
+    raw_checks_mapping = _exact_fields(
+        raw_checks,
+        "raw_check_facts",
+        RAW_CHECK_FIELDS,
+        frozenset(RAW_CHECK_FIELDS),
+        violations,
+    )
+    if raw_checks_mapping is not None:
+        observed_checks = raw_checks_mapping.get("observed")
+        if not isinstance(observed_checks, list):
             violations.append("raw_check_facts.observed must be a list")
         else:
-            allowed_check_fields = {
-                "name",
-                "state",
-                "run_id",
-                "started_at",
-                "completed_at",
-                "source_url",
-            }
-            for index, item in enumerate(raw_checks["observed"]):
-                if not isinstance(item, Mapping):
-                    violations.append(
-                        f"raw_check_facts.observed[{index}] must be an object"
-                    )
-                else:
-                    extra = sorted(set(item) - allowed_check_fields)
-                    if extra:
-                        violations.append(
-                            f"raw_check_facts.observed[{index}] has non-mechanical fields: {extra}"
-                        )
-        _require_mapping(
-            raw_checks.get("required"), "raw_check_facts.required", violations
-        )
-        required = raw_checks.get("required")
-        if isinstance(required, Mapping):
-            extra = sorted(set(required) - {"configuration", "contexts", "failure"})
-            if extra:
-                violations.append(
-                    f"raw_check_facts.required has non-mechanical fields: {extra}"
+            for index, item in enumerate(observed_checks):
+                check = _exact_fields(
+                    item,
+                    f"raw_check_facts.observed[{index}]",
+                    CHECK_ITEM_FIELDS,
+                    frozenset(CHECK_ITEM_FIELDS),
+                    violations,
                 )
+                if check is not None:
+                    for field in ("name", "state", "category"):
+                        _require_string(
+                            check.get(field),
+                            f"raw_check_facts.observed[{index}].{field}",
+                            violations,
+                        )
+                    for field in ("run_id", "started_at", "completed_at", "source_url"):
+                        value = check.get(field)
+                        if value is not None and not isinstance(value, str):
+                            violations.append(
+                                f"raw_check_facts.observed[{index}].{field} must be a string or null"
+                            )
+
+        required = _exact_fields(
+            raw_checks_mapping.get("required"),
+            "raw_check_facts.required",
+            REQUIRED_CHECK_FIELDS,
+            frozenset({"configuration", "contexts"}),
+            violations,
+        )
+        if required is not None:
+            _require_string(
+                required.get("configuration"),
+                "raw_check_facts.required.configuration",
+                violations,
+            )
+            _validate_bounded_list(
+                required.get("contexts"),
+                "raw_check_facts.required.contexts",
+                violations,
+            )
+            if "failure" in required:
+                failure = _exact_fields(
+                    required.get("failure"),
+                    "raw_check_facts.required.failure",
+                    REQUIRED_FAILURE_FIELDS,
+                    frozenset(REQUIRED_FAILURE_FIELDS),
+                    violations,
+                )
+                if failure is not None:
+                    for field in ("category", "reason", "command_id"):
+                        _require_string(
+                            failure.get(field),
+                            f"raw_check_facts.required.failure.{field}",
+                            violations,
+                        )
+                    if failure.get("http_status") is not None and not isinstance(
+                        failure.get("http_status"), int
+                    ):
+                        violations.append(
+                            "raw_check_facts.required.failure.http_status must be an integer or null"
+                        )
 
     validation = handoff.get("validation_facts")
-    _require_mapping(validation, "validation_facts", violations)
-    if isinstance(validation, Mapping):
-        extra = sorted(
-            set(validation)
-            - {
-                "profile",
-                "schema_version",
-                "runner_identity",
-                "exit_code",
-                "result_locator",
-                "result_sha256",
-            }
+    validation_mapping = _exact_fields(
+        validation,
+        "validation_facts",
+        VALIDATION_FIELDS,
+        frozenset(VALIDATION_FIELDS),
+        violations,
+    )
+    if validation_mapping is not None:
+        profile = validation_mapping.get("profile")
+        _require_string(
+            profile,
+            "validation_facts.profile",
+            violations,
         )
-        if extra:
-            violations.append(f"validation_facts has non-mechanical fields: {extra}")
-        for field in (
-            "profile",
-            "schema_version",
-            "runner_identity",
-            "exit_code",
-            "result_locator",
-            "result_sha256",
-        ):
-            if field not in validation:
-                violations.append(f"validation_facts missing field: {field}")
-        if not isinstance(validation.get("profile"), str):
-            violations.append("validation_facts.profile must be a string")
-        if not isinstance(validation.get("runner_identity"), Mapping):
-            violations.append("validation_facts.runner_identity must be an object")
-        if not isinstance(validation.get("exit_code"), int):
-            violations.append("validation_facts.exit_code must be an integer")
-        if not _is_relative_repo_path(validation.get("result_locator")):
+        if profile not in VALIDATION_PROFILES:
             violations.append(
-                "validation_facts.result_locator must be repository-relative"
+                "validation_facts.profile is not a canonical workflow profile"
             )
-        result_sha = validation.get("result_sha256")
-        if (
-            not isinstance(result_sha, str)
-            or not is_sha(result_sha)
-            or len(result_sha) != 64
+        if validation_mapping.get("schema_version") != SCHEMA_VERSION:
+            violations.append(
+                f"validation_facts.schema_version must be {SCHEMA_VERSION}"
+            )
+        identity = _exact_fields(
+            validation_mapping.get("runner_identity"),
+            "validation_facts.runner_identity",
+            VALIDATION_RUNNER_FIELDS,
+            frozenset(VALIDATION_RUNNER_FIELDS),
+            violations,
+        )
+        if identity is not None:
+            _require_string(
+                identity.get("path"),
+                "validation_facts.runner_identity.path",
+                violations,
+            )
+            for field in (
+                "sha256",
+                "profile_spec_sha256",
+                "rules_sha256",
+                "workflow_validation_sha256",
+            ):
+                _require_sha_length(
+                    identity.get(field),
+                    f"validation_facts.runner_identity.{field}",
+                    64,
+                    violations,
+                )
+            for field in (
+                "profile_spec_path",
+                "rules_path",
+                "workflow_validation_path",
+            ):
+                if not _is_relative_repo_path(identity.get(field)):
+                    violations.append(
+                        f"validation_facts.runner_identity.{field} must be repository-relative"
+                    )
+            skill = _exact_fields(
+                identity.get("skill"),
+                "validation_facts.runner_identity.skill",
+                WORKFLOW_SKILL_FIELDS,
+                frozenset(WORKFLOW_SKILL_FIELDS),
+                violations,
+            )
+            if skill is not None:
+                _require_string(
+                    skill.get("path"),
+                    "validation_facts.runner_identity.skill.path",
+                    violations,
+                )
+                _require_sha_length(
+                    skill.get("sha256"),
+                    "validation_facts.runner_identity.skill.sha256",
+                    64,
+                    violations,
+                )
+            if profile in VALIDATION_PROFILES:
+                for field, expected in VALIDATION_IDENTITY_PATHS.items():
+                    if identity.get(field) != expected:
+                        violations.append(
+                            f"validation_facts.runner_identity.{field} is not canonical"
+                        )
+                skill_path = skill.get("path") if isinstance(skill, Mapping) else None
+                expected_skill_suffix = f"/{VALIDATION_SKILL_NAMES[profile]}/SKILL.md"
+                if (
+                    not isinstance(skill_path, str)
+                    or not (
+                        skill_path.startswith(".agents/skills/")
+                        or skill_path.startswith(".claude/skills/")
+                    )
+                    or not skill_path.endswith(expected_skill_suffix)
+                ):
+                    violations.append(
+                        "validation_facts.runner_identity.skill.path is not canonical"
+                    )
+        exit_code = validation_mapping.get("exit_code")
+        if type(exit_code) is not int or exit_code != 0:
+            violations.append("validation_facts.exit_code must be 0")
+        locator = validation_mapping.get("result_locator")
+        if not _is_relative_repo_path(locator) or not (
+            isinstance(locator, str) and locator.startswith(".agents/validation.local/")
         ):
             violations.append(
-                "validation_facts.result_sha256 must be a 64-character SHA-256"
+                "validation_facts.result_locator must be under .agents/validation.local/"
             )
+        _require_sha_length(
+            validation_mapping.get("result_sha256"),
+            "validation_facts.result_sha256",
+            64,
+            violations,
+        )
 
     workflow = handoff.get("workflow_identity")
-    _require_mapping(workflow, "workflow_identity", violations)
-    if isinstance(workflow, Mapping):
-        for field in ("profile", "schema_version", "runner", "skill"):
-            if field not in workflow:
-                violations.append(f"workflow_identity missing field: {field}")
-        if not isinstance(workflow.get("profile"), str):
-            violations.append("workflow_identity.profile must be a string")
-        if not isinstance(workflow.get("runner"), Mapping):
-            violations.append("workflow_identity.runner must be an object")
-        if not isinstance(workflow.get("skill"), Mapping):
-            violations.append("workflow_identity.skill must be an object")
+    _validate_workflow_identity(workflow, "workflow_identity", violations)
 
     source = handoff.get("source_identity")
-    _require_mapping(source, "source_identity", violations)
-    if isinstance(source, Mapping):
-        if not isinstance(source.get("repository"), str):
-            violations.append("source_identity.repository must be a string")
-        if not isinstance(source.get("source_locator"), str):
-            violations.append("source_identity.source_locator must be a string")
-        source_digest = source.get("source_digest")
-        if (
-            not isinstance(source_digest, str)
-            or not is_sha(source_digest)
-            or len(source_digest) != 64
-        ):
-            violations.append(
-                "source_identity.source_digest must be a 64-character SHA-256"
-            )
-        if expected_repository and source.get("repository") != expected_repository:
-            violations.append("source_identity.repository does not match repository")
+    _validate_source_identity(
+        source,
+        "source_identity",
+        violations,
+        expected_repository=expected_repository,
+    )
 
     freshness = handoff.get("freshness_contract")
-    _require_mapping(freshness, "freshness_contract", violations)
-    if isinstance(freshness, Mapping):
-        invalidations = freshness.get("invalidate_on")
+    freshness_mapping = _exact_fields(
+        freshness,
+        "freshness_contract",
+        FRESHNESS_FIELDS,
+        frozenset(FRESHNESS_FIELDS),
+        violations,
+    )
+    if freshness_mapping is not None:
+        invalidations = freshness_mapping.get("invalidate_on")
         if not isinstance(invalidations, list) or set(invalidations) != set(
             DRIFT_TYPES
         ):
             violations.append(
                 "freshness_contract.invalidate_on must list all supported drift types"
             )
-        if not isinstance(freshness.get("revalidate_current_facts"), list):
+        current_facts = freshness_mapping.get("revalidate_current_facts")
+        if not isinstance(current_facts, list) or any(
+            not isinstance(item, str) for item in current_facts
+        ):
             violations.append(
                 "freshness_contract.revalidate_current_facts must be a list"
             )
-        if freshness.get("requires_new_semantic_context_on_object_drift") is not True:
+        if (
+            freshness_mapping.get("requires_new_semantic_context_on_object_drift")
+            is not True
+        ):
             violations.append(
                 "freshness_contract must require a new semantic context on object drift"
             )
@@ -418,6 +739,7 @@ def _current_raw_check_facts(snapshot: Mapping[str, Any]) -> dict[str, Any] | No
             {
                 "name": item.get("name"),
                 "state": item.get("state"),
+                "category": item.get("category"),
                 "run_id": item.get("run_id"),
                 "started_at": item.get("started_at"),
                 "completed_at": item.get("completed_at"),
@@ -427,15 +749,249 @@ def _current_raw_check_facts(snapshot: Mapping[str, Any]) -> dict[str, Any] | No
     return {"observed": raw_items, "required": dict(required)}
 
 
+def acquire_current_validation_facts(
+    repo_root: Path,
+    validation_facts: Mapping[str, Any],
+    *,
+    expected_head_sha: str | None,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """Read and normalize the canonical validation Runner result for a handoff.
+
+    The handoff contains only a locator and digest.  The current result file is
+    the canonical mechanical source; its repository/head, profile, schema, and
+    Runner/Skill identities must all be present and internally verified before
+    the facts can be compared with the handoff.
+    """
+    errors: list[str] = []
+    if not isinstance(validation_facts, Mapping):
+        return None, ["validation facts unavailable"]
+    locator = validation_facts.get("result_locator")
+    if not isinstance(locator, str) or not _is_relative_repo_path(locator):
+        return None, ["validation result locator is unavailable"]
+    root = (repo_root / ".agents/validation.local").resolve()
+    path = (repo_root / locator).resolve()
+    if not locator.startswith(".agents/validation.local/") or root not in path.parents:
+        return None, [
+            "validation result locator is outside canonical validation artifacts"
+        ]
+    if path.is_symlink():
+        return None, ["validation result must not be a symlink"]
+    try:
+        raw = path.read_bytes()
+    except (FileNotFoundError, OSError):
+        return None, ["validation result is unavailable"]
+    result_digest = sha256_bytes(raw)
+    if result_digest != validation_facts.get("result_sha256"):
+        errors.append("validation result digest mismatch")
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None, ["validation result is not valid JSON"]
+    if not isinstance(document, Mapping):
+        return None, ["validation result is not an object"]
+
+    schema_version = document.get("schema_version")
+    profile = document.get("profile")
+    status = document.get("status")
+    artifacts = document.get("artifacts")
+    integrity = document.get("integrity")
+    repository = document.get("repository")
+    repository_state = (
+        repository.get("state") if isinstance(repository, Mapping) else None
+    )
+    if type(schema_version) is not int:
+        errors.append("validation result schema identity is unavailable")
+    if not isinstance(profile, str) or not profile:
+        errors.append("validation result profile is unavailable")
+    elif profile not in VALIDATION_PROFILES:
+        errors.append("validation result profile is not canonical")
+    if status != "pass":
+        errors.append("validation result is not a passing current fact")
+    if not isinstance(artifacts, Mapping) or artifacts.get("result_json") != locator:
+        errors.append("validation result locator identity mismatch")
+    if not isinstance(repository_state, Mapping):
+        errors.append("validation result repository state is unavailable")
+    if not isinstance(integrity, Mapping):
+        errors.append("validation result integrity is unavailable")
+
+    if isinstance(repository_state, Mapping):
+        if repository_state.get("clean") is not True:
+            errors.append("validation result repository was not clean")
+        if (
+            expected_head_sha is None
+            or repository_state.get("head_sha") != expected_head_sha
+        ):
+            errors.append("validation result head identity mismatch")
+    if isinstance(integrity, Mapping):
+        if integrity.get("verification") != "current-worktree-content":
+            errors.append("validation result integrity verification is unavailable")
+        if integrity.get("repository_clean") is not True:
+            errors.append(
+                "validation result integrity does not prove a clean repository"
+            )
+        if (
+            expected_head_sha is None
+            or integrity.get("repository_head_sha") != expected_head_sha
+        ):
+            errors.append("validation result integrity head identity mismatch")
+
+    identity: dict[str, Any] | None = None
+    if isinstance(integrity, Mapping):
+        skill = integrity.get("skill")
+        identity = {
+            "path": integrity.get("runner_path"),
+            "sha256": integrity.get("runner_sha256"),
+            "profile_spec_path": integrity.get("profile_spec_path"),
+            "profile_spec_sha256": integrity.get("profile_spec_sha256"),
+            "rules_path": integrity.get("rules_path"),
+            "rules_sha256": integrity.get("rules_sha256"),
+            "workflow_validation_path": integrity.get("workflow_validation_path"),
+            "workflow_validation_sha256": integrity.get("workflow_validation_sha256"),
+            "skill": dict(skill) if isinstance(skill, Mapping) else skill,
+        }
+        identity_violations: list[str] = []
+        _validate_validation_runner_identity(identity, identity_violations)
+        errors.extend(identity_violations)
+        if (
+            isinstance(profile, str)
+            and profile in VALIDATION_PROFILES
+            and identity is not None
+        ):
+            for field, expected in VALIDATION_IDENTITY_PATHS.items():
+                if identity.get(field) != expected:
+                    errors.append(
+                        f"validation result identity is not canonical: {field}"
+                    )
+            skill = identity.get("skill")
+            skill_path = skill.get("path") if isinstance(skill, Mapping) else None
+            expected_skill_suffix = f"/{VALIDATION_SKILL_NAMES[profile]}/SKILL.md"
+            if (
+                not isinstance(skill_path, str)
+                or not (
+                    skill_path.startswith(".agents/skills/")
+                    or skill_path.startswith(".claude/skills/")
+                )
+                or not skill_path.endswith(expected_skill_suffix)
+            ):
+                errors.append("validation result Skill identity is not canonical")
+        if not identity_violations:
+            identity_files = (
+                ("path", "sha256"),
+                ("profile_spec_path", "profile_spec_sha256"),
+                ("rules_path", "rules_sha256"),
+                ("workflow_validation_path", "workflow_validation_sha256"),
+            )
+            for path_field, digest_field in identity_files:
+                relative = identity.get(path_field)
+                target = repo_root / relative if isinstance(relative, str) else None
+                if target is None or target.is_symlink() or not target.is_file():
+                    errors.append(f"validation identity file unavailable: {path_field}")
+                elif sha256_bytes(target.read_bytes()) != identity.get(digest_field):
+                    errors.append(f"validation identity digest drift: {path_field}")
+            skill = identity.get("skill")
+            skill_path = skill.get("path") if isinstance(skill, Mapping) else None
+            skill_digest = skill.get("sha256") if isinstance(skill, Mapping) else None
+            skill_target = (
+                repo_root / skill_path if isinstance(skill_path, str) else None
+            )
+            if (
+                skill_target is None
+                or skill_target.is_symlink()
+                or not skill_target.is_file()
+            ):
+                errors.append("validation identity file unavailable: skill")
+            elif sha256_bytes(skill_target.read_bytes()) != skill_digest:
+                errors.append("validation identity digest drift: skill")
+
+    canonical: dict[str, Any] | None = None
+    if (
+        type(schema_version) is int
+        and isinstance(profile, str)
+        and identity is not None
+    ):
+        canonical = {
+            "profile": profile,
+            "schema_version": schema_version,
+            "runner_identity": identity,
+            "exit_code": 0 if status == "pass" else 1,
+            "result_locator": locator,
+            "result_sha256": result_digest,
+        }
+        if canonical != dict(validation_facts):
+            errors.append("validation facts do not match current canonical result")
+    if errors:
+        return None, list(dict.fromkeys(errors))
+    return canonical, []
+
+
+def _validate_validation_runner_identity(
+    value: Any, violations: list[str]
+) -> Mapping[str, Any] | None:
+    identity = _exact_fields(
+        value,
+        "validation_facts.runner_identity",
+        VALIDATION_RUNNER_FIELDS,
+        frozenset(VALIDATION_RUNNER_FIELDS),
+        violations,
+    )
+    if identity is None:
+        return None
+    _require_string(
+        identity.get("path"), "validation_facts.runner_identity.path", violations
+    )
+    for field in (
+        "sha256",
+        "profile_spec_sha256",
+        "rules_sha256",
+        "workflow_validation_sha256",
+    ):
+        _require_sha_length(
+            identity.get(field),
+            f"validation_facts.runner_identity.{field}",
+            64,
+            violations,
+        )
+    for field in ("profile_spec_path", "rules_path", "workflow_validation_path"):
+        if not _is_relative_repo_path(identity.get(field)):
+            violations.append(
+                f"validation_facts.runner_identity.{field} must be repository-relative"
+            )
+    skill = _exact_fields(
+        identity.get("skill"),
+        "validation_facts.runner_identity.skill",
+        WORKFLOW_SKILL_FIELDS,
+        frozenset(WORKFLOW_SKILL_FIELDS),
+        violations,
+    )
+    if skill is not None:
+        _require_string(
+            skill.get("path"), "validation_facts.runner_identity.skill.path", violations
+        )
+        _require_sha_length(
+            skill.get("sha256"),
+            "validation_facts.runner_identity.skill.sha256",
+            64,
+            violations,
+        )
+    return identity
+
+
 def validate_against_snapshot(
     handoff: Mapping[str, Any],
     snapshot: Mapping[str, Any],
     *,
     handoff_digest: str | None = None,
     current_acceptance_criteria_ids: Sequence[str] | None = None,
+    current_validation_facts: Mapping[str, Any] | None = None,
+    current_workflow_identity: Mapping[str, Any] | None = None,
+    current_source_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compare trusted handoff candidates with freshly collected current facts."""
-    errors = validate_handoff_structure(handoff)
+    repository = snapshot.get("repository")
+    errors = validate_handoff_structure(
+        handoff,
+        expected_repository=repository if isinstance(repository, str) else None,
+    )
     observed = snapshot.get("observed")
     observed = observed if isinstance(observed, Mapping) else {}
     issue = observed.get("issue")
@@ -444,7 +1000,6 @@ def validate_against_snapshot(
     pr = pr if isinstance(pr, Mapping) else {}
     diff = observed.get("effective_diff")
     diff = diff if isinstance(diff, Mapping) else {}
-    repository = snapshot.get("repository")
     source = handoff.get("source_identity")
     source_repository = (
         source.get("repository") if isinstance(source, Mapping) else None
@@ -480,6 +1035,43 @@ def validate_against_snapshot(
     if current_checks is None or current_checks != handoff.get("raw_check_facts"):
         errors.append("CHECKS_DRIFT: raw_check_facts")
 
+    validation = handoff.get("validation_facts")
+    if current_validation_facts is None:
+        errors.append("VALIDATION_DRIFT: current validation facts unavailable")
+    elif not isinstance(validation, Mapping) or dict(validation) != dict(
+        current_validation_facts
+    ):
+        errors.append("VALIDATION_DRIFT: validation_facts")
+
+    if current_workflow_identity is None:
+        execution_context = snapshot.get("execution_context")
+        execution_context = (
+            execution_context if isinstance(execution_context, Mapping) else {}
+        )
+        candidate = execution_context.get("workflow_identity")
+        current_workflow_identity = (
+            candidate if isinstance(candidate, Mapping) else None
+        )
+    workflow = handoff.get("workflow_identity")
+    if current_workflow_identity is None:
+        errors.append("WORKFLOW_RULE_DRIFT: current workflow identity unavailable")
+    elif not isinstance(workflow, Mapping) or dict(workflow) != dict(
+        current_workflow_identity
+    ):
+        errors.append("WORKFLOW_RULE_DRIFT: workflow_identity")
+
+    if current_source_identity is None:
+        try:
+            current_source_identity = source_identity_for_snapshot(snapshot)
+        except ReviewFactHandoffError:
+            current_source_identity = None
+    if current_source_identity is None:
+        errors.append("HANDOFF_SCHEMA_DRIFT: current source identity unavailable")
+    elif not isinstance(source, Mapping) or dict(source) != dict(
+        current_source_identity
+    ):
+        errors.append("HANDOFF_SCHEMA_DRIFT: source_identity")
+
     unique_errors = list(dict.fromkeys(errors))
     status = "pass" if not unique_errors else "fail"
     return {
@@ -497,6 +1089,7 @@ def validate_against_snapshot(
             "checks_and_required_configuration",
             "validation_result_freshness",
             "workflow_identity",
+            "source_identity",
         ],
     }
 
@@ -533,12 +1126,7 @@ def build_handoff_from_snapshot(
     repository = snapshot.get("repository")
     if not isinstance(repository, str):
         raise ReviewFactHandoffError("snapshot repository is unavailable")
-    source = dict(source_identity or {})
-    source.setdefault("repository", repository)
-    source.setdefault(
-        "source_locator", f"snapshot:{snapshot.get('snapshot_id', 'unknown')}"
-    )
-    source.setdefault("source_digest", sha256_json(snapshot))
+    source = dict(source_identity or source_identity_for_snapshot(snapshot))
     handoff = {
         "schema_version": SCHEMA_VERSION,
         "task_id": issue.get("number"),

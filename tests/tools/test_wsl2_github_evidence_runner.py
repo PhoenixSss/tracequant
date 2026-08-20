@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -25,6 +26,13 @@ IDENTITY_FILES = (
     Path("tools/agent_workflow/workflow_evidence.py"),
     Path("tools/agent_workflow/workflow_common.py"),
     Path("tools/agent_workflow/review_fact_handoff.py"),
+)
+VALIDATION_IDENTITY_FILES = (
+    Path("tools/agent_workflow/wsl2_validation_runner.py"),
+    Path("tools/agent_workflow/wsl2_validation_profiles.json"),
+    Path(".codex/rules/tracequant-wsl-validation.rules"),
+    Path("tools/agent_workflow/workflow_validation.py"),
+    Path(".agents/skills/task-delivery-runner/SKILL.md"),
 )
 REAL_GIT_OPTIONAL = shutil.which("git")
 assert REAL_GIT_OPTIONAL is not None
@@ -248,6 +256,10 @@ def _prepare_repo(
         target = repo / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, target)
+    for relative in VALIDATION_IDENTITY_FILES:
+        target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative, target)
     for skill_dir in (".agents", ".claude"):
         for skill in (
             "task-delivery-runner",
@@ -386,6 +398,60 @@ def _result(repo: Path, stdout: str) -> dict[str, Any]:
     return result
 
 
+def _validation_facts(repo: Path, head_sha: str) -> dict[str, Any]:
+    def digest(relative: Path) -> str:
+        return hashlib.sha256((repo / relative).read_bytes()).hexdigest()
+
+    locator = ".agents/validation.local/wsl2-runs/run/result.json"
+    identity = {
+        "path": "tools/agent_workflow/wsl2_validation_runner.py",
+        "sha256": digest(VALIDATION_IDENTITY_FILES[0]),
+        "profile_spec_path": "tools/agent_workflow/wsl2_validation_profiles.json",
+        "profile_spec_sha256": digest(VALIDATION_IDENTITY_FILES[1]),
+        "rules_path": ".codex/rules/tracequant-wsl-validation.rules",
+        "rules_sha256": digest(VALIDATION_IDENTITY_FILES[2]),
+        "workflow_validation_path": "tools/agent_workflow/workflow_validation.py",
+        "workflow_validation_sha256": digest(VALIDATION_IDENTITY_FILES[3]),
+        "skill": {
+            "path": ".agents/skills/task-delivery-runner/SKILL.md",
+            "sha256": digest(VALIDATION_IDENTITY_FILES[4]),
+        },
+    }
+    document = {
+        "schema_version": 1,
+        "profile": "workflow-delivery",
+        "status": "pass",
+        "repository": {"state": {"head_sha": head_sha, "clean": True}},
+        "artifacts": {"result_json": locator},
+        "integrity": {
+            "verification": "current-worktree-content",
+            "repository_head_sha": head_sha,
+            "repository_clean": True,
+            "runner_path": identity["path"],
+            "runner_sha256": identity["sha256"],
+            "profile_spec_path": identity["profile_spec_path"],
+            "profile_spec_sha256": identity["profile_spec_sha256"],
+            "rules_path": identity["rules_path"],
+            "rules_sha256": identity["rules_sha256"],
+            "workflow_validation_path": identity["workflow_validation_path"],
+            "workflow_validation_sha256": identity["workflow_validation_sha256"],
+            "skill": identity["skill"],
+        },
+    }
+    payload = (json.dumps(document, sort_keys=True) + "\n").encode()
+    result_path = repo / locator
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_bytes(payload)
+    return {
+        "profile": document["profile"],
+        "schema_version": document["schema_version"],
+        "runner_identity": identity,
+        "exit_code": 0,
+        "result_locator": locator,
+        "result_sha256": hashlib.sha256(payload).hexdigest(),
+    }
+
+
 def test_review_profile_returns_required_schema_and_compact_digest(
     tmp_path: Path,
 ) -> None:
@@ -447,20 +513,8 @@ def test_review_profile_consumes_verified_handoff_and_recheck_invalidates_drift(
     handoff = build_handoff_from_snapshot(
         snapshot,
         acceptance_criteria_ids=["AC-1", "AC-2"],
-        validation_facts={
-            "profile": "workflow-delivery",
-            "schema_version": 1,
-            "runner_identity": {"path": "validation", "sha256": "c" * 64},
-            "exit_code": 0,
-            "result_locator": ".agents/validation.local/result.json",
-            "result_sha256": "d" * 64,
-        },
+        validation_facts=_validation_facts(repo, head_sha),
         workflow_identity=snapshot["execution_context"]["workflow_identity"],
-        source_identity={
-            "repository": "PhoenixSss/tracequant",
-            "source_locator": ".agents/evidence.local/snapshot.json",
-            "source_digest": "e" * 64,
-        },
     )
     write_handoff(
         repo,
