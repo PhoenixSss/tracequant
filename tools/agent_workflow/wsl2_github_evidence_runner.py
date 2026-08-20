@@ -69,6 +69,7 @@ DELIVERY_ENTRY_PARAMS: Final = {
             "branch",
             "expected_base_sha",
             "expected_head_sha",
+            "push_verification_result",
         }
     ),
     "review-remediation": frozenset(
@@ -89,6 +90,7 @@ DELIVERY_PARAM_SPACE: Final = frozenset(
         "expected_head_sha",
         "bootstrap_verify",
         "validation_result",
+        "push_verification_result",
         "verify",
     }
 )
@@ -142,6 +144,7 @@ CANONICAL_PROFILES: Final[dict[str, tuple[str, tuple[str, ...]]]] = {
             "expected_head_sha",
             "validation_result",
             "verify",
+            "push_verification_result",
         ),
     ),
     "delivery-readiness": (
@@ -458,6 +461,23 @@ def _validation_result(value: str) -> str:
     return normalized
 
 
+def _push_verification_result(value: str) -> str:
+    normalized = value.replace("\\", "/")
+    path = Path(normalized)
+    if (
+        not normalized
+        or path.is_absolute()
+        or any(part in {"", ".", ".."} for part in path.parts)
+        or not normalized.startswith(".agents/evidence.local/wsl2-github-runs/")
+        or not normalized.endswith("/result.json")
+    ):
+        raise argparse.ArgumentTypeError(
+            "must be a repo-relative push-readiness evidence result under "
+            ".agents/evidence.local/wsl2-github-runs/"
+        )
+    return normalized
+
+
 def _validate_delivery_contract(args: argparse.Namespace) -> None:
     allowed = DELIVERY_ENTRY_PARAMS[args.entry_point]
     optional = DELIVERY_OPTIONAL_PARAMS.get(args.entry_point, frozenset())
@@ -492,6 +512,7 @@ def _build_parser() -> argparse.ArgumentParser:
     delivery.add_argument("--expected-base-sha", type=_sha)
     delivery.add_argument("--expected-head-sha", type=_sha)
     delivery.add_argument("--validation-result", type=_validation_result)
+    delivery.add_argument("--push-verification-result", type=_push_verification_result)
     delivery.add_argument(
         "--verify",
         action="store_true",
@@ -635,6 +656,8 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
             result.extend(["--expected-head-sha", args.expected_head_sha])
         if args.validation_result is not None:
             result.extend(["--validation-result", args.validation_result])
+        if args.push_verification_result is not None:
+            result.extend(["--push-verification-result", args.push_verification_result])
         if args.pr is not None:
             result.extend(["--pr", str(args.pr)])
         if args.bootstrap_verify is not None:
@@ -993,9 +1016,38 @@ def main(argv: Sequence[str] | None = None) -> int:
             "stdout_truncated": stdout_truncated,
             "stderr_truncated": stderr_truncated,
         }
+        receipt_path = run_dir / "receipt.json"
+        result["artifacts"]["receipt_json"] = receipt_path.relative_to(
+            repo_root
+        ).as_posix()
         payload = _json_dumps(result, pretty=True).encode("utf-8")
         _atomic_write(result_path, payload)
         result_sha = _sha256_bytes(payload)
+        if args.profile == "delivery":
+            receipt_document = {
+                "schema_version": SCHEMA_VERSION,
+                "operation": "github-evidence-receipt",
+                "runner_version": RUNNER_VERSION,
+                "profile": args.profile,
+                "result_path": result_path.relative_to(repo_root).as_posix(),
+                "result_sha256": result_sha,
+                "invocation": {
+                    "task": args.task,
+                    "entry_point": args.entry_point,
+                    "branch": args.branch,
+                    "expected_main_sha": args.expected_main_sha,
+                    "expected_base_sha": args.expected_base_sha,
+                    "expected_head_sha": args.expected_head_sha,
+                    "validation_result": args.validation_result,
+                    "push_verification_result": args.push_verification_result,
+                    "verify": bool(args.verify),
+                },
+                "producer": {"files": dict(content_hashes)},
+            }
+            _atomic_write(
+                receipt_path,
+                _json_dumps(receipt_document, pretty=True).encode("utf-8"),
+            )
         subject_value = snapshot.get("subject")
         subject_value = subject_value if isinstance(subject_value, dict) else {}
         push_readiness_value = result.get("push_readiness")
@@ -1022,6 +1074,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             "profile": args.profile,
             "result_path": result_path.relative_to(repo_root).as_posix(),
             "result_sha256": result_sha,
+            "receipt_path": (
+                result["artifacts"].get("receipt_json")
+                if isinstance(result.get("artifacts"), dict)
+                else None
+            ),
+            "receipt_sha256": (
+                _sha256_bytes(receipt_path.read_bytes())
+                if receipt_path.exists()
+                else None
+            ),
             "snapshot_id": result["stability"]["snapshot_id"],
             "status": status,
             "task": result["identity"]["task"],

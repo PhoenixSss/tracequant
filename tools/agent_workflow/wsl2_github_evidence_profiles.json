@@ -14,7 +14,8 @@
         "expected_base_sha",
         "expected_head_sha",
         "validation_result",
-        "verify"
+        "verify",
+        "push_verification_result"
       ],
       "description": "Unified Delivery Invocation Preflight with lifecycle-conflict detection across six stable semantic entry points."
     },

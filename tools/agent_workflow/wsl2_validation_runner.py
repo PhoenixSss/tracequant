@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Final
 
 SCHEMA_VERSION: Final = 1
-RUNNER_VERSION: Final = "1.2.0"
+RUNNER_VERSION: Final = "1.3.0"
 OUTPUT_ROOT: Final = ".agents/validation.local/wsl2-runs"
 SPEC_PATH: Final = "tools/agent_workflow/wsl2_validation_profiles.json"
 RUNNER_PATH: Final = "tools/agent_workflow/wsl2_validation_runner.py"
@@ -705,6 +705,9 @@ def _run_profile(
             "run_id": run_id,
             "run_dir": run_dir.relative_to(repo_root).as_posix(),
             "result_json": (run_dir / "result.json").relative_to(repo_root).as_posix(),
+            "receipt_json": (run_dir / "receipt.json")
+            .relative_to(repo_root)
+            .as_posix(),
         },
         "integrity": {
             "verification": "current-worktree-content",
@@ -725,6 +728,22 @@ def _run_profile(
     _atomic_write(
         result_path, _json_dumps(result_document, pretty=True).encode("utf-8")
     )
+    result_sha = _sha256_file(result_path)
+    receipt_path = run_dir / "receipt.json"
+    receipt_document = {
+        "schema_version": SCHEMA_VERSION,
+        "operation": "workflow-validation-receipt",
+        "runner_version": RUNNER_VERSION,
+        "profile": profile_name,
+        "base_sha": base_sha,
+        "status": status,
+        "result_path": result_document["artifacts"]["result_json"],
+        "result_sha256": result_sha,
+        "producer": {"files": {path: content_hashes[path] for path in IDENTITY_PATHS}},
+    }
+    _atomic_write(
+        receipt_path, _json_dumps(receipt_document, pretty=True).encode("utf-8")
+    )
     digest = {
         "schema_version": SCHEMA_VERSION,
         "runner_version": RUNNER_VERSION,
@@ -734,7 +753,9 @@ def _run_profile(
         "expected_command_count": len(commands),
         "duration_ms": duration_ms,
         "result_path": result_document["artifacts"]["result_json"],
-        "result_sha256": _sha256_file(result_path),
+        "result_sha256": result_sha,
+        "receipt_path": result_document["artifacts"]["receipt_json"],
+        "receipt_sha256": _sha256_file(receipt_path),
         "failed_command": next(
             (item for item in results if item["exit_code"] != 0),
             None,

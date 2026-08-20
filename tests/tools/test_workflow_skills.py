@@ -68,7 +68,9 @@ def test_delivery_runner_push_authorization_sequence_is_explicit() -> None:
         text = (ROOT / relative).read_text(encoding="utf-8")
         assert "push-readiness" in text
         assert "--validation-result" in text
+        assert "--push-verification-result" in text
         assert "push-readiness --verify" in text
+        assert "| `push-readiness` | Forbidden |" in text
         assert "The Runner never pushes" in text
         assert "pr-readiness`" in text
         assert "before PR resolve/create/reuse" in text

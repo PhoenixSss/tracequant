@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -17,6 +18,13 @@ IDENTITY_FILES = (
     Path("tools/agent_workflow/wsl2_github_evidence_profiles.json"),
     Path(".codex/rules/tracequant-wsl-evidence.rules"),
     Path("tools/agent_workflow/workflow_evidence.py"),
+    Path("tools/agent_workflow/workflow_common.py"),
+)
+VALIDATION_IDENTITY_FILES = (
+    Path("tools/agent_workflow/wsl2_validation_runner.py"),
+    Path("tools/agent_workflow/wsl2_validation_profiles.json"),
+    Path(".codex/rules/tracequant-wsl-validation.rules"),
+    Path("tools/agent_workflow/workflow_validation.py"),
     Path("tools/agent_workflow/workflow_common.py"),
 )
 REAL_GIT_OPTIONAL = shutil.which("git")
@@ -241,6 +249,10 @@ def _prepare_repo(
         target = repo / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, target)
+    for relative in VALIDATION_IDENTITY_FILES:
+        target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative, target)
     for skill_dir in (".agents", ".claude"):
         for skill in (
             "task-delivery-runner",
@@ -377,6 +389,99 @@ def _result(repo: Path, stdout: str) -> dict[str, Any]:
     result = json.loads((repo / digest["result_path"]).read_text(encoding="utf-8"))
     assert isinstance(result, dict)
     return result
+
+
+def _write_workflow_delivery_artifact(
+    repo: Path, *, base_sha: str, head_sha: str, branch: str
+) -> str:
+    relative_path = ".agents/validation.local/wsl2-runs/delivery/result.json"
+    receipt_path = ".agents/validation.local/wsl2-runs/delivery/receipt.json"
+    hashes = {
+        relative.as_posix(): hashlib.sha256((repo / relative).read_bytes()).hexdigest()
+        for relative in VALIDATION_IDENTITY_FILES
+    }
+    skill_path = ".agents/skills/task-delivery-runner/SKILL.md"
+    artifact = {
+        "schema_version": 1,
+        "runner_version": "1.3.0",
+        "profile": "workflow-delivery",
+        "profile_kind": "workflow-phase",
+        "base_sha": base_sha,
+        "status": "pass",
+        "repository": {
+            "state": {
+                "branch": branch,
+                "head_sha": head_sha,
+                "origin_main_sha": base_sha,
+                "clean": True,
+            }
+        },
+        "commands": [
+            {
+                "id": "workflow-validation",
+                "argv": [
+                    "python",
+                    "/repo/tools/agent_workflow/workflow_validation.py",
+                    "run",
+                    "--repo-root",
+                    ".",
+                    "--phase",
+                    "delivery",
+                    "--base-sha",
+                    base_sha,
+                    "--include-skill-validators",
+                    "--require-skill-validator",
+                ],
+                "exit_code": 0,
+                "timed_out": False,
+                "interrupted": False,
+            }
+        ],
+        "expected_command_count": 1,
+        "artifacts": {"result_json": relative_path, "receipt_json": receipt_path},
+        "integrity": {
+            "verification": "current-worktree-content",
+            "repository_head_sha": head_sha,
+            "repository_clean": True,
+            "runner_path": VALIDATION_IDENTITY_FILES[0].as_posix(),
+            "runner_sha256": hashes[VALIDATION_IDENTITY_FILES[0].as_posix()],
+            "profile_spec_path": VALIDATION_IDENTITY_FILES[1].as_posix(),
+            "profile_spec_sha256": hashes[VALIDATION_IDENTITY_FILES[1].as_posix()],
+            "rules_path": VALIDATION_IDENTITY_FILES[2].as_posix(),
+            "rules_sha256": hashes[VALIDATION_IDENTITY_FILES[2].as_posix()],
+            "workflow_validation_path": VALIDATION_IDENTITY_FILES[3].as_posix(),
+            "workflow_validation_sha256": hashes[
+                VALIDATION_IDENTITY_FILES[3].as_posix()
+            ],
+            "skill": {
+                "path": skill_path,
+                "sha256": hashlib.sha256((repo / skill_path).read_bytes()).hexdigest(),
+            },
+        },
+    }
+    path = repo / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(artifact, sort_keys=True, indent=2).encode()
+    path.write_bytes(payload)
+    (repo / receipt_path).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "operation": "workflow-validation-receipt",
+                "runner_version": "1.3.0",
+                "profile": "workflow-delivery",
+                "base_sha": base_sha,
+                "status": "pass",
+                "result_path": relative_path,
+                "result_sha256": hashlib.sha256(payload).hexdigest(),
+                "producer": {"files": hashes},
+            },
+            sort_keys=True,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return relative_path
 
 
 def test_review_profile_returns_required_schema_and_compact_digest(
@@ -944,31 +1049,11 @@ def test_delivery_push_readiness_reuses_workflow_delivery_identity(
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
     state_path.write_text(json.dumps(state), encoding="utf-8")
-    relative_artifact = ".agents/validation.local/wsl2-runs/delivery/result.json"
-    artifact = repo / relative_artifact
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    artifact.write_text(
-        json.dumps(
-            {
-                "profile": "workflow-delivery",
-                "base_sha": main_sha,
-                "status": "pass",
-                "repository": {
-                    "state": {
-                        "branch": "84-task-evidence-runner",
-                        "head_sha": head_sha,
-                        "origin_main_sha": main_sha,
-                        "clean": True,
-                    }
-                },
-                "artifacts": {"result_json": relative_artifact},
-                "integrity": {
-                    "repository_head_sha": head_sha,
-                    "repository_clean": True,
-                },
-            }
-        ),
-        encoding="utf-8",
+    relative_artifact = _write_workflow_delivery_artifact(
+        repo,
+        base_sha=main_sha,
+        head_sha=head_sha,
+        branch="84-task-evidence-runner",
     )
     completed = _run(
         repo,
@@ -996,6 +1081,11 @@ def test_delivery_push_readiness_reuses_workflow_delivery_identity(
     result = _result(repo, completed.stdout)
     assert result["push_readiness"]["push_action"] == "none"
     assert result["evidence"]["gate_summary"]["failed_gates"] == []
+    receipt = json.loads(
+        (repo / result["artifacts"]["receipt_json"]).read_text(encoding="utf-8")
+    )
+    assert receipt["operation"] == "github-evidence-receipt"
+    assert receipt["invocation"]["verify"] is False
 
 
 def test_delivery_implementation_accepts_bootstrap_verification_mode(

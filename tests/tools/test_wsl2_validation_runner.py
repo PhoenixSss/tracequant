@@ -576,6 +576,11 @@ def test_workflow_profiles_require_base_sha_and_run_one_bounded_command(
         assert stored["base_sha"] == base_sha
         assert stored["commands"][0]["id"] == "workflow-validation"
         assert stored["commands"][0]["exit_code"] == 0
+        receipt_path = repo / stored["artifacts"]["receipt_json"]
+        receipt = json.loads(receipt_path.read_text())
+        assert receipt["operation"] == "workflow-validation-receipt"
+        assert receipt["result_path"] == digest["result_path"]
+        assert receipt["result_sha256"] == digest["result_sha256"]
 
 
 def test_workflow_closeout_requires_clean_synchronized_main(tmp_path: Path) -> None:

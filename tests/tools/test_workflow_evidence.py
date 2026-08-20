@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -102,6 +104,18 @@ elif args[:2] == ['issue','view']:
 elif args[:2] == ['pr','view']:
     number=args[2]
     dump(state.get('prs',{{}}).get(number, state['pr']))
+elif args[:2] == ['pr','list']:
+    pr=state['pr']
+    dump([{{
+        'number': pr['number'],
+        'state': pr['state'],
+        'isDraft': pr['isDraft'],
+        'headRefName': pr['headRefName'],
+        'headRefOid': pr['headRefOid'],
+        'baseRefName': pr['baseRefName'],
+        'baseRefOid': pr['baseRefOid'],
+        'closingIssuesReferences': pr['closingIssuesReferences'],
+    }}])
 elif args[:2] == ['pr','diff']:
     if not state.get('diff_available', True):
         sys.stderr.write('diff unavailable')
@@ -296,6 +310,22 @@ def _write_repo(
         ".agents/evidence.local/\n.agents/validation.local/\n",
         encoding="utf-8",
     )
+    for relative in (
+        "tools/agent_workflow/wsl2_validation_runner.py",
+        "tools/agent_workflow/wsl2_validation_profiles.json",
+        ".codex/rules/tracequant-wsl-validation.rules",
+        "tools/agent_workflow/workflow_validation.py",
+        "tools/agent_workflow/workflow_common.py",
+        "tools/agent_workflow/wsl2_github_evidence_runner.py",
+        "tools/agent_workflow/wsl2_github_evidence_profiles.json",
+        ".codex/rules/tracequant-wsl-evidence.rules",
+        "tools/agent_workflow/workflow_evidence.py",
+        ".agents/skills/task-delivery-runner/SKILL.md",
+    ):
+        source = Path(__file__).parents[2] / relative
+        target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
     state_path = tmp_path / "state.json"
     state_path.write_text(json.dumps(state), encoding="utf-8")
     bin_dir = _write_fake_tools(tmp_path)
@@ -318,26 +348,181 @@ def _write_workflow_delivery_artifact(
 ) -> str:
     path = repo / relative_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    identity = (
+        "tools/agent_workflow/wsl2_validation_runner.py",
+        "tools/agent_workflow/wsl2_validation_profiles.json",
+        ".codex/rules/tracequant-wsl-validation.rules",
+        "tools/agent_workflow/workflow_validation.py",
+        "tools/agent_workflow/workflow_common.py",
+    )
+    hashes = {
+        relative: hashlib.sha256((repo / relative).read_bytes()).hexdigest()
+        for relative in identity
+    }
+    skill_path = ".agents/skills/task-delivery-runner/SKILL.md"
+    skill_hash = hashlib.sha256((repo / skill_path).read_bytes()).hexdigest()
+    receipt_path = relative_path.replace("/result.json", "/receipt.json")
+    artifact = {
+        "schema_version": 1,
+        "runner_version": "1.3.0",
+        "profile": "workflow-delivery",
+        "profile_kind": "workflow-phase",
+        "base_sha": base_sha,
+        "status": "pass",
+        "repository": {
+            "state": {
+                "branch": branch,
+                "head_sha": head_sha,
+                "origin_main_sha": main_sha,
+                "clean": True,
+            }
+        },
+        "commands": [
+            {
+                "id": "workflow-validation",
+                "argv": [
+                    "python",
+                    "/repo/tools/agent_workflow/workflow_validation.py",
+                    "run",
+                    "--repo-root",
+                    ".",
+                    "--phase",
+                    "delivery",
+                    "--base-sha",
+                    base_sha,
+                    "--include-skill-validators",
+                    "--require-skill-validator",
+                ],
+                "exit_code": 0,
+                "timed_out": False,
+                "interrupted": False,
+            }
+        ],
+        "expected_command_count": 1,
+        "artifacts": {"result_json": relative_path, "receipt_json": receipt_path},
+        "integrity": {
+            "verification": "current-worktree-content",
+            "repository_head_sha": head_sha,
+            "repository_clean": True,
+            "runner_path": identity[0],
+            "runner_sha256": hashes[identity[0]],
+            "profile_spec_path": identity[1],
+            "profile_spec_sha256": hashes[identity[1]],
+            "rules_path": identity[2],
+            "rules_sha256": hashes[identity[2]],
+            "workflow_validation_path": identity[3],
+            "workflow_validation_sha256": hashes[identity[3]],
+            "skill": {"path": skill_path, "sha256": skill_hash},
+        },
+    }
+    payload = json.dumps(artifact, sort_keys=True, indent=2).encode()
+    path.write_bytes(payload)
+    (repo / receipt_path).write_text(
         json.dumps(
             {
+                "schema_version": 1,
+                "operation": "workflow-validation-receipt",
+                "runner_version": "1.3.0",
                 "profile": "workflow-delivery",
                 "base_sha": base_sha,
                 "status": "pass",
-                "repository": {
-                    "state": {
-                        "branch": branch,
-                        "head_sha": head_sha,
-                        "origin_main_sha": main_sha,
-                        "clean": True,
-                    }
+                "result_path": relative_path,
+                "result_sha256": hashlib.sha256(payload).hexdigest(),
+                "producer": {"files": hashes},
+            },
+            sort_keys=True,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return relative_path
+
+
+def _write_push_verification_artifact(
+    repo: Path,
+    *,
+    task: int = 70,
+    branch: str = "task-70",
+    main_sha: str = "2" * 40,
+    head_sha: str = "4" * 40,
+    relative_path: str = ".agents/evidence.local/wsl2-github-runs/verify/result.json",
+) -> str:
+    identity = (
+        "tools/agent_workflow/wsl2_github_evidence_runner.py",
+        "tools/agent_workflow/wsl2_github_evidence_profiles.json",
+        ".codex/rules/tracequant-wsl-evidence.rules",
+        "tools/agent_workflow/workflow_evidence.py",
+        "tools/agent_workflow/workflow_common.py",
+    )
+    hashes = {
+        relative: hashlib.sha256((repo / relative).read_bytes()).hexdigest()
+        for relative in identity
+    }
+    receipt_path = relative_path.replace("/result.json", "/receipt.json")
+    artifact = {
+        "schema_version": 1,
+        "runner_version": "1.3.0",
+        "profile": "delivery",
+        "status": "pass",
+        "partial": False,
+        "identity": {"task": task},
+        "git": {
+            "current_branch": branch,
+            "working_tree_clean": True,
+            "current_head": head_sha,
+            "origin_main": main_sha,
+            "remote_main": main_sha,
+            "remote_head": head_sha,
+        },
+        "push_readiness": {
+            "validated_head_sha": head_sha,
+            "remote_branch_state": "PRESENT",
+            "remote_tip": head_sha,
+            "remote_push": "pass",
+            "push_action": "none",
+            "verify": True,
+        },
+        "disposition": {
+            "workflow_may_continue": True,
+            "write_actions_allowed": True,
+        },
+        "evidence": {"gate_summary": {"failed_gates": [], "unknown_gates": []}},
+        "artifacts": {"result_json": relative_path, "receipt_json": receipt_path},
+        "integrity": {
+            "verification": "current-worktree-content",
+            "repository_head_sha": head_sha,
+            "repository_clean": True,
+            "files": hashes,
+        },
+    }
+    path = repo / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(artifact, sort_keys=True, indent=2).encode()
+    path.write_bytes(payload)
+    (repo / receipt_path).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "operation": "github-evidence-receipt",
+                "runner_version": "1.3.0",
+                "profile": "delivery",
+                "result_path": relative_path,
+                "result_sha256": hashlib.sha256(payload).hexdigest(),
+                "invocation": {
+                    "task": task,
+                    "entry_point": "push-readiness",
+                    "branch": branch,
+                    "expected_main_sha": main_sha,
+                    "expected_base_sha": main_sha,
+                    "expected_head_sha": head_sha,
+                    "validation_result": ".agents/validation.local/wsl2-runs/verify/result.json",
+                    "push_verification_result": None,
+                    "verify": True,
                 },
-                "artifacts": {"result_json": relative_path},
-                "integrity": {
-                    "repository_head_sha": head_sha,
-                    "repository_clean": True,
-                },
-            }
+                "producer": {"files": hashes},
+            },
+            sort_keys=True,
+            indent=2,
         ),
         encoding="utf-8",
     )
@@ -1658,6 +1843,109 @@ def test_push_readiness_rejects_validation_artifact_head_binding_drift(
     assert value["disposition"]["write_actions_allowed"] is False
 
 
+def test_push_readiness_rejects_handcrafted_validation_artifact(
+    tmp_path: Path,
+) -> None:
+    state = _push_readiness_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    relative_path = ".agents/validation.local/handcrafted/result.json"
+    path = repo / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "profile": "workflow-delivery",
+                "base_sha": SHA40,
+                "status": "pass",
+                "repository": {
+                    "state": {
+                        "branch": "task/70-push-readiness",
+                        "head_sha": "4" * 40,
+                        "origin_main_sha": SHA40,
+                        "clean": True,
+                    }
+                },
+                "artifacts": {"result_json": relative_path},
+                "integrity": {
+                    "repository_head_sha": "4" * 40,
+                    "repository_clean": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    value = _run_push_readiness(repo, env, relative_path)
+    assert value["gates"]["validated_head_binding"]["status"] in {"fail", "unknown"}
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_pr_readiness_rejects_without_successful_push_verification(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state["git_head"] = "4" * 40
+    repo, _, env = _write_repo(tmp_path, state)
+    relative_path = ".agents/evidence.local/wsl2-github-runs/failed/result.json"
+    path = repo / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}", encoding="utf-8")
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "pr-readiness",
+        "--branch",
+        "task-70",
+        "--expected-base-sha",
+        SHA40,
+        "--expected-head-sha",
+        "4" * 40,
+        "--push-verification-result",
+        relative_path,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["push_verification_binding"]["status"] in {"fail", "unknown"}
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_pr_readiness_accepts_exact_successful_push_verification(
+    tmp_path: Path,
+) -> None:
+    state = _base_state()
+    state["git_head"] = "4" * 40
+    repo, _, env = _write_repo(tmp_path, state)
+    verification = _write_push_verification_artifact(repo)
+    result = _run(
+        repo,
+        env,
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "pr-readiness",
+        "--branch",
+        "task-70",
+        "--expected-base-sha",
+        SHA40,
+        "--expected-head-sha",
+        "4" * 40,
+        "--push-verification-result",
+        verification,
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["gates"]["push_verification_binding"]["status"] == "pass"
+    assert value["disposition"]["write_actions_allowed"] is True
+
+
 def test_implementation_missing_canonical_branch_authorizes_bootstrap(
     tmp_path: Path,
 ) -> None:
@@ -2041,6 +2329,9 @@ def test_delivery_preflight_subject_includes_entry_point(
 ) -> None:
     state = _base_state()
     repo, _, env = _write_repo(tmp_path, state)
+    verification = ".agents/evidence.local/wsl2-github-runs/verify/result.json"
+    (repo / verification).parent.mkdir(parents=True, exist_ok=True)
+    (repo / verification).write_text("{}", encoding="utf-8")
     result = _run(
         repo,
         env,
@@ -2057,6 +2348,8 @@ def test_delivery_preflight_subject_includes_entry_point(
         SHA40,
         "--expected-head-sha",
         "4" * 40,
+        "--push-verification-result",
+        verification,
     )
     assert result.returncode == 0, result.stderr
     value = json.loads(result.stdout)
@@ -2359,6 +2652,9 @@ def test_worktree_pr_readiness_rejects_dirty(tmp_path: Path) -> None:
     state = _dirty_state()
     state["local_branch_tips"] = {"task-70": "4" * 40}
     repo, _, env = _write_repo(tmp_path, state)
+    verification = ".agents/evidence.local/wsl2-github-runs/verify/result.json"
+    (repo / verification).parent.mkdir(parents=True, exist_ok=True)
+    (repo / verification).write_text("{}", encoding="utf-8")
     result = _run(
         repo,
         env,
@@ -2375,6 +2671,8 @@ def test_worktree_pr_readiness_rejects_dirty(tmp_path: Path) -> None:
         SHA40,
         "--expected-head-sha",
         "4" * 40,
+        "--push-verification-result",
+        verification,
     )
     assert result.returncode == 0, result.stderr
     gate = json.loads(result.stdout)["gates"]["worktree_state_compatible"]
@@ -2507,6 +2805,9 @@ def test_worktree_clean_passes_all_entry_points(tmp_path: Path) -> None:
             extra.extend(["--expected-head-sha", "4" * 40])
         if entry_point == "push-readiness":
             extra.extend(["--validation-result", "__push_artifact__"])
+        if entry_point == "pr-readiness":
+            verification = ".agents/evidence.local/wsl2-github-runs/verify/result.json"
+            extra.extend(["--push-verification-result", verification])
         if entry_point == "review-remediation":
             extra = [
                 "--pr",
@@ -2517,6 +2818,10 @@ def test_worktree_clean_passes_all_entry_points(tmp_path: Path) -> None:
                 "4" * 40,
             ]
         repo, _, env = _write_repo(case_dir, state)
+        if entry_point == "pr-readiness":
+            verification_path = repo / extra[-1]
+            verification_path.parent.mkdir(parents=True, exist_ok=True)
+            verification_path.write_text("{}", encoding="utf-8")
         if entry_point == "push-readiness":
             artifact = _write_workflow_delivery_artifact(
                 repo,

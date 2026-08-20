@@ -81,6 +81,15 @@ tools/agent_workflow/wsl2_github_evidence_runner.py delivery-readiness \
   --pr <PR> \
   --expected-base-sha <LOCKED_TASK_BASE_SHA> \
   --expected-head-sha <CURRENT_HEAD_SHA>
+
+tools/agent_workflow/wsl2_github_evidence_runner.py delivery \
+  --entry-point pr-readiness \
+  --task <TASK> \
+  --expected-main-sha <LOCKED_MAIN_SHA> \
+  --branch <BRANCH> \
+  --expected-base-sha <LOCKED_TASK_BASE_SHA> \
+  --expected-head-sha <VALIDATED_HEAD_SHA> \
+  --push-verification-result <PUSH_VERIFY_RESULT>
 ```
 
 | Entry point | Invoked at | Params beyond `--task`, `--expected-main-sha` |
@@ -89,7 +98,7 @@ tools/agent_workflow/wsl2_github_evidence_runner.py delivery-readiness \
 | `implementation` | Phase 2 before branch/implementation writes | `--branch --expected-base-sha` (`--bootstrap-verify` after creation) |
 | `final-validation` | Phase 3 before commit + `workflow-delivery` | `--branch --expected-base-sha --expected-head-sha` |
 | `push-readiness` | Phase 3 after `workflow-delivery` and before any remote Task-branch push; `--verify` immediately after the prescribed push | `--branch --expected-base-sha --expected-head-sha --validation-result` (`--verify` after push) |
-| `pr-readiness` | Phase 4 after the exact validated head has been confirmed on remote, before PR resolve/create/reuse | `--branch --expected-base-sha --expected-head-sha` |
+| `pr-readiness` | Phase 4 after the exact validated head has been confirmed on remote, before PR resolve/create/reuse | `--branch --expected-base-sha --expected-head-sha --push-verification-result` |
 | `review-remediation` | Remediation before any repair edit | `--pr --expected-base-sha --expected-head-sha` |
 
 During implementation, use a matching targeted Validation profile only when
@@ -164,6 +173,7 @@ final; no auto-remediation or retry.
 | `delivery-start` | Allowed | Full flow takes custody of existing changes |
 | `implementation` | Allowed | Phase continues development and commit |
 | `final-validation` | Forbidden | Must bind clean committed head |
+| `push-readiness` | Forbidden | Must bind clean committed head and exact validation artifact |
 | `pr-readiness` | Forbidden | Local, remote, PR head must be stable |
 | `review-remediation` | Forbidden (fail-closed) | Must start from determinate reviewed head |
 
@@ -249,9 +259,11 @@ scoped commit, and rerun. Then run `push-readiness` against that artifact. Only
 a passing gate authorizes the Skill to execute the specified ordinary push
 action (`create_remote` or `fast_forward_update`); `none` is an idempotent
 resume path. The Runner never pushes and no force-push form is authorized.
-Immediately run `push-readiness --verify` against the same artifact and
-continue only after it passes. Re-read branch and remote-head identity before
-`pr-readiness`.
+Immediately run `push-readiness --verify` against the same artifact and retain
+its exact evidence result. Continue only after it passes. Re-read branch and
+remote-head identity, then pass that exact `PUSH_VERIFY_RESULT` to
+`pr-readiness`; the gate rejects a missing, stale, failed, or mismatched verify
+artifact.
 
 ## Phase 4: PR and readiness
 

@@ -37,6 +37,22 @@ from workflow_common import (
 SCHEMA_VERSION: Final = 1
 EVIDENCE_ROOT: Final = ".agents/evidence.local"
 SNAPSHOT_SUBDIR: Final = "snapshots"
+VALIDATION_RUNNER_PATH: Final = "tools/agent_workflow/wsl2_validation_runner.py"
+VALIDATION_PROFILE_SPEC_PATH: Final = (
+    "tools/agent_workflow/wsl2_validation_profiles.json"
+)
+VALIDATION_RULES_PATH: Final = ".codex/rules/tracequant-wsl-validation.rules"
+VALIDATION_WORKFLOW_PATH: Final = "tools/agent_workflow/workflow_validation.py"
+VALIDATION_COMMON_PATH: Final = "tools/agent_workflow/workflow_common.py"
+VALIDATION_RUNNER_VERSION: Final = "1.3.0"
+EVIDENCE_RUNNER_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_runner.py"
+EVIDENCE_PROFILE_SPEC_PATH: Final = (
+    "tools/agent_workflow/wsl2_github_evidence_profiles.json"
+)
+EVIDENCE_RULES_PATH: Final = ".codex/rules/tracequant-wsl-evidence.rules"
+EVIDENCE_TOOL_PATH: Final = "tools/agent_workflow/workflow_evidence.py"
+EVIDENCE_COMMON_PATH: Final = "tools/agent_workflow/workflow_common.py"
+EVIDENCE_RUNNER_VERSION: Final = "1.3.0"
 MAX_CHILDREN: Final = 50
 MAX_FILES: Final = 100
 
@@ -116,6 +132,7 @@ DELIVERY_ENTRY_PARAMS: Final = {
             "branch",
             "expected_base_sha",
             "expected_head_sha",
+            "push_verification_result",
         }
     ),
     "review-remediation": frozenset(
@@ -136,6 +153,7 @@ DELIVERY_PARAM_SPACE: Final = frozenset(
         "expected_head_sha",
         "bootstrap_verify",
         "validation_result",
+        "push_verification_result",
         "verify",
     }
 )
@@ -1083,6 +1101,43 @@ def _remote_branch_tip(value: str | None) -> str | None:
     return None
 
 
+def _is_sha256(value: Any) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    return all(char in "0123456789abcdef" for char in value.casefold())
+
+
+def _content_hashes(
+    repo_root: Path, paths: Sequence[str]
+) -> tuple[dict[str, str] | None, str | None]:
+    values: dict[str, str] = {}
+    for relative_path in paths:
+        path = repo_root / relative_path
+        if path.is_symlink():
+            return None, f"canonical input must not be a symlink: {relative_path}"
+        try:
+            values[relative_path] = sha256_bytes(path.read_bytes())
+        except OSError:
+            return None, f"canonical input is unavailable: {relative_path}"
+    return values, None
+
+
+def _load_hashed_json_artifact(
+    repo_root: Path, relative_path: str
+) -> tuple[dict[str, Any] | None, bytes | None, dict[str, Any]]:
+    path = repo_root / relative_path
+    if path.is_symlink():
+        return None, None, _gate("unknown", "artifact must not be a symlink")
+    try:
+        raw = path.read_bytes()
+        value = read_json_file(path)
+    except (WorkflowToolError, OSError) as exc:
+        return None, None, _gate("unknown", str(exc))
+    if not isinstance(value, dict):
+        return None, raw, _gate("unknown", "artifact is not an object")
+    return value, raw, _gate("pass")
+
+
 def _read_validation_artifact(
     repo_root: Path,
     relative_path: str,
@@ -1092,41 +1147,31 @@ def _read_validation_artifact(
     expected_base_sha: str,
     expected_head_sha: str,
 ) -> tuple[dict[str, Any], str | None]:
-    """Validate the exact successful workflow-delivery artifact binding.
+    """Prove a successful workflow-delivery result came from its Runner.
 
-    The fixed Validation Runner already records the repository head captured
-    before validation as ``repository.state.head_sha`` and repeats it in
-    ``integrity.repository_head_sha``.  This gate requires both existing
-    identities to agree and binds the artifact to the current Task/base
-    invocation before any remote classification is allowed.
+    The result JSON is not a provenance credential.  The canonical validation
+    Runner writes a sidecar receipt containing the exact result hash and the
+    hashes of every producer input.  This gate verifies both before using any
+    validation identity for remote publication.
     """
-    path = repo_root / relative_path
-    if path.is_symlink():
+    artifact, raw, artifact_gate = _load_hashed_json_artifact(repo_root, relative_path)
+    if artifact is None or raw is None:
+        return artifact_gate, None
+    if artifact.get("schema_version") != SCHEMA_VERSION:
+        return _gate("fail", "workflow-delivery artifact schema is unsupported"), None
+    if artifact.get("runner_version") != VALIDATION_RUNNER_VERSION:
         return _gate(
-            "unknown", "workflow-delivery artifact must not be a symlink"
+            "fail", "workflow-delivery artifact runner version is not canonical"
         ), None
-    try:
-        artifact = read_json_file(path)
-    except (WorkflowToolError, OSError) as exc:
-        return _gate("unknown", str(exc)), None
-    if not isinstance(artifact, dict):
-        return _gate("unknown", "workflow-delivery artifact is not an object"), None
-
     if artifact.get("profile") != "workflow-delivery":
         return _gate("fail", "validation artifact is not workflow-delivery"), None
+    if artifact.get("profile_kind") != "workflow-phase":
+        return _gate(
+            "fail", "validation artifact is not a canonical workflow phase"
+        ), None
     if artifact.get("status") != "pass":
         return _gate(
-            "fail",
-            f"workflow-delivery artifact status is {artifact.get('status')!r}",
-        ), None
-    artifacts = artifact.get("artifacts")
-    artifact_path = (
-        artifacts.get("result_json") if isinstance(artifacts, dict) else None
-    )
-    if artifact_path != relative_path:
-        return _gate(
-            "fail",
-            "workflow-delivery artifact path binding does not match the requested artifact",
+            "fail", f"workflow-delivery artifact status is {artifact.get('status')!r}"
         ), None
     if artifact.get("base_sha") != expected_base_sha:
         return _gate(
@@ -1134,24 +1179,132 @@ def _read_validation_artifact(
             f"workflow-delivery base SHA expected {expected_base_sha}, observed {artifact.get('base_sha')}",
         ), None
 
+    artifacts = artifact.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return _gate("unknown", "workflow-delivery artifact paths are incomplete"), None
+    if artifacts.get("result_json") != relative_path:
+        return _gate("fail", "workflow-delivery result path binding is invalid"), None
+    receipt_relative = artifacts.get("receipt_json")
+    if (
+        not isinstance(receipt_relative, str)
+        or not receipt_relative.startswith(".agents/validation.local/")
+        or not receipt_relative.endswith("/receipt.json")
+        or any(part in {"", ".", ".."} for part in Path(receipt_relative).parts)
+    ):
+        return _gate(
+            "unknown", "canonical workflow-delivery receipt is unavailable"
+        ), None
+    receipt, _, receipt_gate = _load_hashed_json_artifact(repo_root, receipt_relative)
+    if receipt is None:
+        return receipt_gate, None
+
+    expected_files, files_error = _content_hashes(
+        repo_root,
+        (
+            VALIDATION_RUNNER_PATH,
+            VALIDATION_PROFILE_SPEC_PATH,
+            VALIDATION_RULES_PATH,
+            VALIDATION_WORKFLOW_PATH,
+            VALIDATION_COMMON_PATH,
+        ),
+    )
+    if expected_files is None:
+        return _gate(
+            "unknown", files_error or "canonical validation inputs unavailable"
+        ), None
+    producer = receipt.get("producer")
+    producer_files = producer.get("files") if isinstance(producer, dict) else None
+    integrity = artifact.get("integrity")
+    if not isinstance(integrity, dict) or producer_files != expected_files:
+        return _gate(
+            "fail", "workflow-delivery producer provenance is not canonical"
+        ), None
+    integrity_files = {
+        VALIDATION_RUNNER_PATH: integrity.get("runner_sha256"),
+        VALIDATION_PROFILE_SPEC_PATH: integrity.get("profile_spec_sha256"),
+        VALIDATION_RULES_PATH: integrity.get("rules_sha256"),
+        VALIDATION_WORKFLOW_PATH: integrity.get("workflow_validation_sha256"),
+    }
+    if integrity.get(
+        "verification"
+    ) != "current-worktree-content" or integrity_files != {
+        key: expected_files[key] for key in integrity_files
+    }:
+        return _gate(
+            "fail", "workflow-delivery integrity inputs do not match canonical content"
+        ), None
+    if (
+        receipt.get("schema_version") != SCHEMA_VERSION
+        or receipt.get("operation") != "workflow-validation-receipt"
+        or receipt.get("runner_version") != VALIDATION_RUNNER_VERSION
+        or receipt.get("profile") != "workflow-delivery"
+        or receipt.get("base_sha") != expected_base_sha
+        or receipt.get("status") != "pass"
+        or receipt.get("result_path") != relative_path
+        or receipt.get("result_sha256") != sha256_bytes(raw)
+    ):
+        return _gate(
+            "fail", "workflow-delivery receipt does not bind the exact result"
+        ), None
+
+    commands = artifact.get("commands")
+    command = commands[0] if isinstance(commands, list) and len(commands) == 1 else None
+    argv = command.get("argv") if isinstance(command, dict) else None
+    expected_argv_suffix = [
+        "--repo-root",
+        ".",
+        "--phase",
+        "delivery",
+        "--base-sha",
+        expected_base_sha,
+        "--include-skill-validators",
+        "--require-skill-validator",
+    ]
+    if (
+        artifact.get("expected_command_count") != 1
+        or not isinstance(command, dict)
+        or command.get("id") != "workflow-validation"
+        or command.get("exit_code") != 0
+        or command.get("timed_out") is not False
+        or command.get("interrupted") is not False
+        or not isinstance(argv, list)
+        or argv[-len(expected_argv_suffix) :] != expected_argv_suffix
+    ):
+        return _gate("fail", "workflow-delivery command receipt is not canonical"), None
+
     repository = artifact.get("repository")
     state = repository.get("state") if isinstance(repository, dict) else None
-    integrity = artifact.get("integrity")
-    if not isinstance(state, dict) or not isinstance(integrity, dict):
-        return _gate(
-            "unknown", "workflow-delivery repository identity is incomplete"
-        ), None
-    validated_head = state.get("head_sha")
+    validated_head = state.get("head_sha") if isinstance(state, dict) else None
     integrity_head = integrity.get("repository_head_sha")
-    if not is_sha(validated_head) or not is_sha(integrity_head):
+    if (
+        not isinstance(state, dict)
+        or not is_sha(validated_head)
+        or not is_sha(integrity_head)
+    ):
         return _gate(
-            "unknown", "workflow-delivery validated head SHA is unavailable"
+            "unknown", "workflow-delivery validated head identity is unavailable"
         ), None
     if validated_head != integrity_head:
+        return _gate("fail", "workflow-delivery validated-head binding drifted"), None
+    skill = integrity.get("skill")
+    skill_path = skill.get("path") if isinstance(skill, dict) else None
+    skill_hash = skill.get("sha256") if isinstance(skill, dict) else None
+    if (
+        not isinstance(skill_path, str)
+        or not (
+            skill_path.startswith(".agents/skills/")
+            or skill_path.startswith(".claude/skills/")
+        )
+        or not skill_path.endswith("/task-delivery-runner/SKILL.md")
+        or not _is_sha256(skill_hash)
+    ):
+        return _gate("fail", "workflow-delivery Skill provenance is unavailable"), None
+    current_skill, skill_error = _content_hashes(repo_root, (skill_path,))
+    if current_skill is None or current_skill[skill_path] != skill_hash:
         return _gate(
-            "fail",
-            "workflow-delivery validated-head binding drifted inside the artifact",
+            "fail", skill_error or "workflow-delivery Skill provenance drifted"
         ), None
+
     failures: list[str] = []
     if validated_head != expected_head_sha:
         failures.append(
@@ -1174,9 +1327,153 @@ def _read_validation_artifact(
     return (
         _gate(
             "pass",
-            f"workflow-delivery validated head {validated_head} is bound to {relative_path}",
+            f"canonical workflow-delivery receipt binds validated head {validated_head}",
         ),
         validated_head,
+    )
+
+
+def _read_push_verification_artifact(
+    repo_root: Path,
+    relative_path: str,
+    *,
+    task: int,
+    branch: str,
+    expected_main_sha: str,
+    expected_base_sha: str,
+    expected_head_sha: str,
+) -> dict[str, Any]:
+    """Prove that pr-readiness follows a canonical successful verify gate."""
+    artifact, raw, artifact_gate = _load_hashed_json_artifact(repo_root, relative_path)
+    if artifact is None or raw is None:
+        return artifact_gate
+    if artifact.get("schema_version") != SCHEMA_VERSION:
+        return _gate("fail", "push verification evidence schema is unsupported")
+    if artifact.get("runner_version") != EVIDENCE_RUNNER_VERSION:
+        return _gate(
+            "fail", "push verification evidence runner version is not canonical"
+        )
+    if artifact.get("profile") != "delivery" or artifact.get("status") != "pass":
+        return _gate(
+            "fail", "push verification evidence is not a successful delivery result"
+        )
+    if artifact.get("partial") is not False:
+        return _gate("fail", "push verification evidence is partial")
+    artifacts = artifact.get("artifacts")
+    if not isinstance(artifacts, dict) or artifacts.get("result_json") != relative_path:
+        return _gate("fail", "push verification result path binding is invalid")
+    receipt_relative = artifacts.get("receipt_json")
+    if (
+        not isinstance(receipt_relative, str)
+        or not receipt_relative.startswith(".agents/evidence.local/wsl2-github-runs/")
+        or not receipt_relative.endswith("/receipt.json")
+        or any(part in {"", ".", ".."} for part in Path(receipt_relative).parts)
+    ):
+        return _gate("unknown", "canonical push verification receipt is unavailable")
+    receipt, _, receipt_gate = _load_hashed_json_artifact(repo_root, receipt_relative)
+    if receipt is None:
+        return receipt_gate
+
+    expected_files, files_error = _content_hashes(
+        repo_root,
+        (
+            EVIDENCE_RUNNER_PATH,
+            EVIDENCE_PROFILE_SPEC_PATH,
+            EVIDENCE_RULES_PATH,
+            EVIDENCE_TOOL_PATH,
+            EVIDENCE_COMMON_PATH,
+        ),
+    )
+    if expected_files is None:
+        return _gate("unknown", files_error or "canonical evidence inputs unavailable")
+    producer = receipt.get("producer")
+    producer_files = producer.get("files") if isinstance(producer, dict) else None
+    integrity = artifact.get("integrity")
+    integrity_files = integrity.get("files") if isinstance(integrity, dict) else None
+    if producer_files != expected_files or integrity_files != expected_files:
+        return _gate("fail", "push verification producer provenance is not canonical")
+    if (
+        receipt.get("schema_version") != SCHEMA_VERSION
+        or receipt.get("operation") != "github-evidence-receipt"
+        or receipt.get("runner_version") != EVIDENCE_RUNNER_VERSION
+        or receipt.get("profile") != "delivery"
+        or receipt.get("result_path") != relative_path
+        or receipt.get("result_sha256") != sha256_bytes(raw)
+    ):
+        return _gate("fail", "push verification receipt does not bind the exact result")
+
+    invocation = receipt.get("invocation")
+    expected_invocation = {
+        "task": task,
+        "entry_point": "push-readiness",
+        "branch": branch,
+        "expected_main_sha": expected_main_sha,
+        "expected_base_sha": expected_base_sha,
+        "expected_head_sha": expected_head_sha,
+        "verify": True,
+    }
+    if not isinstance(invocation, dict) or any(
+        invocation.get(key) != value for key, value in expected_invocation.items()
+    ):
+        return _gate(
+            "fail", "push verification invocation identity does not match pr-readiness"
+        )
+
+    identity = artifact.get("identity")
+    git = artifact.get("git")
+    push = artifact.get("push_readiness")
+    disposition = artifact.get("disposition")
+    gate_summary = (
+        artifact.get("evidence", {}).get("gate_summary")
+        if isinstance(artifact.get("evidence"), dict)
+        else None
+    )
+    if not isinstance(identity, dict) or identity.get("task") != task:
+        return _gate("fail", "push verification Task identity does not match")
+    if (
+        not isinstance(git, dict)
+        or not isinstance(push, dict)
+        or not isinstance(disposition, dict)
+    ):
+        return _gate("unknown", "push verification identity is incomplete")
+    if (
+        git.get("current_branch") != branch
+        or git.get("current_head") != expected_head_sha
+        or git.get("working_tree_clean") is not True
+        or git.get("origin_main") != expected_main_sha
+        or git.get("remote_main") != expected_main_sha
+        or git.get("remote_head") != expected_head_sha
+    ):
+        return _gate(
+            "fail", "push verification branch/base/head identity does not match"
+        )
+    if (
+        push.get("verify") is not True
+        or push.get("remote_push") != "pass"
+        or push.get("remote_branch_state") != "PRESENT"
+        or push.get("remote_tip") != expected_head_sha
+        or push.get("validated_head_sha") != expected_head_sha
+        or push.get("push_action") != "none"
+        or disposition.get("workflow_may_continue") is not True
+        or disposition.get("write_actions_allowed") is not True
+        or not isinstance(gate_summary, dict)
+        or gate_summary.get("failed_gates") != []
+        or gate_summary.get("unknown_gates") != []
+    ):
+        return _gate(
+            "fail",
+            "push verification did not prove a successful exact-head publication",
+        )
+    if (
+        not isinstance(integrity, dict)
+        or integrity.get("verification") != "current-worktree-content"
+        or integrity.get("repository_head_sha") != expected_head_sha
+        or integrity.get("repository_clean") is not True
+    ):
+        return _gate("fail", "push verification artifact integrity is invalid")
+    return _gate(
+        "pass",
+        f"canonical push-readiness --verify evidence binds Task #{task}, {branch}, and {expected_head_sha}",
     )
 
 
@@ -1512,6 +1809,20 @@ def _validate_delivery_entry_args(args: argparse.Namespace) -> None:
                 "validation result must be a repo-relative workflow-delivery "
                 "artifact under .agents/validation.local/"
             )
+    if args.push_verification_result is not None:
+        value = str(args.push_verification_result).replace("\\", "/")
+        path = Path(value)
+        if (
+            not value
+            or path.is_absolute()
+            or any(part in {"", ".", ".."} for part in path.parts)
+            or not value.startswith(".agents/evidence.local/wsl2-github-runs/")
+            or not value.endswith("/result.json")
+        ):
+            raise WorkflowToolError(
+                "push verification result must be a repo-relative evidence "
+                "artifact under .agents/evidence.local/wsl2-github-runs/"
+            )
 
 
 def _task_branch_identity_gate(branch: Any, task: int) -> dict[str, Any]:
@@ -1821,6 +2132,15 @@ def _entry_point_gates(
 
     if entry_point == "pr-readiness":
         branch = args.branch
+        gates["push_verification_binding"] = _read_push_verification_artifact(
+            runner.repo_root,
+            args.push_verification_result,
+            task=args.task,
+            branch=branch,
+            expected_main_sha=args.expected_main_sha,
+            expected_base_sha=args.expected_base_sha,
+            expected_head_sha=args.expected_head_sha,
+        )
         remote_result = runner.run(
             ["git", "ls-remote", "--heads", "origin", str(branch)],
             command_id="git-remote-branch-head",
@@ -2830,6 +3150,7 @@ def _compute_preflight_disposition(
         "branch_head",
         "local_head_validated",
         "validated_head_binding",
+        "push_verification_binding",
         "remote_push",
         "pr_identity",
         "pr_base_sha",
@@ -3660,6 +3981,10 @@ def _build_parser() -> argparse.ArgumentParser:
     delivery.add_argument(
         "--validation-result",
         help="repo-relative successful workflow-delivery result artifact",
+    )
+    delivery.add_argument(
+        "--push-verification-result",
+        help="repo-relative successful push-readiness --verify evidence artifact",
     )
     delivery.add_argument(
         "--verify",
