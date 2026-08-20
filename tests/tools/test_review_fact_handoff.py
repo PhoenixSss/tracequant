@@ -43,6 +43,36 @@ def _workflow_identity() -> dict[str, Any]:
             "path": ".agents/skills/task-pr-review-runner/SKILL.md",
             "sha256": SHA256,
         },
+        "control_plane": {
+            "evidence_runner": {
+                "path": "tools/agent_workflow/wsl2_github_evidence_runner.py",
+                "content_sha256": SHA256,
+            },
+            "profile_spec": {
+                "path": "tools/agent_workflow/wsl2_github_evidence_profiles.json",
+                "content_sha256": SHA256,
+            },
+            "evidence_rules": {
+                "path": ".codex/rules/tracequant-wsl-evidence.rules",
+                "content_sha256": SHA256,
+            },
+            "workflow_common": {
+                "path": "tools/agent_workflow/workflow_common.py",
+                "content_sha256": SHA256,
+            },
+            "command_execution_policy": {
+                "path": ".agents/policies/command-execution.md",
+                "content_sha256": SHA256,
+            },
+            "workflow_evidence_policy": {
+                "path": ".agents/policies/workflow-evidence.md",
+                "content_sha256": SHA256,
+            },
+            "review_semantics": {
+                "path": "docs/development/pr-review.md",
+                "content_sha256": SHA256,
+            },
+        },
     }
 
 
@@ -335,6 +365,87 @@ def test_validation_head_mismatch_remains_fail_closed(tmp_path: Path) -> None:
     assert any("head identity mismatch" in error for error in errors)
 
 
+def test_all_required_drift_classes_fail_closed() -> None:
+    cases: list[tuple[str, Callable[[dict[str, Any], dict[str, Any]], None]]] = [
+        (
+            "TASK_SPEC_DRIFT",
+            lambda snapshot, current: snapshot["observed"]["issue"].update(
+                {"spec_sha256": "e" * 64}
+            ),
+        ),
+        (
+            "BASE_DRIFT",
+            lambda snapshot, current: snapshot["observed"]["pr"].update(
+                {"base_sha": "e" * 40}
+            ),
+        ),
+        (
+            "HEAD_DRIFT",
+            lambda snapshot, current: snapshot["observed"]["pr"].update(
+                {"head_sha": "e" * 40}
+            ),
+        ),
+        (
+            "EFFECTIVE_DIFF_DRIFT",
+            lambda snapshot, current: snapshot["observed"]["effective_diff"].update(
+                {"sha256": "e" * 64}
+            ),
+        ),
+        (
+            "CHECKS_DRIFT",
+            lambda snapshot, current: snapshot["observed"]["pr"]["checks"]["items"][
+                0
+            ].update({"state": "FAILURE"}),
+        ),
+        (
+            "VALIDATION_DRIFT",
+            lambda snapshot, current: current["validation"].update(
+                {"result_sha256": "e" * 64}
+            ),
+        ),
+        (
+            "WORKFLOW_RULE_DRIFT",
+            lambda snapshot, current: current["workflow"]["control_plane"][
+                "evidence_runner"
+            ].update({"content_sha256": "e" * 64}),
+        ),
+        (
+            "HANDOFF_SCHEMA_DRIFT",
+            lambda snapshot, current: current["source"].update(
+                {"source_digest": "e" * 64}
+            ),
+        ),
+    ]
+
+    for drift, mutate in cases:
+        snapshot = _snapshot()
+        current = {
+            "validation": _validation_facts(),
+            "workflow": _workflow_identity(),
+            "source": source_identity_for_snapshot(snapshot),
+        }
+        mutate(snapshot, current)
+        if drift not in {
+            "HANDOFF_SCHEMA_DRIFT",
+            "WORKFLOW_RULE_DRIFT",
+            "VALIDATION_DRIFT",
+        }:
+            current["source"] = source_identity_for_snapshot(snapshot)
+        result = validate_against_snapshot(
+            _handoff(),
+            snapshot,
+            current_acceptance_criteria_ids=["AC-1", "AC-2"],
+            current_validation_facts=current["validation"],
+            current_workflow_identity=current["workflow"],
+            current_source_identity=current["source"],
+        )
+        assert result["status"] == "fail", drift
+        assert any(item.startswith(drift) for item in result["invalidated"]), (
+            drift,
+            result["invalidated"],
+        )
+
+
 def test_stale_or_mismatched_validation_facts_fail_closed() -> None:
     current = _validation_facts()
     current["result_sha256"] = "e" * 64
@@ -359,15 +470,28 @@ def test_unverifiable_validation_facts_fail_closed() -> None:
     assert any(item.startswith("VALIDATION_DRIFT") for item in result["invalidated"])
 
 
-def test_workflow_runner_skill_and_schema_drift_fail_closed() -> None:
-    for drift in ("runner", "skill", "schema"):
+def test_workflow_runner_skill_schema_and_control_plane_drift_fail_closed() -> None:
+    for drift in (
+        "runner",
+        "skill",
+        "schema",
+        "evidence_runner",
+        "profile_spec",
+        "evidence_rules",
+        "workflow_common",
+        "command_execution_policy",
+        "workflow_evidence_policy",
+        "review_semantics",
+    ):
         current = _workflow_identity()
         if drift == "runner":
             current["runner"]["content_sha256"] = "e" * 64
         elif drift == "skill":
             current["skill"]["sha256"] = "e" * 64
-        else:
+        elif drift == "schema":
             current["schema_version"] = 2
+        else:
+            current["control_plane"][drift]["content_sha256"] = "e" * 64
         result = validate_against_snapshot(
             _handoff(),
             _snapshot(),
@@ -435,6 +559,12 @@ def test_nested_allowlists_reject_unknown_fields() -> None:
             ),
             "workflow",
         ),
+        (
+            lambda value: value["workflow_identity"]["control_plane"][
+                "evidence_runner"
+            ].update({"unknown": True}),
+            "workflow-control-plane",
+        ),
         (lambda value: value["source_identity"].update({"unknown": True}), "source"),
         (
             lambda value: value["validation_facts"]["runner_identity"].update(
@@ -472,5 +602,21 @@ def test_defined_nested_fields_remain_compatible() -> None:
 
 def test_default_freshness_contract_covers_all_required_drift() -> None:
     contract = default_freshness_contract()
-    assert set(contract["invalidate_on"]) == set(DRIFT_TYPES)
+    assert contract["invalidate_on"] == list(DRIFT_TYPES)
     assert contract["requires_new_semantic_context_on_object_drift"] is True
+
+
+def test_freshness_contract_is_closed_world() -> None:
+    mutators: tuple[Callable[[dict[str, Any]], Any], ...] = (
+        lambda value: value["freshness_contract"]["invalidate_on"].append(
+            "UNKNOWN_DRIFT"
+        ),
+        lambda value: value["freshness_contract"]["revalidate_current_facts"].pop(),
+    )
+    for mutate in mutators:
+        handoff = _handoff()
+        mutate(handoff)
+        violations = validate_handoff_structure(
+            handoff, expected_repository="owner/repo"
+        )
+        assert violations

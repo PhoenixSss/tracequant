@@ -17,18 +17,29 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
-from review_fact_handoff import ReviewFactHandoffError, resolve_handoff_path
+from review_fact_handoff import (
+    WORKFLOW_CONTROL_PATHS,
+    ReviewFactHandoffError,
+    resolve_handoff_path,
+)
 
 SCHEMA_VERSION: Final = 1
 RUNNER_VERSION: Final = "1.3.0"
 REPOSITORY: Final = "PhoenixSss/tracequant"
 OUTPUT_ROOT: Final = ".agents/evidence.local/wsl2-github-runs"
-RUNNER_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_runner.py"
-SPEC_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_profiles.json"
-RULES_PATH: Final = ".codex/rules/tracequant-wsl-evidence.rules"
+RUNNER_PATH: Final = WORKFLOW_CONTROL_PATHS["evidence_runner"]
+SPEC_PATH: Final = WORKFLOW_CONTROL_PATHS["profile_spec"]
+RULES_PATH: Final = WORKFLOW_CONTROL_PATHS["evidence_rules"]
 EVIDENCE_TOOL_PATH: Final = "tools/agent_workflow/workflow_evidence.py"
-COMMON_TOOL_PATH: Final = "tools/agent_workflow/workflow_common.py"
+COMMON_TOOL_PATH: Final = WORKFLOW_CONTROL_PATHS["workflow_common"]
 HANDOFF_TOOL_PATH: Final = "tools/agent_workflow/review_fact_handoff.py"
+COMMAND_EXECUTION_POLICY_PATH: Final = WORKFLOW_CONTROL_PATHS[
+    "command_execution_policy"
+]
+WORKFLOW_EVIDENCE_POLICY_PATH: Final = WORKFLOW_CONTROL_PATHS[
+    "workflow_evidence_policy"
+]
+REVIEW_SEMANTICS_PATH: Final = WORKFLOW_CONTROL_PATHS["review_semantics"]
 STDIO_LIMIT_BYTES: Final = 8192
 SHA_PATTERN: Final = re.compile(r"^[0-9a-f]{40}$")
 SNAPSHOT_ID_PATTERN: Final = re.compile(r"^ev-[0-9a-f]{16}$")
@@ -99,6 +110,9 @@ IDENTITY_PATHS: Final = (
     EVIDENCE_TOOL_PATH,
     COMMON_TOOL_PATH,
     HANDOFF_TOOL_PATH,
+    COMMAND_EXECUTION_POLICY_PATH,
+    WORKFLOW_EVIDENCE_POLICY_PATH,
+    REVIEW_SEMANTICS_PATH,
 )
 ALLOWED_ENV: Final = (
     "PATH",

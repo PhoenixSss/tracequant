@@ -26,6 +26,9 @@ IDENTITY_FILES = (
     Path("tools/agent_workflow/workflow_evidence.py"),
     Path("tools/agent_workflow/workflow_common.py"),
     Path("tools/agent_workflow/review_fact_handoff.py"),
+    Path(".agents/policies/command-execution.md"),
+    Path(".agents/policies/workflow-evidence.md"),
+    Path("docs/development/pr-review.md"),
 )
 VALIDATION_IDENTITY_FILES = (
     Path("tools/agent_workflow/wsl2_validation_runner.py"),
@@ -577,6 +580,68 @@ def test_review_profile_consumes_verified_handoff_and_recheck_invalidates_drift(
     assert recheck.returncode == 4
     recheck_digest = json.loads(recheck.stdout)
     assert recheck_digest["status"] == "fail"
+
+
+def test_review_handoff_fails_closed_when_control_plane_drifts(tmp_path: Path) -> None:
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["body"] = "## Acceptance Criteria\n- [ ] first\n- [ ] second\n"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    first = _run(repo, env, *_review_args(main_sha, head_sha))
+    assert first.returncode == 0, first.stderr
+    first_digest = json.loads(first.stdout)
+    snapshot = json.loads(
+        (
+            repo
+            / ".agents/evidence.local/snapshots"
+            / f"{first_digest['snapshot_id']}.json"
+        ).read_text(encoding="utf-8")
+    )
+    handoff = build_handoff_from_snapshot(
+        snapshot,
+        acceptance_criteria_ids=["AC-1", "AC-2"],
+        validation_facts=_validation_facts(repo, main_sha, head_sha),
+        workflow_identity=snapshot["execution_context"]["workflow_identity"],
+    )
+    write_handoff(repo, handoff, filename="task-84-control-plane.json")
+    handoff_run = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--handoff-path",
+        ".agents/evidence.local/review-handoffs/task-84-control-plane.json",
+    )
+    assert handoff_run.returncode == 0, handoff_run.stderr
+    handoff_digest = json.loads(handoff_run.stdout)
+
+    for relative in (Path("tools/agent_workflow/wsl2_github_evidence_runner.py"),):
+        target = repo / relative
+        original = target.read_bytes()
+        target.write_bytes(original + b"\n")
+        try:
+            recheck = _run(
+                repo,
+                env,
+                "recheck",
+                "--snapshot-id",
+                handoff_digest["snapshot_id"],
+            )
+            assert recheck.returncode == 4, (relative, recheck.stderr)
+            recheck_result = _result(repo, recheck.stdout)
+            current_snapshot = json.loads(
+                (repo / recheck_result["evidence"]["source_details_path"]).read_text(
+                    encoding="utf-8"
+                )
+            )
+            invalidated = current_snapshot["observed"]["review_fact_handoff"][
+                "invalidated"
+            ]
+            assert any(
+                item.startswith("WORKFLOW_RULE_DRIFT") for item in invalidated
+            ), (relative, invalidated)
+        finally:
+            target.write_bytes(original)
 
 
 def test_delivery_readiness_recheck_is_stable_through_runner(tmp_path: Path) -> None:

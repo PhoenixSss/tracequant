@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from review_fact_handoff import (
+    WORKFLOW_CONTROL_PATHS,
     ReviewFactHandoffError,
     acquire_current_validation_facts,
     load_handoff,
@@ -2035,6 +2036,23 @@ def _runner_source(
     }
 
 
+def _workflow_control_plane_identity() -> dict[str, dict[str, str]]:
+    """Hash the stable control plane that defines Review evidence semantics."""
+    repo_root = Path(__file__).resolve().parents[2]
+    identity: dict[str, dict[str, str]] = {}
+    for name, relative in WORKFLOW_CONTROL_PATHS.items():
+        target = repo_root / relative
+        if target.is_symlink() or not target.is_file():
+            raise WorkflowToolError(
+                f"workflow control-plane file is unavailable: {relative}"
+            )
+        identity[name] = {
+            "path": relative,
+            "content_sha256": sha256_bytes(target.read_bytes()),
+        }
+    return identity
+
+
 def _skill_identity(
     repo_root: Path,
     value: str | None,
@@ -2791,6 +2809,7 @@ def _task_pr_snapshot(
         "skill": _skill_identity(
             repo_root, getattr(args, "skill_path", None), default=skill_default
         ),
+        "control_plane": _workflow_control_plane_identity(),
     }
     execution_context = {
         "object_base_sha": object_base_sha,

@@ -66,6 +66,17 @@ DRIFT_TYPES: Final = (
     "WORKFLOW_RULE_DRIFT",
     "HANDOFF_SCHEMA_DRIFT",
 )
+REVALIDATE_CURRENT_FACTS: Final = (
+    "task_pr_identity",
+    "base_head_merge_base",
+    "effective_diff_and_changed_files",
+    "task_spec_and_acceptance_criteria",
+    "checks_and_required_configuration",
+    "validation_result_freshness",
+    "validation_facts",
+    "workflow_identity",
+    "source_identity",
+)
 _AC_ID = re.compile(r"^AC-[0-9]+$")
 _RELATIVE_PATH = re.compile(r"^[^/].*$")
 _SOURCE_LOCATOR = re.compile(r"^snapshot:ev-[0-9a-f]{16}$")
@@ -103,12 +114,25 @@ VALIDATION_RUNNER_FIELDS: Final = frozenset(
         "skill",
     }
 )
-WORKFLOW_FIELDS: Final = frozenset({"profile", "schema_version", "runner", "skill"})
+WORKFLOW_FIELDS: Final = frozenset(
+    {"profile", "schema_version", "runner", "skill", "control_plane"}
+)
 WORKFLOW_RUNNER_FIELDS: Final = frozenset(
     {"path", "source_sha", "content_sha256", "handoff_schema"}
 )
 WORKFLOW_SCHEMA_FIELDS: Final = frozenset({"path", "content_sha256"})
 WORKFLOW_SKILL_FIELDS: Final = frozenset({"path", "sha256"})
+WORKFLOW_CONTROL_ITEM_FIELDS: Final = frozenset({"path", "content_sha256"})
+WORKFLOW_CONTROL_PATHS: Final = {
+    "evidence_runner": "tools/agent_workflow/wsl2_github_evidence_runner.py",
+    "profile_spec": "tools/agent_workflow/wsl2_github_evidence_profiles.json",
+    "evidence_rules": ".codex/rules/tracequant-wsl-evidence.rules",
+    "workflow_common": "tools/agent_workflow/workflow_common.py",
+    "command_execution_policy": ".agents/policies/command-execution.md",
+    "workflow_evidence_policy": ".agents/policies/workflow-evidence.md",
+    "review_semantics": "docs/development/pr-review.md",
+}
+WORKFLOW_CONTROL_FIELDS: Final = frozenset(WORKFLOW_CONTROL_PATHS)
 SOURCE_FIELDS: Final = frozenset({"repository", "source_locator", "source_digest"})
 SOURCE_STABLE_FIELDS: Final = (
     "schema_version",
@@ -150,17 +174,7 @@ def default_freshness_contract() -> dict[str, Any]:
     """Return the explicit invalidation contract required by the schema."""
     return {
         "invalidate_on": list(DRIFT_TYPES),
-        "revalidate_current_facts": [
-            "task_pr_identity",
-            "base_head_merge_base",
-            "effective_diff_and_changed_files",
-            "task_spec_and_acceptance_criteria",
-            "checks_and_required_configuration",
-            "validation_result_freshness",
-            "validation_facts",
-            "workflow_identity",
-            "source_identity",
-        ],
+        "revalidate_current_facts": list(REVALIDATE_CURRENT_FACTS),
         "requires_new_semantic_context_on_object_drift": True,
     }
 
@@ -322,6 +336,33 @@ def _validate_workflow_identity(
         _require_sha_length(
             skill.get("sha256"), f"{field}.skill.sha256", 64, violations
         )
+
+    control_plane = _exact_fields(
+        workflow.get("control_plane"),
+        f"{field}.control_plane",
+        WORKFLOW_CONTROL_FIELDS,
+        frozenset(WORKFLOW_CONTROL_FIELDS),
+        violations,
+    )
+    if control_plane is not None:
+        for name, expected_path in WORKFLOW_CONTROL_PATHS.items():
+            item = _exact_fields(
+                control_plane.get(name),
+                f"{field}.control_plane.{name}",
+                WORKFLOW_CONTROL_ITEM_FIELDS,
+                frozenset(WORKFLOW_CONTROL_ITEM_FIELDS),
+                violations,
+            )
+            if item is None:
+                continue
+            if item.get("path") != expected_path:
+                violations.append(f"{field}.control_plane.{name}.path is not canonical")
+            _require_sha_length(
+                item.get("content_sha256"),
+                f"{field}.control_plane.{name}.content_sha256",
+                64,
+                violations,
+            )
     return workflow
 
 
@@ -646,18 +687,16 @@ def validate_handoff_structure(
     )
     if freshness_mapping is not None:
         invalidations = freshness_mapping.get("invalidate_on")
-        if not isinstance(invalidations, list) or set(invalidations) != set(
-            DRIFT_TYPES
-        ):
+        if invalidations != list(DRIFT_TYPES):
             violations.append(
-                "freshness_contract.invalidate_on must list all supported drift types"
+                "freshness_contract.invalidate_on must exactly match the supported "
+                "drift types"
             )
         current_facts = freshness_mapping.get("revalidate_current_facts")
-        if not isinstance(current_facts, list) or any(
-            not isinstance(item, str) for item in current_facts
-        ):
+        if current_facts != list(REVALIDATE_CURRENT_FACTS):
             violations.append(
-                "freshness_contract.revalidate_current_facts must be a list"
+                "freshness_contract.revalidate_current_facts must exactly match the "
+                "required current facts"
             )
         if (
             freshness_mapping.get("requires_new_semantic_context_on_object_drift")
