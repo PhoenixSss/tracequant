@@ -44,6 +44,12 @@ from workflow_common import (
 )
 
 SCHEMA_VERSION: Final = 1
+WORKFLOW_PROFILES: Final = {
+    "delivery-readiness": "delivery-readiness",
+    "delivery-readiness-recheck": "delivery-readiness",
+    "pr-review-snapshot": "review",
+    "pr-review-recheck": "review",
+}
 EVIDENCE_ROOT: Final = ".agents/evidence.local"
 SNAPSHOT_SUBDIR: Final = "snapshots"
 MAX_CHILDREN: Final = 50
@@ -2779,7 +2785,7 @@ def _task_pr_snapshot(
         else ".agents/skills/task-delivery-runner/SKILL.md"
     )
     workflow_identity = {
-        "profile": "review" if is_review else operation,
+        "profile": WORKFLOW_PROFILES[operation],
         "schema_version": SCHEMA_VERSION,
         "runner": _runner_source(runner, warnings),
         "skill": _skill_identity(
@@ -3575,6 +3581,10 @@ def _build_parser() -> argparse.ArgumentParser:
     feature.add_argument("--expected-main-sha")
 
     for name, help_text in (
+        (
+            "delivery-readiness-recheck",
+            "recollect and compare a Delivery readiness snapshot",
+        ),
         ("pr-review-recheck", "recollect and compare a PR review snapshot"),
         ("closeout-final", "recollect and compare a closeout plan"),
         ("feature-audit-recheck", "recollect and compare a Feature audit snapshot"),

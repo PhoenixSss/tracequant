@@ -151,7 +151,7 @@ CANONICAL_PROFILES: Final[dict[str, tuple[str, tuple[str, ...]]]] = {
     "recheck": ("recheck", ("snapshot_id",)),
 }
 RECHECK_COMMANDS: Final = {
-    "delivery-readiness": "pr-review-recheck",
+    "delivery-readiness": "delivery-readiness-recheck",
     "pr-review-snapshot": "pr-review-recheck",
     "closeout-plan": "closeout-final",
 }

@@ -579,6 +579,47 @@ def test_review_profile_consumes_verified_handoff_and_recheck_invalidates_drift(
     assert recheck_digest["status"] == "fail"
 
 
+def test_delivery_readiness_recheck_is_stable_through_runner(tmp_path: Path) -> None:
+    repo, _, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    first = _run(repo, env, *_review_args(main_sha, head_sha, "delivery-readiness"))
+    assert first.returncode == 0, first.stderr
+    first_digest = json.loads(first.stdout)
+    first_result = _result(repo, first.stdout)
+    first_snapshot = json.loads(
+        (repo / first_result["evidence"]["source_details_path"]).read_text(
+            encoding="utf-8"
+        )
+    )
+
+    second = _run(
+        repo,
+        env,
+        "recheck",
+        "--snapshot-id",
+        first_digest["snapshot_id"],
+    )
+    assert second.returncode == 0, second.stderr
+    second_result = _result(repo, second.stdout)
+    second_snapshot = json.loads(
+        (repo / second_result["evidence"]["source_details_path"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert first_snapshot["operation"] == "delivery-readiness"
+    assert second_snapshot["operation"] == "delivery-readiness-recheck"
+    assert (
+        first_snapshot["execution_context"]["workflow_identity"]["profile"]
+        == "delivery-readiness"
+    )
+    assert (
+        second_snapshot["execution_context"]["workflow_identity"]["profile"]
+        == "delivery-readiness"
+    )
+    assert second_result["status"] == "pass"
+    assert second_result["stability"]["stable"] is True
+    assert second_result["stability"]["changed_fields"]["items"] == []
+
+
 @pytest.mark.parametrize("profile", ["delivery-readiness", "review", "pre-merge"])
 def test_task_pr_profiles_are_fixed_and_pass(tmp_path: Path, profile: str) -> None:
     repo, _, env, main_sha, head_sha = _prepare_repo(tmp_path)
