@@ -59,10 +59,18 @@ elif args[:3] == ['worktree','list','--porcelain']:
     out('\\n'.join(lines))
 elif args[:3] == ['log','-1','--format=%H']: out(state.get('runner_source_sha','c'*40))
 elif args[:2] == ['ls-remote','--heads']:
+    if state.get('remote_error', False):
+        sys.stderr.write('remote facts unavailable')
+        sys.exit(1)
     if state.get('remote_branch_exists',True):
         out(state.get('remote_branch_tips',{{}}).get(args[-1], state.get('pr',{{}}).get('headRefOid','d'*40))+'\\trefs/heads/'+args[-1])
 elif args[:3] == ['show-ref','--verify','--quiet']:
     sys.exit(0 if state.get('local_branch_exists',True) else 1)
+elif args[:2] == ['merge-base','--is-ancestor']:
+    if state.get('ancestor_error', False):
+        sys.stderr.write('cannot determine ancestry')
+        sys.exit(2)
+    sys.exit(0 if state.get('remote_is_ancestor', True) else 1)
 elif args[:1] == ['merge-base']:
     out(state.get('branch_base', state.get('origin_main','b'*40)))
 elif args[:2] == ['merge-base','--is-ancestor']:
@@ -297,6 +305,43 @@ def _write_repo(
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     return repo, state_path, env
+
+
+def _write_workflow_delivery_artifact(
+    repo: Path,
+    *,
+    base_sha: str,
+    head_sha: str,
+    main_sha: str,
+    branch: str,
+    relative_path: str = ".agents/validation.local/wsl2-runs/delivery/result.json",
+) -> str:
+    path = repo / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "profile": "workflow-delivery",
+                "base_sha": base_sha,
+                "status": "pass",
+                "repository": {
+                    "state": {
+                        "branch": branch,
+                        "head_sha": head_sha,
+                        "origin_main_sha": main_sha,
+                        "clean": True,
+                    }
+                },
+                "artifacts": {"result_json": relative_path},
+                "integrity": {
+                    "repository_head_sha": head_sha,
+                    "repository_clean": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return relative_path
 
 
 def _run(
@@ -1416,6 +1461,203 @@ def _safe_bootstrap_state() -> dict[str, Any]:
     return state
 
 
+def _push_readiness_state(
+    *,
+    branch: str = "task/70-push-readiness",
+    head: str = "4" * 40,
+    remote_tip: str | None = None,
+) -> dict[str, Any]:
+    state = _base_state()
+    state.update(
+        branch=branch,
+        git_head=head,
+        local_main=SHA40,
+        origin_main=SHA40,
+        local_branch_exists=True,
+        local_branch_tips={branch: head},
+        branch_base=SHA40,
+        remote_branch_exists=remote_tip is not None,
+        remote_branch_tips={} if remote_tip is None else {branch: remote_tip},
+        status=[],
+    )
+    return state
+
+
+def _run_push_readiness(
+    repo: Path,
+    env: dict[str, str],
+    artifact: str,
+    *,
+    branch: str = "task/70-push-readiness",
+    head: str = "4" * 40,
+    verify: bool = False,
+) -> dict[str, Any]:
+    args = [
+        "delivery-preflight",
+        "--task",
+        "70",
+        "--expected-main-sha",
+        SHA40,
+        "--entry-point",
+        "push-readiness",
+        "--branch",
+        branch,
+        "--expected-base-sha",
+        SHA40,
+        "--expected-head-sha",
+        head,
+        "--validation-result",
+        artifact,
+    ]
+    if verify:
+        args.append("--verify")
+    result = _run(repo, env, *args)
+    assert result.returncode == 0, result.stderr
+    return cast(dict[str, Any], json.loads(result.stdout))
+
+
+def test_push_readiness_remote_absent_authorizes_create_remote(tmp_path: Path) -> None:
+    state = _push_readiness_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    artifact = _write_workflow_delivery_artifact(
+        repo,
+        base_sha=SHA40,
+        head_sha="4" * 40,
+        main_sha=SHA40,
+        branch="task/70-push-readiness",
+    )
+    value = _run_push_readiness(repo, env, artifact)
+    assert value["gates"]["validated_head_binding"]["status"] == "pass"
+    assert value["gates"]["remote_push"]["status"] == "pass"
+    assert value["observed"]["push_readiness"]["push_action"] == "create_remote"
+    assert value["disposition"]["write_actions_allowed"] is True
+
+
+def test_push_readiness_equal_remote_is_idempotent(tmp_path: Path) -> None:
+    state = _push_readiness_state(remote_tip="4" * 40)
+    repo, _, env = _write_repo(tmp_path, state)
+    artifact = _write_workflow_delivery_artifact(
+        repo,
+        base_sha=SHA40,
+        head_sha="4" * 40,
+        main_sha=SHA40,
+        branch="task/70-push-readiness",
+    )
+    value = _run_push_readiness(repo, env, artifact)
+    assert value["observed"]["push_readiness"]["push_action"] == "none"
+    assert value["gates"]["remote_push"]["status"] == "pass"
+
+
+def test_push_readiness_predecessor_authorizes_fast_forward(tmp_path: Path) -> None:
+    state = _push_readiness_state(remote_tip="3" * 40)
+    repo, state_path, env = _write_repo(tmp_path, state)
+    state["remote_is_ancestor"] = True
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    artifact = _write_workflow_delivery_artifact(
+        repo,
+        base_sha=SHA40,
+        head_sha="4" * 40,
+        main_sha=SHA40,
+        branch="task/70-push-readiness",
+    )
+    value = _run_push_readiness(repo, env, artifact)
+    assert value["observed"]["push_readiness"]["push_action"] == "fast_forward_update"
+    assert value["gates"]["remote_push"]["status"] == "pass"
+
+
+def test_push_readiness_divergence_fails_closed(tmp_path: Path) -> None:
+    state = _push_readiness_state(remote_tip="3" * 40)
+    state["remote_is_ancestor"] = False
+    repo, state_path, env = _write_repo(tmp_path, state)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    artifact = _write_workflow_delivery_artifact(
+        repo,
+        base_sha=SHA40,
+        head_sha="4" * 40,
+        main_sha=SHA40,
+        branch="task/70-push-readiness",
+    )
+    value = _run_push_readiness(repo, env, artifact)
+    assert value["gates"]["remote_push"]["status"] == "fail"
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+@pytest.mark.parametrize(
+    "mutations, expected_gate",
+    [
+        ({"status": [" M drift.py"]}, "worktree_state_compatible"),
+        ({"git_head": "5" * 40}, "local_head_validated"),
+        ({"branch": "task/70-other"}, "current_branch"),
+        ({"branch_base": "9" * 40}, "branch_base"),
+        ({"remote_error": True}, "remote_branch"),
+    ],
+)
+def test_push_readiness_fail_closed_matrix(
+    tmp_path: Path, mutations: dict[str, Any], expected_gate: str
+) -> None:
+    state = _push_readiness_state()
+    state.update(mutations)
+    repo, state_path, env = _write_repo(tmp_path, state)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    artifact = _write_workflow_delivery_artifact(
+        repo,
+        base_sha=SHA40,
+        head_sha="4" * 40,
+        main_sha=SHA40,
+        branch="task/70-push-readiness",
+    )
+    value = _run_push_readiness(repo, env, artifact)
+    assert value["gates"][expected_gate]["status"] in {"fail", "unknown"}
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_push_readiness_verify_requires_remote_validated_head(tmp_path: Path) -> None:
+    state = _push_readiness_state(remote_tip="4" * 40)
+    repo, _, env = _write_repo(tmp_path, state)
+    artifact = _write_workflow_delivery_artifact(
+        repo,
+        base_sha=SHA40,
+        head_sha="4" * 40,
+        main_sha=SHA40,
+        branch="task/70-push-readiness",
+    )
+    value = _run_push_readiness(repo, env, artifact, verify=True)
+    assert value["gates"]["remote_push"]["status"] == "pass"
+    assert value["observed"]["push_readiness"]["verify"] is True
+
+
+def test_push_readiness_verify_rejects_remote_mismatch(tmp_path: Path) -> None:
+    state = _push_readiness_state(remote_tip="3" * 40)
+    repo, _, env = _write_repo(tmp_path, state)
+    artifact = _write_workflow_delivery_artifact(
+        repo,
+        base_sha=SHA40,
+        head_sha="4" * 40,
+        main_sha=SHA40,
+        branch="task/70-push-readiness",
+    )
+    value = _run_push_readiness(repo, env, artifact, verify=True)
+    assert value["gates"]["remote_push"]["status"] == "fail"
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
+def test_push_readiness_rejects_validation_artifact_head_binding_drift(
+    tmp_path: Path,
+) -> None:
+    state = _push_readiness_state()
+    repo, _, env = _write_repo(tmp_path, state)
+    artifact = _write_workflow_delivery_artifact(
+        repo,
+        base_sha=SHA40,
+        head_sha="5" * 40,
+        main_sha=SHA40,
+        branch="task/70-push-readiness",
+    )
+    value = _run_push_readiness(repo, env, artifact)
+    assert value["gates"]["validated_head_binding"]["status"] == "fail"
+    assert value["disposition"]["write_actions_allowed"] is False
+
+
 def test_implementation_missing_canonical_branch_authorizes_bootstrap(
     tmp_path: Path,
 ) -> None:
@@ -2243,15 +2485,28 @@ def test_worktree_clean_passes_all_entry_points(tmp_path: Path) -> None:
             "delivery-start",
             "implementation",
             "final-validation",
+            "push-readiness",
             "pr-readiness",
             "review-remediation",
         ),
     ):
+        state = _base_state()
+        case_dir = tmp_path / str(index)
+        case_dir.mkdir()
+        if entry_point == "push-readiness":
+            state["git_head"] = "4" * 40
         extra: list[str] = []
-        if entry_point in ("implementation", "final-validation", "pr-readiness"):
+        if entry_point in (
+            "implementation",
+            "final-validation",
+            "push-readiness",
+            "pr-readiness",
+        ):
             extra = ["--branch", "task-70", "--expected-base-sha", SHA40]
-        if entry_point in ("final-validation", "pr-readiness"):
+        if entry_point in ("final-validation", "pr-readiness", "push-readiness"):
             extra.extend(["--expected-head-sha", "4" * 40])
+        if entry_point == "push-readiness":
+            extra.extend(["--validation-result", "__push_artifact__"])
         if entry_point == "review-remediation":
             extra = [
                 "--pr",
@@ -2261,10 +2516,16 @@ def test_worktree_clean_passes_all_entry_points(tmp_path: Path) -> None:
                 "--expected-head-sha",
                 "4" * 40,
             ]
-        state = _base_state()
-        case_dir = tmp_path / str(index)
-        case_dir.mkdir()
         repo, _, env = _write_repo(case_dir, state)
+        if entry_point == "push-readiness":
+            artifact = _write_workflow_delivery_artifact(
+                repo,
+                base_sha=SHA40,
+                head_sha="4" * 40,
+                main_sha=SHA40,
+                branch="task-70",
+            )
+            extra[-1] = artifact
         result = _run(
             repo,
             env,

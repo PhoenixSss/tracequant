@@ -60,6 +60,24 @@ def test_delivery_runner_has_current_profiles_and_remediation_loop() -> None:
     assert "--bootstrap-verify" in text
 
 
+def test_delivery_runner_push_authorization_sequence_is_explicit() -> None:
+    for relative in (
+        ".agents/skills/task-delivery-runner/SKILL.md",
+        ".claude/skills/task-delivery-runner/SKILL.md",
+    ):
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        assert "push-readiness" in text
+        assert "--validation-result" in text
+        assert "push-readiness --verify" in text
+        assert "The Runner never pushes" in text
+        assert "pr-readiness`" in text
+        assert "before PR resolve/create/reuse" in text
+        assert "force-push" in text
+        assert text.index("workflow-delivery") < text.index("push-readiness")
+        assert text.index("push-readiness") < text.index("push-readiness --verify")
+        assert text.index("push-readiness --verify") < text.index("pr-readiness")
+
+
 def test_delivery_branch_bootstrap_contract_is_shared_by_both_skills() -> None:
     for relative in (
         ".agents/skills/task-delivery-runner/SKILL.md",

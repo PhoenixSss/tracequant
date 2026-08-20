@@ -64,6 +64,24 @@ tools/agent_workflow/wsl2_github_evidence_runner.py delivery \
 tools/agent_workflow/wsl2_validation_runner.py workflow-delivery \
   --base-sha <LOCKED_TASK_BASE_SHA>
 
+tools/agent_workflow/wsl2_github_evidence_runner.py delivery \
+  --entry-point push-readiness \
+  --task <TASK> \
+  --expected-main-sha <LOCKED_MAIN_SHA> \
+  --branch <BRANCH> \
+  --expected-base-sha <LOCKED_TASK_BASE_SHA> \
+  --expected-head-sha <VALIDATED_HEAD_SHA> \
+  --validation-result <WORKFLOW_DELIVERY_RESULT>
+
+tools/agent_workflow/wsl2_github_evidence_runner.py delivery \
+  --entry-point push-readiness --verify \
+  --task <TASK> \
+  --expected-main-sha <LOCKED_MAIN_SHA> \
+  --branch <BRANCH> \
+  --expected-base-sha <LOCKED_TASK_BASE_SHA> \
+  --expected-head-sha <VALIDATED_HEAD_SHA> \
+  --validation-result <WORKFLOW_DELIVERY_RESULT>
+
 tools/agent_workflow/wsl2_github_evidence_runner.py delivery-readiness \
   --task <TASK> \
   --pr <PR> \
@@ -76,7 +94,8 @@ tools/agent_workflow/wsl2_github_evidence_runner.py delivery-readiness \
 | `delivery-start` | Phase 1 before any write | — |
 | `implementation` | Phase 2 before branch/implementation writes | `--branch --expected-base-sha` (`--bootstrap-verify` after creation) |
 | `final-validation` | Phase 3 before commit/`workflow-delivery` | `--branch --expected-base-sha --expected-head-sha` |
-| `pr-readiness` | Phase 4 before PR creation/push verification | `--branch --expected-base-sha --expected-head-sha` |
+| `push-readiness` | Phase 3 after `workflow-delivery` and before any remote Task-branch push; `--verify` immediately after the prescribed push | `--branch --expected-base-sha --expected-head-sha --validation-result` (`--verify` after push) |
+| `pr-readiness` | Phase 4 after the exact validated head has been confirmed on remote, before PR resolve/create/reuse | `--branch --expected-base-sha --expected-head-sha` |
 | `review-remediation` | Review remediation before any repair edit | `--pr --expected-base-sha --expected-head-sha` |
 
 During implementation, use a matching targeted Validation profile only when
@@ -291,9 +310,14 @@ and exclude secrets, generated files, unrelated changes, and ignored evidence
 artifacts.
 
 Stage explicit paths only; do not use `git add .`. Create a scoped commit, then
-run `workflow-delivery` against the clean committed head. On failure, inspect
-bounded evidence, repair with another scoped commit, and rerun. Push only the
-head that passed final validation. Re-read branch and remote-head identity.
+run `workflow-delivery` against the clean committed head and retain its exact
+result artifact. On failure, inspect bounded evidence, repair with another
+scoped commit, and rerun. Run `push-readiness` against that artifact. Only a
+passing gate authorizes the Skill to execute its ordinary push action
+(`create_remote` or `fast_forward_update`); `none` is an idempotent resume
+path. The Runner never pushes and no force-push form is authorized. Immediately
+run `push-readiness --verify` against the same artifact and continue only after
+it passes. Re-read branch and remote-head identity before `pr-readiness`.
 
 ## Phase 4: PR and readiness
 
@@ -390,7 +414,9 @@ Implement the smallest complete repair and add regression coverage where
 applicable. Preserve Task scope, safety boundaries, and unrelated behavior.
 
 Create scoped repair commits. Run final `workflow-delivery` validation against
-the clean committed head, push the validated head, wait for applicable checks,
+the clean committed head, then run `push-readiness` against that exact result,
+execute only its ordinary prescribed push after a pass, and run
+`push-readiness --verify` immediately afterward. Wait for applicable checks,
 and regenerate `delivery-readiness`. Update the PR description or validation
 summary when the repair materially changes them.
 

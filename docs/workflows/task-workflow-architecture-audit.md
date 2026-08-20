@@ -71,7 +71,10 @@ Task branch → Agent implementation → targeted Validation Runner
 clean committed head → workflow-delivery Validation Runner
         │
         ▼
-push → PR resolve/create helper → checks → Agent semantic self-review
+push-readiness authorization → Skill ordinary push → push-readiness --verify
+        │
+        ▼
+pr-readiness → PR resolve/create helper → checks → Agent semantic self-review
         │
         ▼
 delivery-readiness Evidence Runner → Review handoff

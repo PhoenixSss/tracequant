@@ -12,9 +12,11 @@
         "branch",
         "pr",
         "expected_base_sha",
-        "expected_head_sha"
+        "expected_head_sha",
+        "validation_result",
+        "verify"
       ],
-      "description": "Unified Delivery Invocation Preflight with lifecycle-conflict detection across five stable semantic entry points."
+      "description": "Unified Delivery Invocation Preflight with lifecycle-conflict detection across six stable semantic entry points."
     },
     "delivery-readiness": {
       "operation": "delivery-readiness",

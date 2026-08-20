@@ -20,7 +20,7 @@ Codex 与 Claude Code 的 workflow Skills 引用本文件作为生命周期语�
 ```text
 Issue (Specifying)
   → Ready（codex:ready + Project Ready + 无 blocker）
-  → Delivery（branch → implementation/tests → commit/push → PR）
+  → Delivery（branch → implementation/tests → commit → push authorization → push → PR）
   → CI checks
   → Independent Review（fresh session，read-only）
   → maintainer manual Squash Merge
@@ -114,8 +114,20 @@ intent 无法可靠解析时：**不要猜**。回退到 explicit Skill-name fal
 ## 6. Delivery semantics
 
 - 一次 Delivery 覆盖：readiness → branch → implementation → tests →
-  targeted validation → commit → push → PR → CI checks → delivery readiness →
-  handoff for Independent Review。
+  targeted validation → commit → `workflow-delivery` → `push-readiness` →
+  Skill ordinary push → `push-readiness --verify` → `pr-readiness` → PR →
+  CI checks → delivery readiness → handoff for Independent Review。
+- `push-readiness` is a deterministic, read-only authorization transition. It
+  binds the exact successful `workflow-delivery` artifact to the clean local
+  head and classifies only `create_remote`, `fast_forward_update`, or the
+  idempotent `none` path. A failed or unknown classification forbids remote
+  writes; the Evidence Runner never executes `git push`.
+- The layers are intentionally distinct: Runner facts → Workflow
+  authorization → Skill side effect → environment approval when needed.
+  Environment approval permits command execution only and never substitutes
+  for `push-readiness` authorization. `pr-readiness` runs only after
+  `push-readiness --verify` proves `remote_tip == validated_head`; its strict
+  exact-head contract and PR responsibility are unchanged.
 - 一个 Task 通常产生一个 PR（base = `main`）。
 - Initial Task branch bootstrap is a shared workflow contract: Delivery locks
   the trusted `main`/base first, then the implementation preflight classifies

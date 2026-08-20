@@ -34,6 +34,7 @@ DELIVERY_ENTRY_POINTS: Final = (
     "delivery-start",
     "implementation",
     "final-validation",
+    "push-readiness",
     "pr-readiness",
     "review-remediation",
 )
@@ -51,6 +52,16 @@ DELIVERY_ENTRY_PARAMS: Final = {
             "expected_head_sha",
         }
     ),
+    "push-readiness": frozenset(
+        {
+            "task",
+            "expected_main_sha",
+            "branch",
+            "expected_base_sha",
+            "expected_head_sha",
+            "validation_result",
+        }
+    ),
     "pr-readiness": frozenset(
         {
             "task",
@@ -66,6 +77,7 @@ DELIVERY_ENTRY_PARAMS: Final = {
 }
 DELIVERY_OPTIONAL_PARAMS: Final = {
     "implementation": frozenset({"bootstrap_verify"}),
+    "push-readiness": frozenset({"verify"}),
 }
 DELIVERY_PARAM_SPACE: Final = frozenset(
     {
@@ -76,6 +88,8 @@ DELIVERY_PARAM_SPACE: Final = frozenset(
         "expected_base_sha",
         "expected_head_sha",
         "bootstrap_verify",
+        "validation_result",
+        "verify",
     }
 )
 REPOSITORY_PATTERN: Final = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -126,6 +140,8 @@ CANONICAL_PROFILES: Final[dict[str, tuple[str, tuple[str, ...]]]] = {
             "pr",
             "expected_base_sha",
             "expected_head_sha",
+            "validation_result",
+            "verify",
         ),
     ),
     "delivery-readiness": (
@@ -425,6 +441,23 @@ def _branch_name(value: str) -> str:
     return value
 
 
+def _validation_result(value: str) -> str:
+    normalized = value.replace("\\", "/")
+    path = Path(normalized)
+    if (
+        not normalized
+        or path.is_absolute()
+        or any(part in {"", ".", ".."} for part in path.parts)
+        or not normalized.startswith(".agents/validation.local/")
+        or not normalized.endswith("/result.json")
+    ):
+        raise argparse.ArgumentTypeError(
+            "must be a repo-relative workflow-delivery result under "
+            ".agents/validation.local/"
+        )
+    return normalized
+
+
 def _validate_delivery_contract(args: argparse.Namespace) -> None:
     allowed = DELIVERY_ENTRY_PARAMS[args.entry_point]
     optional = DELIVERY_OPTIONAL_PARAMS.get(args.entry_point, frozenset())
@@ -458,6 +491,13 @@ def _build_parser() -> argparse.ArgumentParser:
     delivery.add_argument("--branch", type=_branch_name)
     delivery.add_argument("--expected-base-sha", type=_sha)
     delivery.add_argument("--expected-head-sha", type=_sha)
+    delivery.add_argument("--validation-result", type=_validation_result)
+    delivery.add_argument(
+        "--verify",
+        action="store_true",
+        default=None,
+        help="verify that the prescribed push published the validated head",
+    )
     delivery.add_argument("--pr", type=_positive_int)
     delivery.add_argument(
         "--bootstrap-verify",
@@ -593,10 +633,14 @@ def _evidence_argv(args: argparse.Namespace, repo_root: Path) -> list[str]:
             result.extend(["--expected-base-sha", args.expected_base_sha])
         if args.expected_head_sha is not None:
             result.extend(["--expected-head-sha", args.expected_head_sha])
+        if args.validation_result is not None:
+            result.extend(["--validation-result", args.validation_result])
         if args.pr is not None:
             result.extend(["--pr", str(args.pr)])
         if args.bootstrap_verify is not None:
             result.append("--bootstrap-verify")
+        if args.verify is not None:
+            result.append("--verify")
     elif profile in {"delivery-readiness", "review", "pre-merge"}:
         result.extend(
             [
@@ -734,6 +778,8 @@ def _compact_result(
     required_checks = required_checks if isinstance(required_checks, dict) else {}
     branch_cleanup = observed.get("branch_cleanup")
     branch_cleanup = branch_cleanup if isinstance(branch_cleanup, dict) else {}
+    push_readiness = observed.get("push_readiness")
+    push_readiness = push_readiness if isinstance(push_readiness, dict) else {}
     stability = snapshot.get("stability")
     stability = stability if isinstance(stability, dict) else {}
     source_core = {
@@ -793,6 +839,7 @@ def _compact_result(
             "observed_runs": checks,
         },
         "branch_cleanup": branch_cleanup,
+        "push_readiness": push_readiness,
         "scope": {
             "changed_files": pr.get("changed_files"),
             "commits": pr.get("commits"),
@@ -951,6 +998,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         result_sha = _sha256_bytes(payload)
         subject_value = snapshot.get("subject")
         subject_value = subject_value if isinstance(subject_value, dict) else {}
+        push_readiness_value = result.get("push_readiness")
+        push_readiness_value = (
+            push_readiness_value if isinstance(push_readiness_value, dict) else {}
+        )
         compact = {
             "api_calls": result.get("evidence", {})
             .get("operations", {})
@@ -964,6 +1015,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "duration_ms": duration_ms,
             "entry_point": subject_value.get("entry_point"),
             "head_sha": result["identity"]["head_sha"],
+            "validated_head_sha": push_readiness_value.get("validated_head_sha"),
+            "push_action": push_readiness_value.get("push_action"),
             "partial": result["partial"],
             "pr": result["identity"]["pr"],
             "profile": args.profile,

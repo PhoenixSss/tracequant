@@ -81,6 +81,7 @@ DELIVERY_ENTRY_POINTS: Final = (
     "delivery-start",
     "implementation",
     "final-validation",
+    "push-readiness",
     "pr-readiness",
     "review-remediation",
 )
@@ -98,6 +99,16 @@ DELIVERY_ENTRY_PARAMS: Final = {
             "expected_head_sha",
         }
     ),
+    "push-readiness": frozenset(
+        {
+            "task",
+            "expected_main_sha",
+            "branch",
+            "expected_base_sha",
+            "expected_head_sha",
+            "validation_result",
+        }
+    ),
     "pr-readiness": frozenset(
         {
             "task",
@@ -113,6 +124,7 @@ DELIVERY_ENTRY_PARAMS: Final = {
 }
 DELIVERY_OPTIONAL_PARAMS: Final = {
     "implementation": frozenset({"bootstrap_verify"}),
+    "push-readiness": frozenset({"verify"}),
 }
 DELIVERY_PARAM_SPACE: Final = frozenset(
     {
@@ -123,6 +135,8 @@ DELIVERY_PARAM_SPACE: Final = frozenset(
         "expected_base_sha",
         "expected_head_sha",
         "bootstrap_verify",
+        "validation_result",
+        "verify",
     }
 )
 BRANCH_NAME_ALLOWED: Final = frozenset(
@@ -1069,6 +1083,308 @@ def _remote_branch_tip(value: str | None) -> str | None:
     return None
 
 
+def _read_validation_artifact(
+    repo_root: Path,
+    relative_path: str,
+    *,
+    branch: str,
+    expected_main_sha: str,
+    expected_base_sha: str,
+    expected_head_sha: str,
+) -> tuple[dict[str, Any], str | None]:
+    """Validate the exact successful workflow-delivery artifact binding.
+
+    The fixed Validation Runner already records the repository head captured
+    before validation as ``repository.state.head_sha`` and repeats it in
+    ``integrity.repository_head_sha``.  This gate requires both existing
+    identities to agree and binds the artifact to the current Task/base
+    invocation before any remote classification is allowed.
+    """
+    path = repo_root / relative_path
+    if path.is_symlink():
+        return _gate(
+            "unknown", "workflow-delivery artifact must not be a symlink"
+        ), None
+    try:
+        artifact = read_json_file(path)
+    except (WorkflowToolError, OSError) as exc:
+        return _gate("unknown", str(exc)), None
+    if not isinstance(artifact, dict):
+        return _gate("unknown", "workflow-delivery artifact is not an object"), None
+
+    if artifact.get("profile") != "workflow-delivery":
+        return _gate("fail", "validation artifact is not workflow-delivery"), None
+    if artifact.get("status") != "pass":
+        return _gate(
+            "fail",
+            f"workflow-delivery artifact status is {artifact.get('status')!r}",
+        ), None
+    artifacts = artifact.get("artifacts")
+    artifact_path = (
+        artifacts.get("result_json") if isinstance(artifacts, dict) else None
+    )
+    if artifact_path != relative_path:
+        return _gate(
+            "fail",
+            "workflow-delivery artifact path binding does not match the requested artifact",
+        ), None
+    if artifact.get("base_sha") != expected_base_sha:
+        return _gate(
+            "fail",
+            f"workflow-delivery base SHA expected {expected_base_sha}, observed {artifact.get('base_sha')}",
+        ), None
+
+    repository = artifact.get("repository")
+    state = repository.get("state") if isinstance(repository, dict) else None
+    integrity = artifact.get("integrity")
+    if not isinstance(state, dict) or not isinstance(integrity, dict):
+        return _gate(
+            "unknown", "workflow-delivery repository identity is incomplete"
+        ), None
+    validated_head = state.get("head_sha")
+    integrity_head = integrity.get("repository_head_sha")
+    if not is_sha(validated_head) or not is_sha(integrity_head):
+        return _gate(
+            "unknown", "workflow-delivery validated head SHA is unavailable"
+        ), None
+    if validated_head != integrity_head:
+        return _gate(
+            "fail",
+            "workflow-delivery validated-head binding drifted inside the artifact",
+        ), None
+    failures: list[str] = []
+    if validated_head != expected_head_sha:
+        failures.append(
+            f"validated head expected {expected_head_sha}, observed {validated_head}"
+        )
+    if state.get("branch") != branch:
+        failures.append(
+            f"validated branch expected {branch}, observed {state.get('branch')}"
+        )
+    if state.get("clean") is not True or integrity.get("repository_clean") is not True:
+        failures.append(
+            "workflow-delivery artifact was not captured from a clean worktree"
+        )
+    if state.get("origin_main_sha") != expected_main_sha:
+        failures.append(
+            f"validated origin/main expected {expected_main_sha}, observed {state.get('origin_main_sha')}"
+        )
+    if failures:
+        return _gate("fail", "; ".join(failures)), None
+    return (
+        _gate(
+            "pass",
+            f"workflow-delivery validated head {validated_head} is bound to {relative_path}",
+        ),
+        validated_head,
+    )
+
+
+def _push_readiness_gates(
+    args: argparse.Namespace,
+    runner: CommandRunner,
+    observed: dict[str, Any],
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Classify the one permitted ordinary publication of a validated head."""
+    git = observed.get("git")
+    git = git if isinstance(git, dict) else {}
+    branch = args.branch
+    gates: dict[str, Any] = {}
+    validation_gate, validated_head = _read_validation_artifact(
+        runner.repo_root,
+        args.validation_result,
+        branch=branch,
+        expected_main_sha=args.expected_main_sha,
+        expected_base_sha=args.expected_base_sha,
+        expected_head_sha=args.expected_head_sha,
+    )
+    gates["validated_head_binding"] = validation_gate
+
+    gates["branch_identity"] = _task_branch_identity_gate(branch, args.task)
+    gates["current_branch"] = _gate(
+        "pass" if git.get("branch") == branch else "fail",
+        f"current branch expected {branch}, observed {git.get('branch')}",
+    )
+    gates["local_main"] = _sha_gate(
+        git.get("local_main_sha"), args.expected_main_sha, "local main SHA"
+    )
+
+    branch_exists = runner.run(
+        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+        command_id="git-push-readiness-branch-exists",
+    )
+    if branch_exists.returncode == 0:
+        gates["branch_exists"] = _gate("pass")
+    elif branch_exists.returncode == 1:
+        gates["branch_exists"] = _gate("fail", "Task branch does not exist")
+    else:
+        warnings.append(command_warning(branch_exists))
+        gates["branch_exists"] = _gate("unknown", "Task branch existence unavailable")
+
+    local_tip: str | None = None
+    if branch_exists.returncode == 0:
+        local_tip_result = runner.run(
+            ["git", "rev-parse", f"refs/heads/{branch}"],
+            command_id="git-push-readiness-local-head",
+        )
+        if local_tip_result.returncode == 0:
+            local_tip = local_tip_result.stdout.strip()
+            gates["local_head_validated"] = _gate(
+                "pass"
+                if local_tip == args.expected_head_sha
+                and git.get("head_sha") == args.expected_head_sha
+                and validated_head == args.expected_head_sha
+                else "fail",
+                "local HEAD and Task branch tip equal the validated head"
+                if local_tip == args.expected_head_sha
+                and git.get("head_sha") == args.expected_head_sha
+                and validated_head == args.expected_head_sha
+                else "local HEAD, Task branch tip, or validated head drifted",
+            )
+        else:
+            warnings.append(command_warning(local_tip_result))
+            gates["local_head_validated"] = _gate(
+                "unknown", "Task branch tip unavailable"
+            )
+    else:
+        gates["local_head_validated"] = _gate("unknown", "Task branch tip unavailable")
+
+    merge_base = runner.run(
+        [
+            "git",
+            "merge-base",
+            f"refs/heads/{branch}",
+            "refs/remotes/origin/main",
+        ],
+        command_id="git-push-readiness-base",
+    )
+    if merge_base.returncode == 0:
+        actual_base = merge_base.stdout.strip()
+        gates["branch_base"] = _gate(
+            "pass" if actual_base == args.expected_base_sha else "fail",
+            f"Task branch base expected {args.expected_base_sha}, observed {actual_base}",
+        )
+    elif merge_base.returncode == 1:
+        gates["branch_base"] = _gate(
+            "fail", "Task branch has no common base with origin/main"
+        )
+    else:
+        warnings.append(command_warning(merge_base))
+        gates["branch_base"] = _gate("unknown", "Task branch base unavailable")
+
+    remote_result = runner.run(
+        ["git", "ls-remote", "--heads", "origin", str(branch)],
+        command_id="git-push-readiness-remote-head",
+    )
+    remote_tip: str | None = None
+    remote_state = "UNKNOWN"
+    push_action = "none"
+    if remote_result.returncode != 0:
+        warnings.append(command_warning(remote_result))
+        gates["remote_branch"] = _gate(
+            "unknown", "remote Task branch facts unavailable"
+        )
+        gates["remote_push"] = _gate(
+            "unknown", "remote push classification unavailable"
+        )
+    else:
+        lines = [line for line in remote_result.stdout.splitlines() if line]
+        if not lines:
+            remote_state = "ABSENT"
+            gates["remote_branch"] = _gate("pass", "remote Task branch is absent")
+        elif len(lines) == 1:
+            parts = lines[0].split("\t", 1)
+            if (
+                len(parts) == 2
+                and parts[1] == f"refs/heads/{branch}"
+                and is_sha(parts[0])
+            ):
+                remote_tip = parts[0]
+                remote_state = "PRESENT"
+                gates["remote_branch"] = _gate(
+                    "pass", f"remote Task branch tip {remote_tip}"
+                )
+            else:
+                gates["remote_branch"] = _gate(
+                    "unknown", "remote Task branch response is incomplete"
+                )
+        else:
+            gates["remote_branch"] = _gate(
+                "unknown", "multiple remote Task branch tips observed"
+            )
+
+        if gates["remote_branch"].get("status") == "pass":
+            if args.verify:
+                if remote_tip == args.expected_head_sha:
+                    gates["remote_push"] = _gate(
+                        "pass", "post-push remote tip equals validated head"
+                    )
+                    push_action = "none"
+                elif remote_state == "ABSENT":
+                    gates["remote_push"] = _gate(
+                        "fail", "post-push remote Task branch is absent"
+                    )
+                    push_action = "none"
+                else:
+                    gates["remote_push"] = _gate(
+                        "fail",
+                        f"post-push remote tip expected {args.expected_head_sha}, observed {remote_tip}",
+                    )
+                    push_action = "none"
+            elif remote_state == "ABSENT":
+                gates["remote_push"] = _gate(
+                    "pass", "exact validated head may create the remote branch"
+                )
+                push_action = "create_remote"
+            elif remote_tip == args.expected_head_sha:
+                gates["remote_push"] = _gate(
+                    "pass", "remote tip already equals the validated head"
+                )
+                push_action = "none"
+            else:
+                ancestor = runner.run(
+                    [
+                        "git",
+                        "merge-base",
+                        "--is-ancestor",
+                        str(remote_tip),
+                        args.expected_head_sha,
+                    ],
+                    command_id="git-push-readiness-remote-ancestor",
+                )
+                if ancestor.returncode == 0:
+                    gates["remote_push"] = _gate(
+                        "pass",
+                        "remote tip is a valid predecessor of the validated head",
+                    )
+                    push_action = "fast_forward_update"
+                elif ancestor.returncode == 1:
+                    gates["remote_push"] = _gate(
+                        "fail", "remote Task branch diverged from the validated head"
+                    )
+                    push_action = "none"
+                else:
+                    warnings.append(command_warning(ancestor))
+                    gates["remote_push"] = _gate(
+                        "unknown", "remote ancestry could not be established"
+                    )
+                    push_action = "none"
+        else:
+            push_action = "none"
+
+    observed["push_readiness"] = {
+        "validation_result": args.validation_result,
+        "validated_head_sha": validated_head,
+        "remote_branch_state": remote_state,
+        "remote_tip": remote_tip,
+        "remote_push": gates.get("remote_push", {}).get("status"),
+        "push_action": push_action,
+        "verify": bool(args.verify),
+    }
+    return gates
+
+
 def _gate_pass(gates: Mapping[str, Any], name: str) -> bool:
     value = gates.get(name)
     return isinstance(value, dict) and value.get("status") == "pass"
@@ -1119,6 +1435,7 @@ def _project_status_gate(
         "delivery-start": {"Ready", "In Progress"},
         "implementation": {"Ready", "In Progress"},
         "final-validation": {"Ready", "In Progress"},
+        "push-readiness": {"Ready", "In Progress"},
         "pr-readiness": {"Ready", "In Progress"},
         "review-remediation": {"Review"},
     }.get(entry_point, set())
@@ -1181,6 +1498,20 @@ def _validate_delivery_entry_args(args: argparse.Namespace) -> None:
             or value.endswith(".lock")
         ):
             raise WorkflowToolError(f"invalid branch name: {value!r}")
+    if args.validation_result is not None:
+        value = str(args.validation_result).replace("\\", "/")
+        path = Path(value)
+        if (
+            not value
+            or path.is_absolute()
+            or any(part in {"", ".", ".."} for part in path.parts)
+            or not value.startswith(".agents/validation.local/")
+            or not value.endswith("/result.json")
+        ):
+            raise WorkflowToolError(
+                "validation result must be a repo-relative workflow-delivery "
+                "artifact under .agents/validation.local/"
+            )
 
 
 def _task_branch_identity_gate(branch: Any, task: int) -> dict[str, Any]:
@@ -1582,6 +1913,9 @@ def _entry_point_gates(
                         )
                 else:
                     gates["pr_identity"] = _gate("unknown")
+
+    if entry_point == "push-readiness":
+        gates.update(_push_readiness_gates(args, runner, observed, warnings))
 
     if entry_point == "review-remediation":
         if repository and args.pr is not None:
@@ -2374,7 +2708,8 @@ def _worktree_state_compatible_gate(
 
     delivery-start and implementation may accept a dirty worktree when the
     changes are plausibly owned by the current Task.  final-validation,
-    pr-readiness, and review-remediation require a clean committed head.
+    push-readiness, pr-readiness, and review-remediation require a clean
+    committed head.
     """
     clean = bool(git.get("clean"))
     branch = git.get("branch")
@@ -2489,8 +2824,13 @@ def _compute_preflight_disposition(
     # identity conflict is a hard stop
     for identity_gate in (
         "origin_main",
+        "local_main",
+        "current_branch",
         "branch_base",
         "branch_head",
+        "local_head_validated",
+        "validated_head_binding",
+        "remote_push",
         "pr_identity",
         "pr_base_sha",
         "pr_head_sha",
@@ -3317,6 +3657,16 @@ def _build_parser() -> argparse.ArgumentParser:
     delivery.add_argument("--branch", help="expected Task branch name")
     delivery.add_argument("--expected-base-sha", help="expected branch base SHA")
     delivery.add_argument("--expected-head-sha", help="expected branch head SHA")
+    delivery.add_argument(
+        "--validation-result",
+        help="repo-relative successful workflow-delivery result artifact",
+    )
+    delivery.add_argument(
+        "--verify",
+        action="store_true",
+        default=None,
+        help="verify that the prescribed push published the validated head",
+    )
     delivery.add_argument("--pr", type=int, help="expected PR number")
     delivery.add_argument(
         "--bootstrap-verify",

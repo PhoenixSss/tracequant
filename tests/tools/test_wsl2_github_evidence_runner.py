@@ -937,6 +937,67 @@ def test_delivery_entry_point_in_compact_digest(
     assert digest["entry_point"] == "delivery-start"
 
 
+def test_delivery_push_readiness_reuses_workflow_delivery_identity(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["projectItems"] = [{"status": {"name": "Ready"}}]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    relative_artifact = ".agents/validation.local/wsl2-runs/delivery/result.json"
+    artifact = repo / relative_artifact
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(
+        json.dumps(
+            {
+                "profile": "workflow-delivery",
+                "base_sha": main_sha,
+                "status": "pass",
+                "repository": {
+                    "state": {
+                        "branch": "84-task-evidence-runner",
+                        "head_sha": head_sha,
+                        "origin_main_sha": main_sha,
+                        "clean": True,
+                    }
+                },
+                "artifacts": {"result_json": relative_artifact},
+                "integrity": {
+                    "repository_head_sha": head_sha,
+                    "repository_clean": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    completed = _run(
+        repo,
+        env,
+        "delivery",
+        "--task",
+        "84",
+        "--expected-main-sha",
+        main_sha,
+        "--entry-point",
+        "push-readiness",
+        "--branch",
+        "84-task-evidence-runner",
+        "--expected-base-sha",
+        main_sha,
+        "--expected-head-sha",
+        head_sha,
+        "--validation-result",
+        relative_artifact,
+    )
+    assert completed.returncode == 0, completed.stderr
+    digest = json.loads(completed.stdout)
+    assert digest["entry_point"] == "push-readiness"
+    assert digest["status"] == "pass"
+    result = _result(repo, completed.stdout)
+    assert result["push_readiness"]["push_action"] == "none"
+    assert result["evidence"]["gate_summary"]["failed_gates"] == []
+
+
 def test_delivery_implementation_accepts_bootstrap_verification_mode(
     tmp_path: Path,
 ) -> None:

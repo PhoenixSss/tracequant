@@ -691,6 +691,7 @@ def _run_profile(
         "runner_version": RUNNER_VERSION,
         "profile": profile_name,
         "profile_kind": profile.get("kind"),
+        "base_sha": base_sha,
         "status": status,
         "started_at": started_at.isoformat(),
         "duration_ms": duration_ms,

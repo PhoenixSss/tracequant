@@ -573,6 +573,7 @@ def test_workflow_profiles_require_base_sha_and_run_one_bounded_command(
         assert digest["profile"] == profile
         assert digest["command_count"] == 1
         stored = json.loads((repo / digest["result_path"]).read_text())
+        assert stored["base_sha"] == base_sha
         assert stored["commands"][0]["id"] == "workflow-validation"
         assert stored["commands"][0]["exit_code"] == 0
 
