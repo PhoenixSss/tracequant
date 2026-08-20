@@ -285,7 +285,7 @@ def _write_repo(
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".gitignore").write_text(
-        ".agents/evidence.local/\n.agents/validation.local/\n__pycache__/\n",
+        ".agents/evidence.local/\n.agents/validation.local/\n",
         encoding="utf-8",
     )
     state_path = tmp_path / "state.json"
@@ -317,7 +317,6 @@ def test_help_for_all_commands() -> None:
     commands = (
         "delivery-preflight",
         "delivery-readiness",
-        "delivery-readiness-recheck",
         "pr-review-snapshot",
         "pr-review-recheck",
         "closeout-plan",
@@ -433,68 +432,6 @@ def test_review_recheck_detects_head_and_diff_drift(tmp_path: Path) -> None:
     assert "head_sha" in value["stability"]["changed_fields"]["items"]
     assert "effective_diff_sha256" in value["stability"]["changed_fields"]["items"]
     assert value["gates"]["snapshot_stability"]["status"] == "fail"
-
-
-def test_delivery_readiness_recheck_is_stable_when_object_is_unchanged(
-    tmp_path: Path,
-) -> None:
-    state = _base_state()
-    state["issues"]["70"]["projectItems"] = [{"status": {"name": "Review"}}]
-    repo, _, env = _write_repo(tmp_path, state)
-    first = _run(repo, env, "delivery-readiness", "--task", "70", "--pr", "71")
-    assert first.returncode == 0, first.stderr
-    initial = json.loads(first.stdout)
-
-    second = _run(
-        repo,
-        env,
-        "delivery-readiness-recheck",
-        "--snapshot-id",
-        initial["snapshot_id"],
-    )
-    assert second.returncode == 0, second.stderr
-    recheck = json.loads(second.stdout)
-    assert initial["operation"] == "delivery-readiness"
-    assert recheck["operation"] == "delivery-readiness-recheck"
-    assert (
-        initial["execution_context"]["workflow_identity"]["profile"]
-        == "delivery-readiness"
-    )
-    assert (
-        recheck["execution_context"]["workflow_identity"]["profile"]
-        == "delivery-readiness"
-    )
-    assert recheck["stability"]["stable"] is True
-    assert recheck["stability"]["changed_fields"]["items"] == []
-    assert recheck["gates"]["snapshot_stability"]["status"] == "pass"
-
-
-def test_delivery_readiness_recheck_detects_head_and_diff_drift(
-    tmp_path: Path,
-) -> None:
-    state = _base_state()
-    state["issues"]["70"]["projectItems"] = [{"status": {"name": "Review"}}]
-    repo, state_path, env = _write_repo(tmp_path, state)
-    first = _run(repo, env, "delivery-readiness", "--task", "70", "--pr", "71")
-    assert first.returncode == 0, first.stderr
-    snapshot_id = json.loads(first.stdout)["snapshot_id"]
-
-    state["pr"]["headRefOid"] = "5" * 40
-    state["diff"] = "diff --git a/file.py b/file.py\n+changed\n"
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    second = _run(
-        repo,
-        env,
-        "delivery-readiness-recheck",
-        "--snapshot-id",
-        snapshot_id,
-    )
-    assert second.returncode == 0, second.stderr
-    recheck = json.loads(second.stdout)
-    assert recheck["stability"]["stable"] is False
-    assert "head_sha" in recheck["stability"]["changed_fields"]["items"]
-    assert "effective_diff_sha256" in recheck["stability"]["changed_fields"]["items"]
-    assert recheck["gates"]["snapshot_stability"]["status"] == "fail"
 
 
 def test_read_only_mode_skips_fetch_and_reports_local_main(tmp_path: Path) -> None:

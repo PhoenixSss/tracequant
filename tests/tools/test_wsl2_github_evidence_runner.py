@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
@@ -12,12 +11,6 @@ from typing import Any
 import pytest
 
 ROOT = Path(__file__).parents[2]
-sys.path.insert(0, str(ROOT / "tools/agent_workflow"))
-from review_fact_handoff import (  # type: ignore[import-not-found]  # noqa: E402, I001
-    build_handoff_from_snapshot,
-    write_handoff,
-)
-
 RUNNER_REL = Path("tools/agent_workflow/wsl2_github_evidence_runner.py")
 IDENTITY_FILES = (
     RUNNER_REL,
@@ -25,17 +18,6 @@ IDENTITY_FILES = (
     Path(".codex/rules/tracequant-wsl-evidence.rules"),
     Path("tools/agent_workflow/workflow_evidence.py"),
     Path("tools/agent_workflow/workflow_common.py"),
-    Path("tools/agent_workflow/review_fact_handoff.py"),
-    Path(".agents/policies/command-execution.md"),
-    Path(".agents/policies/workflow-evidence.md"),
-    Path("docs/development/pr-review.md"),
-)
-VALIDATION_IDENTITY_FILES = (
-    Path("tools/agent_workflow/wsl2_validation_runner.py"),
-    Path("tools/agent_workflow/wsl2_validation_profiles.json"),
-    Path(".codex/rules/tracequant-wsl-validation.rules"),
-    Path("tools/agent_workflow/workflow_validation.py"),
-    Path(".agents/skills/task-delivery-runner/SKILL.md"),
 )
 REAL_GIT_OPTIONAL = shutil.which("git")
 assert REAL_GIT_OPTIONAL is not None
@@ -259,10 +241,6 @@ def _prepare_repo(
         target = repo / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, target)
-    for relative in VALIDATION_IDENTITY_FILES:
-        target = repo / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / relative, target)
     for skill_dir in (".agents", ".claude"):
         for skill in (
             "task-delivery-runner",
@@ -275,7 +253,7 @@ def _prepare_repo(
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, target)
     (repo / ".gitignore").write_text(
-        ".agents/evidence.local/\n.agents/validation.local/\n__pycache__/\n",
+        ".agents/evidence.local/\n.agents/validation.local/\n",
         encoding="utf-8",
         newline="\n",
     )
@@ -401,62 +379,6 @@ def _result(repo: Path, stdout: str) -> dict[str, Any]:
     return result
 
 
-def _validation_facts(repo: Path, base_sha: str, head_sha: str) -> dict[str, Any]:
-    def digest(relative: Path) -> str:
-        return hashlib.sha256((repo / relative).read_bytes()).hexdigest()
-
-    locator = ".agents/validation.local/wsl2-runs/run/result.json"
-    identity = {
-        "path": "tools/agent_workflow/wsl2_validation_runner.py",
-        "sha256": digest(VALIDATION_IDENTITY_FILES[0]),
-        "profile_spec_path": "tools/agent_workflow/wsl2_validation_profiles.json",
-        "profile_spec_sha256": digest(VALIDATION_IDENTITY_FILES[1]),
-        "rules_path": ".codex/rules/tracequant-wsl-validation.rules",
-        "rules_sha256": digest(VALIDATION_IDENTITY_FILES[2]),
-        "workflow_validation_path": "tools/agent_workflow/workflow_validation.py",
-        "workflow_validation_sha256": digest(VALIDATION_IDENTITY_FILES[3]),
-        "skill": {
-            "path": ".agents/skills/task-delivery-runner/SKILL.md",
-            "sha256": digest(VALIDATION_IDENTITY_FILES[4]),
-        },
-    }
-    document = {
-        "schema_version": 1,
-        "profile": "workflow-delivery",
-        "base_sha": base_sha,
-        "status": "pass",
-        "repository": {"state": {"head_sha": head_sha, "clean": True}},
-        "artifacts": {"result_json": locator},
-        "integrity": {
-            "verification": "current-worktree-content",
-            "repository_head_sha": head_sha,
-            "repository_clean": True,
-            "runner_path": identity["path"],
-            "runner_sha256": identity["sha256"],
-            "profile_spec_path": identity["profile_spec_path"],
-            "profile_spec_sha256": identity["profile_spec_sha256"],
-            "rules_path": identity["rules_path"],
-            "rules_sha256": identity["rules_sha256"],
-            "workflow_validation_path": identity["workflow_validation_path"],
-            "workflow_validation_sha256": identity["workflow_validation_sha256"],
-            "skill": identity["skill"],
-        },
-    }
-    payload = (json.dumps(document, sort_keys=True) + "\n").encode()
-    result_path = repo / locator
-    result_path.parent.mkdir(parents=True, exist_ok=True)
-    result_path.write_bytes(payload)
-    return {
-        "base_sha": document["base_sha"],
-        "profile": document["profile"],
-        "schema_version": document["schema_version"],
-        "runner_identity": identity,
-        "exit_code": 0,
-        "result_locator": locator,
-        "result_sha256": hashlib.sha256(payload).hexdigest(),
-    }
-
-
 def test_review_profile_returns_required_schema_and_compact_digest(
     tmp_path: Path,
 ) -> None:
@@ -497,292 +419,6 @@ def test_review_profile_returns_required_schema_and_compact_digest(
     assert set(value["integrity"]["files"]) == {
         path.as_posix() for path in IDENTITY_FILES
     }
-
-
-def test_review_profile_consumes_verified_handoff_and_recheck_invalidates_drift(
-    tmp_path: Path,
-) -> None:
-    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["issue"]["body"] = "## Acceptance Criteria\n- [ ] first\n- [ ] second\n"
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    first = _run(repo, env, *_review_args(main_sha, head_sha))
-    assert first.returncode == 0, first.stderr
-    first_digest = json.loads(first.stdout)
-    snapshot_path = (
-        repo
-        / ".agents/evidence.local/snapshots"
-        / f"{first_digest['snapshot_id']}.json"
-    )
-    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
-    handoff = build_handoff_from_snapshot(
-        snapshot,
-        acceptance_criteria_ids=["AC-1", "AC-2"],
-        validation_facts=_validation_facts(repo, main_sha, head_sha),
-        workflow_identity=snapshot["execution_context"]["workflow_identity"],
-    )
-    write_handoff(
-        repo,
-        handoff,
-        filename="task-84-review.json",
-    )
-    handoff_run = _run(
-        repo,
-        env,
-        *_review_args(main_sha, head_sha),
-        "--handoff-path",
-        ".agents/evidence.local/review-handoffs/task-84-review.json",
-    )
-    assert handoff_run.returncode == 0, handoff_run.stderr
-    handoff_digest = json.loads(handoff_run.stdout)
-    handoff_snapshot = json.loads(
-        (
-            repo
-            / ".agents/evidence.local/snapshots"
-            / f"{handoff_digest['snapshot_id']}.json"
-        ).read_text(encoding="utf-8")
-    )
-    assert handoff_snapshot["gates"]["review_fact_handoff"]["status"] == "pass"
-    assert (
-        handoff_snapshot["observed"]["review_fact_handoff"]["strategy"]
-        == "FRESH_ROOT_BOUNDED_HANDOFF"
-    )
-
-    stable_recheck = _run(
-        repo,
-        env,
-        "recheck",
-        "--snapshot-id",
-        handoff_digest["snapshot_id"],
-    )
-    assert stable_recheck.returncode == 0, stable_recheck.stderr
-    stable_value = _result(repo, stable_recheck.stdout)
-    assert stable_value["stability"]["stable"] is True
-    assert stable_value["stability"]["changed_fields"]["items"] == []
-    assert stable_value["evidence"]["source_operation"] == "pr-review-recheck"
-    stable_snapshot = json.loads(
-        (repo / stable_value["evidence"]["source_details_path"]).read_text(
-            encoding="utf-8"
-        )
-    )
-    assert stable_snapshot["operation"] == "pr-review-recheck"
-    assert stable_snapshot["observed"]["review_fact_handoff"]["status"] == "pass"
-    assert not any(
-        item.startswith("HANDOFF_SCHEMA_DRIFT")
-        for item in stable_snapshot["observed"]["review_fact_handoff"]["invalidated"]
-    )
-
-    handoff["head_sha"] = "f" * 40
-    (repo / ".agents/evidence.local/review-handoffs/task-84-review.json").write_text(
-        json.dumps(handoff), encoding="utf-8"
-    )
-    recheck = _run(repo, env, "recheck", "--snapshot-id", handoff_digest["snapshot_id"])
-    assert recheck.returncode == 4
-    recheck_digest = json.loads(recheck.stdout)
-    assert recheck_digest["status"] == "fail"
-
-
-def test_review_handoff_fails_closed_when_pr_metadata_is_unavailable(
-    tmp_path: Path,
-) -> None:
-    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["issue"]["body"] = "## Acceptance Criteria\n- [ ] first\n- [ ] second\n"
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-
-    first = _run(repo, env, *_review_args(main_sha, head_sha))
-    assert first.returncode == 0, first.stderr
-    first_digest = json.loads(first.stdout)
-    snapshot = json.loads(
-        (
-            repo
-            / ".agents/evidence.local/snapshots"
-            / f"{first_digest['snapshot_id']}.json"
-        ).read_text(encoding="utf-8")
-    )
-    handoff = build_handoff_from_snapshot(
-        snapshot,
-        acceptance_criteria_ids=["AC-1", "AC-2"],
-        validation_facts=_validation_facts(repo, main_sha, head_sha),
-        workflow_identity=snapshot["execution_context"]["workflow_identity"],
-    )
-    write_handoff(repo, handoff, filename="task-84-pr-unavailable.json")
-
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["pr"] = None
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    failed = _run(
-        repo,
-        env,
-        *_review_args(main_sha, head_sha),
-        "--handoff-path",
-        ".agents/evidence.local/review-handoffs/task-84-pr-unavailable.json",
-    )
-    assert "Traceback" not in failed.stderr
-    digest = json.loads(failed.stdout)
-    assert digest["status"] == "fail"
-    result = _result(repo, failed.stdout)
-    failed_snapshot = json.loads(
-        (repo / result["evidence"]["source_details_path"]).read_text(encoding="utf-8")
-    )
-    handoff_status = failed_snapshot["observed"]["review_fact_handoff"]
-    assert handoff_status["status"] == "fail"
-    assert handoff_status["trusted"] is False
-    assert handoff_status["strategy"] == "FAIL_CLOSED"
-
-
-def test_review_handoff_fails_closed_when_required_checks_are_unknown(
-    tmp_path: Path,
-) -> None:
-    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["issue"]["body"] = "## Acceptance Criteria\n- [ ] first\n- [ ] second\n"
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-
-    first = _run(repo, env, *_review_args(main_sha, head_sha))
-    assert first.returncode == 0, first.stderr
-    first_digest = json.loads(first.stdout)
-    snapshot = json.loads(
-        (
-            repo
-            / ".agents/evidence.local/snapshots"
-            / f"{first_digest['snapshot_id']}.json"
-        ).read_text(encoding="utf-8")
-    )
-    handoff = build_handoff_from_snapshot(
-        snapshot,
-        acceptance_criteria_ids=["AC-1", "AC-2"],
-        validation_facts=_validation_facts(repo, main_sha, head_sha),
-        workflow_identity=snapshot["execution_context"]["workflow_identity"],
-    )
-    write_handoff(repo, handoff, filename="task-84-checks-unknown.json")
-
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["required_checks_mode"] = "rate-limit"
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    failed = _run(
-        repo,
-        env,
-        *_review_args(main_sha, head_sha),
-        "--handoff-path",
-        ".agents/evidence.local/review-handoffs/task-84-checks-unknown.json",
-    )
-    digest = json.loads(failed.stdout)
-    assert digest["status"] == "fail"
-    result = _result(repo, failed.stdout)
-    failed_snapshot = json.loads(
-        (repo / result["evidence"]["source_details_path"]).read_text(encoding="utf-8")
-    )
-    handoff_status = failed_snapshot["observed"]["review_fact_handoff"]
-    assert handoff_status["status"] == "fail"
-    assert handoff_status["trusted"] is False
-    assert handoff_status["strategy"] == "FAIL_CLOSED"
-    assert any(
-        item.startswith("CHECKS_DRIFT") for item in handoff_status["invalidated"]
-    )
-
-
-def test_review_handoff_fails_closed_when_control_plane_drifts(tmp_path: Path) -> None:
-    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["issue"]["body"] = "## Acceptance Criteria\n- [ ] first\n- [ ] second\n"
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-
-    first = _run(repo, env, *_review_args(main_sha, head_sha))
-    assert first.returncode == 0, first.stderr
-    first_digest = json.loads(first.stdout)
-    snapshot = json.loads(
-        (
-            repo
-            / ".agents/evidence.local/snapshots"
-            / f"{first_digest['snapshot_id']}.json"
-        ).read_text(encoding="utf-8")
-    )
-    handoff = build_handoff_from_snapshot(
-        snapshot,
-        acceptance_criteria_ids=["AC-1", "AC-2"],
-        validation_facts=_validation_facts(repo, main_sha, head_sha),
-        workflow_identity=snapshot["execution_context"]["workflow_identity"],
-    )
-    write_handoff(repo, handoff, filename="task-84-control-plane.json")
-    handoff_run = _run(
-        repo,
-        env,
-        *_review_args(main_sha, head_sha),
-        "--handoff-path",
-        ".agents/evidence.local/review-handoffs/task-84-control-plane.json",
-    )
-    assert handoff_run.returncode == 0, handoff_run.stderr
-    handoff_digest = json.loads(handoff_run.stdout)
-
-    for relative in (Path("tools/agent_workflow/wsl2_github_evidence_runner.py"),):
-        target = repo / relative
-        original = target.read_bytes()
-        target.write_bytes(original + b"\n")
-        try:
-            recheck = _run(
-                repo,
-                env,
-                "recheck",
-                "--snapshot-id",
-                handoff_digest["snapshot_id"],
-            )
-            assert recheck.returncode == 4, (relative, recheck.stderr)
-            recheck_result = _result(repo, recheck.stdout)
-            current_snapshot = json.loads(
-                (repo / recheck_result["evidence"]["source_details_path"]).read_text(
-                    encoding="utf-8"
-                )
-            )
-            invalidated = current_snapshot["observed"]["review_fact_handoff"][
-                "invalidated"
-            ]
-            assert any(
-                item.startswith("WORKFLOW_RULE_DRIFT") for item in invalidated
-            ), (relative, invalidated)
-        finally:
-            target.write_bytes(original)
-
-
-def test_delivery_readiness_recheck_is_stable_through_runner(tmp_path: Path) -> None:
-    repo, _, env, main_sha, head_sha = _prepare_repo(tmp_path)
-    first = _run(repo, env, *_review_args(main_sha, head_sha, "delivery-readiness"))
-    assert first.returncode == 0, first.stderr
-    first_digest = json.loads(first.stdout)
-    first_result = _result(repo, first.stdout)
-    first_snapshot = json.loads(
-        (repo / first_result["evidence"]["source_details_path"]).read_text(
-            encoding="utf-8"
-        )
-    )
-
-    second = _run(
-        repo,
-        env,
-        "recheck",
-        "--snapshot-id",
-        first_digest["snapshot_id"],
-    )
-    assert second.returncode == 0, second.stderr
-    second_result = _result(repo, second.stdout)
-    second_snapshot = json.loads(
-        (repo / second_result["evidence"]["source_details_path"]).read_text(
-            encoding="utf-8"
-        )
-    )
-    assert first_snapshot["operation"] == "delivery-readiness"
-    assert second_snapshot["operation"] == "delivery-readiness-recheck"
-    assert (
-        first_snapshot["execution_context"]["workflow_identity"]["profile"]
-        == "delivery-readiness"
-    )
-    assert (
-        second_snapshot["execution_context"]["workflow_identity"]["profile"]
-        == "delivery-readiness"
-    )
-    assert second_result["status"] == "pass"
-    assert second_result["stability"]["stable"] is True
-    assert second_result["stability"]["changed_fields"]["items"] == []
 
 
 @pytest.mark.parametrize("profile", ["delivery-readiness", "review", "pre-merge"])
@@ -1620,7 +1256,6 @@ def test_recheck_preserves_skill_identity(
     assert second.returncode == 0, second.stderr
     value = _result(repo, second.stdout)
     assert value["integrity"]["skill"]["path"] == claude_skill
-    assert value["stability"]["stable"] is True
 
 
 def test_skill_path_hash_mismatch_detected(

@@ -690,7 +690,6 @@ def _run_profile(
         "schema_version": SCHEMA_VERSION,
         "runner_version": RUNNER_VERSION,
         "profile": profile_name,
-        "base_sha": base_sha,
         "profile_kind": profile.get("kind"),
         "status": status,
         "started_at": started_at.isoformat(),
