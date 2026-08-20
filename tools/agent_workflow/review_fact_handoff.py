@@ -769,27 +769,67 @@ def _current_changed_files(
     return sorted(set(items)), None
 
 
+def _bounded_string_list_complete(value: Any) -> bool:
+    if not isinstance(value, Mapping) or value.get("truncated") is not False:
+        return False
+    items = value.get("items")
+    count = value.get("count")
+    return (
+        isinstance(items, list)
+        and all(isinstance(item, str) for item in items)
+        and isinstance(count, int)
+        and not isinstance(count, bool)
+        and count == len(items)
+    )
+
+
+def _bounded_check_items(value: Any) -> list[Any] | None:
+    if not isinstance(value, Mapping) or value.get("truncated") is not False:
+        return None
+    items = value.get("items")
+    count = value.get("count")
+    if (
+        not isinstance(items, list)
+        or not isinstance(count, int)
+        or isinstance(count, bool)
+        or count != len(items)
+    ):
+        return None
+    return items
+
+
 def _current_raw_check_facts(snapshot: Mapping[str, Any]) -> dict[str, Any] | None:
     observed = snapshot.get("observed")
     observed = observed if isinstance(observed, Mapping) else {}
     pr = observed.get("pr")
-    pr = pr if isinstance(pr, Mapping) else {}
+    if not isinstance(pr, Mapping):
+        return None
     checks = pr.get("checks")
-    checks = checks if isinstance(checks, Mapping) else {}
+    if not isinstance(checks, Mapping):
+        return None
     required = observed.get("required_checks")
-    required = required if isinstance(required, Mapping) else {}
-    bounded_items = checks.get("items")
-    if isinstance(bounded_items, Mapping):
-        if bounded_items.get("truncated") is True:
-            return None
-        items = bounded_items.get("items")
-    else:
-        items = bounded_items
-    if not isinstance(items, list):
+    if not isinstance(required, Mapping):
+        return None
+
+    configuration = required.get("configuration")
+    if configuration not in {"available", "configured-empty", "not-configured"}:
+        return None
+    contexts = required.get("contexts")
+    if not _bounded_string_list_complete(contexts):
+        return None
+    if required.get("failure") is not None:
+        return None
+
+    items = _bounded_check_items(checks.get("items"))
+    if items is None:
         return None
     raw_items: list[dict[str, Any]] = []
     for item in items:
         if not isinstance(item, Mapping):
+            return None
+        if not all(
+            isinstance(item.get(field), str) for field in ("name", "state", "category")
+        ):
             return None
         raw_items.append(
             {

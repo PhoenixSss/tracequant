@@ -119,17 +119,21 @@ def _snapshot() -> dict[str, Any]:
                 "base_sha": SHA40,
                 "head_sha": HEAD40,
                 "checks": {
-                    "items": [
-                        {
-                            "name": "quality",
-                            "state": "SUCCESS",
-                            "category": "success",
-                            "run_id": "run-1",
-                            "started_at": "2026-08-20T00:00:00Z",
-                            "completed_at": "2026-08-20T00:01:00Z",
-                            "source_url": "https://example.invalid/run-1",
-                        }
-                    ]
+                    "items": {
+                        "items": [
+                            {
+                                "name": "quality",
+                                "state": "SUCCESS",
+                                "category": "success",
+                                "run_id": "run-1",
+                                "started_at": "2026-08-20T00:00:00Z",
+                                "completed_at": "2026-08-20T00:01:00Z",
+                                "source_url": "https://example.invalid/run-1",
+                            }
+                        ],
+                        "count": 1,
+                        "truncated": False,
+                    }
                 },
             },
             "effective_diff": {
@@ -394,8 +398,8 @@ def test_all_required_drift_classes_fail_closed() -> None:
         (
             "CHECKS_DRIFT",
             lambda snapshot, current: snapshot["observed"]["pr"]["checks"]["items"][
-                0
-            ].update({"state": "FAILURE"}),
+                "items"
+            ][0].update({"state": "FAILURE"}),
         ),
         (
             "VALIDATION_DRIFT",
@@ -598,6 +602,35 @@ def test_defined_nested_fields_remain_compatible() -> None:
     }
     handoff["raw_check_facts"]["observed"][0]["source_url"] = None
     assert validate_handoff_structure(handoff, expected_repository="owner/repo") == []
+
+
+def test_current_required_check_facts_fail_closed_when_incomplete() -> None:
+    cases = []
+
+    truncated_contexts = json.loads(json.dumps(_snapshot()))
+    truncated_contexts["observed"]["required_checks"]["contexts"]["truncated"] = True
+    cases.append(truncated_contexts)
+
+    unknown_configuration = json.loads(json.dumps(_snapshot()))
+    unknown_configuration["observed"]["required_checks"]["configuration"] = "unknown"
+    cases.append(unknown_configuration)
+
+    truncated_checks = json.loads(json.dumps(_snapshot()))
+    truncated_checks["observed"]["pr"]["checks"]["items"]["truncated"] = True
+    cases.append(truncated_checks)
+
+    for snapshot in cases:
+        result = validate_against_snapshot(
+            _handoff(),
+            snapshot,
+            current_acceptance_criteria_ids=["AC-1", "AC-2"],
+            current_validation_facts=_validation_facts(),
+            current_workflow_identity=_workflow_identity(),
+        )
+        assert result["status"] == "fail"
+        assert result["trusted"] is False
+        assert result["strategy"] == "FAIL_CLOSED"
+        assert any(item.startswith("CHECKS_DRIFT") for item in result["invalidated"])
 
 
 def test_default_freshness_contract_covers_all_required_drift() -> None:

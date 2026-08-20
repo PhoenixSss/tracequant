@@ -2846,13 +2846,14 @@ def _task_pr_snapshot(
                 handoff, handoff_digest = load_handoff(
                     path, expected_repository=repository
                 )
+                pr_base_sha = pr.get("base_sha") if isinstance(pr, Mapping) else None
                 pr_head_sha = pr.get("head_sha") if isinstance(pr, Mapping) else None
                 current_validation_facts, validation_errors = (
                     acquire_current_validation_facts(
                         repo_root,
                         handoff["validation_facts"],
-                        expected_base_sha=pr.get("base_sha")
-                        if isinstance(pr.get("base_sha"), str)
+                        expected_base_sha=pr_base_sha
+                        if isinstance(pr_base_sha, str)
                         else None,
                         expected_head_sha=pr_head_sha
                         if isinstance(pr_head_sha, str)

@@ -582,6 +582,106 @@ def test_review_profile_consumes_verified_handoff_and_recheck_invalidates_drift(
     assert recheck_digest["status"] == "fail"
 
 
+def test_review_handoff_fails_closed_when_pr_metadata_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["body"] = "## Acceptance Criteria\n- [ ] first\n- [ ] second\n"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    first = _run(repo, env, *_review_args(main_sha, head_sha))
+    assert first.returncode == 0, first.stderr
+    first_digest = json.loads(first.stdout)
+    snapshot = json.loads(
+        (
+            repo
+            / ".agents/evidence.local/snapshots"
+            / f"{first_digest['snapshot_id']}.json"
+        ).read_text(encoding="utf-8")
+    )
+    handoff = build_handoff_from_snapshot(
+        snapshot,
+        acceptance_criteria_ids=["AC-1", "AC-2"],
+        validation_facts=_validation_facts(repo, main_sha, head_sha),
+        workflow_identity=snapshot["execution_context"]["workflow_identity"],
+    )
+    write_handoff(repo, handoff, filename="task-84-pr-unavailable.json")
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["pr"] = None
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    failed = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--handoff-path",
+        ".agents/evidence.local/review-handoffs/task-84-pr-unavailable.json",
+    )
+    assert "Traceback" not in failed.stderr
+    digest = json.loads(failed.stdout)
+    assert digest["status"] == "fail"
+    result = _result(repo, failed.stdout)
+    failed_snapshot = json.loads(
+        (repo / result["evidence"]["source_details_path"]).read_text(encoding="utf-8")
+    )
+    handoff_status = failed_snapshot["observed"]["review_fact_handoff"]
+    assert handoff_status["status"] == "fail"
+    assert handoff_status["trusted"] is False
+    assert handoff_status["strategy"] == "FAIL_CLOSED"
+
+
+def test_review_handoff_fails_closed_when_required_checks_are_unknown(
+    tmp_path: Path,
+) -> None:
+    repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["issue"]["body"] = "## Acceptance Criteria\n- [ ] first\n- [ ] second\n"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    first = _run(repo, env, *_review_args(main_sha, head_sha))
+    assert first.returncode == 0, first.stderr
+    first_digest = json.loads(first.stdout)
+    snapshot = json.loads(
+        (
+            repo
+            / ".agents/evidence.local/snapshots"
+            / f"{first_digest['snapshot_id']}.json"
+        ).read_text(encoding="utf-8")
+    )
+    handoff = build_handoff_from_snapshot(
+        snapshot,
+        acceptance_criteria_ids=["AC-1", "AC-2"],
+        validation_facts=_validation_facts(repo, main_sha, head_sha),
+        workflow_identity=snapshot["execution_context"]["workflow_identity"],
+    )
+    write_handoff(repo, handoff, filename="task-84-checks-unknown.json")
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["required_checks_mode"] = "rate-limit"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    failed = _run(
+        repo,
+        env,
+        *_review_args(main_sha, head_sha),
+        "--handoff-path",
+        ".agents/evidence.local/review-handoffs/task-84-checks-unknown.json",
+    )
+    digest = json.loads(failed.stdout)
+    assert digest["status"] == "fail"
+    result = _result(repo, failed.stdout)
+    failed_snapshot = json.loads(
+        (repo / result["evidence"]["source_details_path"]).read_text(encoding="utf-8")
+    )
+    handoff_status = failed_snapshot["observed"]["review_fact_handoff"]
+    assert handoff_status["status"] == "fail"
+    assert handoff_status["trusted"] is False
+    assert handoff_status["strategy"] == "FAIL_CLOSED"
+    assert any(
+        item.startswith("CHECKS_DRIFT") for item in handoff_status["invalidated"]
+    )
+
+
 def test_review_handoff_fails_closed_when_control_plane_drifts(tmp_path: Path) -> None:
     repo, state_path, env, main_sha, head_sha = _prepare_repo(tmp_path)
     state = json.loads(state_path.read_text(encoding="utf-8"))
