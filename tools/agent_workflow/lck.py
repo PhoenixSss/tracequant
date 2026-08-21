@@ -118,6 +118,21 @@ def _branch_matches_task(branch: str, task_number: int) -> bool:
     return number == str(task_number)
 
 
+def _is_clean_current_main(git: Mapping[str, Any]) -> bool:
+    """Return whether a new Task branch can safely be based on current main."""
+    head_sha = git.get("head_sha")
+    local_main_sha = git.get("local_main_sha")
+    origin_main_sha = git.get("origin_main_sha")
+    return (
+        git.get("branch") == BASE_BRANCH
+        and git.get("clean") is True
+        and is_sha(head_sha)
+        and is_sha(local_main_sha)
+        and is_sha(origin_main_sha)
+        and head_sha == local_main_sha == origin_main_sha
+    )
+
+
 def _remote_refs(stdout: str) -> dict[str, str]:
     refs: dict[str, str] = {}
     for line in stdout.splitlines():
@@ -464,11 +479,11 @@ class PhaseEligibilityResolver:
                 if state.local_task_head != state.remote_task_oid:
                     reasons.append("Task branch has divergent local and remote tips")
             if not state.local_task_branch and not state.remote_task_branch:
-                current = state.git.get("branch")
-                if current != BASE_BRANCH:
-                    reasons.append("new workspace bootstrap requires current main")
-                if state.git.get("clean") is not True:
-                    reasons.append("new workspace bootstrap requires a clean worktree")
+                if not _is_clean_current_main(state.git):
+                    reasons.append(
+                        "new workspace bootstrap requires clean main with "
+                        "HEAD == local main == origin/main"
+                    )
             capabilities = ("prepare_task_workspace",)
         elif phase is Phase.REVIEW_PREPARE:
             if state.open_pr is None:
@@ -581,15 +596,10 @@ class DeliveryPreparer:
             )
             action = "restored-from-remote"
         else:
-            if (
-                current_branch != BASE_BRANCH
-                or not clean
-                or not isinstance(base_sha, str)
-                or not is_sha(base_sha)
-                or state.git.get("head_sha") != base_sha
-            ):
+            if not _is_clean_current_main(state.git):
                 raise LckStopError(
-                    "new Task workspace requires clean main at current main SHA"
+                    "new Task workspace requires clean main with "
+                    "HEAD == local main == origin/main"
                 )
             self._run_git(
                 ["switch", "-c", branch, base_sha],

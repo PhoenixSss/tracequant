@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any, cast
@@ -28,11 +29,19 @@ class FakeRunner:
         local_branches: set[str] | None = None,
         remote_branches: dict[str, str] | None = None,
         clean: bool = True,
+        head_sha: str = SHA,
+        local_main_sha: str = SHA,
+        origin_main_sha: str = SHA,
+        open_pr: dict[str, Any] | None = None,
     ) -> None:
         self.branch = branch
         self.local_branches = local_branches or set()
         self.remote_branches = remote_branches or {}
         self.clean = clean
+        self.head_sha = head_sha
+        self.local_main_sha = local_main_sha
+        self.origin_main_sha = origin_main_sha
+        self.open_pr = open_pr
         self.commands: list[tuple[str, ...]] = []
 
     def run(
@@ -55,13 +64,23 @@ class FakeRunner:
                 for branch, oid in sorted(self.remote_branches.items())
             )
         elif args[:2] == ["rev-parse", "refs/heads/main"]:
-            stdout = SHA
+            stdout = self.local_main_sha
         elif args[:1] == ["rev-parse"] and len(args) == 2:
             branch = args[1].removeprefix("refs/heads/")
             if branch not in self.local_branches:
                 returncode = 1
             else:
                 stdout = SHA
+        elif args[:3] == ["gh", "pr", "list"]:
+            if self.open_pr is not None:
+                stdout = json.dumps([self.open_pr])
+            else:
+                stdout = "[]"
+        elif args[:3] == ["gh", "pr", "view"]:
+            if self.open_pr is None:
+                returncode = 1
+            else:
+                stdout = json.dumps(self.open_pr)
         elif args[:2] == ["switch", "-c"]:
             branch = args[2]
             self.local_branches.add(branch)
@@ -107,9 +126,9 @@ def _relationships() -> dict[str, Any]:
 def _git_snapshot(fake: FakeRunner) -> dict[str, Any]:
     return {
         "branch": fake.branch,
-        "head_sha": SHA,
-        "local_main_sha": SHA,
-        "origin_main_sha": SHA,
+        "head_sha": fake.head_sha,
+        "local_main_sha": fake.local_main_sha,
+        "origin_main_sha": fake.origin_main_sha,
         "origin_fetch": "pass",
         "clean": fake.clean,
         "status_entries": 0 if fake.clean else 1,
@@ -184,6 +203,47 @@ def test_closed_pr_does_not_block_current_open_pr(
     assert state.merged_pr_numbers == ()
 
 
+def test_live_state_resolver_reads_non_empty_pr_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "task/159-lck-core-live-state-resolution"
+    open_pr = {
+        "number": 200,
+        "state": "OPEN",
+        "isDraft": False,
+        "baseRefName": "main",
+        "baseRefOid": SHA,
+        "headRefName": branch,
+        "headRefOid": SHA,
+        "url": "https://github.com/owner/repo/pull/200",
+        "statusCheckRollup": [
+            {"name": "quality", "conclusion": "SUCCESS"},
+        ],
+    }
+    fake = FakeRunner(
+        branch=branch,
+        local_branches={branch},
+        remote_branches={branch: SHA},
+        open_pr=open_pr,
+    )
+    monkeypatch.setattr(lck, "_repository_slug", lambda *_args: "owner/repo")
+    monkeypatch.setattr(lck, "_issue_view", lambda *_args: _issue())
+    monkeypatch.setattr(lck, "_relationship_snapshot", lambda *_args: _relationships())
+    monkeypatch.setattr(lck, "_git_snapshot", lambda *_args: _git_snapshot(fake))
+
+    state = _resolver(fake).resolve(159)
+
+    assert state.status is lck.ResolutionStatus.RESOLVED
+    assert state.checks["count"] == 1
+    assert state.checks["success"] == 1
+    view_commands = [
+        command for command in fake.commands if command[:3] == ("gh", "pr", "view")
+    ]
+    assert len(view_commands) == 1
+    fields = view_commands[0][view_commands[0].index("--json") + 1].split(",")
+    assert "statusCheckRollup" in fields
+
+
 def test_ambiguous_open_pr_stops_phase_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -242,6 +302,23 @@ def test_delivery_prepare_creates_then_reuses_workspace(
         or (command[:3] == ("gh", "pr", "create"))
         for command in fake.commands
     )
+
+
+def test_delivery_prepare_stops_on_divergent_main_without_branch_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRunner(
+        branch="main",
+        local_main_sha=SHA,
+        origin_main_sha="b" * 40,
+    )
+    _install_facts(monkeypatch, fake)
+
+    with pytest.raises(lck.LckStopError, match="HEAD == local main == origin/main"):
+        lck.DeliveryPreparer(_resolver(fake)).prepare(159)
+
+    assert fake.branch == "main"
+    assert not any(command[:3] == ("git", "switch", "-c") for command in fake.commands)
 
 
 def test_delivery_prepare_restores_remote_workspace(

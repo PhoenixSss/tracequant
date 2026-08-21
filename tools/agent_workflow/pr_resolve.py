@@ -33,7 +33,8 @@ _PR_URL_PATTERN: Final = re.compile(
 )
 _PR_LIST_FIELDS: Final = "number,url,state,isDraft,baseRefName,headRefName,headRefOid"
 _PR_VIEW_FIELDS: Final = (
-    "number,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid"
+    "number,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,"
+    "statusCheckRollup"
 )
 _REQUIRED_PR_FIELDS: Final = (
     "number",
