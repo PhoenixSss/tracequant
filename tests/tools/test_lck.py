@@ -296,6 +296,66 @@ def test_ambiguous_open_pr_stops_phase_resolution(
     assert any("multiple OPEN PRs" in reason for reason in decision.reasons)
 
 
+def test_multiple_merged_prs_stop_before_workspace_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRunner(branch="main")
+    _install_facts(
+        monkeypatch,
+        fake,
+        history=[
+            {"number": 200, "state": "MERGED"},
+            {"number": 201, "state": "MERGED"},
+        ],
+    )
+
+    with pytest.raises(lck.LckStopError, match="multiple merged PRs"):
+        lck.DeliveryPreparer(_resolver(fake)).prepare(159)
+
+    assert fake.branch == "main"
+    assert not any(command[:2] == ("git", "switch") for command in fake.commands)
+
+
+def test_open_pr_without_task_branch_stops_before_workspace_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "task/159-lck-core-live-state-resolution"
+    fake = FakeRunner(branch="main")
+    _install_facts(monkeypatch, fake, open_pr=_open_pr(branch))
+
+    with pytest.raises(
+        lck.LckStopError,
+        match="current OPEN PR has no local or remote Task branch",
+    ):
+        lck.DeliveryPreparer(_resolver(fake)).prepare(159)
+
+    assert fake.branch == "main"
+    assert not any(command[:2] == ("git", "switch") for command in fake.commands)
+
+
+def test_open_pr_head_mismatch_stops_before_workspace_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "task/159-lck-core-live-state-resolution"
+    fake = FakeRunner(
+        branch="main",
+        local_branches={branch},
+        remote_branches={branch: SHA},
+    )
+    open_pr = _open_pr(branch)
+    open_pr["headRefOid"] = "b" * 40
+    _install_facts(monkeypatch, fake, open_pr=open_pr)
+
+    with pytest.raises(
+        lck.LckStopError,
+        match="current OPEN PR head OID differs",
+    ):
+        lck.DeliveryPreparer(_resolver(fake)).prepare(159)
+
+    assert fake.branch == "main"
+    assert not any(command[:2] == ("git", "switch") for command in fake.commands)
+
+
 @pytest.mark.parametrize(
     ("blocked_by", "expected_detail"),
     [

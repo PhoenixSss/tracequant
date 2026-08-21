@@ -369,6 +369,26 @@ class LiveStateResolver:
             checks = _normalize_checks(open_pr.get("statusCheckRollup"))
         else:
             checks = _normalize_checks([])
+        if len(merged_numbers) > 1:
+            reasons.append(
+                "multiple merged PRs for the Task branch: "
+                f"{list(merged_numbers)}"
+            )
+        if open_pr is not None:
+            pr_head_oid = open_pr.get("headRefOid")
+            if not is_sha(pr_head_oid):
+                reasons.append("current OPEN PR head OID is unavailable")
+            elif local_branch is None and remote_branch is None:
+                reasons.append("current OPEN PR has no local or remote Task branch")
+            else:
+                if local_head is not None and local_head != pr_head_oid:
+                    reasons.append(
+                        "current OPEN PR head OID differs from local Task branch tip"
+                    )
+                if remote_oid is not None and remote_oid != pr_head_oid:
+                    reasons.append(
+                        "current OPEN PR head OID differs from remote Task branch tip"
+                    )
         if open_pr is not None:
             merged: bool | None = False
         elif len(merged_numbers) == 1:
