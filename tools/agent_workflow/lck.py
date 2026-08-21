@@ -507,6 +507,7 @@ class PhaseEligibilityResolver:
                 reasons.append("Task already has a merged PR")
             if (
                 state.local_task_branch is not None
+                and state.git.get("branch") == state.local_task_branch
                 and state.git.get("clean") is not True
             ):
                 reasons.append("existing Task branch reuse requires a clean worktree")
