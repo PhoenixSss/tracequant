@@ -45,6 +45,7 @@ from workflow_evidence import (
     _issue_view,
     _normalize_checks,
     _relationship_snapshot,
+    _formal_blockers_gate,
     _repository_slug,
 )
 
@@ -432,6 +433,7 @@ class PhaseEligibilityResolver:
     def resolve(self, state: LiveState, phase: Phase) -> PhaseDecision:
         reasons = list(state.stop_reasons)
         issue = state.issue
+        relationships = state.relationships
         if state.status is not ResolutionStatus.RESOLVED:
             reasons.append("live state resolution stopped")
         if state.repository is None:
@@ -444,10 +446,22 @@ class PhaseEligibilityResolver:
                 reasons.append("Task is not OPEN")
             if phase is not Phase.CLOSEOUT:
                 labels = set(_items(issue.get("labels")))
-                if "codex:ready" not in labels:
-                    reasons.append("Task is missing codex:ready")
-                if "codex:blocked" in labels:
-                    reasons.append("Task has codex:blocked")
+                lifecycle_labels = labels & {
+                    "codex:needs-spec",
+                    "codex:ready",
+                    "codex:blocked",
+                }
+                if lifecycle_labels != {"codex:ready"}:
+                    reasons.append(
+                        "lifecycle labels must be exactly ['codex:ready']: "
+                        f"{sorted(lifecycle_labels) or 'none'}"
+                    )
+                issue_type = relationships.get("issue_type")
+                is_task = "type:task" in labels or (
+                    isinstance(issue_type, str) and issue_type.casefold() == "task"
+                )
+                if not is_task:
+                    reasons.append("target Issue is not a type:task")
             project = issue.get("project_status")
             allowed_projects = {
                 Phase.DELIVERY_PREPARE: {"Ready", "In Progress"},
@@ -458,19 +472,10 @@ class PhaseEligibilityResolver:
             if project not in allowed_projects:
                 reasons.append("Project Status is unavailable or unknown")
 
-        relationships = state.relationships
-        blocked_by = relationships.get("blocked_by")
-        if isinstance(blocked_by, Mapping):
-            open_blockers = [
-                item
-                for item in _items(blocked_by)
-                if isinstance(item, Mapping)
-                and str(item.get("state", "")).upper() == "OPEN"
-            ]
-            if open_blockers:
-                reasons.append(f"unresolved blocked-by Issues: {open_blockers}")
-        elif relationships.get("available") is not True:
-            reasons.append("relationship facts are unavailable")
+        blocker_gate = _formal_blockers_gate(relationships)
+        if blocker_gate.get("status") != "pass":
+            detail = blocker_gate.get("detail") or "formal blocker gate did not pass"
+            reasons.append(f"formal blocker gate: {detail}")
 
         if phase is Phase.DELIVERY_PREPARE:
             if state.merged is True:
@@ -488,6 +493,8 @@ class PhaseEligibilityResolver:
         elif phase is Phase.REVIEW_PREPARE:
             if state.open_pr is None:
                 reasons.append("no current OPEN PR")
+            elif state.open_pr.get("isDraft") is not False:
+                reasons.append("Review Prepare requires a non-Draft OPEN PR")
             if state.project_status not in {"Review", "In Progress"}:
                 reasons.append("Task is not eligible for Review Prepare")
             capabilities = ("prepare_read_only_review_context",)

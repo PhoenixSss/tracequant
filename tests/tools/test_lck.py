@@ -14,7 +14,10 @@ if AGENT_WORKFLOW not in sys.path:
     sys.path.insert(0, AGENT_WORKFLOW)
 
 import lck  # type: ignore[import-not-found]  # noqa: E402
-from pr_resolve import PrResolveError  # type: ignore[import-not-found]  # noqa: E402
+from pr_resolve import (  # type: ignore[import-not-found]
+    PrResolveError,
+    resolve_open_pr,
+)  # noqa: E402
 from workflow_common import CommandResult  # type: ignore[import-not-found]  # noqa: E402
 
 
@@ -116,10 +119,17 @@ def _issue() -> dict[str, Any]:
     }
 
 
-def _relationships() -> dict[str, Any]:
+def _relationships(
+    *,
+    blocked_by: dict[str, Any] | None = None,
+    issue_type: str | None = "Task",
+) -> dict[str, Any]:
     return {
         "available": True,
-        "blocked_by": {"items": [], "count": 0, "truncated": False},
+        "issue_type": issue_type,
+        "blocked_by": blocked_by
+        if blocked_by is not None
+        else {"items": [], "count": 0, "truncated": False},
     }
 
 
@@ -141,12 +151,17 @@ def _install_facts(
     fake: FakeRunner,
     *,
     issue: dict[str, Any] | None = None,
+    relationships: dict[str, Any] | None = None,
     open_pr: dict[str, Any] | None = None,
     history: list[dict[str, Any]] | None = None,
 ) -> None:
     monkeypatch.setattr(lck, "_repository_slug", lambda *_args: "owner/repo")
     monkeypatch.setattr(lck, "_issue_view", lambda *_args: issue or _issue())
-    monkeypatch.setattr(lck, "_relationship_snapshot", lambda *_args: _relationships())
+    monkeypatch.setattr(
+        lck,
+        "_relationship_snapshot",
+        lambda *_args: relationships if relationships is not None else _relationships(),
+    )
     monkeypatch.setattr(lck, "_git_snapshot", lambda *_args: _git_snapshot(fake))
     monkeypatch.setattr(lck, "resolve_open_pr", lambda *_args: open_pr)
     monkeypatch.setattr(
@@ -156,6 +171,24 @@ def _install_facts(
 
 def _resolver(fake: FakeRunner) -> lck.LiveStateResolver:
     return lck.LiveStateResolver(Path.cwd(), runner=cast(Any, fake))
+
+
+def _open_pr(
+    branch: str,
+    *,
+    is_draft: bool = False,
+) -> dict[str, Any]:
+    return {
+        "number": 200,
+        "state": "OPEN",
+        "isDraft": is_draft,
+        "baseRefName": "main",
+        "baseRefOid": SHA,
+        "headRefName": branch,
+        "headRefOid": SHA,
+        "url": "https://github.com/owner/repo/pull/200",
+        "statusCheckRollup": [],
+    }
 
 
 def test_canonical_branch_is_derived_from_current_issue_title() -> None:
@@ -261,6 +294,235 @@ def test_ambiguous_open_pr_stops_phase_resolution(
     assert state.status is lck.ResolutionStatus.STOP
     assert not decision.eligible
     assert any("multiple OPEN PRs" in reason for reason in decision.reasons)
+
+
+@pytest.mark.parametrize(
+    ("blocked_by", "expected_detail"),
+    [
+        (
+            {"items": [], "count": 0, "truncated": True},
+            "truncated",
+        ),
+        (
+            {"items": []},
+            "malformed",
+        ),
+        (
+            {"items": [], "count": 1, "truncated": False},
+            "count mismatch",
+        ),
+        (
+            {
+                "items": [{"number": 300, "state": "UNKNOWN"}],
+                "count": 1,
+                "truncated": False,
+            },
+            "unknown_state",
+        ),
+        (
+            {
+                "items": [{"number": 301, "state": "OPEN"}],
+                "count": 1,
+                "truncated": False,
+            },
+            "unresolved",
+        ),
+    ],
+)
+def test_formal_blocker_gate_stops_before_workspace_write(
+    monkeypatch: pytest.MonkeyPatch,
+    blocked_by: dict[str, Any],
+    expected_detail: str,
+) -> None:
+    fake = FakeRunner(branch="main")
+    _install_facts(
+        monkeypatch,
+        fake,
+        relationships=_relationships(blocked_by=blocked_by),
+    )
+
+    with pytest.raises(lck.LckStopError, match="formal blocker gate") as error:
+        lck.DeliveryPreparer(_resolver(fake)).prepare(159)
+
+    assert expected_detail in str(error.value)
+    assert fake.branch == "main"
+    assert not any(command[:2] == ("git", "switch") for command in fake.commands)
+
+
+@pytest.mark.parametrize(
+    ("phase", "project_status", "open_pr"),
+    [
+        (lck.Phase.DELIVERY_PREPARE, "Ready", None),
+        (lck.Phase.REVIEW_PREPARE, "Review", "review"),
+        (lck.Phase.REMEDIATION_PREPARE, "Review", "remediation"),
+    ],
+)
+def test_all_non_closeout_phases_require_task_type(
+    monkeypatch: pytest.MonkeyPatch,
+    phase: lck.Phase,
+    project_status: str,
+    open_pr: str | None,
+) -> None:
+    branch = "task/159-lck-core-live-state-resolution"
+    fake = FakeRunner(
+        branch=branch, local_branches={branch}, remote_branches={branch: SHA}
+    )
+    issue = _issue()
+    issue["project_status"] = project_status
+    issue["labels"] = {"items": ["type:feature", "codex:ready"]}
+    phase_pr = _open_pr(branch) if open_pr is not None else None
+    _install_facts(
+        monkeypatch,
+        fake,
+        issue=issue,
+        relationships=_relationships(issue_type="Feature"),
+        open_pr=phase_pr,
+    )
+
+    state = _resolver(fake).resolve(159)
+    decision = lck.PhaseEligibilityResolver().resolve(state, phase)
+
+    assert not decision.eligible
+    assert any("type:task" in reason for reason in decision.reasons)
+
+
+def test_non_task_delivery_prepare_stops_before_workspace_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRunner(branch="main")
+    issue = _issue()
+    issue["labels"] = {"items": ["type:feature", "codex:ready"]}
+    _install_facts(
+        monkeypatch,
+        fake,
+        issue=issue,
+        relationships=_relationships(issue_type="Feature"),
+    )
+
+    with pytest.raises(lck.LckStopError, match="type:task"):
+        lck.DeliveryPreparer(_resolver(fake)).prepare(159)
+
+    assert fake.branch == "main"
+    assert not any(command[:2] == ("git", "switch") for command in fake.commands)
+
+
+@pytest.mark.parametrize(
+    ("phase", "project_status", "open_pr"),
+    [
+        (lck.Phase.DELIVERY_PREPARE, "Ready", None),
+        (lck.Phase.REVIEW_PREPARE, "Review", "review"),
+        (lck.Phase.REMEDIATION_PREPARE, "Review", "remediation"),
+    ],
+)
+def test_all_non_closeout_phases_reject_lifecycle_label_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+    phase: lck.Phase,
+    project_status: str,
+    open_pr: str | None,
+) -> None:
+    branch = "task/159-lck-core-live-state-resolution"
+    fake = FakeRunner(
+        branch=branch, local_branches={branch}, remote_branches={branch: SHA}
+    )
+    issue = _issue()
+    issue["project_status"] = project_status
+    issue["labels"] = {"items": ["type:task", "codex:ready", "codex:needs-spec"]}
+    phase_pr = _open_pr(branch) if open_pr is not None else None
+    _install_facts(
+        monkeypatch,
+        fake,
+        issue=issue,
+        open_pr=phase_pr,
+    )
+
+    state = _resolver(fake).resolve(159)
+    decision = lck.PhaseEligibilityResolver().resolve(state, phase)
+
+    assert not decision.eligible
+    assert any("lifecycle labels" in reason for reason in decision.reasons)
+
+
+def test_lifecycle_label_conflict_stops_before_workspace_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRunner(branch="main")
+    issue = _issue()
+    issue["labels"] = {"items": ["type:task", "codex:ready", "codex:needs-spec"]}
+    _install_facts(monkeypatch, fake, issue=issue)
+
+    with pytest.raises(lck.LckStopError, match="lifecycle labels"):
+        lck.DeliveryPreparer(_resolver(fake)).prepare(159)
+
+    assert fake.branch == "main"
+    assert not any(command[:2] == ("git", "switch") for command in fake.commands)
+
+
+def test_resolve_open_pr_observes_draft_pr() -> None:
+    branch = "task/159-lck-core-live-state-resolution"
+    draft_pr = _open_pr(branch, is_draft=True)
+    fake = FakeRunner(open_pr=draft_pr)
+
+    observed = resolve_open_pr(
+        cast(Any, fake),
+        "owner/repo",
+        branch,
+        "main",
+        [],
+    )
+
+    assert observed is not None
+    assert observed["isDraft"] is True
+
+
+def test_review_prepare_rejects_draft_open_pr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "task/159-lck-core-live-state-resolution"
+    fake = FakeRunner(
+        branch=branch, local_branches={branch}, remote_branches={branch: SHA}
+    )
+    issue = _issue()
+    issue["project_status"] = "Review"
+    _install_facts(
+        monkeypatch,
+        fake,
+        issue=issue,
+        open_pr=_open_pr(branch, is_draft=True),
+    )
+
+    state = _resolver(fake).resolve(159)
+    decision = lck.PhaseEligibilityResolver().resolve(
+        state,
+        lck.Phase.REVIEW_PREPARE,
+    )
+
+    assert not decision.eligible
+    assert any("non-Draft" in reason for reason in decision.reasons)
+
+
+def test_remediation_prepare_keeps_draft_pr_observable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "task/159-lck-core-live-state-resolution"
+    fake = FakeRunner(
+        branch=branch, local_branches={branch}, remote_branches={branch: SHA}
+    )
+    issue = _issue()
+    issue["project_status"] = "Review"
+    _install_facts(
+        monkeypatch,
+        fake,
+        issue=issue,
+        open_pr=_open_pr(branch, is_draft=True),
+    )
+
+    state = _resolver(fake).resolve(159)
+    decision = lck.PhaseEligibilityResolver().resolve(
+        state,
+        lck.Phase.REMEDIATION_PREPARE,
+    )
+
+    assert decision.eligible
 
 
 def test_multiple_task_branches_stop_fail_closed(
