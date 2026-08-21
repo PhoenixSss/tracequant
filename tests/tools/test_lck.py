@@ -12,9 +12,9 @@ AGENT_WORKFLOW = str(Path(__file__).parents[2] / "tools" / "agent_workflow")
 if AGENT_WORKFLOW not in sys.path:
     sys.path.insert(0, AGENT_WORKFLOW)
 
-import lck  # noqa: E402
-from pr_resolve import PrResolveError  # noqa: E402
-from workflow_common import CommandResult  # noqa: E402
+import lck  # type: ignore[import-not-found]  # noqa: E402
+from pr_resolve import PrResolveError  # type: ignore[import-not-found]  # noqa: E402
+from workflow_common import CommandResult  # type: ignore[import-not-found]  # noqa: E402
 
 
 SHA = "a" * 40
