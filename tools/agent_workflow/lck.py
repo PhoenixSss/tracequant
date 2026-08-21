@@ -288,7 +288,10 @@ class LiveStateResolver:
         else:
             reasons.append("repository identity unavailable")
 
+        git_warning_count = len(warnings)
         git = _git_snapshot(self.runner, warnings)
+        if len(warnings) > git_warning_count:
+            reasons.append("local Git snapshot contains unavailable facts")
         if git.get("origin_fetch") != "pass":
             reasons.append("current origin/main facts are unavailable")
         if not is_sha(git.get("local_main_sha")) or not is_sha(
@@ -299,9 +302,12 @@ class LiveStateResolver:
             reasons.append("Task metadata unavailable")
         if relationships.get("available") is not True:
             reasons.append("Task relationship facts unavailable")
+        branch_warning_count = len(warnings)
         local_branches, remote_branches, remote_available = self._task_branches(
             task_number, warnings
         )
+        if len(warnings) > branch_warning_count:
+            reasons.append("Task branch inventory contains unavailable facts")
         if not remote_available:
             reasons.append("remote Task branch facts unavailable")
         title = issue.get("title") if isinstance(issue, Mapping) else None

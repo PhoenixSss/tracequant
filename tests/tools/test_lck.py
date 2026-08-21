@@ -356,6 +356,67 @@ def test_open_pr_head_mismatch_stops_before_workspace_write(
     assert not any(command[:2] == ("git", "switch") for command in fake.commands)
 
 
+def test_git_snapshot_warning_stops_before_workspace_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRunner(branch="main")
+    _install_facts(monkeypatch, fake)
+
+    def unavailable_git_snapshot(
+        _runner: Any,
+        warnings: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        warnings.append(
+            {
+                "command_id": "git-status",
+                "exit_code": 1,
+                "error": "git status unavailable",
+            }
+        )
+        return _git_snapshot(fake)
+
+    monkeypatch.setattr(lck, "_git_snapshot", unavailable_git_snapshot)
+
+    with pytest.raises(lck.LckStopError, match="local Git snapshot"):
+        lck.DeliveryPreparer(_resolver(fake)).prepare(159)
+
+    assert fake.branch == "main"
+    assert not any(command[:2] == ("git", "switch") for command in fake.commands)
+
+
+def test_task_branch_inventory_warning_stops_before_workspace_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRunner(branch="main")
+    _install_facts(monkeypatch, fake)
+
+    def unavailable_task_branches(
+        _resolver: Any,
+        _task_number: int,
+        warnings: list[dict[str, Any]],
+    ) -> tuple[set[str], dict[str, str], bool]:
+        warnings.append(
+            {
+                "command_id": "lck-local-task-branches",
+                "exit_code": 1,
+                "error": "local branch inventory unavailable",
+            }
+        )
+        return set(), {}, True
+
+    monkeypatch.setattr(
+        lck.LiveStateResolver,
+        "_task_branches",
+        unavailable_task_branches,
+    )
+
+    with pytest.raises(lck.LckStopError, match="Task branch inventory"):
+        lck.DeliveryPreparer(_resolver(fake)).prepare(159)
+
+    assert fake.branch == "main"
+    assert not any(command[:2] == ("git", "switch") for command in fake.commands)
+
+
 @pytest.mark.parametrize(
     ("blocked_by", "expected_detail"),
     [
