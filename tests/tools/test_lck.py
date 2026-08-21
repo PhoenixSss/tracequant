@@ -733,6 +733,24 @@ def test_dirty_unrelated_worktree_is_not_switched(
         lck.DeliveryPreparer(_resolver(fake)).prepare(159)
 
 
+def test_dirty_current_task_worktree_is_not_prepared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "task/159-lck-core-live-state-resolution"
+    fake = FakeRunner(
+        branch=branch,
+        local_branches={branch},
+        clean=False,
+    )
+    _install_facts(monkeypatch, fake)
+
+    with pytest.raises(lck.LckStopError, match="clean worktree"):
+        lck.DeliveryPreparer(_resolver(fake)).prepare(159)
+
+    assert fake.branch == branch
+    assert not any(command[:2] == ("git", "switch") for command in fake.commands)
+
+
 def test_closeout_eligibility_uses_merged_live_pr_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

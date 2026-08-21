@@ -505,6 +505,11 @@ class PhaseEligibilityResolver:
         if phase is Phase.DELIVERY_PREPARE:
             if state.merged is True:
                 reasons.append("Task already has a merged PR")
+            if (
+                state.local_task_branch is not None
+                and state.git.get("clean") is not True
+            ):
+                reasons.append("existing Task branch reuse requires a clean worktree")
             if state.local_task_head and state.remote_task_oid:
                 if state.local_task_head != state.remote_task_oid:
                     reasons.append("Task branch has divergent local and remote tips")
