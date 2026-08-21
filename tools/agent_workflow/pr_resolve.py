@@ -59,6 +59,7 @@ def _validate_pr_identity(
     expected_base: str,
     expected_head_sha: str | None,
     expected_base_sha: str | None,
+    require_non_draft: bool = True,
 ) -> None:
     """Verify a PR dict has all required identity fields and matches expectations."""
     missing = [f for f in _REQUIRED_PR_FIELDS if f not in pr]
@@ -84,7 +85,7 @@ def _validate_pr_identity(
         raise PrResolveError(f"PR state is not OPEN: {state}")
 
     is_draft = pr.get("isDraft")
-    if is_draft is not False:
+    if require_non_draft and is_draft is not False:
         raise PrResolveError(f"PR is Draft or draft status unknown: {is_draft!r}")
 
     head_branch = pr.get("headRefName")
@@ -116,6 +117,158 @@ def _validate_pr_identity(
                 f"PR head SHA mismatch: expected {expected_head_sha}, "
                 f"observed {head_sha!r}"
             )
+
+
+def list_matching_prs(
+    runner: CommandRunner,
+    repository: str,
+    current_branch: str,
+    base_branch: str,
+    warnings: list[dict[str, Any]],
+    *,
+    state: str = "all",
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Read matching PRs for live-state consumers without any side effect."""
+    if state not in {"open", "closed", "merged", "all"}:
+        raise PrResolveError(f"unsupported PR list state: {state!r}")
+    if limit < 1 or limit > 100:
+        raise PrResolveError(f"invalid PR list limit: {limit!r}")
+    result = runner.run(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            repository,
+            "--head",
+            current_branch,
+            "--base",
+            base_branch,
+            "--state",
+            state,
+            "--limit",
+            str(limit),
+            "--json",
+            _PR_LIST_FIELDS,
+        ],
+        command_id="gh-pr-list-live-state-history",
+    )
+    if result.returncode != 0:
+        warnings.append(command_warning(result))
+        raise PrResolveError(
+            f"gh pr list failed with exit code {result.returncode}: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    if not result.stdout.strip():
+        raise PrResolveError("gh pr list returned empty stdout — cannot read PR state")
+    value = read_json_text(result.stdout, field="gh-pr-list-live-state-history")
+    if not isinstance(value, list):
+        raise PrResolveError("live PR history result is not a JSON array")
+    items: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise PrResolveError("live PR history item is not a JSON object")
+        items.append(dict(item))
+    return items
+
+
+def resolve_open_pr(
+    runner: CommandRunner,
+    repository: str,
+    current_branch: str,
+    base_branch: str,
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Resolve the unique matching OPEN PR without creating or changing one.
+
+    This is the read-only counterpart used by live-state resolution.  It keeps
+    the PR query and identity checks in the shared resolver instead of creating
+    a second GitHub query stack in the Local Control Kernel.
+    """
+    list_result = runner.run(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            repository,
+            "--head",
+            current_branch,
+            "--base",
+            base_branch,
+            "--state",
+            "open",
+            "--limit",
+            "2",
+            "--json",
+            _PR_LIST_FIELDS,
+        ],
+        command_id="gh-pr-list-live-state",
+    )
+    if list_result.returncode != 0:
+        warnings.append(command_warning(list_result))
+        raise PrResolveError(
+            f"gh pr list failed with exit code {list_result.returncode}: "
+            f"{list_result.stderr.strip() or list_result.stdout.strip()}"
+        )
+    if not list_result.stdout.strip():
+        raise PrResolveError(
+            "gh pr list returned empty stdout — cannot resolve live PR state"
+        )
+    value = read_json_text(list_result.stdout, field="gh-pr-list-live-state")
+    if not isinstance(value, list):
+        raise PrResolveError("live PR list result is not a JSON array")
+    if not value:
+        return None
+    if len(value) > 1:
+        numbers = [
+            item.get("number") if isinstance(item, Mapping) else None for item in value
+        ]
+        raise PrResolveError(
+            f"multiple OPEN PRs for head={current_branch!r} "
+            f"base={base_branch!r}: {numbers}"
+        )
+
+    listed = value[0]
+    if not isinstance(listed, Mapping):
+        raise PrResolveError("live PR list item is not a JSON object")
+    pr_url = listed.get("url")
+    if not isinstance(pr_url, str) or not pr_url:
+        raise PrResolveError("live PR is missing URL")
+    view_result = runner.run(
+        [
+            "gh",
+            "pr",
+            "view",
+            pr_url,
+            "--repo",
+            repository,
+            "--json",
+            _PR_VIEW_FIELDS,
+        ],
+        command_id="gh-pr-view-live-state",
+    )
+    if view_result.returncode != 0:
+        warnings.append(command_warning(view_result))
+        raise PrResolveError(
+            f"gh pr view identity verification failed with exit code "
+            f"{view_result.returncode}: "
+            f"{view_result.stderr.strip() or view_result.stdout.strip()}"
+        )
+    viewed = read_json_text(view_result.stdout, field="gh-pr-view-live-state")
+    if not isinstance(viewed, Mapping):
+        raise PrResolveError("live PR view result is not a JSON object")
+    _validate_pr_identity(
+        viewed,
+        repository=repository,
+        expected_branch=current_branch,
+        expected_base=base_branch,
+        expected_head_sha=None,
+        expected_base_sha=None,
+        require_non_draft=False,
+    )
+    return dict(viewed)
 
 
 def resolve_or_create_pr(
