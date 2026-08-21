@@ -371,8 +371,7 @@ class LiveStateResolver:
             checks = _normalize_checks([])
         if len(merged_numbers) > 1:
             reasons.append(
-                "multiple merged PRs for the Task branch: "
-                f"{list(merged_numbers)}"
+                f"multiple merged PRs for the Task branch: {list(merged_numbers)}"
             )
         if open_pr is not None:
             pr_head_oid = open_pr.get("headRefOid")
