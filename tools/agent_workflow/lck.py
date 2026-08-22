@@ -1507,7 +1507,28 @@ class ReviewCompleter:
                 )
             checks: Mapping[str, Any] = guard.get("checks", {})
             if verdict == "PASS":
-                self.checks_gate.run(task_number)
+                checks = self.checks_gate.run(task_number)
+            # The checks gate re-resolves the live PR while it waits. Reacquire
+            # the complete applicability identity after that gate so a head,
+            # base, Task Contract, or effective-diff change cannot publish a
+            # verdict for the sealed Review worktree.
+            final_state = self.resolver.resolve(task_number)
+            final_contract = _live_task_contract(self.resolver, task_number)
+            if final_state.open_pr is None:
+                raise ReviewStaleError(
+                    "REVIEW_STALE_PR", "the reviewed OPEN PR no longer exists"
+                )
+            final_identity = _review_identity(
+                self.resolver, final_state, final_contract
+            )
+            _assert_review_applicable(start, final_identity)
+            final_decision = self.eligibility.resolve(final_state, Phase.REVIEW_PREPARE)
+            if not final_decision.eligible:
+                raise LckStopError(
+                    f"Review Complete STOP for Task #{task_number}: "
+                    + "; ".join(final_decision.reasons)
+                )
+            current = final_identity
             record = {
                 "schema_version": LCK_SCHEMA_VERSION,
                 "kind": "independent-review-record",

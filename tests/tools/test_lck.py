@@ -1162,6 +1162,52 @@ def test_review_pass_stops_at_human_merge_boundary(
     assert checks.calls == 1
 
 
+def test_review_complete_rechecks_identity_after_pass_checks_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = _review_identity_value()
+    current = _review_identity_value(head="b" * 40)
+    state = _review_state()
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_guard(
+        review_id,
+        {
+            "task_number": 159,
+            "identity": start.to_dict(),
+            "review_root": str(tmp_path / "review-root"),
+            "checks": {"status": "pass"},
+            "validation": {"status": "pass"},
+        },
+    )
+
+    monkeypatch.setattr(
+        lck,
+        "_live_task_contract",
+        lambda *_args: {"body_sha256": "d" * 64},
+    )
+    identities = iter((start, current))
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args: next(identities))
+
+    class AdvancingChecks(FakeReviewChecks):
+        def run(self, _task: int) -> dict[str, Any]:
+            assert state.open_pr is not None
+            state.open_pr["headRefOid"] = "b" * 40
+            return super().run(_task)
+
+    with pytest.raises(lck.ReviewStaleError) as exc_info:
+        lck.ReviewCompleter(
+            resolver,
+            store=store,
+            workspace=cast(Any, FakeReviewWorkspace(tmp_path / "review-root")),
+            checks_gate=cast(Any, AdvancingChecks()),
+        ).complete(159, review_id, verdict="PASS")
+
+    assert exc_info.value.code == "REVIEW_STALE_HEAD"
+
+
 def test_review_complete_rechecks_current_review_eligibility(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
