@@ -969,6 +969,39 @@ def test_review_prepare_builds_context_only_from_live_resolution(
     assert checks.calls == 2
 
 
+def test_review_prepare_rechecks_eligibility_after_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _review_state()
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    identity = _review_identity_value()
+    monkeypatch.setattr(
+        lck,
+        "_live_task_contract",
+        lambda *_args: {"number": 159, "body_sha256": "d" * 64},
+    )
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
+
+    class DraftingValidation(FakeReviewValidation):
+        def run(self, _root: Path, _base: str) -> dict[str, Any]:
+            assert state.open_pr is not None
+            state.open_pr["isDraft"] = True
+            return super().run(_root, _base)
+
+    workspace = FakeReviewWorkspace(tmp_path / "review-root")
+    with pytest.raises(lck.LckStopError, match="post-validation STOP"):
+        lck.ReviewPreparer(
+            resolver,
+            validation=cast(Any, DraftingValidation()),
+            checks_gate=cast(Any, FakeReviewChecks()),
+            workspace=cast(Any, workspace),
+            store=lck.ReviewInvocationStore(tmp_path),
+        ).prepare(159)
+
+    assert workspace.removed == [tmp_path / "review-root"]
+
+
 def test_review_complete_head_change_is_review_stale_head(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1127,6 +1160,48 @@ def test_review_pass_stops_at_human_merge_boundary(
     assert result.status == "READY_FOR_HUMAN_MERGE"
     assert "manual merge" in result.to_dict()["human_boundary"]
     assert checks.calls == 1
+
+
+def test_review_complete_rechecks_current_review_eligibility(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _review_state()
+    assert state.open_pr is not None
+    state.open_pr["isDraft"] = True
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_guard(
+        review_id,
+        {
+            "task_number": 159,
+            "identity": _review_identity_value().to_dict(),
+            "review_root": str(tmp_path / "review-root"),
+            "checks": {"status": "pass"},
+            "validation": {"status": "pass"},
+        },
+    )
+    monkeypatch.setattr(
+        lck,
+        "_live_task_contract",
+        lambda *_args: {"body_sha256": "d" * 64},
+    )
+    monkeypatch.setattr(
+        lck, "_review_identity", lambda *_args: _review_identity_value()
+    )
+    workspace = FakeReviewWorkspace(tmp_path / "review-root")
+
+    with pytest.raises(lck.LckStopError, match="Review Complete STOP"):
+        lck.ReviewCompleter(
+            resolver,
+            store=store,
+            workspace=cast(Any, workspace),
+            checks_gate=cast(Any, FakeReviewChecks()),
+        ).complete(159, review_id, verdict="PASS")
+
+    assert workspace.removed == [tmp_path / "review-root"]
+    assert not store.guard_path(review_id).exists()
 
 
 def test_review_workspace_seal_removes_write_bits(tmp_path: Path) -> None:

@@ -1360,6 +1360,12 @@ class ReviewPreparer:
             validation = self.validation.run(review_root, identity.base_sha)
             final_state = self.resolver.resolve(task_number)
             final_contract = _live_task_contract(self.resolver, task_number)
+            final_decision = self.eligibility.resolve(final_state, Phase.REVIEW_PREPARE)
+            if not final_decision.eligible:
+                raise LckStopError(
+                    "Review Prepare post-validation STOP: "
+                    + "; ".join(final_decision.reasons)
+                )
             final_identity = _review_identity(
                 self.resolver, final_state, final_contract
             )
@@ -1433,11 +1439,13 @@ class ReviewCompleter:
         self,
         resolver: LiveStateResolver,
         *,
+        eligibility: PhaseEligibilityResolver | None = None,
         store: ReviewInvocationStore | None = None,
         workspace: ReviewWorkspaceManager | None = None,
         checks_gate: DeliveryChecksGate | None = None,
     ) -> None:
         self.resolver = resolver
+        self.eligibility = eligibility or PhaseEligibilityResolver()
         self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.workspace = workspace or ReviewWorkspaceManager(resolver)
         self.checks_gate = checks_gate or DeliveryChecksGate(
@@ -1491,6 +1499,12 @@ class ReviewCompleter:
                 )
             current = _review_identity(self.resolver, state, task_contract)
             _assert_review_applicable(start, current)
+            decision = self.eligibility.resolve(state, Phase.REVIEW_PREPARE)
+            if not decision.eligible:
+                raise LckStopError(
+                    f"Review Complete STOP for Task #{task_number}: "
+                    + "; ".join(decision.reasons)
+                )
             checks: Mapping[str, Any] = guard.get("checks", {})
             if verdict == "PASS":
                 self.checks_gate.run(task_number)
