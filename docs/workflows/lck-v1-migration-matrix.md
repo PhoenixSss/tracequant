@@ -100,3 +100,23 @@ The Initial Delivery section of `task-delivery-runner` is now semantic-only plus
 entrypoint guidance. The existing Review remediation procedure remains temporarily on
 the current Runner contract because its authority cutover belongs to the next migration
 Task; merge and closeout remain Human/later-task boundaries.
+
+## Mainline activation and rollback procedure
+
+The candidate becomes the Initial Delivery lifecycle authority only after all of the
+following have occurred:
+
+1. an independent Review of the current PR head passes;
+2. the maintainer performs the required Squash Merge;
+3. `main` is synchronized and the post-merge validation confirms the merged
+   LCK controller, provider-neutral Delivery Skill contract, and repository
+   workflow validators are coherent.
+
+If activation or post-merge validation fails, the maintainer must stop further
+LCK Initial Delivery activation, record the failure, and revert the candidate
+merge as one controlled change. The pre-cutover Current Workflow remains the
+authority while the revert is validated. The maintainer then synchronizes
+`main`, reruns the relevant post-merge validation, and records the restored
+authority boundary before any later reactivation attempt. A later activation
+requires a new reviewed head and a fresh maintainer merge decision; no Agent or
+Delivery Skill may bypass this rollback boundary.

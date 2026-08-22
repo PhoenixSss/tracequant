@@ -492,7 +492,11 @@ class PhaseEligibilityResolver:
             project = issue.get("project_status")
             allowed_projects = {
                 Phase.DELIVERY_PREPARE: {"Ready", "In Progress"},
-                Phase.DELIVERY_COMPLETE: {"Ready", "In Progress"},
+                # A prior status write may have moved the Task to Review before
+                # a later final verification stopped.  Allow the same LCK
+                # Delivery Complete path to reacquire and safely finish that
+                # partial invocation.
+                Phase.DELIVERY_COMPLETE: {"Ready", "In Progress", "Review"},
                 Phase.REVIEW_PREPARE: {"Review", "In Progress"},
                 Phase.REMEDIATION_PREPARE: {"Review"},
                 Phase.CLOSEOUT: {"In Progress", "Review", "Done"},
@@ -1081,6 +1085,18 @@ class EnsureOpenPrEffect:
             or not isinstance(issue, Mapping)
         ):
             raise LckStopError("OPEN PR preconditions are incomplete")
+        if state.merged is not False:
+            raise LckStopError(
+                "OPEN PR precondition failed: Task merge state is unavailable "
+                "or already merged"
+            )
+        if (
+            state.local_task_branch != state.target_branch
+            or state.git.get("branch") != state.target_branch
+        ):
+            raise LckStopError(
+                "OPEN PR precondition failed: resolved Task branch is not selected"
+            )
         if base != expected_base_sha:
             raise LckStopError("OPEN PR precondition failed: origin/main changed")
         if issue.get("body_sha256") != expected_body_sha256:
@@ -1560,9 +1576,14 @@ class DeliveryCompleter:
             validated_tree = self.commit_effect.current_head_tree()
             critical = self._run_critical_outcome(state)
             validation = self.formal_validation.run(base_sha)
-            head = state.local_task_head
-            if not is_sha(head):
+            validated_head = state.local_task_head
+            if not is_sha(validated_head):
                 raise LckStopError("current Task head is unavailable")
+            self.commit_effect.verify_tree_unchanged(
+                validated_tree,
+                expected_head_sha=validated_head,
+            )
+            head = validated_head
             effects.append(
                 EffectReceipt(
                     effect="commit_current_tree",

@@ -227,6 +227,47 @@ def test_formal_validation_gate_fails_closed(
         lck.FormalValidationGate(resolver).run(SHA)
 
 
+@pytest.mark.parametrize("mutation", ["merged", "wrong-branch"])
+def test_ensure_open_pr_rechecks_live_task_identity_before_resolution(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    head = "b" * 40
+    state = _live_state(
+        head=head,
+        clean=True,
+        project_status="In Progress",
+        open_pr=None,
+        remote_oid=head,
+    )
+    if mutation == "merged":
+        state = lck.LiveState(**{**state.__dict__, "merged": True})
+        expected = "already merged"
+    else:
+        state = lck.LiveState(
+            **{
+                **state.__dict__,
+                "git": {**state.git, "branch": "main"},
+            }
+        )
+        expected = "not selected"
+    runner = CompletionRunner()
+    resolver = SequenceResolver(tmp_path, runner, [state])
+
+    with pytest.raises(lck.LckStopError, match=expected):
+        lck.EnsureOpenPrEffect(cast(Any, resolver)).execute(
+            160,
+            summary="Move initial Delivery mechanics into LCK.",
+            risks="None.",
+            critical_outcome=_critical_snapshot(),
+            validation={"status": "pass"},
+            expected_base_sha=SHA,
+            expected_body_sha256="e" * 64,
+        )
+
+    assert runner.commands == []
+
+
 def _critical_snapshot() -> dict[str, Any]:
     return {
         "status": "valid",
@@ -702,7 +743,7 @@ def test_delivery_complete_revalidates_clean_committed_head_and_stops_at_review_
         result.to_dict()["human_boundary"]
         == "Independent Review must be started separately"
     )
-    assert commit.calls == ["current_head_tree"]
+    assert commit.calls == ["current_head_tree", "verify_tree_unchanged"]
     assert remote.calls == pr.calls == status.calls == 1
     assert not any(
         "review" in " ".join(command).casefold() for command in runner.commands
@@ -782,6 +823,19 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
         "ensure_open_pr",
         "set_review_status",
     ]
+
+
+def test_lck_migration_matrix_records_activation_rollback_procedure() -> None:
+    matrix = (
+        Path(__file__).parents[2] / "docs" / "workflows" / "lck-v1-migration-matrix.md"
+    ).read_text(encoding="utf-8")
+
+    assert "## Mainline activation and rollback procedure" in matrix
+    assert "independent Review" in matrix
+    assert "required Squash Merge" in matrix
+    assert "revert the candidate" in matrix
+    assert "pre-cutover Current Workflow" in matrix
+    assert "fresh maintainer merge decision" in matrix
 
 
 def _with_checks(state: lck.LiveState, checks: dict[str, Any]) -> lck.LiveState:

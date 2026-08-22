@@ -630,6 +630,33 @@ def test_review_prepare_rejects_draft_open_pr(
     assert any("non-Draft" in reason for reason in decision.reasons)
 
 
+def test_delivery_complete_allows_review_status_for_partial_effect_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "task/159-lck-core-live-state-resolution"
+    fake = FakeRunner(
+        branch=branch,
+        local_branches={branch},
+        remote_branches={branch: SHA},
+    )
+    issue = _issue()
+    issue["project_status"] = "Review"
+    _install_facts(
+        monkeypatch,
+        fake,
+        issue=issue,
+        open_pr=_open_pr(branch),
+    )
+
+    state = _resolver(fake).resolve(159)
+    decision = lck.PhaseEligibilityResolver().resolve(
+        state,
+        lck.Phase.DELIVERY_COMPLETE,
+    )
+
+    assert decision.eligible
+
+
 def test_remediation_prepare_keeps_draft_pr_observable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
