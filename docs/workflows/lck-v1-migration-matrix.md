@@ -1,6 +1,6 @@
 # LCK v1 Current → Target Migration Matrix
 
-This matrix is the Task #159 implementation boundary. It normalizes the
+This matrix tracks the LCK v1 migration boundary. It normalizes the
 operation inventory from the Task #88 architecture audit against the LCK v1
 Design Charter. `KEEP` means the responsibility remains in its current layer,
 `MOVE` means deterministic lifecycle authority moves into LCK, `SIMPLIFY` means
@@ -11,10 +11,12 @@ Task #159 established live-state resolution, phase eligibility, and Delivery
 Prepare. Task #160 implements the candidate **Initial Delivery** LCK controller:
 Critical Outcome + formal validation, validated-tree commit, remote
 synchronization, OPEN-PR resolve/create, checks, Project Status `Review`, and
-final `READY_FOR_REVIEW` verification. Task #160 itself is delivered through
-the pre-cutover Current Workflow; the candidate controller becomes lifecycle
-authority only after the maintainer merge boundary. Review/Remediation, merge,
-closeout, and recovery cutovers remain bounded follow-up work.
+final `READY_FOR_REVIEW` verification. Task #161 cuts over **Independent Review
+and explicit Remediation**: Review target identity is reacquired live, Review runs
+in an isolated implementation-read-only worktree with invocation-local stale
+guards, Review FAIL returns `STOP_REQUIRED`, and Human-started Remediation reuses
+the Task #160 Delivery effects while requiring the existing OPEN PR. Merge,
+Closeout redesign, and later recovery work remain bounded follow-up work.
 
 | ID | #88 operation | Current owner | LCK v1 target | Task #159 boundary |
 |---|---|---|---|---|
@@ -32,20 +34,20 @@ closeout, and recovery cutovers remain bounded follow-up work.
 | O12 | Check wait/read and interpretation | Skill + Runner | SIMPLIFY | Candidate gate implemented; Current Workflow remains authority for #160 pre-cutover delivery |
 | O13 | Semantic self-review | Agent + helper | SIMPLIFY | Semantic judgement stays Agent-owned |
 | O14 | Delivery readiness snapshot | Evidence Runner + Skill | MOVE | Snapshot is diagnostic, not LCK authority |
-| O15 | Reviewed object identity lock | Review Skill + Runner | MOVE | Live resolver foundation only |
+| O15 | Reviewed object identity lock | Review Skill + Runner | MOVE | LCK live Review target + invocation-local guard |
 | O16 | Complete effective-diff inspection | Review Agent | KEEP | KEEP |
 | O17 | Review correctness / AC / risk judgement | Review Agent | KEEP | KEEP |
-| O18 | Review CI-equivalent validation | Review Skill + Runner | KEEP | KEEP |
-| O19 | Review recheck and stability | Runner + Review Skill | SIMPLIFY | Invocation-local recheck only |
-| O20 | Review verdict and handoff | Review Agent + Skill | KEEP | KEEP |
-| O21 | Remediation admission | Delivery Skill + Runner | MOVE | Phase resolver exposes eligibility only |
-| O22 | Repair and new head | Agent + Delivery Skill | MOVE | Out of scope |
+| O18 | Review CI-equivalent validation | Review Skill + Runner | KEEP | LCK runs formal Review validation on exact isolated head |
+| O19 | Review recheck and stability | Runner + Review Skill | SIMPLIFY | `REVIEW_STALE_HEAD` / `REVIEW_STALE_BASE` invocation-local guard only |
+| O20 | Review verdict and handoff | Review Agent + Skill | SIMPLIFY | Review Agent returns PASS/FAIL; LCK records diagnostic result; no mechanical handoff authority |
+| O21 | Remediation admission | Delivery Skill + Runner | MOVE | Explicit `lck remediation prepare`; live mechanics + semantic findings only |
+| O22 | Repair and new head | Agent + Delivery Skill | MOVE | LCK completion reuses Delivery effects and existing PR, then STOP before new Review |
 | O23 | Manual Squash Merge checkpoint | Maintainer | KEEP | KEEP |
 | O24 | Closeout read-only plan | Closeout Skill + Runner | MOVE | Closeout phase eligibility only |
 | O25 | Main sync and post-merge validation | Skill + Runner | MOVE | Out of scope |
 | O26 | Lifecycle metadata convergence | Closeout Skill / GitHub | MOVE | Out of scope |
 | O27 | Exact Task branch cleanup | Closeout Skill | MOVE | Out of scope |
-| O28 | Recovery after valid gate / drift | Skill + Agent | MOVE | Reacquire live facts; no lineage |
+| O28 | Recovery after valid gate / drift | Skill + Agent | MOVE | Reacquire live facts; no lineage; Review uses only invocation-local stale guards |
 | O29 | Feature child-set / completion mechanics | Feature Audit Skill + Agent | MOVE | Separate Feature audit boundary |
 | O30 | Repeated fact re-query / reformat | Agent / Skill ad hoc | REMOVE | No snapshot authority |
 | O31 | Homogeneous Agent command grouping | Agent orchestration | SIMPLIFY | Optional; never hides failure boundaries |
@@ -96,10 +98,39 @@ target is one bounded `tests/...::test_...` pytest node id; Issue text cannot in
 arbitrary shell commands. Operation-local base/body/head guards are ephemeral and are
 reacquired on retry rather than persisted as cross-phase authority.
 
-The Initial Delivery section of `task-delivery-runner` is now semantic-only plus LCK
-entrypoint guidance. The existing Review remediation procedure remains temporarily on
-the current Runner contract because its authority cutover belongs to the next migration
-Task; merge and closeout remain Human/later-task boundaries.
+The Initial Delivery and explicit Remediation sections of `task-delivery-runner` are now
+semantic-only plus LCK entrypoint guidance. The Review Skill likewise receives its
+mechanical target only from LCK. The pre-cutover `review-remediation` Evidence Runner
+entry point may remain for historical compatibility/diagnostics, but it is no longer a
+formal lifecycle authorization path. Merge and closeout remain Human/later-task
+boundaries.
+
+## Review / Remediation cutover implemented by Task #161
+
+The active path is now:
+
+1. `review prepare <Task>` resolves the current OPEN PR, base/head, current Task
+   Contract, effective diff and checks from live authority; no expected SHA/PR input is
+   accepted.
+2. LCK creates a detached clean worktree for the reviewed head, runs formal Review
+   validation there, then removes implementation write bits before the semantic Agent
+   inspects it.
+3. A random `review_id` locates only the bounded prepare→complete applicability guard.
+   Completion reacquires live facts; a changed head/base produces
+   `REVIEW_STALE_HEAD` / `REVIEW_STALE_BASE` instead of accepting the verdict.
+4. PASS returns `READY_FOR_HUMAN_MERGE`; FAIL returns `STOP_REQUIRED`. Neither path
+   starts another lifecycle phase automatically.
+5. A failed Review record is diagnostic/audit state. Human-started Remediation uses its
+   findings as semantic input, while `remediation prepare` independently reacquires the
+   current Task/PR/head/base/workspace.
+6. `remediation complete` requires actual repair changes, reruns Critical Outcome and
+   formal Delivery validation, commits the exact validated tree, synchronizes the Task
+   branch, reuses the existing OPEN PR, waits for current checks, and returns
+   `READY_FOR_NEW_REVIEW` followed by STOP.
+
+This cutover intentionally deletes the former formal dependence on bounded verified
+fact handoff, cross-phase freshness contracts, snapshot-derived Review target authority,
+and generalized drift categories. Historical evidence remains audit-only.
 
 ## Mainline activation and rollback procedure
 
