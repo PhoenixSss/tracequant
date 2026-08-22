@@ -1,6 +1,6 @@
 ---
 name: task-delivery-runner
-description: Deliver one maintainer-specified existing GitHub Task through LCK initial Delivery, or repair an existing Task PR from an independent review handoff. Initial Delivery uses LCK for workspace preparation, Critical Outcome, formal validation, commit, push, PR resolution/creation, checks, and Project Status. Independent review, merge, closeout, and Feature completion remain outside this Skill.
+description: Deliver one maintainer-specified existing GitHub Task through LCK, including explicitly requested remediation after a failed Independent Review. LCK owns workspace preparation, live identity, Critical Outcome, formal validation, commit, push, PR reuse/create as phase-appropriate, checks, and lifecycle boundaries. Review, merge, closeout, and Feature completion remain separate.
 ---
 
 # Task delivery runner
@@ -11,8 +11,8 @@ Initial Delivery is controlled by **LCK**. Codex / Claude owns semantic work;
 LCK owns deterministic lifecycle mechanics. A successful initial Delivery ends
 at `READY_FOR_REVIEW` and a Human boundary. It never starts Independent Review.
 
-Review remediation remains the separate procedure at the end of this Skill
-until its LCK cutover is implemented by the Review / Remediation migration Task.
+Review remediation is also LCK-controlled after cutover, but starts only from an
+explicit Human request that identifies a failed LCK `review_id`.
 
 ## Standard invocation
 
@@ -22,20 +22,29 @@ until its LCK cutover is implemented by the Review / Remediation migration Task.
 直到 PR 准备好接受独立审查。
 ```
 
-For remediation after an independent review:
+For remediation after an Independent Review FAIL:
 
 ```text
-请按 task-delivery-runner 修复
-[Task] <当前完整标题> #<Task编号>
-对应 PR #<PR编号> 的独立审查问题，
-并继续处理，直到 PR 再次准备好接受新的独立审查。
-
-Review remediation handoff:
-
-<粘贴 task-pr-review-runner 输出的 remediation handoff>
+请按 task-delivery-runner 对 Task #<Task编号> 显式执行 remediation。
+Failed Review ID: <REVIEW_ID>
 ```
 
+The failed `review_id` locates semantic findings only. LCK independently reacquires
+the current Task / PR / base / head / branch state; mechanical facts from the Review
+record are not write authorization.
+
 The Issue number is the primary key; the current Issue title is canonical.
+
+Before the first LCK command, verify the project launcher:
+
+```bash
+command -v uv
+uv --version
+uv run --frozen python --version
+```
+
+If this preflight fails, report an environment/launcher failure. It is not a
+Delivery or Review verdict, and must not be converted into `STOP_REQUIRED`.
 
 ## Policies and shared semantics
 
@@ -91,7 +100,7 @@ maintainer or implementation action.
 The first lifecycle action is:
 
 ```bash
-python tools/agent_workflow/lck.py delivery prepare <TASK>
+uv run --frozen python tools/agent_workflow/lck.py delivery prepare <TASK>
 ```
 
 Proceed only when LCK returns a resolved Delivery context. LCK reacquires live
@@ -125,7 +134,7 @@ workspace presented to LCK is the candidate Task tree.
 After semantic implementation is complete, invoke LCK with semantic metadata:
 
 ```bash
-python tools/agent_workflow/lck.py delivery complete <TASK> \
+uv run --frozen python tools/agent_workflow/lck.py delivery complete <TASK> \
   --commit-message "<scoped commit message>" \
   --summary "<implementation summary>" \
   --risks "<risks or limitations>"
@@ -182,48 +191,70 @@ branch deletion, and Feature completion were not performed.
 
 ## Review remediation
 
-This section applies only after a non-passing `task-pr-review-runner` handoff.
-Its lifecycle-control migration is intentionally outside the initial Delivery
-cutover.
+This section applies only after the latest completed LCK Independent Review returned
+`FAIL` / `STOP_REQUIRED` and the maintainer explicitly requests repair. A successful
+remediation forces a fresh Review before any later remediation can start.
 
-The remediation handoff must identify Task and PR, reviewed head SHA, verdict,
-required Blocking/High/Medium findings, objective gates, and maintainer
-questions if any. `review-remediation` requires the bounded handoff. Missing or contradictory handoff identity is a semantic admission failure: stop before Runner or repair writes.
-Do not use the generic snapshot fallback to manufacture remediation authority.
+The Agent / Skill MUST NOT accept a bounded mechanical handoff, expected SHA, base SHA,
+PR number, checks snapshot, validation snapshot, or old Evidence Runner snapshot as
+Remediation authority. The failed Review record supplies semantic findings; LCK resolves
+all actionable mechanical identity from current live Git / GitHub state.
 
-Run the current deterministic remediation Preflight before editing:
+### 1. LCK Remediation Prepare
 
 ```bash
-tools/agent_workflow/wsl2_github_evidence_runner.py delivery \
-  --entry-point review-remediation \
-  --task <TASK> \
-  --expected-main-sha <CURRENT_MAIN_SHA> \
-  --pr <PR> \
-  --expected-base-sha <REVIEWED_BASE_SHA> \
-  --expected-head-sha <REVIEWED_HEAD_SHA>
+uv run --frozen python tools/agent_workflow/lck.py remediation prepare <TASK> \
+  --review-id <FAILED_REVIEW_ID>
 ```
 
-Proceed only on a valid passing result. `partial`, `unknown`, lifecycle
-conflict, identity conflict, or other valid non-pass is terminal; do not repair
-it automatically.
+Proceed only on `READY_FOR_REMEDIATION`. LCK verifies that the record is a failed
+Independent Review, reads its findings as semantic input, reacquires the current OPEN
+non-Draft PR/head/base and Task branch, and selects/restores the current implementation
+workspace.
 
-Classify every handoff item before editing: confirmed in-scope implementation,
-test, documentation, or configuration finding → repair; scope/AC/public
-behavior/architecture change → Human Gate; Low/Nit → leave unchanged unless
-explicitly requested.
+Do not pass expected head/base/PR identity. If current live identity is ambiguous,
+diverged, missing, or unsafe, STOP; do not use the pre-cutover `review-remediation`
+Evidence Runner as a fallback.
 
-Implement the smallest complete repair and add regression coverage. Existing
-remediation mechanics continue to use the current Evidence / Validation Runner
-contract for this phase: create scoped repair commits, run `workflow-delivery`
-against the clean committed head, push only the validated head, reuse the
-existing Task PR, wait for checks, and regenerate `delivery-readiness`.
+### 2. Semantic repair
 
-The previous Review verdict applies only to its reviewed head. Any new commit
-requires a fresh independent review. Remediation never submits a GitHub Review,
-merges, closes the Task, performs closeout, or starts the new Review itself.
+Read the returned findings, confirm them against the current implementation, implement
+the smallest complete repair, and add regression coverage. If a finding requires a true
+scope/architecture/product decision, stop at Human Gate rather than silently expanding
+the Task.
 
-Report the handoff items addressed, new head, validation/check result, remaining
-limitations, and the exact fresh-session review prompt.
+The Agent may edit and run targeted development validation. It MUST NOT directly stage
+the final tree, commit, push, create/replace the PR, mutate lifecycle state, or start a
+new Review.
+
+### 3. LCK Remediation Complete
+
+After the repair is ready:
+
+```bash
+uv run --frozen python tools/agent_workflow/lck.py remediation complete <TASK> \
+  --review-id <FAILED_REVIEW_ID> \
+  --commit-message "<scoped repair commit message>" \
+  --summary "<repair summary>" \
+  --risks "<risks or limitations>"
+```
+
+LCK reuses the Task-2 Delivery effects for Critical Outcome, formal validation, exact
+validated-tree commit, remote synchronization, checks, and final local/remote/PR head
+verification. Unlike Initial Delivery, Remediation must reuse existing OPEN PR state; it never
+creates a replacement PR.
+
+A successful result is:
+
+```text
+READY_FOR_NEW_REVIEW
+→ STOP
+```
+
+The new head invalidates the earlier semantic Review result. Remediation MUST NOT start
+Independent Review automatically. Report the repaired findings, new head,
+validation/check results, limitations, and tell the maintainer to start a new fresh
+`task-pr-review-runner` invocation.
 
 ## Failure discipline
 

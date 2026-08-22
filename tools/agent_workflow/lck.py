@@ -12,12 +12,16 @@ branch/PR identity is workflow authority.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
+import shutil
 import sys
 import tempfile
 import time
 import unicodedata
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -42,10 +46,13 @@ from project_status import set_project_status_with_runner
 from workflow_common import (
     CommandRunner,
     WorkflowToolError,
+    atomic_write_json,
     command_warning,
     is_sha,
     print_json,
+    read_json_file,
     read_json_text,
+    sha256_json,
 )
 from workflow_evidence import (
     _git_snapshot,
@@ -72,6 +79,7 @@ class Phase(StrEnum):
     DELIVERY_COMPLETE = "Delivery Complete"
     REVIEW_PREPARE = "Review Prepare"
     REMEDIATION_PREPARE = "Remediation Prepare"
+    REMEDIATION_COMPLETE = "Remediation Complete"
     CLOSEOUT = "Closeout"
 
 
@@ -82,6 +90,14 @@ class ResolutionStatus(StrEnum):
 
 class LckStopError(WorkflowToolError):
     """A deterministic LCK gate could not identify one safe action."""
+
+
+class ReviewStaleError(LckStopError):
+    """The live PR target changed during one bounded Review invocation."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        self.code = code
+        super().__init__(f"{code}: {detail}")
 
 
 def canonical_task_branch(task_number: int, title: str) -> str:
@@ -438,6 +454,57 @@ class LiveStateResolver:
         )
 
 
+def _live_task_contract(
+    resolver: LiveStateResolver, task_number: int
+) -> dict[str, Any]:
+    """Read the current Task body directly from GitHub for semantic consumers."""
+    state = resolver.resolve(task_number)
+    if state.status is not ResolutionStatus.RESOLVED or state.repository is None:
+        raise LckStopError("cannot read Task Contract from unresolved live state")
+    result = resolver.runner.run(
+        [
+            "gh",
+            "issue",
+            "view",
+            str(task_number),
+            "--repo",
+            state.repository,
+            "--json",
+            "number,title,body,state,url",
+        ],
+        command_id="lck-task-contract-live",
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise LckStopError(
+            "current Task Contract is unavailable: "
+            + (result.stderr.strip() or f"exit {result.returncode}")
+        )
+    value = read_json_text(result.stdout, field="lck-task-contract-live")
+    if not isinstance(value, Mapping):
+        raise LckStopError("current Task Contract result is not an object")
+    body = value.get("body")
+    if not isinstance(body, str):
+        raise LckStopError("current Task Contract body is unavailable")
+    body_sha256 = sha256_json({"body": body})
+    live_issue = state.issue
+    if (
+        not isinstance(live_issue, Mapping)
+        or live_issue.get("body_sha256") != body_sha256
+        or value.get("number") != task_number
+        or value.get("title") != live_issue.get("title")
+        or str(value.get("state", "")).upper() != "OPEN"
+    ):
+        raise LckStopError("Task Contract changed while being acquired")
+    return {
+        "number": task_number,
+        "title": value.get("title"),
+        "url": value.get("url"),
+        "body": body,
+        "body_sha256": body_sha256,
+        "critical_outcome": live_issue.get("critical_outcome"),
+    }
+
+
 @dataclass(frozen=True)
 class PhaseDecision:
     phase: Phase
@@ -499,6 +566,7 @@ class PhaseEligibilityResolver:
                 Phase.DELIVERY_COMPLETE: {"Ready", "In Progress", "Review"},
                 Phase.REVIEW_PREPARE: {"Review", "In Progress"},
                 Phase.REMEDIATION_PREPARE: {"Review"},
+                Phase.REMEDIATION_COMPLETE: {"Review"},
                 Phase.CLOSEOUT: {"In Progress", "Review", "Done"},
             }[phase]
             if project not in allowed_projects:
@@ -575,12 +643,40 @@ class PhaseEligibilityResolver:
             if state.project_status not in {"Review", "In Progress"}:
                 reasons.append("Task is not eligible for Review Prepare")
             capabilities = ("prepare_read_only_review_context",)
-        elif phase is Phase.REMEDIATION_PREPARE:
+        elif phase in {Phase.REMEDIATION_PREPARE, Phase.REMEDIATION_COMPLETE}:
             if state.open_pr is None:
                 reasons.append("no current OPEN PR")
+            elif state.open_pr.get("isDraft") is not False:
+                reasons.append("Remediation requires a non-Draft OPEN PR")
             if state.project_status != "Review":
                 reasons.append("Remediation requires Project Status Review")
-            capabilities = ("prepare_task_workspace",)
+            pr_head = state.open_pr.get("headRefOid") if state.open_pr else None
+            if not is_sha(pr_head):
+                reasons.append("current OPEN PR head OID is unavailable")
+            pr_base = state.open_pr.get("baseRefOid") if state.open_pr else None
+            origin_main = state.git.get("origin_main_sha")
+            if not is_sha(pr_base) or not is_sha(origin_main) or pr_base != origin_main:
+                reasons.append("current OPEN PR base must match current origin/main")
+            if state.remote_task_oid != pr_head:
+                reasons.append("remote Task branch must match current OPEN PR head")
+            if state.local_task_head is not None and state.local_task_head != pr_head:
+                reasons.append("local Task branch must match current OPEN PR head")
+            if phase is Phase.REMEDIATION_PREPARE:
+                capabilities = ("prepare_task_workspace", "load_review_findings")
+            else:
+                if state.local_task_branch is None:
+                    reasons.append("Remediation Complete requires a local Task branch")
+                if state.git.get("branch") != state.target_branch:
+                    reasons.append(
+                        "Remediation Complete requires the resolved Task branch selected"
+                    )
+                capabilities = (
+                    "verify_critical_outcome",
+                    "run_formal_validation",
+                    "commit_current_tree",
+                    "ensure_remote_branch",
+                    "reuse_open_pr",
+                )
         else:
             if state.merged is not True:
                 reasons.append("Closeout requires one current merged PR")
@@ -788,6 +884,802 @@ class FormalValidationGate:
         return payload
 
 
+@dataclass(frozen=True)
+class ReviewIdentity:
+    task_number: int
+    pr_number: int
+    base_sha: str
+    head_sha: str
+    task_body_sha256: str
+    merge_base_sha: str
+    effective_diff_sha256: str
+    changed_files: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "task_number": self.task_number,
+            "pr_number": self.pr_number,
+            "base_sha": self.base_sha,
+            "head_sha": self.head_sha,
+            "task_body_sha256": self.task_body_sha256,
+            "merge_base_sha": self.merge_base_sha,
+            "effective_diff_sha256": self.effective_diff_sha256,
+            "changed_files": list(self.changed_files),
+        }
+
+
+def _review_identity(
+    resolver: LiveStateResolver,
+    state: LiveState,
+    task_contract: Mapping[str, Any],
+) -> ReviewIdentity:
+    """Bind one Review invocation to the live PR object without cross-phase input."""
+    pr = state.open_pr
+    if not isinstance(pr, Mapping):
+        raise LckStopError("Review target has no current OPEN PR")
+    pr_number = pr.get("number")
+    base_sha = pr.get("baseRefOid")
+    head_sha = pr.get("headRefOid")
+    task_body_sha256 = task_contract.get("body_sha256")
+    if not isinstance(pr_number, int) or isinstance(pr_number, bool) or pr_number <= 0:
+        raise LckStopError("Review target PR number is unavailable")
+    if not is_sha(base_sha) or not is_sha(head_sha):
+        raise LckStopError("Review target base/head identity is unavailable")
+    if not isinstance(task_body_sha256, str) or not task_body_sha256:
+        raise LckStopError("Review target Task Contract identity is unavailable")
+
+    merge_base = resolver.runner.run(
+        ["git", "merge-base", str(base_sha), str(head_sha)],
+        command_id="lck-review-merge-base",
+    )
+    if merge_base.returncode != 0 or not is_sha(merge_base.stdout.strip()):
+        raise LckStopError("Review effective-diff merge base is unavailable")
+    diff = resolver.runner.run(
+        [
+            "git",
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+            "--no-textconv",
+            f"{base_sha}...{head_sha}",
+        ],
+        command_id="lck-review-effective-diff",
+    )
+    if diff.returncode != 0:
+        raise LckStopError(
+            "Review effective diff is unavailable: "
+            + (diff.stderr.strip() or f"exit {diff.returncode}")
+        )
+    names = resolver.runner.run(
+        ["git", "diff", "--name-only", f"{base_sha}...{head_sha}"],
+        command_id="lck-review-changed-files",
+    )
+    if names.returncode != 0:
+        raise LckStopError("Review changed-file inventory is unavailable")
+    changed_files = tuple(line for line in names.stdout.splitlines() if line)
+    return ReviewIdentity(
+        task_number=state.task_number,
+        pr_number=pr_number,
+        base_sha=str(base_sha),
+        head_sha=str(head_sha),
+        task_body_sha256=task_body_sha256,
+        merge_base_sha=merge_base.stdout.strip(),
+        effective_diff_sha256=hashlib.sha256(
+            diff.stdout.encode("utf-8", errors="replace")
+        ).hexdigest(),
+        changed_files=changed_files,
+    )
+
+
+class ReviewValidationGate:
+    """Run current Review validation inside the isolated reviewed worktree."""
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+
+    def _persist_validation_artifacts(
+        self, review_root: Path, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        raw_output_dir = payload.get("output_dir")
+        if not isinstance(raw_output_dir, str) or not raw_output_dir:
+            raise LckStopError(
+                "formal Review validation did not provide an output directory"
+            )
+        output_dir = Path(raw_output_dir)
+        if output_dir.is_absolute():
+            raise LckStopError(
+                "formal Review validation output directory must be relative"
+            )
+        review_root = review_root.resolve()
+        source = (review_root / output_dir).resolve()
+        try:
+            source.relative_to(review_root)
+        except ValueError as exc:
+            raise LckStopError(
+                "formal Review validation output escaped the Review worktree"
+            ) from exc
+        if not source.is_dir():
+            raise LckStopError(
+                "formal Review validation output directory is unavailable"
+            )
+
+        durable_root = (
+            self.resolver.repo_root / ".agents" / "validation.local"
+        ).resolve()
+        durable_root.mkdir(parents=True, exist_ok=True)
+        destination = durable_root / f"lck-review-{uuid.uuid4().hex}"
+        try:
+            shutil.copytree(source, destination)
+        except OSError as exc:
+            shutil.rmtree(destination, ignore_errors=True)
+            raise LckStopError(
+                f"cannot preserve formal Review validation artifacts: {exc}"
+            ) from exc
+
+        durable_relative = destination.relative_to(
+            self.resolver.repo_root.resolve()
+        ).as_posix()
+        preserved = dict(payload)
+        preserved["output_dir"] = durable_relative
+        commands = preserved.get("commands")
+        if isinstance(commands, list):
+            for command in commands:
+                if not isinstance(command, dict):
+                    continue
+                raw_log_path = command.get("log_path")
+                if not isinstance(raw_log_path, str) or not raw_log_path:
+                    continue
+                log_path = Path(raw_log_path)
+                try:
+                    log_relative = log_path.relative_to(output_dir)
+                except ValueError as exc:
+                    raise LckStopError(
+                        "formal Review validation log path escaped its output directory"
+                    ) from exc
+                command["log_path"] = (Path(durable_relative) / log_relative).as_posix()
+        return preserved
+
+    def run(self, review_root: Path, base_sha: str) -> dict[str, Any]:
+        if not is_sha(base_sha):
+            raise LckStopError("formal Review validation base SHA is unavailable")
+        tool = review_root / "tools" / "agent_workflow" / "workflow_validation.py"
+        if not tool.is_file():
+            raise LckStopError("reviewed head does not contain workflow_validation.py")
+        result = self.resolver.runner.run(
+            [
+                sys.executable,
+                str(tool),
+                "run",
+                "--repo-root",
+                str(review_root),
+                "--phase",
+                "review",
+                "--base-sha",
+                base_sha,
+                "--include-skill-validators",
+                "--require-skill-validator",
+            ],
+            command_id="lck-formal-review-validation",
+            cwd=review_root,
+            validation=True,
+        )
+        if not result.stdout.strip():
+            raise LckStopError(
+                "formal Review validation produced no structured result: "
+                + (result.stderr.strip() or f"exit {result.returncode}")
+            )
+        payload = read_json_text(result.stdout, field="lck-formal-review-validation")
+        if not isinstance(payload, dict):
+            raise LckStopError("formal Review validation result is not an object")
+        if result.returncode != 0 or payload.get("status") != "pass":
+            raise LckStopError(
+                "formal Review validation failed: "
+                + str(payload.get("status") or result.returncode)
+            )
+        return self._persist_validation_artifacts(review_root, payload)
+
+
+class ReviewWorkspaceManager:
+    """Create and later remove one isolated, implementation-read-only worktree."""
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+
+    @staticmethod
+    def _validated_worktree_path(path: Path) -> Path:
+        resolved = path.resolve(strict=False)
+        temp_root = Path(tempfile.gettempdir()).resolve()
+        try:
+            relative = resolved.relative_to(temp_root)
+        except ValueError as exc:
+            raise LckStopError(
+                "Review worktree cleanup path is outside the temporary root"
+            ) from exc
+        if len(relative.parts) != 1 or not resolved.name.startswith(
+            "tracequant-lck-review-"
+        ):
+            raise LckStopError("Review worktree cleanup path is not LCK-owned")
+        return resolved
+
+    def _assert_registered_worktree(self, path: Path) -> None:
+        result = self.resolver.runner.run(
+            ["git", "worktree", "list", "--porcelain"],
+            command_id="lck-review-worktree-verify",
+        )
+        if result.returncode != 0:
+            raise LckStopError(
+                "cannot verify isolated Review worktree ownership: "
+                + (result.stderr.strip() or result.stdout.strip())
+            )
+        registered = {
+            Path(line.removeprefix("worktree ").strip()).resolve()
+            for line in result.stdout.splitlines()
+            if line.startswith("worktree ") and line.removeprefix("worktree ").strip()
+        }
+        if path not in registered:
+            raise LckStopError(
+                "Review worktree cleanup path is not a registered LCK worktree"
+            )
+
+    def create(self, task_number: int, head_sha: str) -> Path:
+        path = Path(
+            tempfile.mkdtemp(prefix=f"tracequant-lck-review-{task_number}-")
+        ).resolve()
+        # mkdtemp creates the path, while git worktree requires an absent target.
+        path.rmdir()
+        result = self.resolver.runner.run(
+            ["git", "worktree", "add", "--detach", str(path), head_sha],
+            command_id="lck-review-worktree-add",
+        )
+        if result.returncode != 0:
+            shutil.rmtree(path, ignore_errors=True)
+            raise LckStopError(
+                "cannot create isolated Review worktree: "
+                + (result.stderr.strip() or result.stdout.strip())
+            )
+        status = self.resolver.runner.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            command_id="lck-review-worktree-clean",
+            cwd=path,
+        )
+        head = self.resolver.runner.run(
+            ["git", "rev-parse", "HEAD"],
+            command_id="lck-review-worktree-head",
+            cwd=path,
+        )
+        if (
+            status.returncode != 0
+            or status.stdout.strip()
+            or head.stdout.strip() != head_sha
+        ):
+            self.remove(path)
+            raise LckStopError("isolated Review worktree postcondition failed")
+        return path
+
+    @staticmethod
+    def seal_read_only(path: Path) -> None:
+        for root, dirs, files in os.walk(path, topdown=False, followlinks=False):
+            root_path = Path(root)
+            for name in files:
+                target = root_path / name
+                if not target.is_symlink():
+                    os.chmod(target, 0o444)
+            for name in dirs:
+                target = root_path / name
+                if not target.is_symlink():
+                    os.chmod(target, 0o555)
+        os.chmod(path, 0o555)
+
+    @staticmethod
+    def _make_removable(path: Path) -> None:
+        if not path.exists():
+            return
+        os.chmod(path, 0o755)
+        for root, dirs, files in os.walk(path, topdown=True, followlinks=False):
+            root_path = Path(root)
+            os.chmod(root_path, 0o755)
+            for name in dirs:
+                target = root_path / name
+                if not target.is_symlink():
+                    os.chmod(target, 0o755)
+            for name in files:
+                target = root_path / name
+                if not target.is_symlink():
+                    os.chmod(target, 0o644)
+
+    def remove(self, path: Path) -> None:
+        path = self._validated_worktree_path(path)
+        self._assert_registered_worktree(path)
+        self._make_removable(path)
+        result = self.resolver.runner.run(
+            ["git", "worktree", "remove", "--force", str(path)],
+            command_id="lck-review-worktree-remove",
+        )
+        if result.returncode != 0:
+            shutil.rmtree(path, ignore_errors=True)
+            if path.exists():
+                raise LckStopError(
+                    "failed to remove isolated Review worktree directory"
+                )
+            prune = self.resolver.runner.run(
+                ["git", "worktree", "prune"],
+                command_id="lck-review-worktree-prune",
+            )
+            if prune.returncode != 0:
+                raise LckStopError("failed to remove isolated Review worktree")
+
+
+class ReviewInvocationStore:
+    """Persist invocation-local guards and diagnostic review records only."""
+
+    _ID = re.compile(r"^[0-9a-f]{32}$")
+
+    def __init__(self, repo_root: Path) -> None:
+        self.root = repo_root / ".workflow.local" / "lck"
+
+    def new_id(self) -> str:
+        return uuid.uuid4().hex
+
+    def _validate_id(self, review_id: str) -> None:
+        if self._ID.fullmatch(review_id) is None:
+            raise LckStopError("invalid Review invocation id")
+
+    def guard_path(self, review_id: str) -> Path:
+        self._validate_id(review_id)
+        return self.root / "review-invocations" / f"{review_id}.json"
+
+    def record_path(self, task_number: int, review_id: str) -> Path:
+        self._validate_id(review_id)
+        return self.root / "reviews" / f"task-{task_number}" / f"{review_id}.json"
+
+    def latest_review_path(self, task_number: int) -> Path:
+        return self.root / "review-state" / f"task-{task_number}-latest.json"
+
+    def review_required_path(self, task_number: int) -> Path:
+        return self.root / "review-state" / f"task-{task_number}-required.json"
+
+    def write_guard(self, review_id: str, payload: Mapping[str, Any]) -> None:
+        atomic_write_json(self.guard_path(review_id), payload)
+
+    def read_guard(self, review_id: str) -> dict[str, Any]:
+        value = read_json_file(self.guard_path(review_id))
+        if not isinstance(value, dict):
+            raise LckStopError("Review invocation guard is not an object")
+        return value
+
+    def delete_guard(self, review_id: str) -> None:
+        try:
+            self.guard_path(review_id).unlink()
+        except FileNotFoundError:
+            pass
+
+    def write_record(
+        self, task_number: int, review_id: str, payload: Mapping[str, Any]
+    ) -> Path:
+        path = self.record_path(task_number, review_id)
+        atomic_write_json(path, payload)
+        return path
+
+    def read_record(self, task_number: int, review_id: str) -> dict[str, Any]:
+        value = read_json_file(self.record_path(task_number, review_id))
+        if not isinstance(value, dict):
+            raise LckStopError("Review record is not an object")
+        return value
+
+    def write_latest_review(
+        self, task_number: int, review_id: str, verdict: str
+    ) -> None:
+        self._validate_id(review_id)
+        atomic_write_json(
+            self.latest_review_path(task_number),
+            {
+                "schema_version": LCK_SCHEMA_VERSION,
+                "kind": "latest-independent-review",
+                "task_number": task_number,
+                "review_id": review_id,
+                "verdict": verdict,
+                "authority": "semantic predecessor only; never mechanical target authority",
+            },
+        )
+
+    def read_latest_review(self, task_number: int) -> dict[str, Any] | None:
+        path = self.latest_review_path(task_number)
+        if not path.exists():
+            return None
+        value = read_json_file(path)
+        if not isinstance(value, dict) or value.get("task_number") != task_number:
+            raise LckStopError("latest Review state is invalid")
+        return value
+
+    def write_review_required(
+        self, task_number: int, review_id: str, head_sha: str
+    ) -> None:
+        self._validate_id(review_id)
+        if not is_sha(head_sha):
+            raise LckStopError("review-required state needs a valid remediation head")
+        atomic_write_json(
+            self.review_required_path(task_number),
+            {
+                "schema_version": LCK_SCHEMA_VERSION,
+                "kind": "fresh-review-required",
+                "task_number": task_number,
+                "source_review_id": review_id,
+                "remediated_head": head_sha,
+                "authority": "negative lifecycle boundary only; current target remains live-resolved",
+            },
+        )
+
+    def read_review_required(self, task_number: int) -> dict[str, Any] | None:
+        path = self.review_required_path(task_number)
+        if not path.exists():
+            return None
+        value = read_json_file(path)
+        if not isinstance(value, dict) or value.get("task_number") != task_number:
+            raise LckStopError("review-required state is invalid")
+        return value
+
+    def clear_review_required(self, task_number: int) -> None:
+        try:
+            self.review_required_path(task_number).unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _identity_from_mapping(value: Mapping[str, Any]) -> ReviewIdentity:
+    changed = value.get("changed_files")
+    if not isinstance(changed, list) or not all(
+        isinstance(item, str) for item in changed
+    ):
+        raise LckStopError("Review invocation identity has invalid changed-files data")
+    fields = {
+        "task_number": value.get("task_number"),
+        "pr_number": value.get("pr_number"),
+        "base_sha": value.get("base_sha"),
+        "head_sha": value.get("head_sha"),
+        "task_body_sha256": value.get("task_body_sha256"),
+        "merge_base_sha": value.get("merge_base_sha"),
+        "effective_diff_sha256": value.get("effective_diff_sha256"),
+    }
+    if not isinstance(fields["task_number"], int) or not isinstance(
+        fields["pr_number"], int
+    ):
+        raise LckStopError("Review invocation identity is incomplete")
+    for name in ("base_sha", "head_sha", "merge_base_sha"):
+        if not is_sha(fields[name]):
+            raise LckStopError(f"Review invocation identity has invalid {name}")
+    for name in ("task_body_sha256", "effective_diff_sha256"):
+        item = fields[name]
+        if not isinstance(item, str) or re.fullmatch(r"[0-9a-f]{64}", item) is None:
+            raise LckStopError(f"Review invocation identity has invalid {name}")
+    return ReviewIdentity(
+        task_number=cast(int, fields["task_number"]),
+        pr_number=cast(int, fields["pr_number"]),
+        base_sha=cast(str, fields["base_sha"]),
+        head_sha=cast(str, fields["head_sha"]),
+        task_body_sha256=cast(str, fields["task_body_sha256"]),
+        merge_base_sha=cast(str, fields["merge_base_sha"]),
+        effective_diff_sha256=cast(str, fields["effective_diff_sha256"]),
+        changed_files=tuple(changed),
+    )
+
+
+def _assert_review_applicable(start: ReviewIdentity, current: ReviewIdentity) -> None:
+    """Apply only invocation-local stale guards; this is not a drift framework."""
+    if current.pr_number != start.pr_number:
+        raise ReviewStaleError(
+            "REVIEW_STALE_PR",
+            f"OPEN PR changed from #{start.pr_number} to #{current.pr_number}",
+        )
+    if current.head_sha != start.head_sha:
+        raise ReviewStaleError(
+            "REVIEW_STALE_HEAD",
+            f"PR head changed from {start.head_sha} to {current.head_sha}",
+        )
+    if current.base_sha != start.base_sha:
+        raise ReviewStaleError(
+            "REVIEW_STALE_BASE",
+            f"PR base changed from {start.base_sha} to {current.base_sha}",
+        )
+    if current.task_body_sha256 != start.task_body_sha256:
+        raise ReviewStaleError(
+            "REVIEW_STALE_TASK",
+            "Task Contract changed during this Review invocation",
+        )
+    if (
+        current.merge_base_sha != start.merge_base_sha
+        or current.effective_diff_sha256 != start.effective_diff_sha256
+        or current.changed_files != start.changed_files
+    ):
+        raise ReviewStaleError(
+            "REVIEW_STALE_DIFF",
+            "effective diff changed during this Review invocation",
+        )
+
+
+@dataclass(frozen=True)
+class ReviewContext:
+    review_id: str
+    task_contract: Mapping[str, Any]
+    identity: ReviewIdentity
+    checks: Mapping[str, Any]
+    validation: Mapping[str, Any]
+    review_root: Path
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "operation": "review-prepare",
+            "status": "READY_FOR_SEMANTIC_REVIEW",
+            "review_id": self.review_id,
+            "task_contract": _jsonable(self.task_contract),
+            "review_target": self.identity.to_dict(),
+            "checks": _jsonable(self.checks),
+            "validation": _jsonable(self.validation),
+            "review_root": str(self.review_root),
+            "workspace_mode": "implementation-read-only",
+            "agent_role": ["Inspect", "Reason", "Judge", "Report"],
+            "mechanical_authority": "live Git/GitHub state resolved by LCK",
+            "forbidden_handoff_authority": [
+                "Delivery SHA",
+                "Delivery base SHA",
+                "Delivery PR identity",
+                "Delivery checks snapshot",
+                "Delivery validation snapshot",
+            ],
+        }
+
+
+class ReviewPreparer:
+    """Resolve a fresh review target and construct one bounded read-only context."""
+
+    def __init__(
+        self,
+        resolver: LiveStateResolver,
+        *,
+        eligibility: PhaseEligibilityResolver | None = None,
+        validation: ReviewValidationGate | None = None,
+        checks_gate: DeliveryChecksGate | None = None,
+        workspace: ReviewWorkspaceManager | None = None,
+        store: ReviewInvocationStore | None = None,
+    ) -> None:
+        self.resolver = resolver
+        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.validation = validation or ReviewValidationGate(resolver)
+        self.checks_gate = checks_gate or DeliveryChecksGate(
+            resolver, timeout_seconds=0.0, poll_seconds=0.0
+        )
+        self.workspace = workspace or ReviewWorkspaceManager(resolver)
+        self.store = store or ReviewInvocationStore(resolver.repo_root)
+
+    def prepare(self, task_number: int) -> ReviewContext:
+        state = self.resolver.resolve(task_number)
+        decision = self.eligibility.resolve(state, Phase.REVIEW_PREPARE)
+        if not decision.eligible:
+            raise LckStopError(
+                f"Review Prepare STOP for Task #{task_number}: "
+                + "; ".join(decision.reasons)
+            )
+        task_contract = _live_task_contract(self.resolver, task_number)
+        identity = _review_identity(self.resolver, state, task_contract)
+        self.checks_gate.run(task_number)
+        review_root = self.workspace.create(task_number, identity.head_sha)
+        try:
+            validation = self.validation.run(review_root, identity.base_sha)
+            final_state = self.resolver.resolve(task_number)
+            final_contract = _live_task_contract(self.resolver, task_number)
+            final_decision = self.eligibility.resolve(final_state, Phase.REVIEW_PREPARE)
+            if not final_decision.eligible:
+                raise LckStopError(
+                    "Review Prepare post-validation STOP: "
+                    + "; ".join(final_decision.reasons)
+                )
+            final_identity = _review_identity(
+                self.resolver, final_state, final_contract
+            )
+            _assert_review_applicable(identity, final_identity)
+            final_checks = self.checks_gate.run(task_number)
+            self.workspace.seal_read_only(review_root)
+        except BaseException:
+            self.workspace.remove(review_root)
+            raise
+
+        review_id = self.store.new_id()
+        guard = {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "kind": "review-invocation-guard",
+            "review_id": review_id,
+            "task_number": task_number,
+            "identity": identity.to_dict(),
+            "review_root": str(review_root),
+            "validation": validation,
+            "checks": final_checks,
+            "authority": "ephemeral applicability guard only",
+        }
+        try:
+            self.store.write_guard(review_id, guard)
+        except BaseException:
+            self.workspace.remove(review_root)
+            raise
+        return ReviewContext(
+            review_id=review_id,
+            task_contract=task_contract,
+            identity=identity,
+            checks=final_checks,
+            validation=validation,
+            review_root=review_root,
+        )
+
+
+@dataclass(frozen=True)
+class ReviewCompletionResult:
+    review_id: str
+    task_number: int
+    verdict: str
+    status: str
+    identity: ReviewIdentity
+    record_path: Path
+
+    def to_dict(self) -> dict[str, Any]:
+        human_boundary = (
+            "Maintainer manual merge decision"
+            if self.verdict == "PASS"
+            else "STOP; Human must explicitly choose remediation, redesign, or abandon"
+        )
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "operation": "review-complete",
+            "review_id": self.review_id,
+            "task_number": self.task_number,
+            "verdict": self.verdict,
+            "status": self.status,
+            "review_target": self.identity.to_dict(),
+            "record_path": str(self.record_path),
+            "human_boundary": human_boundary,
+            "automatic_remediation": False,
+        }
+
+
+class ReviewCompleter:
+    """Accept one semantic verdict only while the invocation target is still live."""
+
+    def __init__(
+        self,
+        resolver: LiveStateResolver,
+        *,
+        eligibility: PhaseEligibilityResolver | None = None,
+        store: ReviewInvocationStore | None = None,
+        workspace: ReviewWorkspaceManager | None = None,
+        checks_gate: DeliveryChecksGate | None = None,
+    ) -> None:
+        self.resolver = resolver
+        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.store = store or ReviewInvocationStore(resolver.repo_root)
+        self.workspace = workspace or ReviewWorkspaceManager(resolver)
+        self.checks_gate = checks_gate or DeliveryChecksGate(
+            resolver, timeout_seconds=0.0, poll_seconds=0.0
+        )
+
+    @staticmethod
+    def _read_findings(path: Path | None, verdict: str) -> str:
+        if path is None:
+            if verdict == "FAIL":
+                raise LckStopError("FAIL verdict requires --findings-file")
+            return ""
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise LckStopError(f"cannot read findings file: {exc}") from exc
+        if verdict == "FAIL" and not text.strip():
+            raise LckStopError("FAIL verdict requires non-empty findings")
+        return text
+
+    def complete(
+        self,
+        task_number: int,
+        review_id: str,
+        *,
+        verdict: str,
+        findings_file: Path | None = None,
+    ) -> ReviewCompletionResult:
+        verdict = verdict.upper()
+        if verdict not in {"PASS", "FAIL"}:
+            raise LckStopError("Review verdict must be PASS or FAIL")
+        findings = self._read_findings(findings_file, verdict)
+        guard = self.store.read_guard(review_id)
+        if guard.get("task_number") != task_number:
+            raise LckStopError("Review invocation does not belong to this Task")
+        raw_identity = guard.get("identity")
+        if not isinstance(raw_identity, Mapping):
+            raise LckStopError("Review invocation guard has no identity")
+        start = _identity_from_mapping(raw_identity)
+        review_root_value = guard.get("review_root")
+        if not isinstance(review_root_value, str) or not review_root_value:
+            raise LckStopError("Review invocation guard has no review root")
+        review_root = Path(review_root_value)
+
+        try:
+            state = self.resolver.resolve(task_number)
+            task_contract = _live_task_contract(self.resolver, task_number)
+            if state.open_pr is None:
+                raise ReviewStaleError(
+                    "REVIEW_STALE_PR", "the reviewed OPEN PR no longer exists"
+                )
+            current = _review_identity(self.resolver, state, task_contract)
+            _assert_review_applicable(start, current)
+            decision = self.eligibility.resolve(state, Phase.REVIEW_PREPARE)
+            if not decision.eligible:
+                raise LckStopError(
+                    f"Review Complete STOP for Task #{task_number}: "
+                    + "; ".join(decision.reasons)
+                )
+            checks: Mapping[str, Any] = guard.get("checks", {})
+            if verdict == "PASS":
+                checks = self.checks_gate.run(task_number)
+            # The checks gate re-resolves the live PR while it waits. Reacquire
+            # the complete applicability identity after that gate so a head,
+            # base, Task Contract, or effective-diff change cannot publish a
+            # verdict for the sealed Review worktree.
+            final_state = self.resolver.resolve(task_number)
+            final_contract = _live_task_contract(self.resolver, task_number)
+            if final_state.open_pr is None:
+                raise ReviewStaleError(
+                    "REVIEW_STALE_PR", "the reviewed OPEN PR no longer exists"
+                )
+            final_identity = _review_identity(
+                self.resolver, final_state, final_contract
+            )
+            _assert_review_applicable(start, final_identity)
+            final_decision = self.eligibility.resolve(final_state, Phase.REVIEW_PREPARE)
+            if not final_decision.eligible:
+                raise LckStopError(
+                    f"Review Complete STOP for Task #{task_number}: "
+                    + "; ".join(final_decision.reasons)
+                )
+            if verdict == "PASS" and not DeliveryChecksGate._checks_postcondition(
+                final_state, checks
+            ):
+                raise LckStopError(
+                    "Review Complete STOP: current PR checks are no longer passing"
+                )
+            current = final_identity
+            record = {
+                "schema_version": LCK_SCHEMA_VERSION,
+                "kind": "independent-review-record",
+                "review_id": review_id,
+                "task_number": task_number,
+                "verdict": verdict,
+                "status": (
+                    "READY_FOR_HUMAN_MERGE" if verdict == "PASS" else "STOP_REQUIRED"
+                ),
+                "identity": current.to_dict(),
+                "findings": findings,
+                "findings_sha256": hashlib.sha256(findings.encode("utf-8")).hexdigest(),
+                "validation": guard.get("validation"),
+                "checks": checks,
+                "authority_note": (
+                    "record is diagnostic/audit evidence; later lifecycle mechanics "
+                    "must reacquire live Git/GitHub state"
+                ),
+            }
+            record_path = self.store.write_record(task_number, review_id, record)
+            self.store.write_latest_review(task_number, review_id, verdict)
+            # A successfully accepted fresh Review is the only operation that
+            # releases the post-remediation "new Review required" boundary.
+            self.store.clear_review_required(task_number)
+            return ReviewCompletionResult(
+                review_id=review_id,
+                task_number=task_number,
+                verdict=verdict,
+                status=cast(str, record["status"]),
+                identity=current,
+                record_path=record_path,
+            )
+        finally:
+            self.workspace.remove(review_root)
+            self.store.delete_guard(review_id)
+
+
 class CommitCurrentTreeEffect:
     """Commit exactly the staged tree that passed Critical Outcome + validation."""
 
@@ -976,6 +1868,57 @@ class EnsureRemoteBranchEffect:
         remote_oid = refs.get(branch)
         return head, remote_oid
 
+    def _ensure_upstream(self, branch: str) -> str:
+        expected = f"origin/{branch}"
+        upstream = self.resolver.runner.run(
+            [
+                "git",
+                "rev-parse",
+                "--abbrev-ref",
+                "--symbolic-full-name",
+                "@{upstream}",
+            ],
+            command_id="lck-task-branch-upstream",
+        )
+        current = upstream.stdout.strip() if upstream.returncode == 0 else ""
+        if current != expected:
+            set_upstream = self.resolver.runner.run(
+                [
+                    "git",
+                    "branch",
+                    "--set-upstream-to",
+                    expected,
+                    branch,
+                ],
+                command_id="lck-set-task-branch-upstream",
+            )
+            if set_upstream.returncode != 0:
+                raise LckStopError(
+                    "cannot establish Task branch upstream: "
+                    + (
+                        set_upstream.stderr.strip()
+                        or set_upstream.stdout.strip()
+                        or f"exit {set_upstream.returncode}"
+                    )
+                )
+            upstream = self.resolver.runner.run(
+                [
+                    "git",
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "--symbolic-full-name",
+                    "@{upstream}",
+                ],
+                command_id="lck-verify-task-branch-upstream",
+            )
+            current = upstream.stdout.strip() if upstream.returncode == 0 else ""
+        if current != expected:
+            raise LckStopError(
+                "Task branch upstream postcondition failed: "
+                f"expected {expected!r}, observed {current or 'unavailable'!r}"
+            )
+        return current
+
     def execute(
         self,
         branch: str,
@@ -987,10 +1930,15 @@ class EnsureRemoteBranchEffect:
             expected_head_sha=expected_head_sha,
         )
         if remote_oid == head:
+            upstream = self._ensure_upstream(branch)
             return EffectReceipt(
                 effect="ensure_remote_branch",
                 action="already-synced",
-                details={"head_sha": head, "remote_oid": remote_oid},
+                details={
+                    "head_sha": head,
+                    "remote_oid": remote_oid,
+                    "upstream": upstream,
+                },
             )
         if remote_oid is not None:
             fetch = self.resolver.runner.run(
@@ -1042,10 +1990,15 @@ class EnsureRemoteBranchEffect:
             raise LckStopError(
                 "push postcondition failed: local and remote heads differ"
             )
+        upstream = self._ensure_upstream(branch)
         return EffectReceipt(
             effect="ensure_remote_branch",
             action=action,
-            details={"head_sha": head, "remote_oid": final_remote},
+            details={
+                "head_sha": head,
+                "remote_oid": final_remote,
+                "upstream": upstream,
+            },
         )
 
 
@@ -1141,6 +2094,64 @@ class EnsureOpenPrEffect:
                 "head_sha": result.get("head_sha"),
                 "base_sha": result.get("base_sha"),
                 "warnings": warnings,
+            },
+        )
+
+
+class ReuseExistingOpenPrEffect:
+    """Verify the pushed repair is attached to the already-existing OPEN PR."""
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+
+    def execute(
+        self,
+        task_number: int,
+        *,
+        summary: str,
+        risks: str,
+        critical_outcome: Mapping[str, Any],
+        validation: Mapping[str, Any],
+        expected_base_sha: str,
+        expected_body_sha256: str,
+    ) -> EffectReceipt:
+        del summary, risks, critical_outcome, validation
+        state = self.resolver.resolve(task_number)
+        if state.status is not ResolutionStatus.RESOLVED:
+            raise LckStopError("cannot reuse OPEN PR from unresolved live state")
+        pr = state.open_pr
+        issue = state.issue
+        if not isinstance(pr, Mapping) or pr.get("isDraft") is not False:
+            raise LckStopError("Remediation requires the existing non-Draft OPEN PR")
+        if state.git.get("origin_main_sha") != expected_base_sha:
+            raise LckStopError(
+                "Remediation PR precondition failed: origin/main changed"
+            )
+        if (
+            not isinstance(issue, Mapping)
+            or issue.get("body_sha256") != expected_body_sha256
+        ):
+            raise LckStopError("Remediation PR precondition failed: Task body changed")
+        head = state.local_task_head
+        if (
+            not is_sha(head)
+            or state.remote_task_oid != head
+            or pr.get("headRefOid") != head
+            or pr.get("baseRefOid") != expected_base_sha
+            or pr.get("headRefName") != state.target_branch
+            or pr.get("baseRefName") != BASE_BRANCH
+        ):
+            raise LckStopError(
+                "Remediation PR postcondition failed: existing PR is not on the pushed head"
+            )
+        return EffectReceipt(
+            effect="reuse_open_pr",
+            action="reused-current-open-pr",
+            details={
+                "number": pr.get("number"),
+                "url": pr.get("url"),
+                "head_sha": head,
+                "base_sha": expected_base_sha,
             },
         )
 
@@ -1471,6 +2482,7 @@ class DeliveryCompleter:
         pr_effect: EnsureOpenPrEffect | None = None,
         status_effect: SetReviewStatusEffect | None = None,
         checks_gate: DeliveryChecksGate | None = None,
+        require_existing_open_pr: bool = False,
     ) -> None:
         self.resolver = resolver
         self.eligibility = eligibility or PhaseEligibilityResolver()
@@ -1480,6 +2492,7 @@ class DeliveryCompleter:
         self.pr_effect = pr_effect or EnsureOpenPrEffect(resolver)
         self.status_effect = status_effect or SetReviewStatusEffect(resolver)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
+        self.require_existing_open_pr = require_existing_open_pr
 
     def _run_critical_outcome(self, state: LiveState) -> dict[str, Any]:
         issue = state.issue
@@ -1520,6 +2533,7 @@ class DeliveryCompleter:
         body_sha256: str,
         branch: str,
         head_sha: str | None = None,
+        expected_pr_base_sha: str | None = None,
     ) -> LiveState:
         """Reacquire the facts that must stay stable within this invocation."""
         state = self.resolver.resolve(task_number)
@@ -1537,6 +2551,15 @@ class DeliveryCompleter:
             raise LckStopError(
                 "Delivery operation guard stopped: Task branch identity changed"
             )
+        if expected_pr_base_sha is not None:
+            pr = state.open_pr
+            if (
+                not isinstance(pr, Mapping)
+                or pr.get("baseRefOid") != expected_pr_base_sha
+            ):
+                raise LckStopError(
+                    "Delivery operation guard stopped: existing OPEN PR base changed"
+                )
         if head_sha is not None and state.local_task_head != head_sha:
             raise LckStopError(
                 "Delivery operation guard stopped: local Task head changed"
@@ -1615,6 +2638,17 @@ class DeliveryCompleter:
         if not isinstance(body_sha256, str) or not body_sha256:
             raise LckStopError("current Task body identity is unavailable")
         branch = state.target_branch
+        expected_pr_base_sha = base_sha if self.require_existing_open_pr else None
+
+        if expected_pr_base_sha is not None:
+            self._operation_guard(
+                task_number,
+                base_sha=base_sha,
+                body_sha256=body_sha256,
+                branch=branch,
+                head_sha=state.local_task_head,
+                expected_pr_base_sha=expected_pr_base_sha,
+            )
 
         effects: list[EffectReceipt] = []
         if state.git.get("clean") is True:
@@ -1652,6 +2686,7 @@ class DeliveryCompleter:
                 body_sha256=body_sha256,
                 branch=branch,
                 head_sha=state.local_task_head,
+                expected_pr_base_sha=expected_pr_base_sha,
             )
             self.commit_effect.verify_tree_unchanged(
                 validated_tree,
@@ -1673,6 +2708,7 @@ class DeliveryCompleter:
             body_sha256=body_sha256,
             branch=branch,
             head_sha=str(head),
+            expected_pr_base_sha=expected_pr_base_sha,
         )
         effects.append(
             self.remote_effect.execute(
@@ -1686,6 +2722,7 @@ class DeliveryCompleter:
             body_sha256=body_sha256,
             branch=branch,
             head_sha=str(head),
+            expected_pr_base_sha=expected_pr_base_sha,
         )
         effects.append(
             self.pr_effect.execute(
@@ -1704,6 +2741,7 @@ class DeliveryCompleter:
             body_sha256=body_sha256,
             branch=branch,
             head_sha=str(head),
+            expected_pr_base_sha=expected_pr_base_sha,
         )
         checks = self.checks_gate.run(task_number)
         self._operation_guard(
@@ -1712,6 +2750,7 @@ class DeliveryCompleter:
             body_sha256=body_sha256,
             branch=branch,
             head_sha=str(head),
+            expected_pr_base_sha=expected_pr_base_sha,
         )
         checks_pr = checks.get("pr")
         if not isinstance(checks_pr, Mapping):
@@ -1747,6 +2786,260 @@ class DeliveryCompleter:
         )
 
 
+@dataclass(frozen=True)
+class RemediationContext:
+    task_number: int
+    review_id: str
+    findings: str
+    state: LiveState
+    action: str
+
+    def to_dict(self) -> dict[str, Any]:
+        pr = self.state.open_pr or {}
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "operation": "remediation-prepare",
+            "status": "READY_FOR_REMEDIATION",
+            "task_number": self.task_number,
+            "review_id": self.review_id,
+            "action": self.action,
+            "findings": self.findings,
+            "live_target": {
+                "pr_number": pr.get("number"),
+                "base_sha": pr.get("baseRefOid"),
+                "head_sha": pr.get("headRefOid"),
+                "branch": self.state.target_branch,
+                "task_body_sha256": (
+                    self.state.issue.get("body_sha256")
+                    if isinstance(self.state.issue, Mapping)
+                    else None
+                ),
+            },
+            "mechanical_authority": "current live state; Review record supplies findings only",
+        }
+
+
+def _failed_review_record(
+    store: ReviewInvocationStore, task_number: int, review_id: str
+) -> dict[str, Any]:
+    record = store.read_record(task_number, review_id)
+    if record.get("task_number") != task_number or record.get("verdict") != "FAIL":
+        raise LckStopError("Remediation requires a failed Independent Review record")
+    latest = store.read_latest_review(task_number)
+    if (
+        not isinstance(latest, Mapping)
+        or latest.get("review_id") != review_id
+        or latest.get("verdict") != "FAIL"
+    ):
+        raise LckStopError(
+            "Remediation requires the latest completed Independent Review to be this FAIL"
+        )
+    findings = record.get("findings")
+    if not isinstance(findings, str) or not findings.strip():
+        raise LckStopError(
+            "failed Independent Review record has no remediation findings"
+        )
+    identity = record.get("identity")
+    if not isinstance(identity, Mapping):
+        raise LckStopError("failed Independent Review record has no reviewed identity")
+    _identity_from_mapping(identity)
+    return record
+
+
+def _failed_review_findings(
+    store: ReviewInvocationStore, task_number: int, review_id: str
+) -> str:
+    record = _failed_review_record(store, task_number, review_id)
+    return cast(str, record["findings"])
+
+
+class RemediationPreparer:
+    """Explicitly enter repair using live mechanics plus semantic Review findings."""
+
+    def __init__(
+        self,
+        resolver: LiveStateResolver,
+        *,
+        eligibility: PhaseEligibilityResolver | None = None,
+        store: ReviewInvocationStore | None = None,
+    ) -> None:
+        self.resolver = resolver
+        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.store = store or ReviewInvocationStore(resolver.repo_root)
+
+    def _run_git(self, args: Sequence[str], command_id: str) -> None:
+        result = self.resolver.runner.run(["git", *args], command_id=command_id)
+        if result.returncode != 0:
+            raise LckStopError(
+                f"{command_id} failed with exit code {result.returncode}: "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+
+    def prepare(self, task_number: int, review_id: str) -> RemediationContext:
+        required = self.store.read_review_required(task_number)
+        if required is not None:
+            raise LckStopError(
+                "Remediation STOP: a fresh Independent Review is required after the previous remediation"
+            )
+        findings = _failed_review_findings(self.store, task_number, review_id)
+        state = self.resolver.resolve(task_number)
+        decision = self.eligibility.resolve(state, Phase.REMEDIATION_PREPARE)
+        if not decision.eligible:
+            raise LckStopError(
+                f"Remediation Prepare STOP for Task #{task_number}: "
+                + "; ".join(decision.reasons)
+            )
+
+        branch = state.target_branch
+        current = state.git.get("branch")
+        clean = state.git.get("clean") is True
+        action = "already-prepared"
+        if state.local_task_branch is None:
+            if not clean:
+                raise LckStopError(
+                    "restoring Remediation workspace requires a clean current worktree"
+                )
+            if state.remote_task_branch != branch:
+                raise LckStopError(
+                    "current OPEN PR has no restorable remote Task branch"
+                )
+            self._run_git(
+                ["switch", "-c", branch, "--track", f"origin/{branch}"],
+                "lck-remediation-restore-branch",
+            )
+            action = "restored-remote-branch"
+        elif current != branch:
+            if not clean:
+                raise LckStopError(
+                    "cannot switch to Remediation branch with a dirty unrelated worktree"
+                )
+            self._run_git(["switch", branch], "lck-remediation-switch-branch")
+            action = "selected-existing-branch"
+        elif not clean:
+            action = "resumed-dirty-remediation"
+
+        final = self.resolver.resolve(task_number)
+        final_decision = self.eligibility.resolve(final, Phase.REMEDIATION_PREPARE)
+        pr_head = final.open_pr.get("headRefOid") if final.open_pr else None
+        if (
+            not final_decision.eligible
+            or final.git.get("branch") != branch
+            or final.local_task_head != pr_head
+            or final.remote_task_oid != pr_head
+        ):
+            raise LckStopError(
+                "Remediation Prepare postcondition failed: workspace is not on current PR head"
+            )
+        return RemediationContext(
+            task_number=task_number,
+            review_id=review_id,
+            findings=findings,
+            state=final,
+            action=action,
+        )
+
+
+@dataclass(frozen=True)
+class RemediationCompletionResult:
+    task_number: int
+    review_id: str
+    delivery: DeliveryCompletionResult
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = self.delivery.to_dict()
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "operation": "remediation-complete",
+            "task_number": self.task_number,
+            "review_id": self.review_id,
+            "status": "READY_FOR_NEW_REVIEW",
+            "head_sha": self.delivery.head_sha,
+            "critical_outcome": payload["critical_outcome"],
+            "validation": payload["validation"],
+            "checks": payload["checks"],
+            "effects": payload["effects"],
+            "final_state": payload["final_state"],
+            "human_boundary": (
+                "STOP — a new Independent Review must be started explicitly in a fresh invocation"
+            ),
+            "automatic_review": False,
+        }
+
+
+class RemediationCompleter:
+    """Reuse Task-2 Delivery effects for one explicitly started repair."""
+
+    def __init__(
+        self,
+        resolver: LiveStateResolver,
+        *,
+        eligibility: PhaseEligibilityResolver | None = None,
+        store: ReviewInvocationStore | None = None,
+        checks_gate: DeliveryChecksGate | None = None,
+    ) -> None:
+        self.resolver = resolver
+        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.store = store or ReviewInvocationStore(resolver.repo_root)
+        self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
+
+    def complete(
+        self,
+        task_number: int,
+        review_id: str,
+        *,
+        commit_message: str,
+        summary: str,
+        risks: str = "",
+    ) -> RemediationCompletionResult:
+        if self.store.read_review_required(task_number) is not None:
+            raise LckStopError(
+                "Remediation STOP: a fresh Independent Review is required after the previous remediation"
+            )
+        record = _failed_review_record(self.store, task_number, review_id)
+        reviewed_identity = _identity_from_mapping(
+            cast(Mapping[str, Any], record["identity"])
+        )
+        state = self.resolver.resolve(task_number)
+        decision = self.eligibility.resolve(state, Phase.REMEDIATION_COMPLETE)
+        if not decision.eligible:
+            raise LckStopError(
+                f"Remediation Complete STOP for Task #{task_number}: "
+                + "; ".join(decision.reasons)
+            )
+        if (
+            state.git.get("clean") is True
+            and state.local_task_head == reviewed_identity.head_sha
+        ):
+            raise LckStopError(
+                "Remediation Complete requires a repaired head or uncommitted repair changes"
+            )
+
+        # Initial Delivery already owns the bounded validate/commit/push/check
+        # mechanics.  Remediation deliberately reuses those effects while
+        # replacing PR create/resolve with a strict existing-PR postcondition.
+        delivery = DeliveryCompleter(
+            self.resolver,
+            pr_effect=cast(Any, ReuseExistingOpenPrEffect(self.resolver)),
+            checks_gate=self.checks_gate,
+            require_existing_open_pr=True,
+        ).complete(
+            task_number,
+            commit_message=commit_message,
+            summary=summary,
+            risks=risks,
+        )
+        if delivery.head_sha == reviewed_identity.head_sha:
+            raise LckStopError(
+                "Remediation Complete did not produce a new head; fresh Review boundary cannot advance"
+            )
+        self.store.write_review_required(task_number, review_id, delivery.head_sha)
+        return RemediationCompletionResult(
+            task_number=task_number,
+            review_id=review_id,
+            delivery=delivery,
+        )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="LCK v1 live state operations")
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
@@ -1766,6 +3059,33 @@ def _build_parser() -> argparse.ArgumentParser:
     complete.add_argument("--summary", required=True)
     complete.add_argument("--risks", default="")
     complete.add_argument("--check-timeout-seconds", type=float, default=600.0)
+
+    review = commands.add_parser("review")
+    review_commands = review.add_subparsers(dest="review_command", required=True)
+    review_prepare = review_commands.add_parser("prepare")
+    review_prepare.add_argument("task", type=int)
+    review_complete = review_commands.add_parser("complete")
+    review_complete.add_argument("task", type=int)
+    review_complete.add_argument("--review-id", required=True)
+    review_complete.add_argument("--verdict", required=True, choices=("PASS", "FAIL"))
+    review_complete.add_argument("--findings-file", type=Path)
+
+    remediation = commands.add_parser("remediation")
+    remediation_commands = remediation.add_subparsers(
+        dest="remediation_command", required=True
+    )
+    remediation_prepare = remediation_commands.add_parser("prepare")
+    remediation_prepare.add_argument("task", type=int)
+    remediation_prepare.add_argument("--review-id", required=True)
+    remediation_complete = remediation_commands.add_parser("complete")
+    remediation_complete.add_argument("task", type=int)
+    remediation_complete.add_argument("--review-id", required=True)
+    remediation_complete.add_argument("--commit-message", required=True)
+    remediation_complete.add_argument("--summary", required=True)
+    remediation_complete.add_argument("--risks", default="")
+    remediation_complete.add_argument(
+        "--check-timeout-seconds", type=float, default=600.0
+    )
     return parser
 
 
@@ -1780,11 +3100,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             state = resolver.resolve(args.task)
             print_json(state.to_dict(), pretty=True)
             return 0 if state.status is ResolutionStatus.RESOLVED else 2
-        if args.delivery_command == "prepare":
+        if args.command == "delivery" and args.delivery_command == "prepare":
             context = DeliveryPreparer(resolver).prepare(args.task)
             print_json(context.to_dict(), pretty=True)
             return 0
-        if args.delivery_command == "complete":
+        if args.command == "delivery" and args.delivery_command == "complete":
             result = DeliveryCompleter(
                 resolver,
                 checks_gate=DeliveryChecksGate(
@@ -1798,7 +3118,47 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print_json(result.to_dict(), pretty=True)
             return 0
+        if args.command == "review" and args.review_command == "prepare":
+            context = ReviewPreparer(resolver).prepare(args.task)
+            print_json(context.to_dict(), pretty=True)
+            return 0
+        if args.command == "review" and args.review_command == "complete":
+            result = ReviewCompleter(resolver).complete(
+                args.task,
+                args.review_id,
+                verdict=args.verdict,
+                findings_file=args.findings_file,
+            )
+            print_json(result.to_dict(), pretty=True)
+            return 0
+        if args.command == "remediation" and args.remediation_command == "prepare":
+            context = RemediationPreparer(resolver).prepare(args.task, args.review_id)
+            print_json(context.to_dict(), pretty=True)
+            return 0
+        if args.command == "remediation" and args.remediation_command == "complete":
+            result = RemediationCompleter(
+                resolver,
+                checks_gate=DeliveryChecksGate(
+                    resolver, timeout_seconds=args.check_timeout_seconds
+                ),
+            ).complete(
+                args.task,
+                args.review_id,
+                commit_message=args.commit_message,
+                summary=args.summary,
+                risks=args.risks,
+            )
+            print_json(result.to_dict(), pretty=True)
+            return 0
         raise LckStopError("unsupported LCK command")
+    except ReviewStaleError as exc:
+        print(
+            json.dumps(
+                {"status": "stale", "code": exc.code, "error": str(exc)},
+                ensure_ascii=False,
+            )
+        )
+        return 3
     except WorkflowToolError as exc:
         print(json.dumps({"status": "stop", "error": str(exc)}, ensure_ascii=False))
         return 2

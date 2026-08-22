@@ -3,43 +3,52 @@
 ## Responsibilities
 
 ```text
-Skill       authorization, phases, semantic judgment, findings, verdict
-Evidence    deterministic current Git/GitHub facts and stability snapshots
+LCK         lifecycle control and current mechanical authority for migrated phases
+Skill       semantic procedure, judgment, findings, and human-facing report
+Evidence    deterministic compatibility/audit facts for non-migrated or historical paths
 Validation  deterministic command plans, exit codes, and bounded diagnostics
-Maintainer  manual Merge and Feature closeout
+Maintainer  explicit remediation start, manual Merge, and Feature closeout
 ```
 
 Evidence and Validation never authorize repository or GitHub writes and never
-replace semantic correctness review.
+replace semantic correctness review. For migrated Delivery / Review / Remediation
+phases, LCK reacquires the current mechanical facts itself; persisted Evidence
+snapshots and cross-phase handoffs are not lifecycle authority.
 
 ## Current front doors
 
-Runner Skills use the current repository entries directly:
+Migrated lifecycle phases enter through LCK:
+
+```text
+tools/agent_workflow/lck.py delivery prepare|complete
+tools/agent_workflow/lck.py review prepare|complete
+tools/agent_workflow/lck.py remediation prepare|complete
+```
+
+The Evidence / Validation Runners remain current for non-migrated phases and
+for bounded deterministic validation internals:
 
 ```text
 tools/agent_workflow/wsl2_github_evidence_runner.py
 tools/agent_workflow/wsl2_validation_runner.py
 ```
 
-The implementation CLIs are Runner internals:
+Their implementation CLIs are Runner/LCK internals, not alternate Skill write routes:
 
 ```text
 tools/agent_workflow/workflow_evidence.py
 tools/agent_workflow/workflow_validation.py
 ```
 
-For each phase, the named Runner is the single mechanical source. Do not run its
-implementation CLI or a second equivalent Git/`gh`/`uv` chain after a valid
-result.
-
-| Workflow phase | Evidence profile | Validation profile |
+| Workflow phase | Current mechanical front door | Validation |
 | --- | --- | --- |
-| Runner Delivery preflight | `delivery` | named `targeted*` only when useful |
-| Runner Delivery final | `delivery-readiness` | `workflow-delivery --base-sha <base>` |
-| Independent Runner Review | `review`, then `recheck` | `workflow-review --base-sha <base>` |
+| Initial Delivery | `lck.py delivery prepare|complete` | LCK runs formal Delivery validation |
+| Independent Review | `lck.py review prepare|complete` | LCK runs formal Review validation on the live-resolved head |
+| Explicit Remediation | `lck.py remediation prepare|complete` | LCK reuses migrated Delivery validation/effects |
 | Closeout | `closeout-readonly`, then `recheck` | `workflow-closeout --base-sha <PR base>` |
 
-Validation is not reused across Delivery, Review, and Closeout. A targeted
+The old Evidence `review` / `recheck` path remains historical compatibility only;
+it must not select or authorize the current Review target. A targeted validation
 profile is not CI-equivalent.
 
 ## Execution identity
@@ -57,9 +66,10 @@ Every result artifact records, when applicable:
 - repository head and clean/dirty state;
 - Task, PR, base/head/effective-diff, audited-main, or merge identities.
 
-Content identity is reproducibility evidence, not a source hierarchy. Final
-Delivery and Review validation bind a clean committed current head. Object SHA
-locks remain mandatory even though control-plane version locks do not.
+Content identity is reproducibility evidence, not a source hierarchy. LCK binds
+formal Delivery / Review validation to the current invocation target. Review
+head/base applicability is invocation-local; it is not a reusable cross-phase
+freshness contract or persisted authorization token.
 
 When a PR changes Skills, Runners, Rules, profiles, or workflow governance, an
 independent Review directly evaluates those changes, tests, permissions, and
@@ -113,7 +123,7 @@ absolute paths.
 
 ## Evidence contract
 
-The Evidence Runner supports:
+The Evidence Runner still supports its historical profiles:
 
 ```text
 delivery
@@ -124,9 +134,11 @@ closeout-readonly
 recheck
 ```
 
-It validates complete argv, repository identity, fixed queries, and fixed
-read-only Git operations. It accepts no arbitrary repository, API path, raw
-`gh`/Git argv, shell string, output path, or cwd.
+After the LCK cutover, `review` / `recheck` are compatibility and audit tools,
+not the formal Independent Review selector or freshness authority. The Runner
+validates complete argv, repository identity, fixed queries, and fixed read-only
+Git operations. It accepts no arbitrary repository, API path, raw `gh`/Git argv,
+shell string, output path, or cwd.
 
 Snapshots contain bounded normalized facts, explicit `pass`/`fail`/`unknown`
 gates, operation counts, truncation state, content identities, snapshot ID, and
@@ -159,8 +171,10 @@ workflow-closeout --base-sha <PR base>
 ```
 
 Workflow profiles run the current CI-equivalent plan and all repository Skill
-validators. Delivery and Review require a clean committed worktree.
-`workflow-closeout` additionally requires clean local `main == origin/main`.
+validators. LCK invokes formal Review validation inside the isolated exact-head
+Review worktree before sealing implementation files read-only; the profile result
+is invocation evidence, not a cross-phase snapshot. `workflow-closeout` additionally
+requires clean local `main == origin/main`.
 
 Success stdout is a compact digest. Full redacted results and bounded failure
 diagnostics remain in the ignored validation directory.
@@ -179,17 +193,17 @@ Preflight pass returns `disposition.workflow_may_continue = true` and
 all write operations, auto-remediation, state modification, and re-invocation
 of the same profile to obtain `pass`.
 
-The `worktree_state_compatible` gate evaluates worktree cleanliness per
-entry point. `delivery-start` and `implementation` may accept a dirty
-worktree with Task-owned changes; `final-validation`, `pr-readiness`, and
-`review-remediation` require a clean committed head.
+The `worktree_state_compatible` gate evaluates worktree cleanliness for the
+legacy Evidence Runner entry points. `delivery-start` and `implementation` may
+accept a dirty worktree with Task-owned changes; `final-validation` and
+`pr-readiness` require a clean committed head.
 
-For `review-remediation`, a GitHub submitted Review is **not** canonical
-admission evidence. Independent Review is strictly read-only and returns a
-bounded remediation handoff to the Delivery Skill. The Runner mechanically
-locks the open PR plus expected base/head identity and head fixability; the
-Delivery Skill is responsible for validating the supplied handoff. Any new
-commit invalidates the prior Review and requires a fresh independent re-review.
+`review-remediation` remains implemented only as **pre-cutover compatibility /
+diagnostic behavior** for historical evidence and tests. It is not part of the
+LCK Review / Remediation lifecycle and MUST NOT authorize a current repair from
+an expected base/head or bounded handoff. Current remediation authority is
+`lck.py remediation prepare`, which reacquires the live Task/PR/head/base and
+uses the failed Review record only for semantic findings.
 
 ## Failure expansion
 

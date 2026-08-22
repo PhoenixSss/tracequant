@@ -245,15 +245,15 @@ def test_review_skills_independent_and_lazy_hierarchy() -> None:
     for path in SKILLS["review"].values():
         text = _flat(path)
         assert (
-            "Independently read the current Task body, PR body and effective diff"
+            "The current Task Contract, effective diff, and necessary related code are the default semantic context"
             in text
         )
         assert (
-            "Comments, Parent/Epic bodies, and other hierarchy/history are not default review input"
+            "Comments, Parent/Epic bodies, and other hierarchy or history are not default Review input"
             in text
         )
-        assert "Expansion is bounded" in text
-        assert "Do not inherit Delivery conclusions" in text
+        assert "expand only when the current Task explicitly references them" in text
+        assert "Delivery conclusions" in text and "are not evidence" in text
         assert "fresh session" in text.casefold() or "new session" in text.casefold()
         assert "read-only" in text
 
@@ -299,7 +299,7 @@ def test_feature_audit_skills_hierarchy_aware_exception() -> None:
 def test_codex_claude_retrieval_semantics_parity() -> None:
     markers = {
         "delivery": "Do not default to reading comments, complete Parent/Epic bodies",
-        "review": "hierarchy/history are not default review input",
+        "review": "hierarchy or history are not default Review input",
         "closeout": "does not default to re-reading the complete business Issue hierarchy",
         "audit": "not a leaf-Issue-first default",
     }

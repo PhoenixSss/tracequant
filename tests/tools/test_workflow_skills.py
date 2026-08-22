@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +14,21 @@ ACTIVE_SKILLS = {
     / ".agents/skills/feature-completion-audit/SKILL.md",
 }
 PATH_AUDIT = ROOT / "tools/agent_workflow/skill_path_audit.py"
+LCK_COMMAND_PREFIX = "uv run --frozen python tools/agent_workflow/lck.py"
+LCK_COMMAND_SOURCES = (
+    ACTIVE_SKILLS["task-delivery-runner"],
+    ACTIVE_SKILLS["task-pr-review-runner"],
+    ROOT / ".claude/skills/task-delivery-runner/SKILL.md",
+    ROOT / ".claude/skills/task-pr-review-runner/SKILL.md",
+    ROOT / "docs/development/pr-review.md",
+)
+
+
+def _dual_skill(name: str) -> tuple[str, str]:
+    return (
+        (ROOT / ".agents/skills" / name / "SKILL.md").read_text(encoding="utf-8"),
+        (ROOT / ".claude/skills" / name / "SKILL.md").read_text(encoding="utf-8"),
+    )
 
 
 def test_current_runner_skills_use_one_mechanical_path() -> None:
@@ -34,37 +48,61 @@ def test_current_runner_skills_use_one_mechanical_path() -> None:
     for name, path in ACTIVE_SKILLS.items():
         text = path.read_text(encoding="utf-8")
         assert f"name: {name}" in text
-        assert ".agents/policies/workflow-evidence.md" in text
         assert len(text) < 28_000
         assert len(text.splitlines()) < 550
         for fragment in forbidden:
             assert fragment not in text
         assert "telemetry" not in text.casefold()
 
+    # Review is deliberately cut over from Evidence Runner snapshot authority.
+    review = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
+    assert ".agents/policies/command-execution.md" in review
+    assert ".agents/policies/workflow-evidence.md" not in review
+    for name in ("task-delivery-runner", "task-closeout", "feature-completion-audit"):
+        assert ".agents/policies/workflow-evidence.md" in ACTIVE_SKILLS[name].read_text(
+            encoding="utf-8"
+        )
 
-def test_delivery_runner_uses_lck_for_initial_delivery_and_keeps_remediation() -> None:
+
+def test_lck_commands_use_the_pinned_project_python() -> None:
+    for path in LCK_COMMAND_SOURCES:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "tools/agent_workflow/lck.py" in line:
+                assert line.strip().startswith(LCK_COMMAND_PREFIX), (
+                    f"{path} contains a non-canonical LCK launcher: {line!r}"
+                )
+
+    profile = (ROOT / ".agents/execution-profile.example.toml").read_text(
+        encoding="utf-8"
+    )
+    assert 'executable = "python"' not in profile
+    assert 'name = "uv-toolchain"' in profile
+
+
+def test_delivery_runner_uses_lck_for_initial_delivery_and_explicit_remediation() -> (
+    None
+):
     text = ACTIVE_SKILLS["task-delivery-runner"].read_text(encoding="utf-8")
     assert "tools/agent_workflow/lck.py delivery prepare" in text
     assert "tools/agent_workflow/lck.py delivery complete" in text
     assert "Critical Outcome" in text
     assert "READY_FOR_REVIEW" in text
     assert "Agent / Skill MUST NOT directly" in text
-    assert "branch, remote, SHA, base SHA, PR number, or refspec" in text
+    assert "branch/SHA/base/PR identity as workflow authority" in text
     assert "no alternate write route" in text
+
     assert "## Review remediation" in text
-    assert "reviewed head SHA" in text
-    assert "workflow-delivery" in text
-    assert "delivery-readiness" in text
-    assert "new commit" in text and "fresh independent review" in text
+    assert "tools/agent_workflow/lck.py remediation prepare" in text
+    assert "tools/agent_workflow/lck.py remediation complete" in text
+    assert "semantic findings" in text
+    assert "mechanical facts from the Review" in text
+    assert "reuse existing OPEN PR" in text
+    assert "READY_FOR_NEW_REVIEW" in text
+    assert "MUST NOT start\nIndependent Review automatically" in text
 
 
-def test_initial_delivery_lck_contract_is_shared_by_both_skills() -> None:
-    agent = (ROOT / ".agents/skills/task-delivery-runner/SKILL.md").read_text(
-        encoding="utf-8"
-    )
-    claude = (ROOT / ".claude/skills/task-delivery-runner/SKILL.md").read_text(
-        encoding="utf-8"
-    )
+def test_delivery_lck_contract_is_shared_by_both_skills() -> None:
+    agent, claude = _dual_skill("task-delivery-runner")
     assert agent == claude
     for phrase in (
         "LCK Delivery Prepare",
@@ -73,6 +111,9 @@ def test_initial_delivery_lck_contract_is_shared_by_both_skills() -> None:
         "ensure_remote_branch",
         "ensure_open_pr",
         "READY_FOR_REVIEW",
+        "LCK Remediation Prepare",
+        "LCK Remediation Complete",
+        "READY_FOR_NEW_REVIEW",
         "The Skill is a semantic procedure",
     ):
         assert phrase in agent
@@ -81,20 +122,71 @@ def test_initial_delivery_lck_contract_is_shared_by_both_skills() -> None:
     assert "--bootstrap-verify" not in agent
 
 
-def test_review_runner_is_read_only_and_emits_bounded_remediation_handoff() -> None:
+def test_review_runner_is_fresh_read_only_lck_review() -> None:
+    agent, claude = _dual_skill("task-pr-review-runner")
+    assert agent == claude
+    text = agent
+    for phrase in (
+        "fresh session",
+        "implementation-read-only",
+        "tools/agent_workflow/lck.py review prepare",
+        "READY_FOR_SEMANTIC_REVIEW",
+        "Inspect",
+        "Reason",
+        "Judge",
+        "Report",
+        "tools/agent_workflow/lck.py review complete",
+        "REVIEW_STALE_HEAD",
+        "REVIEW_STALE_BASE",
+        "READY_FOR_HUMAN_MERGE",
+        "STOP_REQUIRED",
+        "通过，可以人工合并",
+        "不通过，需要修复",
+    ):
+        assert phrase in text
+    assert "do not start Remediation" in text
+    assert "Task Contract" in text
+    assert "complete effective diff" in text
+
+
+def test_review_runner_does_not_restore_pre_cutover_authority() -> None:
     text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
-    assert "workflow-review" in text
-    assert "recheck --snapshot-id" in text
-    assert "通过，可以人工合并" in text
-    assert "有条件通过，不得合并" in text
-    assert "不通过，需要修复" in text
-    assert "new session" in text.casefold()
-    assert "strictly read-only" in text
-    assert "## Remediation handoff" in text
-    assert "Required remediation:" in text
-    assert "Objective gates:" in text
-    assert "Maintainer decision required:" in text
-    assert "task-delivery-runner 修复" in text
+    for forbidden in (
+        "workflow-review",
+        "recheck --snapshot-id",
+        "--expected-head-sha",
+        "--expected-base-sha",
+        "有条件通过，不得合并",
+        "Remediation handoff",
+        "Reviewed head SHA:",
+        "Objective gates:",
+        "Maintainer decision required:",
+    ):
+        assert forbidden not in text
+    assert "Delivery handoff" in text
+    assert "MUST NOT pass PR/base/head/checks/snapshot" in text
+    assert "do not fall back to Evidence Runner snapshots" in text
+
+
+def test_review_fail_stops_and_never_auto_starts_remediation() -> None:
+    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
+    assert "FAIL" in text
+    assert "STOP_REQUIRED" in text
+    assert "maintainer may explicitly use for\nRemediation" in text
+    assert "Do not emit an automatic" in text and "Delivery prompt" in text
+    assert "do not start Remediation" in text
+
+
+def test_review_skill_keeps_semantic_coverage_without_mechanical_handoff_matrix() -> (
+    None
+):
+    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
+    assert "AC\ncoverage/evidence matrix" in text
+    assert "complete effective diff" in text
+    assert "Check correctness, failure" in text
+    assert "behavior, tests, docs/config/public interfaces" in text
+    assert "Historical Skill matches source commit blob" not in text
+    assert "All target Skills are canonical-state" not in text
 
 
 def test_closeout_and_feature_audit_keep_manual_gates() -> None:
@@ -112,7 +204,7 @@ def test_closeout_and_feature_audit_keep_manual_gates() -> None:
     assert "performs none" in audit
 
 
-def test_active_skills_have_bounded_failure_contract_without_evolution_traces() -> None:
+def test_active_skills_have_no_evolution_traces() -> None:
     forbidden_traces = (
         "trusted_runner.py",
         "--trusted-sha",
@@ -127,9 +219,6 @@ def test_active_skills_have_bounded_failure_contract_without_evolution_traces() 
     )
     for path in ACTIVE_SKILLS.values():
         text = path.read_text(encoding="utf-8").casefold()
-        assert "partial" in text
-        assert "unknown" in text
-        assert "bounded" in text or "only the named" in text
         for trace in forbidden_traces:
             assert trace not in text
 
@@ -145,6 +234,7 @@ def test_path_audit_reports_only_clean_current_skills() -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     value = json.loads(result.stdout)
+    assert value["schema_version"] == 5
     assert value["status"] == "pass"
     assert value["totals"]["direct_command_path_count"] == 0
     assert value["totals"]["evolution_trace_count"] == 0
@@ -159,7 +249,7 @@ def test_legacy_skill_directories_are_absent() -> None:
         assert not (ROOT / relative).exists(), relative
 
 
-def test_local_workflow_artifact_directories_are_exactly_ignored() -> None:
+def test_local_workflow_artifact_directories_are_ignored() -> None:
     patterns = {
         line.strip()
         for line in (ROOT / ".gitignore").read_text(encoding="utf-8-sig").splitlines()
@@ -167,149 +257,4 @@ def test_local_workflow_artifact_directories_are_exactly_ignored() -> None:
     }
     assert ".agents/evidence.local/" in patterns
     assert ".agents/validation.local/" in patterns
-
-
-# --- Evidence verdict matrix tests ---
-
-
-def test_review_skill_has_shared_owner_contract_and_exact_tokens() -> None:
-    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
-    # Shared semantic owner referenced for verdict and remediation conditions.
-    assert "docs/development/pr-review.md" in text
-    assert "§8" in text
-    assert "§9" in text
-    # Exact executable verdict output tokens are retained.
-    assert "通过，可以人工合并" in text
-    assert "有条件通过，不得合并" in text
-    assert "不通过，需要修复" in text
-    # Head-change invalidation retained as a hard guard.
-    assert "REVIEW INVALIDATED — HEAD CHANGED" in text
-    # Executable procedure retained.
-    assert "workflow-review" in text
-    assert "recheck --snapshot-id" in text
-    # The full shared verdict mapping table is no longer duplicated in the Skill.
-    assert "### Deterministic mapping" not in text
-    assert "| Evidence `status` | Permitted verdict ceiling |" not in text
-
-
-def test_review_skill_requires_remediation_handoff_for_non_pass() -> None:
-    for path in (
-        ROOT / ".agents/skills/task-pr-review-runner/SKILL.md",
-        ROOT / ".claude/skills/task-pr-review-runner/SKILL.md",
-    ):
-        text = path.read_text(encoding="utf-8")
-        section = text[
-            text.index("## Remediation handoff") : text.index(
-                "## Report and recovery", text.index("## Remediation handoff")
-            )
-        ]
-        match = re.search(
-            r"^```text\n(?P<body>.*?)\n```$", section, re.MULTILINE | re.DOTALL
-        )
-        assert match is not None
-        body = match.group("body")
-        assert len(re.findall(r"^## Remediation handoff$", section, re.MULTILINE)) == 1
-        assert len(re.findall(r"^```text$", section, re.MULTILINE)) == 1
-        assert body.startswith("请按 task-delivery-runner 修复\n")
-        for field in (
-            "Task:",
-            "PR:",
-            "Reviewed head SHA:",
-            "Verdict:",
-            "Required remediation:",
-            "Objective gates:",
-            "Maintainer decision required:",
-        ):
-            assert field in body
-        for forbidden in ("上述", "同上", "见前文"):
-            assert forbidden not in body
-        assert "Review remediation handoff:" not in section
-        assert "<上述 remediation handoff>" not in section
-        assert body.count("[F1]") == 1
-        assert "exactly one final" in section
-        assert "duplicate" in section
-        assert "A passing verdict does not emit a remediation handoff." in section
-        assert "A passing verdict emits no remediation\nsection." in section
-
-
-def test_review_skill_has_semantic_review_evidence_matrix() -> None:
-    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
-    assert "evidence matrix" in text.casefold()
-    assert "changed_file_groups" in text
-    assert "acceptance_criteria" in text
-    assert "effective_diff_sha256" in text
-    assert "overall" in text
-    assert "verified | partial | not_verified" in text
-
-
-def test_review_skill_requires_file_coverage_completeness() -> None:
-    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
-    assert "changed file" in text.casefold()
-    assert "one group" in text
-    assert "not covered" in text.casefold()
-
-
-def test_review_skill_has_mechanical_assertions_table() -> None:
-    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
-    assert "Mechanical assertions" in text
-    assert "Historical Skill matches source commit blob" in text
-    assert "All target Skills are canonical-state" in text
-    assert "byte-for-byte" in text.casefold()
-    assert "must not be enlarged" in text
-
-
-def test_review_skill_has_tool_discipline_section() -> None:
-    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
-    assert "## Tool discipline" in text
-    assert "File existence" in text
-    assert "Tool availability" in text
-    assert "Runner result independence" in text
-    assert "Search completeness" in text
-
-
-def test_review_skill_has_minimal_verdict_summary_without_duplicated_rules() -> None:
-    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
-    # Minimal semantic summary with authoritative reference, not a full rule set.
-    assert "pr-review.md" in text
-    assert "PASS is the only mergeable state" in text
-    assert "CONDITIONAL is never mergeable" in text
-    assert "### Verdict rules" not in text
-
-
-def test_review_skill_runner_command_includes_skill_path() -> None:
-    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
-    assert "--skill-path" in text
-    assert ".claude/skills/task-pr-review-runner/SKILL.md" in text
-
-
-def test_claude_skill_differs_from_agents_skill_only_in_execution_details() -> None:
-    """Both Skills share business semantics; only platform execution differs."""
-    claude_text = (ROOT / ".claude/skills/task-pr-review-runner/SKILL.md").read_text(
-        encoding="utf-8"
-    )
-    agents_text = (ROOT / ".agents/skills/task-pr-review-runner/SKILL.md").read_text(
-        encoding="utf-8"
-    )
-    # Both have the same verdict structure
-    for phrase in (
-        "通过，可以人工合并",
-        "有条件通过，不得合并",
-        "不通过，需要修复",
-        "Remediation handoff",
-        "Required remediation:",
-        "Objective gates:",
-        "Maintainer decision required:",
-        "evidence matrix",
-        "changed_file_groups",
-        "acceptance_criteria",
-        "Conditional pass",
-    ):
-        assert phrase in claude_text
-        assert phrase in agents_text
-    # Both prohibit upgrading partial/unknown to unconditional pass
-    assert "never" in claude_text.casefold()
-    assert "never" in agents_text.casefold()
-    # Claude Skill references .claude paths
-    assert ".claude/skills/task-pr-review-runner/SKILL.md" in claude_text
-    # Agents Skill references .agents paths
-    assert ".agents/skills/task-pr-review-runner/SKILL.md" in agents_text
+    assert ".workflow.local/" in patterns

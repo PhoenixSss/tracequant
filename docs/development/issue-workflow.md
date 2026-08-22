@@ -161,11 +161,12 @@ override remains supported.
 
 shared semantics 由 `docs/development/pr-review.md` 权威定义：
 fresh session、strict read-only、head lock、independent judgement、
-no Delivery verdict inheritance、verdict semantics、remediation handoff、
-new head → fresh re-review。
+no Delivery mechanical authority inheritance、LCK live target resolution、
+invocation-local stale guard、PASS / FAIL、new head → fresh re-review。
 
 本文件只声明其在 lifecycle 中的位置：Review 在 CI checks 通过后、
-maintainer merge 前执行；review 未通过时进入 remediation（§10）。
+maintainer merge 前执行；Review FAIL 必须先 STOP，只有 Human 显式发起后
+才进入 remediation（§10）。
 
 ## 9. Human Gate
 
@@ -184,9 +185,14 @@ Issue comments（Retrieval v2 comments default-off 仍适用）。
 
 ## 10. Remediation after failed Review
 
-- Review 非 passing 时输出 bounded remediation handoff（仅包含修复所需
-  的最小信息）。
-- Delivery Skill 按 handoff 修复，产生 new head。
+- Review FAIL → LCK 返回 `STOP_REQUIRED`，不得自动启动修复。
+- Human 显式提供当前 Task 最新 completed FAIL 的 `review_id` 启动 remediation；
+  Review record 中只有 findings 可作为 semantic input，current PR/head/base 必须由
+  LCK live reacquire。
+- Implementation Agent 修复后由 LCK 完成 validation / commit / push / existing
+  PR reuse，产生 new head，并在 `READY_FOR_NEW_REVIEW` 再次 STOP。
+- successful remediation 设置 `fresh-review-required` negative boundary；在新的 Review
+  verdict 被接受前不得再次 remediation。该 boundary 不携带 target authorization。
 - 任何新 commit 都需要 **fresh independent re-review**；不得复用旧 verdict。
 
 ## 11. Manual Squash Merge boundary
@@ -202,8 +208,9 @@ Issue comments（Retrieval v2 comments default-off 仍适用）。
 | Specification ambiguity | 按 expansion trigger 顺序展开 → 仍不 resolve → **Human Gate**，绝不猜测 |
 | Conflict（body / parent / ADR / 实现） | **fail closed**；无法安全定位 → Human Gate |
 | Missing dependency | native relationship / 最小相关源 → unresolved → Human Gate |
-| Review failure | bounded remediation handoff → new head → fresh re-review |
-| Head changed during Review | **invalidate review**，重新锁定后重审 |
+| Review failure | `STOP_REQUIRED` → Human explicit remediation → new head → fresh re-review |
+| Head changed during Review | `REVIEW_STALE_HEAD`，本次 verdict 无效并重新 Review |
+| Relevant base changed during Review | `REVIEW_STALE_BASE`，本次 verdict 无效并重新 Review |
 | Merge head ≠ reviewed head | **block closeout**，人工介入 |
 | NL entry 无法解析 | explicit Skill-name fallback / Human Gate |
 
