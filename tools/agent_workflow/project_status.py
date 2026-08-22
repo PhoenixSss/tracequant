@@ -12,8 +12,51 @@ import subprocess
 import sys
 from typing import Final
 
+from workflow_common import CommandRunner, WorkflowToolError
+
 _REPO: Final = "PhoenixSss/tracequant"
 _ISSUE_URL_PREFIX: Final = f"https://github.com/{_REPO}/issues/"
+
+
+def set_project_status_with_runner(
+    runner: CommandRunner,
+    repository: str,
+    task: int,
+    *,
+    project_number: int = 1,
+    field: str = "Status",
+    value: str = "Review",
+) -> None:
+    """Update one Task Project field through the shared deterministic runner."""
+    if task <= 0:
+        raise WorkflowToolError("Task number must be positive")
+    owner, separator, _name = repository.partition("/")
+    if not separator or not owner:
+        raise WorkflowToolError("repository must be owner/name")
+    url = f"https://github.com/{repository}/issues/{task}"
+    result = runner.run(
+        [
+            "gh",
+            "project",
+            "item-edit",
+            str(project_number),
+            "--owner",
+            owner,
+            "--url",
+            url,
+            "--field",
+            field,
+            "--value",
+            value,
+        ],
+        command_id="lck-project-status",
+    )
+    if result.returncode != 0:
+        raise WorkflowToolError(
+            f"gh project item-edit failed (exit {result.returncode}): "
+            f"task={task}, field={field!r}, value={value!r}: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
 
 
 def set_project_status(

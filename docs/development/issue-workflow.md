@@ -113,29 +113,37 @@ intent 无法可靠解析时：**不要猜**。回退到 explicit Skill-name fal
 
 ## 6. Delivery semantics
 
-- 一次 Delivery 覆盖：readiness → branch → implementation → tests →
-  targeted validation → commit → push → PR → CI checks → delivery readiness →
-  handoff for Independent Review。
+Workflow-owned `uv` processes use `.workflow.local/uv-cache`. This is local
+runtime state and the directory is Git-ignored; an explicit `UV_CACHE_DIR`
+override remains supported.
+
+- Task `Critical Outcome` 是正式 Delivery gate：LCK 从当前 Task body 读取结构化
+  contract，使用固定 pytest verifier 执行真实 supported path。缺失、malformed、unsafe
+  target 或 verifier failure 均 fail closed；不得用普通 unit/static check 替代。
+- Initial Delivery 的 lifecycle mechanics（workspace prepare、commit validated tree、
+  remote synchronization、OPEN PR resolve/create、Project Status → Review）由 LCK
+  deterministic control 执行；Agent/Skill 不提供 branch/SHA/PR/refspec authority。
+- 一次 Initial Delivery 覆盖：LCK Delivery Prepare → semantic implementation / targeted
+  development validation → LCK Delivery Complete → Critical Outcome → formal validation →
+  commit validated tree → ensure remote branch → ensure OPEN PR → CI checks → Project
+  Status `Review` → final live verification → `READY_FOR_REVIEW`。
 - 一个 Task 通常产生一个 PR（base = `main`）。
-- Initial Task branch bootstrap is a shared workflow contract: Delivery locks
-  the trusted `main`/base first, then the implementation preflight classifies
-  the target branch. An existing branch is reusable only when Task identity,
-  ownership, base, and a clean worktree are mechanically proven. A missing
-  branch is creatable
-  only when the worktree is clean, the current/local/remote `main` identities
-  equal the locked base, no local/remote/worktree conflict exists, and the
-  target uses canonical `task/<Issue number>-<slug>` naming. The Runner returns
-  the deterministic creation authorization; the Delivery Skill performs the
-  branch creation from that exact base and reruns mechanical verification
-  before implementation continues.
-- Noncanonical names such as `task-<Issue number>` are never new-branch
-  creation targets. Historical numeric forms may be reused only for an
-  existing branch whose ownership is proven. Ambiguous branch identity,
-  ownership, base, dirty bootstrap state, or post-creation drift fails closed
-  and enters Human Gate.
-- 实现只处理当前 leaf Task；不进行无关重构。
-- 提交前必须完成 target validation；PR 创建前必须完成 delivery readiness
-  验证（Runner 快照）。
+- Initial Task branch bootstrap is LCK-owned. An existing branch is reusable only when
+  Task identity, ownership, base, and the required worktree state are mechanically proven.
+  A missing branch is creatable only when current/local/remote `main` identities are
+  aligned, no local/remote/worktree conflict exists, and the target uses canonical
+  `task/<Issue number>-<slug>` naming. The Skill does not create the branch and has no
+  fallback write route.
+- Noncanonical names such as `task-<Issue number>` are never new-branch creation targets.
+  Historical numeric forms may be reused only for an existing branch whose ownership is
+  proven. Ambiguous identity or inconsistent live state fails closed.
+- 实现只处理当前 leaf Task；不进行无关重构。Targeted validation during implementation is
+  development feedback only. Final Delivery authorization is owned by LCK, which runs the
+  Critical Outcome and formal validation before committing the exact validated tree.
+- Within one `delivery complete` invocation, the observed Task body, `origin/main`, Task
+  branch and committed head are ephemeral preconditions. If they change before a later
+  side effect, LCK stops and the next invocation reacquires/revalidates current facts; no
+  cross-phase snapshot becomes authority.
 - Human Gate 事项未决时不得继续 Delivery（§9）。
 - Delivery 不执行 Independent Review、不 merge、不 close Issue、不 closeout。
 

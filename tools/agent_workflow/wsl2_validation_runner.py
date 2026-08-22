@@ -18,6 +18,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
+from workflow_common import build_workflow_env
+
 SCHEMA_VERSION: Final = 1
 RUNNER_VERSION: Final = "1.2.0"
 OUTPUT_ROOT: Final = ".agents/validation.local/wsl2-runs"
@@ -286,14 +288,13 @@ def _run_quiet(
         text=True,
         encoding="utf-8",
         errors="replace",
-        env=_command_env(),
+        env=_command_env(repo_root),
     )
 
 
-def _command_env() -> dict[str, str]:
-    env = {
-        key: value for key in ALLOWED_ENV if (value := os.environ.get(key)) is not None
-    }
+def _command_env(repo_root: Path) -> dict[str, str]:
+    inherited = build_workflow_env(repo_root)
+    env = {key: inherited[key] for key in ALLOWED_ENV if key in inherited}
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("NO_COLOR", "1")
@@ -583,7 +584,7 @@ def _run_command(
         text=True,
         encoding="utf-8",
         errors="replace",
-        env=_command_env(),
+        env=_command_env(repo_root),
         start_new_session=True,
     )
     timed_out = False

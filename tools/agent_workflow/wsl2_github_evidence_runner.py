@@ -26,6 +26,7 @@ SPEC_PATH: Final = "tools/agent_workflow/wsl2_github_evidence_profiles.json"
 RULES_PATH: Final = ".codex/rules/tracequant-wsl-evidence.rules"
 EVIDENCE_TOOL_PATH: Final = "tools/agent_workflow/workflow_evidence.py"
 COMMON_TOOL_PATH: Final = "tools/agent_workflow/workflow_common.py"
+CRITICAL_OUTCOME_TOOL_PATH: Final = "tools/agent_workflow/critical_outcome.py"
 STDIO_LIMIT_BYTES: Final = 8192
 SHA_PATTERN: Final = re.compile(r"^[0-9a-f]{40}$")
 SNAPSHOT_ID_PATTERN: Final = re.compile(r"^ev-[0-9a-f]{16}$")
@@ -95,6 +96,7 @@ IDENTITY_PATHS: Final = (
     RULES_PATH,
     EVIDENCE_TOOL_PATH,
     COMMON_TOOL_PATH,
+    CRITICAL_OUTCOME_TOOL_PATH,
 )
 ALLOWED_ENV: Final = (
     "PATH",

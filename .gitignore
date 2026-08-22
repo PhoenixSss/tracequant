@@ -61,3 +61,4 @@ desktop.ini
 # Local workflow evidence and validation output
 .agents/evidence.local/
 .agents/validation.local/
+.workflow.local/

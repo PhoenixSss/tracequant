@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 # ruff: noqa: E402, I001
-"""Local Control Kernel v1 live-state resolution and Delivery Prepare.
+"""Local Control Kernel v1 live-state resolution and Delivery control.
 
-This module is intentionally limited to the first LCK migration boundary:
-resolving current mechanical facts, evaluating phase eligibility, and preparing
-the local Task workspace.  Commit, push, PR mutation, lifecycle writes, merge,
-and closeout effects remain outside this Task.
-
-The resolver delegates Issue, relationship, Git snapshot, and PR query details
-to the existing workflow helpers.  It does not use a snapshot, expected SHA,
-or session handoff as authority.
+The resolver reacquires current Git/GitHub authority. Delivery effects are
+bounded, operation-local, and fail closed: Critical Outcome + formal validation
+bind the candidate tree before commit; only the resulting head may be pushed
+and attached to one OPEN PR. No snapshot, expected SHA, or Agent-provided
+branch/PR identity is workflow authority.
 """
 
 from __future__ import annotations
@@ -18,6 +15,8 @@ import argparse
 import json
 import re
 import sys
+import tempfile
+import time
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -28,17 +27,25 @@ from typing import Any, Final, cast
 if __name__ != "__main__" or not any(p.endswith("agent_workflow") for p in sys.path):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from critical_outcome import (
+    CriticalOutcomeError,
+    contract_from_snapshot,
+    verify_critical_outcome,
+)
 from pr_resolve import (
     PrResolveError,
     list_matching_prs,
     resolve_open_pr,
+    resolve_or_create_pr,
 )
+from project_status import set_project_status_with_runner
 from workflow_common import (
     CommandRunner,
     WorkflowToolError,
     command_warning,
     is_sha,
     print_json,
+    read_json_text,
 )
 from workflow_evidence import (
     _git_snapshot,
@@ -46,6 +53,7 @@ from workflow_evidence import (
     _normalize_checks,
     _relationship_snapshot,
     _formal_blockers_gate,
+    _required_checks,
     _repository_slug,
 )
 
@@ -61,6 +69,7 @@ class Phase(StrEnum):
     """LCK phase capabilities exposed by the v1 core."""
 
     DELIVERY_PREPARE = "Delivery Prepare"
+    DELIVERY_COMPLETE = "Delivery Complete"
     REVIEW_PREPARE = "Review Prepare"
     REMEDIATION_PREPARE = "Remediation Prepare"
     CLOSEOUT = "Closeout"
@@ -332,12 +341,9 @@ class LiveStateResolver:
                 warnings.append(command_warning(result))
                 reasons.append("local Task branch tip unavailable")
         remote_oid = remote_branches.get(target_branch)
-        if (
-            local_head is not None
-            and remote_oid is not None
-            and local_head != remote_oid
-        ):
-            reasons.append("local and remote Task branch tips differ")
+        # Tip differences are live facts, not global resolver ambiguity.
+        # Delivery Prepare rejects them; Delivery Complete may legitimately
+        # observe a local validated commit that is not pushed yet.
 
         open_pr: Mapping[str, Any] | None = None
         merged_numbers: tuple[int, ...] = ()
@@ -386,10 +392,6 @@ class LiveStateResolver:
             elif local_branch is None and remote_branch is None:
                 reasons.append("current OPEN PR has no local or remote Task branch")
             else:
-                if local_head is not None and local_head != pr_head_oid:
-                    reasons.append(
-                        "current OPEN PR head OID differs from local Task branch tip"
-                    )
                 if remote_oid is not None and remote_oid != pr_head_oid:
                     reasons.append(
                         "current OPEN PR head OID differs from remote Task branch tip"
@@ -490,12 +492,29 @@ class PhaseEligibilityResolver:
             project = issue.get("project_status")
             allowed_projects = {
                 Phase.DELIVERY_PREPARE: {"Ready", "In Progress"},
+                # A prior status write may have moved the Task to Review before
+                # a later final verification stopped.  Allow the same LCK
+                # Delivery Complete path to reacquire and safely finish that
+                # partial invocation.
+                Phase.DELIVERY_COMPLETE: {"Ready", "In Progress", "Review"},
                 Phase.REVIEW_PREPARE: {"Review", "In Progress"},
                 Phase.REMEDIATION_PREPARE: {"Review"},
                 Phase.CLOSEOUT: {"In Progress", "Review", "Done"},
             }[phase]
             if project not in allowed_projects:
                 reasons.append("Project Status is unavailable or unknown")
+            if phase in {Phase.DELIVERY_PREPARE, Phase.DELIVERY_COMPLETE}:
+                critical = issue.get("critical_outcome")
+                if (
+                    not isinstance(critical, Mapping)
+                    or critical.get("status") != "valid"
+                ):
+                    detail = (
+                        critical.get("detail")
+                        if isinstance(critical, Mapping)
+                        else "contract unavailable"
+                    )
+                    reasons.append(f"Critical Outcome contract invalid: {detail}")
 
         blocker_gate = _formal_blockers_gate(relationships)
         if blocker_gate.get("status") != "pass":
@@ -514,6 +533,12 @@ class PhaseEligibilityResolver:
             if state.local_task_head and state.remote_task_oid:
                 if state.local_task_head != state.remote_task_oid:
                     reasons.append("Task branch has divergent local and remote tips")
+            if state.open_pr is not None and state.local_task_head is not None:
+                pr_head = state.open_pr.get("headRefOid")
+                if is_sha(pr_head) and state.local_task_head != pr_head:
+                    reasons.append(
+                        "current OPEN PR head OID differs from local Task branch tip"
+                    )
             if not state.local_task_branch and not state.remote_task_branch:
                 if not _is_clean_current_main(state.git):
                     reasons.append(
@@ -521,6 +546,27 @@ class PhaseEligibilityResolver:
                         "HEAD == local main == origin/main"
                     )
             capabilities = ("prepare_task_workspace",)
+        elif phase is Phase.DELIVERY_COMPLETE:
+            if state.merged is True:
+                reasons.append("Task already has a merged PR")
+            if state.local_task_branch is None:
+                reasons.append("Delivery Complete requires a local Task branch")
+            if state.git.get("branch") != state.target_branch:
+                reasons.append(
+                    "Delivery Complete requires the resolved Task branch selected"
+                )
+            if not is_sha(state.local_task_head):
+                reasons.append("Delivery Complete requires a current local Task head")
+            if state.open_pr is not None and state.open_pr.get("isDraft") is not False:
+                reasons.append("Delivery Complete cannot continue with a Draft OPEN PR")
+            capabilities = (
+                "verify_critical_outcome",
+                "run_formal_validation",
+                "commit_current_tree",
+                "ensure_remote_branch",
+                "ensure_open_pr",
+                "set_review_status",
+            )
         elif phase is Phase.REVIEW_PREPARE:
             if state.open_pr is None:
                 reasons.append("no current OPEN PR")
@@ -675,6 +721,1032 @@ class DeliveryPreparer:
         )
 
 
+@dataclass(frozen=True)
+class EffectReceipt:
+    effect: str
+    action: str
+    details: Mapping[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "effect": self.effect,
+            "action": self.action,
+            "details": _jsonable(self.details),
+        }
+
+
+class FormalValidationGate:
+    """Run the repository-owned deterministic Delivery validation plan."""
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+
+    def run(self, base_sha: str) -> dict[str, Any]:
+        if not is_sha(base_sha):
+            raise LckStopError("formal validation base SHA is unavailable")
+        tool = (
+            self.resolver.repo_root
+            / "tools"
+            / "agent_workflow"
+            / "workflow_validation.py"
+        )
+        result = self.resolver.runner.run(
+            [
+                sys.executable,
+                str(tool),
+                "run",
+                "--repo-root",
+                str(self.resolver.repo_root),
+                "--phase",
+                "delivery",
+                "--base-sha",
+                base_sha,
+                "--include-skill-validators",
+                "--require-skill-validator",
+            ],
+            command_id="lck-formal-delivery-validation",
+            validation=True,
+        )
+        if not result.stdout.strip():
+            raise LckStopError(
+                "formal Delivery validation produced no structured result: "
+                + (result.stderr.strip() or f"exit {result.returncode}")
+            )
+        try:
+            payload = read_json_text(
+                result.stdout, field="lck-formal-delivery-validation"
+            )
+        except WorkflowToolError as exc:
+            raise LckStopError(str(exc)) from exc
+        if not isinstance(payload, dict):
+            raise LckStopError("formal Delivery validation result is not an object")
+        if result.returncode != 0 or payload.get("status") != "pass":
+            raise LckStopError(
+                "formal Delivery validation failed: "
+                + str(payload.get("status") or result.returncode)
+            )
+        return payload
+
+
+class CommitCurrentTreeEffect:
+    """Commit exactly the staged tree that passed Critical Outcome + validation."""
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+
+    def _run(self, argv: Sequence[str], command_id: str) -> Any:
+        result = self.resolver.runner.run(argv, command_id=command_id)
+        if result.returncode != 0:
+            raise LckStopError(
+                f"{command_id} failed with exit code {result.returncode}: "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        return result
+
+    def stage_candidate_tree(self) -> str:
+        status = self._run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            "lck-delivery-status-before-stage",
+        )
+        if not status.stdout.strip():
+            raise LckStopError("Delivery Complete found no uncommitted Task changes")
+        self._run(["git", "add", "-A", "--", ":/"], "lck-stage-current-tree")
+        cached = self.resolver.runner.run(
+            ["git", "diff", "--cached", "--quiet"],
+            command_id="lck-staged-diff-present",
+        )
+        if cached.returncode == 0:
+            raise LckStopError("Delivery candidate contains no staged changes")
+        if cached.returncode not in {0, 1}:
+            raise LckStopError("unable to determine staged Delivery diff")
+        check = self.resolver.runner.run(
+            ["git", "diff", "--cached", "--check"],
+            command_id="lck-staged-diff-check",
+        )
+        if check.returncode != 0:
+            raise LckStopError(
+                "staged Delivery diff failed git diff --check: "
+                + (check.stderr.strip() or check.stdout.strip())
+            )
+        tree = self._run(
+            ["git", "write-tree"], "lck-write-candidate-tree"
+        ).stdout.strip()
+        if not is_sha(tree):
+            raise LckStopError("candidate tree OID is unavailable")
+        return tree
+
+    def current_head_tree(self) -> str:
+        tree = self._run(
+            ["git", "rev-parse", "HEAD^{tree}"],
+            "lck-current-head-tree",
+        ).stdout.strip()
+        if not is_sha(tree):
+            raise LckStopError("current HEAD tree OID is unavailable")
+        return tree
+
+    def verify_tree_unchanged(
+        self,
+        expected_tree: str,
+        *,
+        expected_head_sha: str | None = None,
+    ) -> None:
+        unstaged = self.resolver.runner.run(
+            ["git", "diff", "--quiet"],
+            command_id="lck-post-validation-unstaged-check",
+        )
+        if unstaged.returncode != 0:
+            if unstaged.returncode == 1:
+                raise LckStopError("working tree changed during formal validation")
+            raise LckStopError("unable to verify post-validation working tree")
+        status = self._run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            "lck-post-validation-status",
+        )
+        # Staged entries are expected. Any untracked/unstaged entry makes status
+        # contain a line not represented by the staged tree; git diff --quiet
+        # already rejects tracked unstaged changes, and untracked paths start '??'.
+        if any(line.startswith("??") for line in status.stdout.splitlines()):
+            raise LckStopError("untracked files appeared during formal validation")
+        current_tree = self._run(
+            ["git", "write-tree"], "lck-write-tree-post-validation"
+        ).stdout.strip()
+        if current_tree != expected_tree:
+            raise LckStopError("validated candidate tree changed before commit")
+        if expected_head_sha is not None:
+            current_head = self._run(
+                ["git", "rev-parse", "HEAD"],
+                "lck-post-validation-head",
+            ).stdout.strip()
+            if current_head != expected_head_sha:
+                raise LckStopError("local Task HEAD changed during formal validation")
+
+    def execute(
+        self,
+        expected_tree: str,
+        message: str,
+        *,
+        expected_parent_sha: str | None = None,
+    ) -> EffectReceipt:
+        if not message.strip() or "\x00" in message or len(message) > 240:
+            raise LckStopError("commit message must be non-empty and <= 240 characters")
+        current_tree = self._run(
+            ["git", "write-tree"], "lck-write-tree-pre-commit"
+        ).stdout.strip()
+        if current_tree != expected_tree:
+            raise LckStopError(
+                "commit precondition failed: staged tree is not validated tree"
+            )
+        if expected_parent_sha is not None:
+            current_parent = self._run(
+                ["git", "rev-parse", "HEAD"],
+                "lck-commit-parent-head",
+            ).stdout.strip()
+            if current_parent != expected_parent_sha:
+                raise LckStopError(
+                    "commit precondition failed: local Task HEAD changed"
+                )
+        self._run(["git", "commit", "-m", message], "lck-commit-current-tree")
+        head = self._run(
+            ["git", "rev-parse", "HEAD"], "lck-head-after-commit"
+        ).stdout.strip()
+        if expected_parent_sha is not None:
+            parent = self._run(
+                ["git", "rev-parse", "HEAD^"],
+                "lck-parent-after-commit",
+            ).stdout.strip()
+            if parent != expected_parent_sha:
+                raise LckStopError(
+                    "commit postcondition failed: commit parent HEAD changed"
+                )
+        tree = self._run(
+            ["git", "rev-parse", "HEAD^{tree}"], "lck-tree-after-commit"
+        ).stdout.strip()
+        if not is_sha(head) or tree != expected_tree:
+            raise LckStopError(
+                "commit postcondition failed: committed tree != validated tree"
+            )
+        status = self._run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            "lck-status-after-commit",
+        )
+        if status.stdout.strip():
+            raise LckStopError("commit postcondition failed: worktree is not clean")
+        return EffectReceipt(
+            effect="commit_current_tree",
+            action="committed",
+            details={"head_sha": head, "tree_oid": tree},
+        )
+
+
+class EnsureRemoteBranchEffect:
+    """Ensure origin Task branch equals current local HEAD without force push."""
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+
+    def _identity(
+        self,
+        branch: str,
+        *,
+        expected_head_sha: str | None = None,
+    ) -> tuple[str, str | None]:
+        branch_result = self.resolver.runner.run(
+            ["git", "branch", "--show-current"], command_id="lck-push-current-branch"
+        )
+        head_result = self.resolver.runner.run(
+            ["git", "rev-parse", "HEAD"], command_id="lck-push-current-head"
+        )
+        if branch_result.returncode != 0 or head_result.returncode != 0:
+            raise LckStopError("cannot resolve local branch identity before push")
+        current_branch = branch_result.stdout.strip()
+        head = head_result.stdout.strip()
+        if current_branch != branch or not is_sha(head):
+            raise LckStopError("push precondition failed: local Task identity changed")
+        if expected_head_sha is not None and head != expected_head_sha:
+            raise LckStopError(
+                "push precondition failed: validated local Task HEAD changed"
+            )
+        remote_result = self.resolver.runner.run(
+            ["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
+            command_id="lck-push-remote-head",
+        )
+        if remote_result.returncode != 0:
+            raise LckStopError("cannot resolve remote Task branch before push")
+        refs = _remote_refs(remote_result.stdout)
+        remote_oid = refs.get(branch)
+        return head, remote_oid
+
+    def execute(
+        self,
+        branch: str,
+        *,
+        expected_head_sha: str | None = None,
+    ) -> EffectReceipt:
+        head, remote_oid = self._identity(
+            branch,
+            expected_head_sha=expected_head_sha,
+        )
+        if remote_oid == head:
+            return EffectReceipt(
+                effect="ensure_remote_branch",
+                action="already-synced",
+                details={"head_sha": head, "remote_oid": remote_oid},
+            )
+        if remote_oid is not None:
+            fetch = self.resolver.runner.run(
+                ["git", "fetch", "--no-tags", "origin", f"refs/heads/{branch}"],
+                command_id="lck-fetch-observed-remote-task-branch",
+            )
+            if fetch.returncode != 0:
+                raise LckStopError("cannot verify existing remote Task branch ancestry")
+            fetched = self.resolver.runner.run(
+                ["git", "rev-parse", "FETCH_HEAD"],
+                command_id="lck-fetched-remote-task-head",
+            )
+            if fetched.returncode != 0 or fetched.stdout.strip() != remote_oid:
+                raise LckStopError(
+                    "remote Task branch changed during push precondition check"
+                )
+            ancestor = self.resolver.runner.run(
+                ["git", "merge-base", "--is-ancestor", remote_oid, head],
+                command_id="lck-remote-fast-forward-check",
+            )
+            if ancestor.returncode != 0:
+                raise LckStopError(
+                    "remote Task branch is ahead/diverged; LCK will not rebase or force push"
+                )
+            action = "fast-forwarded"
+        else:
+            action = "created"
+
+        push = self.resolver.runner.run(
+            [
+                "git",
+                "push",
+                "-u",
+                "origin",
+                f"{head}:refs/heads/{branch}",
+            ],
+            command_id="lck-push-task-branch",
+        )
+        if push.returncode != 0:
+            raise LckStopError(
+                "Task branch push failed: "
+                + (push.stderr.strip() or push.stdout.strip())
+            )
+        final_head, final_remote = self._identity(
+            branch,
+            expected_head_sha=expected_head_sha,
+        )
+        if final_head != head or final_remote != head:
+            raise LckStopError(
+                "push postcondition failed: local and remote heads differ"
+            )
+        return EffectReceipt(
+            effect="ensure_remote_branch",
+            action=action,
+            details={"head_sha": head, "remote_oid": final_remote},
+        )
+
+
+class EnsureOpenPrEffect:
+    """Resolve or create exactly one non-Draft OPEN PR from live identity."""
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+
+    def execute(
+        self,
+        task_number: int,
+        *,
+        summary: str,
+        risks: str,
+        critical_outcome: Mapping[str, Any],
+        validation: Mapping[str, Any],
+        expected_base_sha: str,
+        expected_body_sha256: str,
+    ) -> EffectReceipt:
+        state = self.resolver.resolve(task_number)
+        if state.status is not ResolutionStatus.RESOLVED:
+            raise LckStopError(
+                "cannot ensure OPEN PR from unresolved live state: "
+                + "; ".join(state.stop_reasons)
+            )
+        repository = state.repository
+        head = state.local_task_head
+        remote = state.remote_task_oid
+        base = state.git.get("origin_main_sha")
+        issue = state.issue
+        if (
+            not isinstance(repository, str)
+            or not is_sha(head)
+            or remote != head
+            or not is_sha(base)
+            or not isinstance(issue, Mapping)
+        ):
+            raise LckStopError("OPEN PR preconditions are incomplete")
+        if state.merged is not False:
+            raise LckStopError(
+                "OPEN PR precondition failed: Task merge state is unavailable "
+                "or already merged"
+            )
+        if (
+            state.local_task_branch != state.target_branch
+            or state.git.get("branch") != state.target_branch
+        ):
+            raise LckStopError(
+                "OPEN PR precondition failed: resolved Task branch is not selected"
+            )
+        if base != expected_base_sha:
+            raise LckStopError("OPEN PR precondition failed: origin/main changed")
+        if issue.get("body_sha256") != expected_body_sha256:
+            raise LckStopError("OPEN PR precondition failed: Task body changed")
+        title = issue.get("title")
+        if not isinstance(title, str) or not title.strip():
+            raise LckStopError("Task title is unavailable for PR creation")
+        body = (
+            f"Closes #{task_number}\n\n"
+            "## Summary\n"
+            f"{summary.strip()}\n\n"
+            "## Validation\n"
+            f"- Critical Outcome: {critical_outcome.get('status')}\n"
+            f"- Formal Delivery validation: {validation.get('status')}\n\n"
+            "## Risks / limitations\n"
+            f"{risks.strip() or 'None identified.'}\n"
+        )
+        warnings: list[dict[str, Any]] = []
+        with tempfile.TemporaryDirectory(prefix="lck-pr-") as temp_dir:
+            body_file = Path(temp_dir) / "body.md"
+            body_file.write_text(body, encoding="utf-8", newline="\n")
+            try:
+                result = resolve_or_create_pr(
+                    self.resolver.runner,
+                    repository,
+                    state.target_branch,
+                    BASE_BRANCH,
+                    title,
+                    body_file,
+                    head,
+                    str(base),
+                    warnings,
+                )
+            except PrResolveError as exc:
+                raise LckStopError(str(exc)) from exc
+        return EffectReceipt(
+            effect="ensure_open_pr",
+            action=str(result.get("action")),
+            details={
+                "number": result.get("number"),
+                "url": result.get("url"),
+                "head_sha": result.get("head_sha"),
+                "base_sha": result.get("base_sha"),
+                "warnings": warnings,
+            },
+        )
+
+
+class SetReviewStatusEffect:
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+
+    def execute(
+        self,
+        task_number: int,
+        *,
+        expected_pr: Mapping[str, Any] | None = None,
+        checks_result: Mapping[str, Any] | None = None,
+    ) -> EffectReceipt:
+        state = self.resolver.resolve(task_number)
+        if state.status is not ResolutionStatus.RESOLVED or state.repository is None:
+            raise LckStopError("cannot set Review status from unresolved live state")
+        if state.open_pr is None:
+            raise LckStopError(
+                "Project Status may move to Review only after OPEN PR exists"
+            )
+        if expected_pr is not None:
+            current_pr = DeliveryChecksGate._pr_identity(state)
+            expected_identity = {
+                "number": expected_pr.get("number"),
+                "head_sha": expected_pr.get("head_sha"),
+                "base_sha": expected_pr.get("base_sha"),
+            }
+            if current_pr != expected_identity:
+                raise LckStopError(
+                    "Project Status precondition failed: checks-gated PR identity changed"
+                )
+        if checks_result is not None and not DeliveryChecksGate._checks_postcondition(
+            state, checks_result
+        ):
+            raise LckStopError(
+                "Project Status precondition failed: PR checks are no longer passing"
+            )
+        if state.project_status == "Review":
+            return EffectReceipt(
+                effect="set_review_status", action="already-review", details={}
+            )
+        previous_status = state.project_status
+        if previous_status not in {"Ready", "In Progress"}:
+            raise LckStopError(
+                "Project Status precondition failed: prior status cannot be restored"
+            )
+        set_project_status_with_runner(
+            self.resolver.runner,
+            state.repository,
+            task_number,
+            value="Review",
+        )
+        try:
+            final = self.resolver.resolve(task_number)
+            if final.project_status != "Review":
+                raise LckStopError(
+                    "Project Status postcondition failed: expected Review"
+                )
+            if expected_pr is not None and DeliveryChecksGate._pr_identity(final) != {
+                "number": expected_pr.get("number"),
+                "head_sha": expected_pr.get("head_sha"),
+                "base_sha": expected_pr.get("base_sha"),
+            }:
+                raise LckStopError(
+                    "Project Status postcondition failed: checks-gated PR identity changed"
+                )
+            if (
+                checks_result is not None
+                and not DeliveryChecksGate._checks_postcondition(final, checks_result)
+            ):
+                raise LckStopError(
+                    "Project Status postcondition failed: check/lifecycle state is not aligned"
+                )
+        except LckStopError as exc:
+            try:
+                set_project_status_with_runner(
+                    self.resolver.runner,
+                    state.repository,
+                    task_number,
+                    value=previous_status,
+                )
+                restored = self.resolver.resolve(task_number)
+            except Exception as restore_exc:
+                raise LckStopError(
+                    "Project Status postcondition failed and compensation could not "
+                    f"restore {previous_status!r}"
+                ) from restore_exc
+            if restored.project_status != previous_status:
+                raise LckStopError(
+                    "Project Status postcondition failed and compensation did not "
+                    f"restore {previous_status!r}"
+                )
+            raise LckStopError(
+                f"{exc}; restored Project Status to {previous_status!r}"
+            ) from exc
+        return EffectReceipt(
+            effect="set_review_status", action="updated", details={"status": "Review"}
+        )
+
+
+class DeliveryChecksGate:
+    """Wait boundedly for applicable PR checks using current GitHub facts."""
+
+    def __init__(
+        self,
+        resolver: LiveStateResolver,
+        *,
+        timeout_seconds: float = 600.0,
+        poll_seconds: float = 5.0,
+    ) -> None:
+        self.resolver = resolver
+        self.timeout_seconds = max(0.0, timeout_seconds)
+        self.poll_seconds = max(0.0, poll_seconds)
+
+    @staticmethod
+    def _required_names(required: Mapping[str, Any]) -> set[str]:
+        contexts = required.get("contexts")
+        if not isinstance(contexts, Mapping):
+            return set()
+        items = contexts.get("items")
+        if not isinstance(items, list):
+            return set()
+        return {str(item) for item in items if isinstance(item, str) and item}
+
+    @staticmethod
+    def _observed_categories(checks: Mapping[str, Any]) -> dict[str, str]:
+        bounded = checks.get("items")
+        if not isinstance(bounded, Mapping):
+            return {}
+        items = bounded.get("items")
+        if not isinstance(items, list):
+            return {}
+        values: dict[str, str] = {}
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            name = item.get("name")
+            category = item.get("category")
+            if isinstance(name, str) and isinstance(category, str):
+                values[name] = category
+        return values
+
+    @staticmethod
+    def _pr_identity(state: LiveState) -> dict[str, Any]:
+        pr = state.open_pr
+        if not isinstance(pr, Mapping):
+            return {}
+        return {
+            "number": pr.get("number"),
+            "head_sha": pr.get("headRefOid"),
+            "base_sha": pr.get("baseRefOid"),
+        }
+
+    @staticmethod
+    def _checks_postcondition(
+        state: LiveState,
+        checks_result: Mapping[str, Any],
+    ) -> bool:
+        """Require the latest live PR checks to match the completed gate."""
+        if checks_result.get("status") != "pass":
+            return False
+        current_pr = state.open_pr
+        gated_pr = checks_result.get("pr")
+        if not isinstance(current_pr, Mapping) or not isinstance(gated_pr, Mapping):
+            return False
+        if (
+            gated_pr.get("number") != current_pr.get("number")
+            or gated_pr.get("head_sha") != current_pr.get("headRefOid")
+            or gated_pr.get("base_sha") != current_pr.get("baseRefOid")
+        ):
+            return False
+        checks = state.checks
+        try:
+            failed = int(checks.get("failed", 0) or 0)
+            pending = int(checks.get("pending", 0) or 0)
+            unknown = int(checks.get("skipped_or_unknown", 0) or 0)
+            count = int(checks.get("count", 0) or 0)
+        except (TypeError, ValueError):
+            return False
+        if failed > 0 or pending > 0 or unknown > 0:
+            return False
+
+        required = checks_result.get("required")
+        required_names = (
+            {item for item in required if isinstance(item, str) and item}
+            if isinstance(required, list)
+            else set()
+        )
+        if required_names:
+            observed = DeliveryChecksGate._observed_categories(checks)
+            return all(observed.get(name) == "success" for name in required_names)
+
+        configuration = checks_result.get("configuration")
+        if configuration in {"configured-empty", "not-configured"}:
+            return count == 0 or checks.get("all_success") is True
+        return count > 0 and checks.get("all_success") is True
+
+    def run(self, task_number: int) -> dict[str, Any]:
+        state = self.resolver.resolve(task_number)
+        if state.status is not ResolutionStatus.RESOLVED or state.repository is None:
+            raise LckStopError("cannot evaluate checks from unresolved live state")
+        warnings: list[dict[str, Any]] = []
+        required = _required_checks(
+            self.resolver.runner,
+            state.repository,
+            BASE_BRANCH,
+            warnings,
+        )
+        required_names = self._required_names(required)
+        config = required.get("configuration")
+        deadline = time.monotonic() + self.timeout_seconds
+
+        while True:
+            current = self.resolver.resolve(task_number)
+            if (
+                current.status is not ResolutionStatus.RESOLVED
+                or current.open_pr is None
+            ):
+                raise LckStopError("PR identity changed while waiting for checks")
+            checks = current.checks
+            observed = self._observed_categories(checks)
+            failed = int(checks.get("failed", 0) or 0)
+            unknown = int(checks.get("skipped_or_unknown", 0) or 0)
+            pending = int(checks.get("pending", 0) or 0)
+
+            if failed > 0 or unknown > 0:
+                raise LckStopError("PR checks failed, cancelled, skipped, or unknown")
+
+            if pending == 0:
+                if required_names:
+                    failed_required = {
+                        name
+                        for name in required_names
+                        if observed.get(name) not in {None, "success", "pending"}
+                    }
+                    if failed_required:
+                        raise LckStopError(
+                            "required PR checks failed: "
+                            + ", ".join(sorted(failed_required))
+                        )
+                    if all(observed.get(name) == "success" for name in required_names):
+                        return {
+                            "status": "pass",
+                            "configuration": config,
+                            "required": sorted(required_names),
+                            "observed": checks,
+                            "pr": self._pr_identity(current),
+                            "warnings": warnings,
+                        }
+                elif config in {"configured-empty", "not-configured"}:
+                    if checks.get("count") == 0 or checks.get("all_success") is True:
+                        return {
+                            "status": "pass",
+                            "configuration": config,
+                            "required": [],
+                            "observed": checks,
+                            "pr": self._pr_identity(current),
+                            "warnings": warnings,
+                        }
+                elif checks.get("count", 0) > 0 and checks.get("all_success") is True:
+                    # GitHub can hide branch-protection configuration behind a plan
+                    # boundary. Successful observed checks are preserved as a
+                    # capability-limited fact instead of being upgraded to proof of
+                    # required-check configuration.
+                    return {
+                        "status": "pass",
+                        "configuration": config,
+                        "required": [],
+                        "observed": checks,
+                        "pr": self._pr_identity(current),
+                        "warnings": warnings,
+                        "limitation": "required-check configuration unavailable",
+                    }
+
+            if time.monotonic() >= deadline:
+                detail = (
+                    f"required={sorted(required_names)}, observed={sorted(observed)}, "
+                    f"pending={pending}, configuration={config}"
+                )
+                raise LckStopError(
+                    "timed out waiting for successful PR checks: " + detail
+                )
+            time.sleep(self.poll_seconds)
+
+
+@dataclass(frozen=True)
+class DeliveryCompletionResult:
+    task_number: int
+    status: str
+    branch: str
+    head_sha: str
+    critical_outcome: Mapping[str, Any]
+    validation: Mapping[str, Any]
+    checks: Mapping[str, Any]
+    effects: tuple[EffectReceipt, ...]
+    final_state: LiveState
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "operation": "delivery-complete",
+            "task_number": self.task_number,
+            "status": self.status,
+            "branch": self.branch,
+            "head_sha": self.head_sha,
+            "critical_outcome": _jsonable(self.critical_outcome),
+            "validation": _jsonable(self.validation),
+            "checks": _jsonable(self.checks),
+            "effects": [item.to_dict() for item in self.effects],
+            "final_state": self.final_state.to_dict(),
+            "human_boundary": "Independent Review must be started separately",
+        }
+
+
+class DeliveryCompleter:
+    """Complete initial Delivery using bounded LCK-owned lifecycle effects."""
+
+    def __init__(
+        self,
+        resolver: LiveStateResolver,
+        *,
+        eligibility: PhaseEligibilityResolver | None = None,
+        formal_validation: FormalValidationGate | None = None,
+        commit_effect: CommitCurrentTreeEffect | None = None,
+        remote_effect: EnsureRemoteBranchEffect | None = None,
+        pr_effect: EnsureOpenPrEffect | None = None,
+        status_effect: SetReviewStatusEffect | None = None,
+        checks_gate: DeliveryChecksGate | None = None,
+    ) -> None:
+        self.resolver = resolver
+        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.formal_validation = formal_validation or FormalValidationGate(resolver)
+        self.commit_effect = commit_effect or CommitCurrentTreeEffect(resolver)
+        self.remote_effect = remote_effect or EnsureRemoteBranchEffect(resolver)
+        self.pr_effect = pr_effect or EnsureOpenPrEffect(resolver)
+        self.status_effect = status_effect or SetReviewStatusEffect(resolver)
+        self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
+
+    def _run_critical_outcome(self, state: LiveState) -> dict[str, Any]:
+        issue = state.issue
+        snapshot = issue.get("critical_outcome") if isinstance(issue, Mapping) else None
+        try:
+            contract = contract_from_snapshot(snapshot)
+            result = verify_critical_outcome(
+                self.resolver.repo_root,
+                self.resolver.runner,
+                contract,
+            )
+        except CriticalOutcomeError as exc:
+            raise LckStopError(f"Critical Outcome contract invalid: {exc}") from exc
+        payload = result.to_dict()
+        if result.status != "pass":
+            raise LckStopError(
+                "Critical Outcome FAIL: "
+                f"{contract.verification_test} exited {result.exit_code}"
+            )
+        return payload
+
+    def _has_task_diff(self, base_sha: str) -> bool:
+        result = self.resolver.runner.run(
+            ["git", "diff", "--quiet", f"{base_sha}...HEAD"],
+            command_id="lck-task-diff-present",
+        )
+        if result.returncode == 1:
+            return True
+        if result.returncode == 0:
+            return False
+        raise LckStopError("unable to verify Task diff against current origin/main")
+
+    def _operation_guard(
+        self,
+        task_number: int,
+        *,
+        base_sha: str,
+        body_sha256: str,
+        branch: str,
+        head_sha: str | None = None,
+    ) -> LiveState:
+        """Reacquire the facts that must stay stable within this invocation."""
+        state = self.resolver.resolve(task_number)
+        decision = self.eligibility.resolve(state, Phase.DELIVERY_COMPLETE)
+        if not decision.eligible:
+            raise LckStopError(
+                "Delivery operation guard stopped: " + "; ".join(decision.reasons)
+            )
+        issue = state.issue
+        if state.git.get("origin_main_sha") != base_sha:
+            raise LckStopError("Delivery operation guard stopped: origin/main changed")
+        if not isinstance(issue, Mapping) or issue.get("body_sha256") != body_sha256:
+            raise LckStopError("Delivery operation guard stopped: Task body changed")
+        if state.target_branch != branch:
+            raise LckStopError(
+                "Delivery operation guard stopped: Task branch identity changed"
+            )
+        if head_sha is not None and state.local_task_head != head_sha:
+            raise LckStopError(
+                "Delivery operation guard stopped: local Task head changed"
+            )
+        return state
+
+    @staticmethod
+    def _checks_postcondition(
+        state: LiveState,
+        checks_result: Mapping[str, Any],
+    ) -> bool:
+        return DeliveryChecksGate._checks_postcondition(state, checks_result)
+
+    def _final_verify(
+        self,
+        state: LiveState,
+        head: str,
+        *,
+        base_sha: str,
+        body_sha256: str,
+        branch: str,
+        checks_result: Mapping[str, Any],
+    ) -> LiveState:
+        if state.status is not ResolutionStatus.RESOLVED:
+            raise LckStopError(
+                "Delivery final verification unresolved: "
+                + "; ".join(state.stop_reasons)
+            )
+        issue = state.issue
+        pr_head = state.open_pr.get("headRefOid") if state.open_pr else None
+        pr_base = state.open_pr.get("baseRefOid") if state.open_pr else None
+        if not (
+            state.target_branch == branch
+            and state.git.get("branch") == branch
+            and state.git.get("clean") is True
+            and state.git.get("origin_main_sha") == base_sha
+            and isinstance(issue, Mapping)
+            and issue.get("body_sha256") == body_sha256
+            and state.local_task_head == head
+            and state.remote_task_oid == head
+            and pr_head == head
+            and pr_base == base_sha
+            and state.open_pr is not None
+            and state.open_pr.get("isDraft") is False
+            and state.project_status == "Review"
+            and self._checks_postcondition(state, checks_result)
+        ):
+            raise LckStopError(
+                "Delivery final verification failed: Task/base/local/remote/PR/check/lifecycle "
+                "state is not aligned"
+            )
+        return state
+
+    def complete(
+        self,
+        task_number: int,
+        *,
+        commit_message: str,
+        summary: str,
+        risks: str = "",
+    ) -> DeliveryCompletionResult:
+        if not summary.strip():
+            raise LckStopError("Delivery summary must be non-empty")
+        state = self.resolver.resolve(task_number)
+        decision = self.eligibility.resolve(state, Phase.DELIVERY_COMPLETE)
+        if not decision.eligible:
+            raise LckStopError(
+                f"Delivery Complete STOP for Task #{task_number}: "
+                + "; ".join(decision.reasons)
+            )
+        base_sha = state.git.get("origin_main_sha")
+        if not is_sha(base_sha):
+            raise LckStopError("current origin/main identity is unavailable")
+        issue = state.issue
+        body_sha256 = issue.get("body_sha256") if isinstance(issue, Mapping) else None
+        if not isinstance(body_sha256, str) or not body_sha256:
+            raise LckStopError("current Task body identity is unavailable")
+        branch = state.target_branch
+
+        effects: list[EffectReceipt] = []
+        if state.git.get("clean") is True:
+            if not self._has_task_diff(base_sha):
+                raise LckStopError(
+                    "Delivery Complete found no Task diff against origin/main"
+                )
+            # Stateless recovery path: re-run all gates on the existing clean head
+            # instead of trusting a receipt from a previous interrupted invocation.
+            validated_tree = self.commit_effect.current_head_tree()
+            critical = self._run_critical_outcome(state)
+            validation = self.formal_validation.run(base_sha)
+            validated_head = state.local_task_head
+            if not is_sha(validated_head):
+                raise LckStopError("current Task head is unavailable")
+            self.commit_effect.verify_tree_unchanged(
+                validated_tree,
+                expected_head_sha=validated_head,
+            )
+            head = validated_head
+            effects.append(
+                EffectReceipt(
+                    effect="commit_current_tree",
+                    action="already-committed-revalidated",
+                    details={"head_sha": head, "tree_oid": validated_tree},
+                )
+            )
+        else:
+            validated_tree = self.commit_effect.stage_candidate_tree()
+            critical = self._run_critical_outcome(state)
+            validation = self.formal_validation.run(base_sha)
+            self._operation_guard(
+                task_number,
+                base_sha=base_sha,
+                body_sha256=body_sha256,
+                branch=branch,
+                head_sha=state.local_task_head,
+            )
+            self.commit_effect.verify_tree_unchanged(
+                validated_tree,
+                expected_head_sha=state.local_task_head,
+            )
+            commit = self.commit_effect.execute(
+                validated_tree,
+                commit_message,
+                expected_parent_sha=state.local_task_head,
+            )
+            effects.append(commit)
+            head = commit.details.get("head_sha")
+            if not is_sha(head):
+                raise LckStopError("commit receipt did not contain a valid head SHA")
+
+        self._operation_guard(
+            task_number,
+            base_sha=base_sha,
+            body_sha256=body_sha256,
+            branch=branch,
+            head_sha=str(head),
+        )
+        effects.append(
+            self.remote_effect.execute(
+                branch,
+                expected_head_sha=str(head),
+            )
+        )
+        self._operation_guard(
+            task_number,
+            base_sha=base_sha,
+            body_sha256=body_sha256,
+            branch=branch,
+            head_sha=str(head),
+        )
+        effects.append(
+            self.pr_effect.execute(
+                task_number,
+                summary=summary,
+                risks=risks,
+                critical_outcome=critical,
+                validation=validation,
+                expected_base_sha=base_sha,
+                expected_body_sha256=body_sha256,
+            )
+        )
+        self._operation_guard(
+            task_number,
+            base_sha=base_sha,
+            body_sha256=body_sha256,
+            branch=branch,
+            head_sha=str(head),
+        )
+        checks = self.checks_gate.run(task_number)
+        self._operation_guard(
+            task_number,
+            base_sha=base_sha,
+            body_sha256=body_sha256,
+            branch=branch,
+            head_sha=str(head),
+        )
+        checks_pr = checks.get("pr")
+        if not isinstance(checks_pr, Mapping):
+            raise LckStopError("checks result did not contain PR identity")
+        effects.append(
+            self.status_effect.execute(
+                task_number,
+                expected_pr=checks_pr,
+                checks_result=checks,
+            )
+        )
+        # The status effect may race with GitHub check transitions. Reacquire
+        # one final live state after the effect and verify that exact state.
+        final_state = self.resolver.resolve(task_number)
+        final_state = self._final_verify(
+            final_state,
+            str(head),
+            base_sha=base_sha,
+            body_sha256=body_sha256,
+            branch=branch,
+            checks_result=checks,
+        )
+        return DeliveryCompletionResult(
+            task_number=task_number,
+            status="READY_FOR_REVIEW",
+            branch=final_state.target_branch,
+            head_sha=str(head),
+            critical_outcome=critical,
+            validation=validation,
+            checks=checks,
+            effects=tuple(effects),
+            final_state=final_state,
+        )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="LCK v1 live state operations")
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
@@ -688,6 +1760,12 @@ def _build_parser() -> argparse.ArgumentParser:
     delivery_commands = delivery.add_subparsers(dest="delivery_command", required=True)
     prepare = delivery_commands.add_parser("prepare")
     prepare.add_argument("task", type=int)
+    complete = delivery_commands.add_parser("complete")
+    complete.add_argument("task", type=int)
+    complete.add_argument("--commit-message", required=True)
+    complete.add_argument("--summary", required=True)
+    complete.add_argument("--risks", default="")
+    complete.add_argument("--check-timeout-seconds", type=float, default=600.0)
     return parser
 
 
@@ -705,6 +1783,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.delivery_command == "prepare":
             context = DeliveryPreparer(resolver).prepare(args.task)
             print_json(context.to_dict(), pretty=True)
+            return 0
+        if args.delivery_command == "complete":
+            result = DeliveryCompleter(
+                resolver,
+                checks_gate=DeliveryChecksGate(
+                    resolver, timeout_seconds=args.check_timeout_seconds
+                ),
+            ).complete(
+                args.task,
+                commit_message=args.commit_message,
+                summary=args.summary,
+                risks=args.risks,
+            )
+            print_json(result.to_dict(), pretty=True)
             return 0
         raise LckStopError("unsupported LCK command")
     except WorkflowToolError as exc:

@@ -96,12 +96,27 @@ OPTIONAL：`Context`、`Key Scenarios / Edge Cases`、`Constraints / Decisions`�
 
 ### Task — implementation contract（主要 coding-agent execution contract）
 
-REQUIRED：`Objective`、`Requirements`、`Acceptance Criteria`
+REQUIRED：`Objective`、`Requirements`、`Critical Outcome`、`Acceptance Criteria`
 OPTIONAL：`Context`、`Scope Boundary / Non-goals`、`Constraints / Decisions`、
 `References`、`Task-specific Verification`
 
 Task 必须满足：one primary objective、bounded scope、independently verifiable、
 normally one PR、minimal unrelated context、observable acceptance。
+
+`Critical Outcome` 是 Task-level end-to-end acceptance contract，必须使用固定四行格式：
+
+```text
+Caller: <真实受支持入口或调用方>
+Capability: <本 Task 新增或改变的能力>
+Observable result: <从 Caller 可观察到的结果>
+Verification test: tests/.../test_*.py::test_*
+```
+
+`Verification test` 只能绑定仓库 `tests/` 下一个明确 pytest node id。它不是任意
+shell command，也不能用 private helper/file-exists/grep 代替真实 supported path。LCK
+在 Delivery Complete 中运行该 verifier；FAIL 是 Delivery veto。Independent Review 仍需
+判断该测试是否真实覆盖 `Caller → Capability → Observable result`，不能仅因 pytest
+退出码为 0 就继承语义 verdict。
 
 Task 不得复制：parent Feature / Epic 完整正文、repository architecture summary、
 Git workflow、branch/commit/PR/merge instruction、标准 pytest / Ruff / mypy、

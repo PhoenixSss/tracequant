@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -41,41 +42,43 @@ def test_current_runner_skills_use_one_mechanical_path() -> None:
         assert "telemetry" not in text.casefold()
 
 
-def test_delivery_runner_has_current_profiles_and_remediation_loop() -> None:
+def test_delivery_runner_uses_lck_for_initial_delivery_and_keeps_remediation() -> None:
     text = ACTIVE_SKILLS["task-delivery-runner"].read_text(encoding="utf-8")
-    assert "--expected-main-sha" in text
-    assert "--entry-point" in text
-    assert "delivery-readiness" in text
-    assert "workflow-delivery" in text
-    assert "targeted:workflow-tests" in text
+    assert "tools/agent_workflow/lck.py delivery prepare" in text
+    assert "tools/agent_workflow/lck.py delivery complete" in text
+    assert "Critical Outcome" in text
+    assert "READY_FOR_REVIEW" in text
+    assert "Agent / Skill MUST NOT directly" in text
+    assert "branch, remote, SHA, base SHA, PR number, or refspec" in text
+    assert "no alternate write route" in text
     assert "## Review remediation" in text
     assert "reviewed head SHA" in text
-    assert "Low or Nit" in text
-    assert "new independent review" in text
-    assert "git add ." in text and "do not use" in text
-    assert "lifecycle conflict" in text.casefold()
-    assert "`review-remediation` requires the bounded handoff" in text
-    assert "stop before Runner or repair writes" in text
-    assert "branch_bootstrap" in text
-    assert "--bootstrap-verify" in text
+    assert "workflow-delivery" in text
+    assert "delivery-readiness" in text
+    assert "new commit" in text and "fresh independent review" in text
 
 
-def test_delivery_branch_bootstrap_contract_is_shared_by_both_skills() -> None:
-    for relative in (
-        ".agents/skills/task-delivery-runner/SKILL.md",
-        ".claude/skills/task-delivery-runner/SKILL.md",
+def test_initial_delivery_lck_contract_is_shared_by_both_skills() -> None:
+    agent = (ROOT / ".agents/skills/task-delivery-runner/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    claude = (ROOT / ".claude/skills/task-delivery-runner/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert agent == claude
+    for phrase in (
+        "LCK Delivery Prepare",
+        "LCK Delivery Complete",
+        "commit_current_tree",
+        "ensure_remote_branch",
+        "ensure_open_pr",
+        "READY_FOR_REVIEW",
+        "The Skill is a semantic procedure",
     ):
-        text = (ROOT / relative).read_text(encoding="utf-8").casefold()
-        for phrase in (
-            "branch_bootstrap = pass",
-            "task/<issue number>-<slug>",
-            "--bootstrap-verify",
-            "fail closed",
-            "clean worktree",
-            "existing numeric",
-            "branch forms may be reused",
-        ):
-            assert phrase in text, (relative, phrase)
+        assert phrase in agent
+    assert "git switch -c task/<Issue number>-<slug>" not in agent
+    assert "branch_bootstrap = pass" not in agent
+    assert "--bootstrap-verify" not in agent
 
 
 def test_review_runner_is_read_only_and_emits_bounded_remediation_handoff() -> None:
@@ -126,7 +129,6 @@ def test_active_skills_have_bounded_failure_contract_without_evolution_traces() 
         text = path.read_text(encoding="utf-8").casefold()
         assert "partial" in text
         assert "unknown" in text
-        assert "drift" in text
         assert "bounded" in text or "only the named" in text
         for trace in forbidden_traces:
             assert trace not in text
@@ -191,12 +193,43 @@ def test_review_skill_has_shared_owner_contract_and_exact_tokens() -> None:
 
 
 def test_review_skill_requires_remediation_handoff_for_non_pass() -> None:
-    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
-    assert "Enforcement" in text
-    assert "non-passing verdict" in text.casefold()
-    assert "Delivery prompt" in text
-    assert "non-compliant" in text
-    assert "task-delivery-runner 修复" in text
+    for path in (
+        ROOT / ".agents/skills/task-pr-review-runner/SKILL.md",
+        ROOT / ".claude/skills/task-pr-review-runner/SKILL.md",
+    ):
+        text = path.read_text(encoding="utf-8")
+        section = text[
+            text.index("## Remediation handoff") : text.index(
+                "## Report and recovery", text.index("## Remediation handoff")
+            )
+        ]
+        match = re.search(
+            r"^```text\n(?P<body>.*?)\n```$", section, re.MULTILINE | re.DOTALL
+        )
+        assert match is not None
+        body = match.group("body")
+        assert len(re.findall(r"^## Remediation handoff$", section, re.MULTILINE)) == 1
+        assert len(re.findall(r"^```text$", section, re.MULTILINE)) == 1
+        assert body.startswith("请按 task-delivery-runner 修复\n")
+        for field in (
+            "Task:",
+            "PR:",
+            "Reviewed head SHA:",
+            "Verdict:",
+            "Required remediation:",
+            "Objective gates:",
+            "Maintainer decision required:",
+        ):
+            assert field in body
+        for forbidden in ("上述", "同上", "见前文"):
+            assert forbidden not in body
+        assert "Review remediation handoff:" not in section
+        assert "<上述 remediation handoff>" not in section
+        assert body.count("[F1]") == 1
+        assert "exactly one final" in section
+        assert "duplicate" in section
+        assert "A passing verdict does not emit a remediation handoff." in section
+        assert "A passing verdict emits no remediation\nsection." in section
 
 
 def test_review_skill_has_semantic_review_evidence_matrix() -> None:

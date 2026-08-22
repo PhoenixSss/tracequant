@@ -106,14 +106,52 @@ CONDITIONAL 与 FAIL 都输出 bounded remediation handoff（§9）；
 
 ## 9. Remediation handoff
 
-非 PASS 的 Review（CONDITIONAL / FAIL，见 §8）输出 bounded remediation
-handoff，仅包含 Delivery Skill 修复所需的最小信息：
+非 PASS 的 Review（CONDITIONAL / FAIL，见 §8）在报告末尾输出一个且仅一个
+canonical remediation handoff。Review 报告正文与下一 lifecycle invocation
+输入分离：正文保留 Verdict、mechanical verification、findings、Acceptance
+Criteria coverage 和必要 evidence；handoff 是可以独立复制的完整 Delivery
+prompt。
+
+最终输出契约固定为：
+
+````text
+## Remediation handoff
+```text
+请按 task-delivery-runner 修复
+[Task] <当前完整标题> #<Task编号>
+对应 PR #<PR编号> 的独立审查问题，
+并继续处理，直到 PR 再次准备好接受新的独立审查。
+
+Task: #<Task编号>
+PR: #<PR编号>
+Reviewed head SHA: <SHA>
+Verdict: <有条件通过，不得合并 | 不通过，需要修复>
+
+Required remediation:
+- [F1][Blocking|High|Medium] <完整 finding，包含证据与预期行为>
+
+Objective gates:
+- <尚未满足、不可用、矛盾或需要重新验证的 gate>
+- 如无则写：无。
+
+Maintainer decision required:
+- <需要维护者授权的事项>
+- 如无则写：无。
+```
+````
+
+canonical code block 必须 self-contained；每个 required finding 在其中完整
+出现一次，不得使用“上述”“同上”“见前文”等依赖报告正文的引用。不得在此
+section 之前再输出 handoff，也不得再用 wrapper label 嵌套或重复该 block。
+
+handoff 仅包含 Delivery Skill 修复所需的最小信息：
 
 - findings（severity、位置、失败场景、最小修改方向）；
 - 当前锁定的 base/head；
 - 重新 review 的要求（new head → fresh re-review）。
 
-handoff 不得包含完整历史、无关 findings 或主观偏好。
+handoff 不得包含完整历史、无关 findings 或主观偏好。PASS 不输出
+remediation handoff section。
 
 Independent Review 保持 strict read-only，不向 GitHub 提交 Approve /
 Request changes / Comment Review。`review-remediation` 的 admission 不得依赖

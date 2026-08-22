@@ -307,55 +307,58 @@ merges.
 
 ## Remediation handoff
 
-For `有条件通过，不得合并` or `不通过，需要修复`, emit one compact handoff after
-the verdict:
+For `有条件通过，不得合并` or `不通过，需要修复`, keep the human-readable
+Review report body separate from the next-lifecycle input. The report body
+must contain the verdict, mechanical verification, findings, Acceptance
+Criteria coverage, and relevant evidence. It must then end with exactly one
+canonical remediation section; do not emit a standalone handoff before it or
+wrap a second handoff around it.
 
-```text
-Remediation handoff
+The canonical final section is `## Remediation handoff` followed by exactly one
+fenced code block. The block is the complete, directly copyable Delivery
+prompt and must begin with the task-delivery instruction itself:
 
-Task: #<Task>
-PR: #<PR>
-Reviewed head SHA: <SHA>
-Verdict: <verdict>
-
-Required remediation:
-- [F1][Blocking|High|Medium] <defect, precise evidence, expected behavior>
-
-Objective gates:
-- <pending, unavailable, ambiguous, contradictory, or unstable gate>
-
-Maintainer decision required:
-- <scope, specification, public behavior, or architecture decision>
-```
-
-Rules:
-
-- include only findings that caused the non-passing verdict; the bounded
-  handoff semantics are authoritative in `docs/development/pr-review.md` §9;
-- include objective gates that require recheck or waiting;
-- include decisions that cannot be resolved without maintainer authorization;
-- exclude Low and Nit findings unless the maintainer explicitly made them
-  required;
-- state the defect and expected behavior, but do not design the implementation;
-- preserve finding IDs.
-
-End with this exact remediation prompt populated with current identities:
-
+````text
 ```text
 请按 task-delivery-runner 修复
 [Task] <当前完整标题> #<Task编号>
 对应 PR #<PR编号> 的独立审查问题，
 并继续处理，直到 PR 再次准备好接受新的独立审查。
 
-Review remediation handoff:
+Task: #<Task编号>
+PR: #<PR编号>
+Reviewed head SHA: <SHA>
+Verdict: <有条件通过，不得合并 | 不通过，需要修复>
 
-<上述 remediation handoff>
+Required remediation:
+- [F1][Blocking|High|Medium] <完整 finding，包含证据与预期行为>
+
+Objective gates:
+- <尚未满足、不可用、矛盾或需要重新验证的 gate>
+- 如无则写：无。
+
+Maintainer decision required:
+- <需要维护者授权的事项>
+- 如无则写：无。
 ```
+````
+
+Include only findings that caused the non-passing verdict; the bounded handoff
+semantics are authoritative in `docs/development/pr-review.md` §9. Include
+objective gates that require recheck or waiting, and decisions that cannot be
+resolved without maintainer authorization. Exclude Low and Nit findings unless
+the maintainer explicitly made them required. Preserve finding IDs and write
+each required finding in full exactly once. The block must be self-contained:
+do not refer to material outside it with phrases such as “上述”, “同上”, or
+“见前文”.
 
 A passing verdict does not emit a remediation handoff.
 
-**Enforcement**: Every non-passing verdict must output both handoff and Delivery
-prompt. A partial handoff without the Delivery prompt is non-compliant.
+**Enforcement**: Every non-passing verdict emits exactly one final
+`## Remediation handoff` section and exactly one fenced code block. The block
+itself is the single Delivery prompt; duplicate headings, wrapper labels, or
+repeated findings are non-compliant. A passing verdict emits no remediation
+section.
 
 ## Report and recovery
 
