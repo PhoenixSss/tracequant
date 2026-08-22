@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -192,12 +193,41 @@ def test_review_skill_has_shared_owner_contract_and_exact_tokens() -> None:
 
 
 def test_review_skill_requires_remediation_handoff_for_non_pass() -> None:
-    text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
-    assert "Enforcement" in text
-    assert "non-passing verdict" in text.casefold()
-    assert "Delivery prompt" in text
-    assert "non-compliant" in text
-    assert "task-delivery-runner 修复" in text
+    for path in (
+        ROOT / ".agents/skills/task-pr-review-runner/SKILL.md",
+        ROOT / ".claude/skills/task-pr-review-runner/SKILL.md",
+    ):
+        text = path.read_text(encoding="utf-8")
+        section = text[text.index("## Remediation handoff") : text.index(
+            "## Report and recovery", text.index("## Remediation handoff")
+        )]
+        match = re.search(
+            r"^```text\n(?P<body>.*?)\n```$", section, re.MULTILINE | re.DOTALL
+        )
+        assert match is not None
+        body = match.group("body")
+        assert len(re.findall(r"^## Remediation handoff$", section, re.MULTILINE)) == 1
+        assert len(re.findall(r"^```text$", section, re.MULTILINE)) == 1
+        assert body.startswith("请按 task-delivery-runner 修复\n")
+        for field in (
+            "Task:",
+            "PR:",
+            "Reviewed head SHA:",
+            "Verdict:",
+            "Required remediation:",
+            "Objective gates:",
+            "Maintainer decision required:",
+        ):
+            assert field in body
+        for forbidden in ("上述", "同上", "见前文"):
+            assert forbidden not in body
+        assert "Review remediation handoff:" not in section
+        assert "<上述 remediation handoff>" not in section
+        assert body.count("[F1]") == 1
+        assert "exactly one final" in section
+        assert "duplicate" in section
+        assert "A passing verdict does not emit a remediation handoff." in section
+        assert "A passing verdict emits no remediation\nsection." in section
 
 
 def test_review_skill_has_semantic_review_evidence_matrix() -> None:
