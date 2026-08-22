@@ -38,14 +38,18 @@ def _repo(tmp_path: Path) -> tuple[Path, Path]:
     (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
     _git(repo, "add", "seed.txt")
     _git(repo, "commit", "-m", "seed")
-    subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "--bare", str(origin)], check=True, capture_output=True
+    )
     _git(repo, "remote", "add", "origin", str(origin))
     _git(repo, "push", "-u", "origin", "main")
     return repo, origin
 
 
 def _resolver_for_repo(repo: Path) -> lck.LiveStateResolver:
-    return lck.LiveStateResolver(repo, runner=CommandRunner(repo), repository="owner/repo")
+    return lck.LiveStateResolver(
+        repo, runner=CommandRunner(repo), repository="owner/repo"
+    )
 
 
 def test_commit_current_tree_binds_validated_tree_to_commit(tmp_path: Path) -> None:
@@ -63,7 +67,9 @@ def test_commit_current_tree_binds_validated_tree_to_commit(tmp_path: Path) -> N
     assert _git(repo, "status", "--porcelain") == ""
 
 
-def test_commit_current_tree_rejects_tree_change_after_validation(tmp_path: Path) -> None:
+def test_commit_current_tree_rejects_tree_change_after_validation(
+    tmp_path: Path,
+) -> None:
     repo, _ = _repo(tmp_path)
     _git(repo, "switch", "-c", "task/160-delivery")
     (repo / "seed.txt").write_text("candidate\n", encoding="utf-8")
@@ -120,7 +126,9 @@ def test_ensure_remote_branch_stops_on_divergence(tmp_path: Path) -> None:
     shared = _git(repo, "rev-parse", "HEAD")
 
     other = tmp_path / "other"
-    subprocess.run(["git", "clone", str(origin), str(other)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "clone", str(origin), str(other)], check=True, capture_output=True
+    )
     _git(other, "config", "user.name", "Other")
     _git(other, "config", "user.email", "other@example.invalid")
     _git(other, "switch", "task/160-delivery")
@@ -164,7 +172,9 @@ class ValidationRunner:
 
 def test_formal_validation_gate_requires_structured_pass(tmp_path: Path) -> None:
     runner = ValidationRunner()
-    resolver = lck.LiveStateResolver(tmp_path, runner=cast(Any, runner), repository="owner/repo")
+    resolver = lck.LiveStateResolver(
+        tmp_path, runner=cast(Any, runner), repository="owner/repo"
+    )
 
     payload = lck.FormalValidationGate(resolver).run(SHA)
 
@@ -178,7 +188,9 @@ def test_formal_validation_gate_fails_closed(
     tmp_path: Path, status: str, returncode: int
 ) -> None:
     runner = ValidationRunner(status=status, returncode=returncode)
-    resolver = lck.LiveStateResolver(tmp_path, runner=cast(Any, runner), repository="owner/repo")
+    resolver = lck.LiveStateResolver(
+        tmp_path, runner=cast(Any, runner), repository="owner/repo"
+    )
 
     with pytest.raises(lck.LckStopError, match="formal Delivery validation failed"):
         lck.FormalValidationGate(resolver).run(SHA)
@@ -270,7 +282,9 @@ class CompletionRunner:
 
 
 class SequenceResolver:
-    def __init__(self, repo_root: Path, runner: CompletionRunner, states: list[lck.LiveState]) -> None:
+    def __init__(
+        self, repo_root: Path, runner: CompletionRunner, states: list[lck.LiveState]
+    ) -> None:
         self.repo_root = repo_root
         self.runner = cast(Any, runner)
         self._states = states
@@ -396,10 +410,15 @@ def test_delivery_complete_revalidates_clean_committed_head_and_stops_at_review_
     )
 
     assert result.status == "READY_FOR_REVIEW"
-    assert result.to_dict()["human_boundary"] == "Independent Review must be started separately"
+    assert (
+        result.to_dict()["human_boundary"]
+        == "Independent Review must be started separately"
+    )
     assert commit.calls == ["current_head_tree"]
     assert remote.calls == pr.calls == status.calls == 1
-    assert not any("review" in " ".join(command).casefold() for command in runner.commands)
+    assert not any(
+        "review" in " ".join(command).casefold() for command in runner.commands
+    )
 
 
 def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
@@ -649,8 +668,11 @@ def test_delivery_complete_critical_outcome_failure_blocks_commit_and_remote(
 ) -> None:
     target = tmp_path / "tests" / "test_critical_path.py"
     target.parent.mkdir(parents=True)
-    target.write_text("def test_critical_path(): pass\
-", encoding="utf-8")
+    target.write_text(
+        "def test_critical_path(): pass\
+",
+        encoding="utf-8",
+    )
     pre = _live_state(
         head="d" * 40,
         clean=False,
@@ -687,8 +709,11 @@ def test_delivery_complete_stops_before_commit_when_base_changes_during_validati
 ) -> None:
     target = tmp_path / "tests" / "test_critical_path.py"
     target.parent.mkdir(parents=True)
-    target.write_text("def test_critical_path(): pass\
-", encoding="utf-8")
+    target.write_text(
+        "def test_critical_path(): pass\
+",
+        encoding="utf-8",
+    )
     pre = _live_state(
         head="d" * 40,
         clean=False,
@@ -731,8 +756,11 @@ def test_delivery_complete_stops_before_commit_when_task_body_changes(
 ) -> None:
     target = tmp_path / "tests" / "test_critical_path.py"
     target.parent.mkdir(parents=True)
-    target.write_text("def test_critical_path(): pass\
-", encoding="utf-8")
+    target.write_text(
+        "def test_critical_path(): pass\
+",
+        encoding="utf-8",
+    )
     pre = _live_state(
         head="d" * 40,
         clean=False,
@@ -768,8 +796,11 @@ def test_delivery_complete_stops_before_commit_when_task_body_changes(
 def test_failed_checks_do_not_move_project_status_to_review(tmp_path: Path) -> None:
     target = tmp_path / "tests" / "test_critical_path.py"
     target.parent.mkdir(parents=True)
-    target.write_text("def test_critical_path(): pass\
-", encoding="utf-8")
+    target.write_text(
+        "def test_critical_path(): pass\
+",
+        encoding="utf-8",
+    )
     head = "b" * 40
     pre = _live_state(
         head=head,

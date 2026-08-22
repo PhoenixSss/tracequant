@@ -86,7 +86,9 @@ def parse_critical_outcome(body: str | None) -> CriticalOutcomeContract:
 
     lines = body.splitlines()
     section_starts = [
-        index for index, line in enumerate(lines) if _SECTION_HEADING.fullmatch(line.strip())
+        index
+        for index, line in enumerate(lines)
+        if _SECTION_HEADING.fullmatch(line.strip())
     ]
     if len(section_starts) != 1:
         raise CriticalOutcomeError(
@@ -141,7 +143,9 @@ def critical_outcome_snapshot(body: str | None) -> dict[str, Any]:
 def contract_from_snapshot(value: Any) -> CriticalOutcomeContract:
     if not isinstance(value, Mapping) or value.get("status") != "valid":
         detail = value.get("detail") if isinstance(value, Mapping) else None
-        raise CriticalOutcomeError(str(detail or "Critical Outcome contract is invalid"))
+        raise CriticalOutcomeError(
+            str(detail or "Critical Outcome contract is invalid")
+        )
     contract = value.get("contract")
     if not isinstance(contract, Mapping):
         raise CriticalOutcomeError("Critical Outcome contract payload is unavailable")
@@ -170,7 +174,9 @@ def verify_critical_outcome(
     try:
         target.relative_to(repo_root.resolve())
     except ValueError as exc:
-        raise CriticalOutcomeError("Critical Outcome target escapes repository root") from exc
+        raise CriticalOutcomeError(
+            "Critical Outcome target escapes repository root"
+        ) from exc
     if not target.is_file():
         raise CriticalOutcomeError(
             f"Critical Outcome verification test does not exist: {file_part}"

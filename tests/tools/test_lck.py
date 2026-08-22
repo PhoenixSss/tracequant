@@ -790,9 +790,9 @@ def test_delivery_prepare_requires_valid_critical_outcome(
     _install_facts(monkeypatch, fake, issue=issue)
     state = _resolver(fake).resolve(159)
 
-    decision = lck.PhaseEligibilityResolver().resolve(
-        state, lck.Phase.DELIVERY_PREPARE
-    )
+    decision = lck.PhaseEligibilityResolver().resolve(state, lck.Phase.DELIVERY_PREPARE)
 
     assert decision.eligible is False
-    assert any("Critical Outcome contract invalid" in reason for reason in decision.reasons)
+    assert any(
+        "Critical Outcome contract invalid" in reason for reason in decision.reasons
+    )

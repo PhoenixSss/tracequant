@@ -58,8 +58,12 @@ def test_delivery_runner_uses_lck_for_initial_delivery_and_keeps_remediation() -
 
 
 def test_initial_delivery_lck_contract_is_shared_by_both_skills() -> None:
-    agent = (ROOT / ".agents/skills/task-delivery-runner/SKILL.md").read_text(encoding="utf-8")
-    claude = (ROOT / ".claude/skills/task-delivery-runner/SKILL.md").read_text(encoding="utf-8")
+    agent = (ROOT / ".agents/skills/task-delivery-runner/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    claude = (ROOT / ".claude/skills/task-delivery-runner/SKILL.md").read_text(
+        encoding="utf-8"
+    )
     assert agent == claude
     for phrase in (
         "LCK Delivery Prepare",

@@ -501,7 +501,10 @@ class PhaseEligibilityResolver:
                 reasons.append("Project Status is unavailable or unknown")
             if phase in {Phase.DELIVERY_PREPARE, Phase.DELIVERY_COMPLETE}:
                 critical = issue.get("critical_outcome")
-                if not isinstance(critical, Mapping) or critical.get("status") != "valid":
+                if (
+                    not isinstance(critical, Mapping)
+                    or critical.get("status") != "valid"
+                ):
                     detail = (
                         critical.get("detail")
                         if isinstance(critical, Mapping)
@@ -545,7 +548,9 @@ class PhaseEligibilityResolver:
             if state.local_task_branch is None:
                 reasons.append("Delivery Complete requires a local Task branch")
             if state.git.get("branch") != state.target_branch:
-                reasons.append("Delivery Complete requires the resolved Task branch selected")
+                reasons.append(
+                    "Delivery Complete requires the resolved Task branch selected"
+                )
             if not is_sha(state.local_task_head):
                 reasons.append("Delivery Complete requires a current local Task head")
             if state.open_pr is not None and state.open_pr.get("isDraft") is not False:
@@ -735,7 +740,12 @@ class FormalValidationGate:
     def run(self, base_sha: str) -> dict[str, Any]:
         if not is_sha(base_sha):
             raise LckStopError("formal validation base SHA is unavailable")
-        tool = self.resolver.repo_root / "tools" / "agent_workflow" / "workflow_validation.py"
+        tool = (
+            self.resolver.repo_root
+            / "tools"
+            / "agent_workflow"
+            / "workflow_validation.py"
+        )
         result = self.resolver.runner.run(
             [
                 sys.executable,
@@ -759,7 +769,9 @@ class FormalValidationGate:
                 + (result.stderr.strip() or f"exit {result.returncode}")
             )
         try:
-            payload = read_json_text(result.stdout, field="lck-formal-delivery-validation")
+            payload = read_json_text(
+                result.stdout, field="lck-formal-delivery-validation"
+            )
         except WorkflowToolError as exc:
             raise LckStopError(str(exc)) from exc
         if not isinstance(payload, dict):
@@ -812,7 +824,9 @@ class CommitCurrentTreeEffect:
                 "staged Delivery diff failed git diff --check: "
                 + (check.stderr.strip() or check.stdout.strip())
             )
-        tree = self._run(["git", "write-tree"], "lck-write-candidate-tree").stdout.strip()
+        tree = self._run(
+            ["git", "write-tree"], "lck-write-candidate-tree"
+        ).stdout.strip()
         if not is_sha(tree):
             raise LckStopError("candidate tree OID is unavailable")
         return tree
@@ -857,14 +871,20 @@ class CommitCurrentTreeEffect:
             ["git", "write-tree"], "lck-write-tree-pre-commit"
         ).stdout.strip()
         if current_tree != expected_tree:
-            raise LckStopError("commit precondition failed: staged tree is not validated tree")
+            raise LckStopError(
+                "commit precondition failed: staged tree is not validated tree"
+            )
         self._run(["git", "commit", "-m", message], "lck-commit-current-tree")
-        head = self._run(["git", "rev-parse", "HEAD"], "lck-head-after-commit").stdout.strip()
+        head = self._run(
+            ["git", "rev-parse", "HEAD"], "lck-head-after-commit"
+        ).stdout.strip()
         tree = self._run(
             ["git", "rev-parse", "HEAD^{tree}"], "lck-tree-after-commit"
         ).stdout.strip()
         if not is_sha(head) or tree != expected_tree:
-            raise LckStopError("commit postcondition failed: committed tree != validated tree")
+            raise LckStopError(
+                "commit postcondition failed: committed tree != validated tree"
+            )
         status = self._run(
             ["git", "status", "--porcelain=v1", "--untracked-files=all"],
             "lck-status-after-commit",
@@ -927,7 +947,9 @@ class EnsureRemoteBranchEffect:
                 command_id="lck-fetched-remote-task-head",
             )
             if fetched.returncode != 0 or fetched.stdout.strip() != remote_oid:
-                raise LckStopError("remote Task branch changed during push precondition check")
+                raise LckStopError(
+                    "remote Task branch changed during push precondition check"
+                )
             ancestor = self.resolver.runner.run(
                 ["git", "merge-base", "--is-ancestor", remote_oid, head],
                 command_id="lck-remote-fast-forward-check",
@@ -946,11 +968,14 @@ class EnsureRemoteBranchEffect:
         )
         if push.returncode != 0:
             raise LckStopError(
-                "Task branch push failed: " + (push.stderr.strip() or push.stdout.strip())
+                "Task branch push failed: "
+                + (push.stderr.strip() or push.stdout.strip())
             )
         final_head, final_remote = self._identity(branch)
         if final_head != head or final_remote != head:
-            raise LckStopError("push postcondition failed: local and remote heads differ")
+            raise LckStopError(
+                "push postcondition failed: local and remote heads differ"
+            )
         return EffectReceipt(
             effect="ensure_remote_branch",
             action=action,
@@ -1051,7 +1076,9 @@ class SetReviewStatusEffect:
         if state.status is not ResolutionStatus.RESOLVED or state.repository is None:
             raise LckStopError("cannot set Review status from unresolved live state")
         if state.open_pr is None:
-            raise LckStopError("Project Status may move to Review only after OPEN PR exists")
+            raise LckStopError(
+                "Project Status may move to Review only after OPEN PR exists"
+            )
         if state.project_status == "Review":
             return EffectReceipt(
                 effect="set_review_status", action="already-review", details={}
@@ -1129,7 +1156,10 @@ class DeliveryChecksGate:
 
         while True:
             current = self.resolver.resolve(task_number)
-            if current.status is not ResolutionStatus.RESOLVED or current.open_pr is None:
+            if (
+                current.status is not ResolutionStatus.RESOLVED
+                or current.open_pr is None
+            ):
                 raise LckStopError("PR identity changed while waiting for checks")
             checks = current.checks
             observed = self._observed_categories(checks)
@@ -1148,7 +1178,8 @@ class DeliveryChecksGate:
                 }
                 if failed_required:
                     raise LckStopError(
-                        "required PR checks failed: " + ", ".join(sorted(failed_required))
+                        "required PR checks failed: "
+                        + ", ".join(sorted(failed_required))
                     )
                 if all(observed.get(name) == "success" for name in required_names):
                     return {
@@ -1186,7 +1217,9 @@ class DeliveryChecksGate:
                     f"required={sorted(required_names)}, observed={sorted(observed)}, "
                     f"pending={pending}, configuration={config}"
                 )
-                raise LckStopError("timed out waiting for successful PR checks: " + detail)
+                raise LckStopError(
+                    "timed out waiting for successful PR checks: " + detail
+                )
             time.sleep(self.poll_seconds)
 
 
@@ -1296,9 +1329,13 @@ class DeliveryCompleter:
         if not isinstance(issue, Mapping) or issue.get("body_sha256") != body_sha256:
             raise LckStopError("Delivery operation guard stopped: Task body changed")
         if state.target_branch != branch:
-            raise LckStopError("Delivery operation guard stopped: Task branch identity changed")
+            raise LckStopError(
+                "Delivery operation guard stopped: Task branch identity changed"
+            )
         if head_sha is not None and state.local_task_head != head_sha:
-            raise LckStopError("Delivery operation guard stopped: local Task head changed")
+            raise LckStopError(
+                "Delivery operation guard stopped: local Task head changed"
+            )
         return state
 
     def _final_verify(
@@ -1313,7 +1350,8 @@ class DeliveryCompleter:
         state = self.resolver.resolve(task_number)
         if state.status is not ResolutionStatus.RESOLVED:
             raise LckStopError(
-                "Delivery final verification unresolved: " + "; ".join(state.stop_reasons)
+                "Delivery final verification unresolved: "
+                + "; ".join(state.stop_reasons)
             )
         issue = state.issue
         pr_head = state.open_pr.get("headRefOid") if state.open_pr else None
@@ -1368,7 +1406,9 @@ class DeliveryCompleter:
         effects: list[EffectReceipt] = []
         if state.git.get("clean") is True:
             if not self._has_task_diff(base_sha):
-                raise LckStopError("Delivery Complete found no Task diff against origin/main")
+                raise LckStopError(
+                    "Delivery Complete found no Task diff against origin/main"
+                )
             # Stateless recovery path: re-run all gates on the existing clean head
             # instead of trusting a receipt from a previous interrupted invocation.
             validated_tree = self.commit_effect.current_head_tree()

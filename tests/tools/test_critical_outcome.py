@@ -16,7 +16,9 @@ from critical_outcome import (  # type: ignore[import-not-found]  # noqa: E402
 )
 
 
-def _body(verification: str = "tests/tools/test_lck.py::test_canonical_branch_is_derived_from_current_issue_title") -> str:
+def _body(
+    verification: str = "tests/tools/test_lck.py::test_canonical_branch_is_derived_from_current_issue_title",
+) -> str:
     return f"""### Objective
 Do one thing.
 
