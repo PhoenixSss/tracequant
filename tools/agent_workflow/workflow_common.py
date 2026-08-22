@@ -38,6 +38,21 @@ class WorkflowToolError(RuntimeError):
     """Expected user-facing workflow tooling error."""
 
 
+def build_workflow_env(repo_root: Path) -> dict[str, str]:
+    """Build the shared environment for Workflow-owned subprocesses.
+
+    Workflow runtime state belongs under the repository, not in a user HOME
+    cache that may be unavailable in a sandbox. An explicit caller override
+    remains authoritative.
+    """
+    env = os.environ.copy()
+    env.setdefault(
+        "UV_CACHE_DIR",
+        str(repo_root.resolve() / ".workflow.local" / "uv-cache"),
+    )
+    return env
+
+
 @dataclass(frozen=True)
 class CommandResult:
     command_id: str
@@ -68,7 +83,7 @@ class CommandRunner:
     ) -> CommandResult:
         if not argv:
             raise WorkflowToolError("command argv cannot be empty")
-        process_env = os.environ.copy()
+        process_env = build_workflow_env(self.repo_root)
         process_env.setdefault("PYTHONUTF8", "1")
         process_env.setdefault("PYTHONIOENCODING", "utf-8")
         if env:

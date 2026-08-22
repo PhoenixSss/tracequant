@@ -35,6 +35,7 @@ def _clean_test_env() -> dict[str, str]:
     env = os.environ.copy()
     for key in REMOVED_TRUSTED_ENV_KEYS:
         env.pop(key, None)
+    env.pop("UV_CACHE_DIR", None)
     return env
 
 
@@ -65,7 +66,8 @@ def _copy_runner_repo(tmp_path: Path, *, name: str = "repo") -> Path:
         WORKFLOW_COMMON, repo / "tools" / "agent_workflow" / WORKFLOW_COMMON.name
     )
     (repo / ".gitignore").write_text(
-        ".agents/validation.local/\n.agents/evidence.local/\n", encoding="utf-8"
+        ".agents/validation.local/\n.agents/evidence.local/\n.workflow.local/\n",
+        encoding="utf-8",
     )
     (repo / "uv.lock").write_text("version = 1\n", encoding="utf-8")
     (repo / "pyproject.toml").write_text(
@@ -118,10 +120,12 @@ def _write_fake_tools(
     fail_id: str | None = None,
     sleep_id: str | None = None,
     grandchild_marker: Path | None = None,
+    cache_marker: Path | None = None,
 ) -> Path:
     suffix = (
         f"{branch}-{fail_id or 'pass'}-{sleep_id or 'nosleep'}-"
-        f"{dirty}-{grandchild_marker.name if grandchild_marker else 'nochild'}"
+        f"{dirty}-{grandchild_marker.name if grandchild_marker else 'nochild'}-"
+        f"{cache_marker.name if cache_marker else 'nocache'}"
     )
     bin_dir = tmp_path / f"bin-{repo.name}-{suffix}"
     bin_dir.mkdir()
@@ -189,14 +193,19 @@ sys.exit(0)
     uv = bin_dir / "uv"
     uv.write_text(
         f"""#!{PYTHON}
+import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 args = sys.argv[1:]
 key = '-'.join(args)
 fail = {fail_id!r}
 sleep = {sleep_id!r}
 marker = {str(grandchild_marker) if grandchild_marker else None!r}
+cache_marker = {str(cache_marker) if cache_marker else None!r}
+if cache_marker:
+    Path(cache_marker).write_text(os.environ.get('UV_CACHE_DIR', ''), encoding='utf-8')
 if sleep and sleep in key:
     if marker:
         child_code = (
@@ -280,6 +289,19 @@ def test_current_ci_equivalent_success_digest_and_logs(tmp_path: Path) -> None:
     assert stored["commands"][0]["argv"] == ["uv", "lock", "--check"]
     assert stored["commands"][-1]["id"] == "git-diff-check"
     assert stored["integrity"]["rules_sha256"]
+
+
+def test_uv_subprocess_uses_repo_local_cache_by_default(tmp_path: Path) -> None:
+    repo = _copy_runner_repo(tmp_path)
+    cache_marker = tmp_path / "uv-cache-env.txt"
+    bin_dir = _write_fake_tools(tmp_path, repo, cache_marker=cache_marker)
+
+    result = _run(repo, bin_dir, "targeted")
+
+    assert result.returncode == 0, result.stderr
+    assert cache_marker.read_text(encoding="utf-8") == str(
+        repo / ".workflow.local" / "uv-cache"
+    )
 
 
 def test_targeted_profile_is_not_ci_equivalent(tmp_path: Path) -> None:

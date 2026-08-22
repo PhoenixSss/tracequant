@@ -113,6 +113,10 @@ intent 无法可靠解析时：**不要猜**。回退到 explicit Skill-name fal
 
 ## 6. Delivery semantics
 
+Workflow-owned `uv` processes use `.workflow.local/uv-cache`. This is local
+runtime state and the directory is Git-ignored; an explicit `UV_CACHE_DIR`
+override remains supported.
+
 - Task `Critical Outcome` 是正式 Delivery gate：LCK 从当前 Task body 读取结构化
   contract，使用固定 pytest verifier 执行真实 supported path。缺失、malformed、unsafe
   target 或 verifier failure 均 fail closed；不得用普通 unit/static check 替代。
