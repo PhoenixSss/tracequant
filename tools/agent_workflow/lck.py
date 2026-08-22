@@ -1154,6 +1154,7 @@ class SetReviewStatusEffect:
         task_number: int,
         *,
         expected_pr: Mapping[str, Any] | None = None,
+        checks_result: Mapping[str, Any] | None = None,
     ) -> EffectReceipt:
         state = self.resolver.resolve(task_number)
         if state.status is not ResolutionStatus.RESOLVED or state.repository is None:
@@ -1173,9 +1174,20 @@ class SetReviewStatusEffect:
                 raise LckStopError(
                     "Project Status precondition failed: checks-gated PR identity changed"
                 )
+        if checks_result is not None and not DeliveryChecksGate._checks_postcondition(
+            state, checks_result
+        ):
+            raise LckStopError(
+                "Project Status precondition failed: PR checks are no longer passing"
+            )
         if state.project_status == "Review":
             return EffectReceipt(
                 effect="set_review_status", action="already-review", details={}
+            )
+        previous_status = state.project_status
+        if previous_status not in {"Ready", "In Progress"}:
+            raise LckStopError(
+                "Project Status precondition failed: prior status cannot be restored"
             )
         set_project_status_with_runner(
             self.resolver.runner,
@@ -1183,17 +1195,49 @@ class SetReviewStatusEffect:
             task_number,
             value="Review",
         )
-        final = self.resolver.resolve(task_number)
-        if final.project_status != "Review":
-            raise LckStopError("Project Status postcondition failed: expected Review")
-        if expected_pr is not None and DeliveryChecksGate._pr_identity(final) != {
-            "number": expected_pr.get("number"),
-            "head_sha": expected_pr.get("head_sha"),
-            "base_sha": expected_pr.get("base_sha"),
-        }:
+        try:
+            final = self.resolver.resolve(task_number)
+            if final.project_status != "Review":
+                raise LckStopError(
+                    "Project Status postcondition failed: expected Review"
+                )
+            if expected_pr is not None and DeliveryChecksGate._pr_identity(final) != {
+                "number": expected_pr.get("number"),
+                "head_sha": expected_pr.get("head_sha"),
+                "base_sha": expected_pr.get("base_sha"),
+            }:
+                raise LckStopError(
+                    "Project Status postcondition failed: checks-gated PR identity changed"
+                )
+            if (
+                checks_result is not None
+                and not DeliveryChecksGate._checks_postcondition(final, checks_result)
+            ):
+                raise LckStopError(
+                    "Project Status postcondition failed: check/lifecycle state is not aligned"
+                )
+        except LckStopError as exc:
+            try:
+                set_project_status_with_runner(
+                    self.resolver.runner,
+                    state.repository,
+                    task_number,
+                    value=previous_status,
+                )
+                restored = self.resolver.resolve(task_number)
+            except Exception as restore_exc:
+                raise LckStopError(
+                    "Project Status postcondition failed and compensation could not "
+                    f"restore {previous_status!r}"
+                ) from restore_exc
+            if restored.project_status != previous_status:
+                raise LckStopError(
+                    "Project Status postcondition failed and compensation did not "
+                    f"restore {previous_status!r}"
+                )
             raise LckStopError(
-                "Project Status postcondition failed: checks-gated PR identity changed"
-            )
+                f"{exc}; restored Project Status to {previous_status!r}"
+            ) from exc
         return EffectReceipt(
             effect="set_review_status", action="updated", details={"status": "Review"}
         )
@@ -1251,6 +1295,50 @@ class DeliveryChecksGate:
             "head_sha": pr.get("headRefOid"),
             "base_sha": pr.get("baseRefOid"),
         }
+
+    @staticmethod
+    def _checks_postcondition(
+        state: LiveState,
+        checks_result: Mapping[str, Any],
+    ) -> bool:
+        """Require the latest live PR checks to match the completed gate."""
+        if checks_result.get("status") != "pass":
+            return False
+        current_pr = state.open_pr
+        gated_pr = checks_result.get("pr")
+        if not isinstance(current_pr, Mapping) or not isinstance(gated_pr, Mapping):
+            return False
+        if (
+            gated_pr.get("number") != current_pr.get("number")
+            or gated_pr.get("head_sha") != current_pr.get("headRefOid")
+            or gated_pr.get("base_sha") != current_pr.get("baseRefOid")
+        ):
+            return False
+        checks = state.checks
+        try:
+            failed = int(checks.get("failed", 0) or 0)
+            pending = int(checks.get("pending", 0) or 0)
+            unknown = int(checks.get("skipped_or_unknown", 0) or 0)
+            count = int(checks.get("count", 0) or 0)
+        except (TypeError, ValueError):
+            return False
+        if failed > 0 or pending > 0 or unknown > 0:
+            return False
+
+        required = checks_result.get("required")
+        required_names = (
+            {item for item in required if isinstance(item, str) and item}
+            if isinstance(required, list)
+            else set()
+        )
+        if required_names:
+            observed = DeliveryChecksGate._observed_categories(checks)
+            return all(observed.get(name) == "success" for name in required_names)
+
+        configuration = checks_result.get("configuration")
+        if configuration in {"configured-empty", "not-configured"}:
+            return count == 0 or checks.get("all_success") is True
+        return count > 0 and checks.get("all_success") is True
 
     def run(self, task_number: int) -> dict[str, Any]:
         state = self.resolver.resolve(task_number)
@@ -1460,44 +1548,7 @@ class DeliveryCompleter:
         state: LiveState,
         checks_result: Mapping[str, Any],
     ) -> bool:
-        """Require the latest live PR checks to match the completed gate."""
-        if checks_result.get("status") != "pass":
-            return False
-        current_pr = state.open_pr
-        gated_pr = checks_result.get("pr")
-        if not isinstance(current_pr, Mapping) or not isinstance(gated_pr, Mapping):
-            return False
-        if (
-            gated_pr.get("number") != current_pr.get("number")
-            or gated_pr.get("head_sha") != current_pr.get("headRefOid")
-            or gated_pr.get("base_sha") != current_pr.get("baseRefOid")
-        ):
-            return False
-        checks = state.checks
-        try:
-            failed = int(checks.get("failed", 0) or 0)
-            pending = int(checks.get("pending", 0) or 0)
-            unknown = int(checks.get("skipped_or_unknown", 0) or 0)
-            count = int(checks.get("count", 0) or 0)
-        except (TypeError, ValueError):
-            return False
-        if failed > 0 or pending > 0 or unknown > 0:
-            return False
-
-        required = checks_result.get("required")
-        required_names = (
-            {item for item in required if isinstance(item, str) and item}
-            if isinstance(required, list)
-            else set()
-        )
-        if required_names:
-            observed = DeliveryChecksGate._observed_categories(checks)
-            return all(observed.get(name) == "success" for name in required_names)
-
-        configuration = checks_result.get("configuration")
-        if configuration in {"configured-empty", "not-configured"}:
-            return count == 0 or checks.get("all_success") is True
-        return count > 0 and checks.get("all_success") is True
+        return DeliveryChecksGate._checks_postcondition(state, checks_result)
 
     def _final_verify(
         self,
@@ -1669,6 +1720,7 @@ class DeliveryCompleter:
             self.status_effect.execute(
                 task_number,
                 expected_pr=checks_pr,
+                checks_result=checks,
             )
         )
         # The status effect may race with GitHub check transitions. Reacquire

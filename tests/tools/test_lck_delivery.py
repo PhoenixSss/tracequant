@@ -1219,6 +1219,13 @@ def test_final_verification_stops_when_checks_regress_after_gate(
         open_pr=pr,
         remote_oid=head,
     )
+    restored = _live_state(
+        head=head,
+        clean=True,
+        project_status="In Progress",
+        open_pr=pr,
+        remote_oid=head,
+    )
     failed_final = _with_checks(
         _live_state(
             head=head,
@@ -1233,9 +1240,9 @@ def test_final_verification_stops_when_checks_regress_after_gate(
     resolver = SequenceResolver(
         tmp_path,
         runner,
-        [pre, pre, remote, with_pr, with_pr, failed_final],
+        [pre, pre, remote, with_pr, with_pr, with_pr, failed_final, restored],
     )
-    status = StubEffect("set_review_status", "updated")
+    status = lck.SetReviewStatusEffect(cast(Any, resolver))
 
     with pytest.raises(lck.LckStopError, match="check/lifecycle state is not aligned"):
         lck.DeliveryCompleter(
@@ -1252,7 +1259,12 @@ def test_final_verification_stops_when_checks_regress_after_gate(
             summary="Move initial Delivery mechanics into LCK.",
         )
 
-    assert status.calls == 1
+    project_status_values = [
+        command[command.index("--value") + 1]
+        for command in runner.commands
+        if command[:3] == ("gh", "project", "item-edit")
+    ]
+    assert project_status_values == ["Review", "In Progress"]
 
 
 def test_final_verification_requires_same_pr_as_checks_gate(tmp_path: Path) -> None:
@@ -1313,6 +1325,46 @@ def test_set_review_status_requires_checks_gated_pr_identity(
         lck.SetReviewStatusEffect(cast(Any, resolver)).execute(
             160,
             expected_pr={"number": 10, "head_sha": head, "base_sha": SHA},
+        )
+
+    assert not any(command[:2] == ("gh", "project") for command in runner.commands)
+
+
+def test_set_review_status_rejects_regressed_checks_before_mutation(
+    tmp_path: Path,
+) -> None:
+    head = "b" * 40
+    current_pr = {
+        "number": 10,
+        "state": "OPEN",
+        "isDraft": False,
+        "headRefOid": head,
+        "baseRefOid": SHA,
+    }
+    state = _with_checks(
+        _live_state(
+            head=head,
+            clean=True,
+            project_status="In Progress",
+            open_pr=current_pr,
+            remote_oid=head,
+        ),
+        _checks(category="failed", state_name="FAILURE"),
+    )
+    runner = CompletionRunner()
+    resolver = SequenceResolver(tmp_path, runner, [state])
+    checks_result = {
+        "status": "pass",
+        "configuration": "not-configured",
+        "required": [],
+        "pr": {"number": 10, "head_sha": head, "base_sha": SHA},
+    }
+
+    with pytest.raises(lck.LckStopError, match="PR checks are no longer passing"):
+        lck.SetReviewStatusEffect(cast(Any, resolver)).execute(
+            160,
+            expected_pr=checks_result["pr"],
+            checks_result=checks_result,
         )
 
     assert not any(command[:2] == ("gh", "project") for command in runner.commands)
