@@ -81,6 +81,21 @@ def test_commit_current_tree_rejects_tree_change_after_validation(
         effect.verify_tree_unchanged(tree)
 
 
+def test_commit_current_tree_rejects_head_change_after_validation(
+    tmp_path: Path,
+) -> None:
+    repo, _ = _repo(tmp_path)
+    _git(repo, "switch", "-c", "task/160-delivery")
+    (repo / "seed.txt").write_text("candidate\n", encoding="utf-8")
+    effect = lck.CommitCurrentTreeEffect(_resolver_for_repo(repo))
+    original_head = _git(repo, "rev-parse", "HEAD")
+    tree = effect.stage_candidate_tree()
+    _git(repo, "commit", "-m", "concurrent")
+
+    with pytest.raises(lck.LckStopError, match="HEAD changed during formal validation"):
+        effect.verify_tree_unchanged(tree, expected_head_sha=original_head)
+
+
 def test_ensure_remote_branch_create_then_idempotent(tmp_path: Path) -> None:
     repo, _ = _repo(tmp_path)
     _git(repo, "switch", "-c", "task/160-delivery")
@@ -95,6 +110,22 @@ def test_ensure_remote_branch_create_then_idempotent(tmp_path: Path) -> None:
     assert created.action == "created"
     assert repeated.action == "already-synced"
     assert created.details["head_sha"] == repeated.details["remote_oid"]
+
+
+def test_ensure_remote_branch_rejects_unvalidated_local_head(
+    tmp_path: Path,
+) -> None:
+    repo, _ = _repo(tmp_path)
+    _git(repo, "switch", "-c", "task/160-delivery")
+    (repo / "task.txt").write_text("task\n", encoding="utf-8")
+    _git(repo, "add", "task.txt")
+    _git(repo, "commit", "-m", "task")
+    effect = lck.EnsureRemoteBranchEffect(_resolver_for_repo(repo))
+
+    with pytest.raises(lck.LckStopError, match="validated local Task HEAD changed"):
+        effect.execute("task/160-delivery", expected_head_sha="b" * 40)
+
+    assert _git(repo, "ls-remote", "--heads", "origin", "task/160-delivery") == ""
 
 
 def test_ensure_remote_branch_fast_forwards_only_when_remote_is_ancestor(
@@ -331,10 +362,18 @@ class StubCommit:
         self.calls.append("stage_candidate_tree")
         return "c" * 40
 
-    def verify_tree_unchanged(self, _tree: str) -> None:
+    def verify_tree_unchanged(
+        self, _tree: str, *, expected_head_sha: str | None = None
+    ) -> None:
         self.calls.append("verify_tree_unchanged")
 
-    def execute(self, tree: str, _message: str) -> lck.EffectReceipt:
+    def execute(
+        self,
+        tree: str,
+        _message: str,
+        *,
+        expected_parent_sha: str | None = None,
+    ) -> lck.EffectReceipt:
         self.calls.append("execute")
         return lck.EffectReceipt(
             "commit_current_tree",
@@ -979,3 +1018,33 @@ def test_final_verification_requires_same_pr_as_checks_gate(tmp_path: Path) -> N
                 "pr": {"number": 10, "head_sha": head, "base_sha": SHA},
             },
         )
+
+
+def test_set_review_status_requires_checks_gated_pr_identity(
+    tmp_path: Path,
+) -> None:
+    head = "b" * 40
+    current_pr = {
+        "number": 11,
+        "state": "OPEN",
+        "isDraft": False,
+        "headRefOid": head,
+        "baseRefOid": SHA,
+    }
+    state = _live_state(
+        head=head,
+        clean=True,
+        project_status="In Progress",
+        open_pr=current_pr,
+        remote_oid=head,
+    )
+    runner = CompletionRunner()
+    resolver = SequenceResolver(tmp_path, runner, [state])
+
+    with pytest.raises(lck.LckStopError, match="checks-gated PR identity changed"):
+        lck.SetReviewStatusEffect(cast(Any, resolver)).execute(
+            160,
+            expected_pr={"number": 10, "head_sha": head, "base_sha": SHA},
+        )
+
+    assert not any(command[:2] == ("gh", "project") for command in runner.commands)

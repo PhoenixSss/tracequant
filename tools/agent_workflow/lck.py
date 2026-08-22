@@ -840,7 +840,12 @@ class CommitCurrentTreeEffect:
             raise LckStopError("current HEAD tree OID is unavailable")
         return tree
 
-    def verify_tree_unchanged(self, expected_tree: str) -> None:
+    def verify_tree_unchanged(
+        self,
+        expected_tree: str,
+        *,
+        expected_head_sha: str | None = None,
+    ) -> None:
         unstaged = self.resolver.runner.run(
             ["git", "diff", "--quiet"],
             command_id="lck-post-validation-unstaged-check",
@@ -863,8 +868,21 @@ class CommitCurrentTreeEffect:
         ).stdout.strip()
         if current_tree != expected_tree:
             raise LckStopError("validated candidate tree changed before commit")
+        if expected_head_sha is not None:
+            current_head = self._run(
+                ["git", "rev-parse", "HEAD"],
+                "lck-post-validation-head",
+            ).stdout.strip()
+            if current_head != expected_head_sha:
+                raise LckStopError("local Task HEAD changed during formal validation")
 
-    def execute(self, expected_tree: str, message: str) -> EffectReceipt:
+    def execute(
+        self,
+        expected_tree: str,
+        message: str,
+        *,
+        expected_parent_sha: str | None = None,
+    ) -> EffectReceipt:
         if not message.strip() or "\x00" in message or len(message) > 240:
             raise LckStopError("commit message must be non-empty and <= 240 characters")
         current_tree = self._run(
@@ -874,10 +892,28 @@ class CommitCurrentTreeEffect:
             raise LckStopError(
                 "commit precondition failed: staged tree is not validated tree"
             )
+        if expected_parent_sha is not None:
+            current_parent = self._run(
+                ["git", "rev-parse", "HEAD"],
+                "lck-commit-parent-head",
+            ).stdout.strip()
+            if current_parent != expected_parent_sha:
+                raise LckStopError(
+                    "commit precondition failed: local Task HEAD changed"
+                )
         self._run(["git", "commit", "-m", message], "lck-commit-current-tree")
         head = self._run(
             ["git", "rev-parse", "HEAD"], "lck-head-after-commit"
         ).stdout.strip()
+        if expected_parent_sha is not None:
+            parent = self._run(
+                ["git", "rev-parse", "HEAD^"],
+                "lck-parent-after-commit",
+            ).stdout.strip()
+            if parent != expected_parent_sha:
+                raise LckStopError(
+                    "commit postcondition failed: commit parent HEAD changed"
+                )
         tree = self._run(
             ["git", "rev-parse", "HEAD^{tree}"], "lck-tree-after-commit"
         ).stdout.strip()
@@ -904,7 +940,12 @@ class EnsureRemoteBranchEffect:
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.resolver = resolver
 
-    def _identity(self, branch: str) -> tuple[str, str | None]:
+    def _identity(
+        self,
+        branch: str,
+        *,
+        expected_head_sha: str | None = None,
+    ) -> tuple[str, str | None]:
         branch_result = self.resolver.runner.run(
             ["git", "branch", "--show-current"], command_id="lck-push-current-branch"
         )
@@ -917,6 +958,10 @@ class EnsureRemoteBranchEffect:
         head = head_result.stdout.strip()
         if current_branch != branch or not is_sha(head):
             raise LckStopError("push precondition failed: local Task identity changed")
+        if expected_head_sha is not None and head != expected_head_sha:
+            raise LckStopError(
+                "push precondition failed: validated local Task HEAD changed"
+            )
         remote_result = self.resolver.runner.run(
             ["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
             command_id="lck-push-remote-head",
@@ -927,8 +972,16 @@ class EnsureRemoteBranchEffect:
         remote_oid = refs.get(branch)
         return head, remote_oid
 
-    def execute(self, branch: str) -> EffectReceipt:
-        head, remote_oid = self._identity(branch)
+    def execute(
+        self,
+        branch: str,
+        *,
+        expected_head_sha: str | None = None,
+    ) -> EffectReceipt:
+        head, remote_oid = self._identity(
+            branch,
+            expected_head_sha=expected_head_sha,
+        )
         if remote_oid == head:
             return EffectReceipt(
                 effect="ensure_remote_branch",
@@ -963,7 +1016,13 @@ class EnsureRemoteBranchEffect:
             action = "created"
 
         push = self.resolver.runner.run(
-            ["git", "push", "-u", "origin", f"HEAD:refs/heads/{branch}"],
+            [
+                "git",
+                "push",
+                "-u",
+                "origin",
+                f"{head}:refs/heads/{branch}",
+            ],
             command_id="lck-push-task-branch",
         )
         if push.returncode != 0:
@@ -971,7 +1030,10 @@ class EnsureRemoteBranchEffect:
                 "Task branch push failed: "
                 + (push.stderr.strip() or push.stdout.strip())
             )
-        final_head, final_remote = self._identity(branch)
+        final_head, final_remote = self._identity(
+            branch,
+            expected_head_sha=expected_head_sha,
+        )
         if final_head != head or final_remote != head:
             raise LckStopError(
                 "push postcondition failed: local and remote heads differ"
@@ -1071,7 +1133,12 @@ class SetReviewStatusEffect:
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.resolver = resolver
 
-    def execute(self, task_number: int) -> EffectReceipt:
+    def execute(
+        self,
+        task_number: int,
+        *,
+        expected_pr: Mapping[str, Any] | None = None,
+    ) -> EffectReceipt:
         state = self.resolver.resolve(task_number)
         if state.status is not ResolutionStatus.RESOLVED or state.repository is None:
             raise LckStopError("cannot set Review status from unresolved live state")
@@ -1079,6 +1146,17 @@ class SetReviewStatusEffect:
             raise LckStopError(
                 "Project Status may move to Review only after OPEN PR exists"
             )
+        if expected_pr is not None:
+            current_pr = DeliveryChecksGate._pr_identity(state)
+            expected_identity = {
+                "number": expected_pr.get("number"),
+                "head_sha": expected_pr.get("head_sha"),
+                "base_sha": expected_pr.get("base_sha"),
+            }
+            if current_pr != expected_identity:
+                raise LckStopError(
+                    "Project Status precondition failed: checks-gated PR identity changed"
+                )
         if state.project_status == "Review":
             return EffectReceipt(
                 effect="set_review_status", action="already-review", details={}
@@ -1092,6 +1170,14 @@ class SetReviewStatusEffect:
         final = self.resolver.resolve(task_number)
         if final.project_status != "Review":
             raise LckStopError("Project Status postcondition failed: expected Review")
+        if expected_pr is not None and DeliveryChecksGate._pr_identity(final) != {
+            "number": expected_pr.get("number"),
+            "head_sha": expected_pr.get("head_sha"),
+            "base_sha": expected_pr.get("base_sha"),
+        }:
+            raise LckStopError(
+                "Project Status postcondition failed: checks-gated PR identity changed"
+            )
         return EffectReceipt(
             effect="set_review_status", action="updated", details={"status": "Review"}
         )
@@ -1493,9 +1579,17 @@ class DeliveryCompleter:
                 base_sha=base_sha,
                 body_sha256=body_sha256,
                 branch=branch,
+                head_sha=state.local_task_head,
             )
-            self.commit_effect.verify_tree_unchanged(validated_tree)
-            commit = self.commit_effect.execute(validated_tree, commit_message)
+            self.commit_effect.verify_tree_unchanged(
+                validated_tree,
+                expected_head_sha=state.local_task_head,
+            )
+            commit = self.commit_effect.execute(
+                validated_tree,
+                commit_message,
+                expected_parent_sha=state.local_task_head,
+            )
             effects.append(commit)
             head = commit.details.get("head_sha")
             if not is_sha(head):
@@ -1508,7 +1602,12 @@ class DeliveryCompleter:
             branch=branch,
             head_sha=str(head),
         )
-        effects.append(self.remote_effect.execute(branch))
+        effects.append(
+            self.remote_effect.execute(
+                branch,
+                expected_head_sha=str(head),
+            )
+        )
         self._operation_guard(
             task_number,
             base_sha=base_sha,
@@ -1542,7 +1641,15 @@ class DeliveryCompleter:
             branch=branch,
             head_sha=str(head),
         )
-        effects.append(self.status_effect.execute(task_number))
+        checks_pr = checks.get("pr")
+        if not isinstance(checks_pr, Mapping):
+            raise LckStopError("checks result did not contain PR identity")
+        effects.append(
+            self.status_effect.execute(
+                task_number,
+                expected_pr=checks_pr,
+            )
+        )
         # The status effect may race with GitHub check transitions. Reacquire
         # one final live state after the effect and verify that exact state.
         final_state = self.resolver.resolve(task_number)
