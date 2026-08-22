@@ -198,9 +198,11 @@ def test_review_skill_requires_remediation_handoff_for_non_pass() -> None:
         ROOT / ".claude/skills/task-pr-review-runner/SKILL.md",
     ):
         text = path.read_text(encoding="utf-8")
-        section = text[text.index("## Remediation handoff") : text.index(
-            "## Report and recovery", text.index("## Remediation handoff")
-        )]
+        section = text[
+            text.index("## Remediation handoff") : text.index(
+                "## Report and recovery", text.index("## Remediation handoff")
+            )
+        ]
         match = re.search(
             r"^```text\n(?P<body>.*?)\n```$", section, re.MULTILINE | re.DOTALL
         )
