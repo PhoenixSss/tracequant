@@ -683,6 +683,31 @@ def test_remediation_prepare_rejects_draft_pr(
     assert any("non-Draft" in reason for reason in decision.reasons)
 
 
+def test_remediation_requires_pr_base_to_match_current_main(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "task/159-lck-core-live-state-resolution"
+    fake = FakeRunner(
+        branch=branch, local_branches={branch}, remote_branches={branch: SHA}
+    )
+    issue = _issue()
+    issue["project_status"] = "Review"
+    pr = _open_pr(branch)
+    pr["baseRefOid"] = "b" * 40
+    _install_facts(monkeypatch, fake, issue=issue, open_pr=pr)
+
+    state = _resolver(fake).resolve(159)
+    decision = lck.PhaseEligibilityResolver().resolve(
+        state,
+        lck.Phase.REMEDIATION_PREPARE,
+    )
+
+    assert not decision.eligible
+    assert any(
+        "base must match current origin/main" in reason for reason in decision.reasons
+    )
+
+
 def test_multiple_task_branches_stop_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1313,6 +1338,58 @@ def test_review_workspace_seal_removes_write_bits(tmp_path: Path) -> None:
     assert nested.stat().st_mode & 0o222 == 0
     assert target.stat().st_mode & 0o222 == 0
     lck.ReviewWorkspaceManager._make_removable(root)
+
+
+def test_review_workspace_remove_rejects_unvalidated_path(tmp_path: Path) -> None:
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    manager = lck.ReviewWorkspaceManager(resolver)
+
+    with pytest.raises(lck.LckStopError, match="cleanup path"):
+        manager.remove(tmp_path / "not-an-lck-worktree")
+
+
+def test_review_validation_artifacts_are_preserved_outside_review_worktree(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    review_root = tmp_path / "review-root"
+    tool = review_root / "tools" / "agent_workflow" / "workflow_validation.py"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("# validation stub\n", encoding="utf-8")
+    output_dir = review_root / ".agents" / "validation.local" / "run"
+    output_dir.mkdir(parents=True)
+    (output_dir / "pytest.log").write_text("pass\n", encoding="utf-8")
+
+    class ValidationRunner:
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            payload = {
+                "status": "pass",
+                "output_dir": ".agents/validation.local/run",
+                "commands": [
+                    {
+                        "status": "pass",
+                        "log_path": ".agents/validation.local/run/pytest.log",
+                    }
+                ],
+            }
+            return CommandResult(
+                command_id=command_id,
+                argv=tuple(str(item) for item in argv),
+                returncode=0,
+                stdout=json.dumps(payload),
+                stderr="",
+            )
+
+    resolver = cast(Any, StaticResolver(repo_root, _review_state()))
+    resolver.runner = ValidationRunner()
+    validation = lck.ReviewValidationGate(resolver).run(review_root, SHA)
+
+    durable_output = repo_root / validation["output_dir"]
+    durable_log = repo_root / validation["commands"][0]["log_path"]
+    assert validation["output_dir"].startswith(".agents/validation.local/lck-review-")
+    assert durable_output.is_dir()
+    assert durable_log.read_text(encoding="utf-8") == "pass\n"
 
 
 def test_remediation_prepare_uses_live_head_not_review_record_identity(

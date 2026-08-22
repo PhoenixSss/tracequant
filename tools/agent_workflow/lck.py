@@ -653,6 +653,10 @@ class PhaseEligibilityResolver:
             pr_head = state.open_pr.get("headRefOid") if state.open_pr else None
             if not is_sha(pr_head):
                 reasons.append("current OPEN PR head OID is unavailable")
+            pr_base = state.open_pr.get("baseRefOid") if state.open_pr else None
+            origin_main = state.git.get("origin_main_sha")
+            if not is_sha(pr_base) or not is_sha(origin_main) or pr_base != origin_main:
+                reasons.append("current OPEN PR base must match current origin/main")
             if state.remote_task_oid != pr_head:
                 reasons.append("remote Task branch must match current OPEN PR head")
             if state.local_task_head is not None and state.local_task_head != pr_head:
@@ -974,6 +978,68 @@ class ReviewValidationGate:
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.resolver = resolver
 
+    def _persist_validation_artifacts(
+        self, review_root: Path, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        raw_output_dir = payload.get("output_dir")
+        if not isinstance(raw_output_dir, str) or not raw_output_dir:
+            raise LckStopError(
+                "formal Review validation did not provide an output directory"
+            )
+        output_dir = Path(raw_output_dir)
+        if output_dir.is_absolute():
+            raise LckStopError(
+                "formal Review validation output directory must be relative"
+            )
+        review_root = review_root.resolve()
+        source = (review_root / output_dir).resolve()
+        try:
+            source.relative_to(review_root)
+        except ValueError as exc:
+            raise LckStopError(
+                "formal Review validation output escaped the Review worktree"
+            ) from exc
+        if not source.is_dir():
+            raise LckStopError(
+                "formal Review validation output directory is unavailable"
+            )
+
+        durable_root = (
+            self.resolver.repo_root / ".agents" / "validation.local"
+        ).resolve()
+        durable_root.mkdir(parents=True, exist_ok=True)
+        destination = durable_root / f"lck-review-{uuid.uuid4().hex}"
+        try:
+            shutil.copytree(source, destination)
+        except OSError as exc:
+            shutil.rmtree(destination, ignore_errors=True)
+            raise LckStopError(
+                f"cannot preserve formal Review validation artifacts: {exc}"
+            ) from exc
+
+        durable_relative = destination.relative_to(
+            self.resolver.repo_root.resolve()
+        ).as_posix()
+        preserved = dict(payload)
+        preserved["output_dir"] = durable_relative
+        commands = preserved.get("commands")
+        if isinstance(commands, list):
+            for command in commands:
+                if not isinstance(command, dict):
+                    continue
+                raw_log_path = command.get("log_path")
+                if not isinstance(raw_log_path, str) or not raw_log_path:
+                    continue
+                log_path = Path(raw_log_path)
+                try:
+                    log_relative = log_path.relative_to(output_dir)
+                except ValueError as exc:
+                    raise LckStopError(
+                        "formal Review validation log path escaped its output directory"
+                    ) from exc
+                command["log_path"] = (Path(durable_relative) / log_relative).as_posix()
+        return preserved
+
     def run(self, review_root: Path, base_sha: str) -> dict[str, Any]:
         if not is_sha(base_sha):
             raise LckStopError("formal Review validation base SHA is unavailable")
@@ -1011,7 +1077,7 @@ class ReviewValidationGate:
                 "formal Review validation failed: "
                 + str(payload.get("status") or result.returncode)
             )
-        return payload
+        return self._persist_validation_artifacts(review_root, payload)
 
 
 class ReviewWorkspaceManager:
@@ -1019,6 +1085,42 @@ class ReviewWorkspaceManager:
 
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.resolver = resolver
+
+    @staticmethod
+    def _validated_worktree_path(path: Path) -> Path:
+        resolved = path.resolve(strict=False)
+        temp_root = Path(tempfile.gettempdir()).resolve()
+        try:
+            relative = resolved.relative_to(temp_root)
+        except ValueError as exc:
+            raise LckStopError(
+                "Review worktree cleanup path is outside the temporary root"
+            ) from exc
+        if len(relative.parts) != 1 or not resolved.name.startswith(
+            "tracequant-lck-review-"
+        ):
+            raise LckStopError("Review worktree cleanup path is not LCK-owned")
+        return resolved
+
+    def _assert_registered_worktree(self, path: Path) -> None:
+        result = self.resolver.runner.run(
+            ["git", "worktree", "list", "--porcelain"],
+            command_id="lck-review-worktree-verify",
+        )
+        if result.returncode != 0:
+            raise LckStopError(
+                "cannot verify isolated Review worktree ownership: "
+                + (result.stderr.strip() or result.stdout.strip())
+            )
+        registered = {
+            Path(line.removeprefix("worktree ").strip()).resolve()
+            for line in result.stdout.splitlines()
+            if line.startswith("worktree ") and line.removeprefix("worktree ").strip()
+        }
+        if path not in registered:
+            raise LckStopError(
+                "Review worktree cleanup path is not a registered LCK worktree"
+            )
 
     def create(self, task_number: int, head_sha: str) -> Path:
         path = Path(
@@ -1087,6 +1189,8 @@ class ReviewWorkspaceManager:
                     os.chmod(target, 0o644)
 
     def remove(self, path: Path) -> None:
+        path = self._validated_worktree_path(path)
+        self._assert_registered_worktree(path)
         self._make_removable(path)
         result = self.resolver.runner.run(
             ["git", "worktree", "remove", "--force", str(path)],
@@ -1094,6 +1198,10 @@ class ReviewWorkspaceManager:
         )
         if result.returncode != 0:
             shutil.rmtree(path, ignore_errors=True)
+            if path.exists():
+                raise LckStopError(
+                    "failed to remove isolated Review worktree directory"
+                )
             prune = self.resolver.runner.run(
                 ["git", "worktree", "prune"],
                 command_id="lck-review-worktree-prune",
@@ -2313,6 +2421,7 @@ class DeliveryCompleter:
         pr_effect: EnsureOpenPrEffect | None = None,
         status_effect: SetReviewStatusEffect | None = None,
         checks_gate: DeliveryChecksGate | None = None,
+        require_existing_open_pr: bool = False,
     ) -> None:
         self.resolver = resolver
         self.eligibility = eligibility or PhaseEligibilityResolver()
@@ -2322,6 +2431,7 @@ class DeliveryCompleter:
         self.pr_effect = pr_effect or EnsureOpenPrEffect(resolver)
         self.status_effect = status_effect or SetReviewStatusEffect(resolver)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
+        self.require_existing_open_pr = require_existing_open_pr
 
     def _run_critical_outcome(self, state: LiveState) -> dict[str, Any]:
         issue = state.issue
@@ -2362,6 +2472,7 @@ class DeliveryCompleter:
         body_sha256: str,
         branch: str,
         head_sha: str | None = None,
+        expected_pr_base_sha: str | None = None,
     ) -> LiveState:
         """Reacquire the facts that must stay stable within this invocation."""
         state = self.resolver.resolve(task_number)
@@ -2379,6 +2490,15 @@ class DeliveryCompleter:
             raise LckStopError(
                 "Delivery operation guard stopped: Task branch identity changed"
             )
+        if expected_pr_base_sha is not None:
+            pr = state.open_pr
+            if (
+                not isinstance(pr, Mapping)
+                or pr.get("baseRefOid") != expected_pr_base_sha
+            ):
+                raise LckStopError(
+                    "Delivery operation guard stopped: existing OPEN PR base changed"
+                )
         if head_sha is not None and state.local_task_head != head_sha:
             raise LckStopError(
                 "Delivery operation guard stopped: local Task head changed"
@@ -2457,6 +2577,17 @@ class DeliveryCompleter:
         if not isinstance(body_sha256, str) or not body_sha256:
             raise LckStopError("current Task body identity is unavailable")
         branch = state.target_branch
+        expected_pr_base_sha = base_sha if self.require_existing_open_pr else None
+
+        if expected_pr_base_sha is not None:
+            self._operation_guard(
+                task_number,
+                base_sha=base_sha,
+                body_sha256=body_sha256,
+                branch=branch,
+                head_sha=state.local_task_head,
+                expected_pr_base_sha=expected_pr_base_sha,
+            )
 
         effects: list[EffectReceipt] = []
         if state.git.get("clean") is True:
@@ -2494,6 +2625,7 @@ class DeliveryCompleter:
                 body_sha256=body_sha256,
                 branch=branch,
                 head_sha=state.local_task_head,
+                expected_pr_base_sha=expected_pr_base_sha,
             )
             self.commit_effect.verify_tree_unchanged(
                 validated_tree,
@@ -2515,6 +2647,7 @@ class DeliveryCompleter:
             body_sha256=body_sha256,
             branch=branch,
             head_sha=str(head),
+            expected_pr_base_sha=expected_pr_base_sha,
         )
         effects.append(
             self.remote_effect.execute(
@@ -2528,6 +2661,7 @@ class DeliveryCompleter:
             body_sha256=body_sha256,
             branch=branch,
             head_sha=str(head),
+            expected_pr_base_sha=expected_pr_base_sha,
         )
         effects.append(
             self.pr_effect.execute(
@@ -2546,6 +2680,7 @@ class DeliveryCompleter:
             body_sha256=body_sha256,
             branch=branch,
             head_sha=str(head),
+            expected_pr_base_sha=expected_pr_base_sha,
         )
         checks = self.checks_gate.run(task_number)
         self._operation_guard(
@@ -2554,6 +2689,7 @@ class DeliveryCompleter:
             body_sha256=body_sha256,
             branch=branch,
             head_sha=str(head),
+            expected_pr_base_sha=expected_pr_base_sha,
         )
         checks_pr = checks.get("pr")
         if not isinstance(checks_pr, Mapping):
@@ -2824,6 +2960,7 @@ class RemediationCompleter:
             self.resolver,
             pr_effect=cast(Any, ReuseExistingOpenPrEffect(self.resolver)),
             checks_gate=self.checks_gate,
+            require_existing_open_pr=True,
         ).complete(
             task_number,
             commit_message=commit_message,
