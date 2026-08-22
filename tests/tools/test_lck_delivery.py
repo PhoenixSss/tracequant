@@ -310,9 +310,11 @@ class StubChecks:
             "observed": {
                 "count": 0,
                 "failed": 0,
+                "pending": 0,
                 "skipped_or_unknown": 0,
                 "all_success": None,
             },
+            "pr": {"number": 10, "head_sha": "b" * 40, "base_sha": SHA},
         }
 
 
@@ -862,8 +864,18 @@ def test_failed_checks_do_not_move_project_status_to_review(tmp_path: Path) -> N
     assert status.calls == 0
 
 
+@pytest.mark.parametrize(
+    ("category", "state_name"),
+    [
+        ("failed", "FAILURE"),
+        ("pending", "IN_PROGRESS"),
+        ("skipped-or-unknown", "CANCELLED"),
+    ],
+)
 def test_final_verification_stops_when_checks_regress_after_gate(
     tmp_path: Path,
+    category: str,
+    state_name: str,
 ) -> None:
     target = tmp_path / "tests" / "test_critical_path.py"
     target.parent.mkdir(parents=True)
@@ -908,7 +920,7 @@ def test_final_verification_stops_when_checks_regress_after_gate(
             open_pr={**pr},
             remote_oid=head,
         ),
-        _checks(category="failed", state_name="FAILURE"),
+        _checks(category=category, state_name=state_name),
     )
     runner = CompletionRunner()
     resolver = SequenceResolver(
@@ -934,3 +946,36 @@ def test_final_verification_stops_when_checks_regress_after_gate(
         )
 
     assert status.calls == 1
+
+
+def test_final_verification_requires_same_pr_as_checks_gate(tmp_path: Path) -> None:
+    head = "b" * 40
+    final_state = _live_state(
+        head=head,
+        clean=True,
+        project_status="Review",
+        open_pr={
+            "number": 11,
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefOid": head,
+            "baseRefOid": SHA,
+        },
+        remote_oid=head,
+    )
+    resolver = SequenceResolver(tmp_path, CompletionRunner(), [final_state])
+
+    with pytest.raises(lck.LckStopError, match="check/lifecycle state is not aligned"):
+        lck.DeliveryCompleter(cast(Any, resolver))._final_verify(
+            final_state,
+            head,
+            base_sha=SHA,
+            body_sha256="e" * 64,
+            branch="task/160-delivery-cutover",
+            checks_result={
+                "status": "pass",
+                "configuration": "not-configured",
+                "required": [],
+                "pr": {"number": 10, "head_sha": head, "base_sha": SHA},
+            },
+        )

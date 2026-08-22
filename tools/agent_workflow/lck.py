@@ -1139,6 +1139,17 @@ class DeliveryChecksGate:
                 values[name] = category
         return values
 
+    @staticmethod
+    def _pr_identity(state: LiveState) -> dict[str, Any]:
+        pr = state.open_pr
+        if not isinstance(pr, Mapping):
+            return {}
+        return {
+            "number": pr.get("number"),
+            "head_sha": pr.get("headRefOid"),
+            "base_sha": pr.get("baseRefOid"),
+        }
+
     def run(self, task_number: int) -> dict[str, Any]:
         state = self.resolver.resolve(task_number)
         if state.status is not ResolutionStatus.RESOLVED or state.repository is None:
@@ -1170,47 +1181,51 @@ class DeliveryChecksGate:
             if failed > 0 or unknown > 0:
                 raise LckStopError("PR checks failed, cancelled, skipped, or unknown")
 
-            if required_names:
-                failed_required = {
-                    name
-                    for name in required_names
-                    if observed.get(name) not in {None, "success", "pending"}
-                }
-                if failed_required:
-                    raise LckStopError(
-                        "required PR checks failed: "
-                        + ", ".join(sorted(failed_required))
-                    )
-                if all(observed.get(name) == "success" for name in required_names):
-                    return {
-                        "status": "pass",
-                        "configuration": config,
-                        "required": sorted(required_names),
-                        "observed": checks,
-                        "warnings": warnings,
+            if pending == 0:
+                if required_names:
+                    failed_required = {
+                        name
+                        for name in required_names
+                        if observed.get(name) not in {None, "success", "pending"}
                     }
-            elif config in {"configured-empty", "not-configured"}:
-                if checks.get("count") == 0 or checks.get("all_success") is True:
+                    if failed_required:
+                        raise LckStopError(
+                            "required PR checks failed: "
+                            + ", ".join(sorted(failed_required))
+                        )
+                    if all(observed.get(name) == "success" for name in required_names):
+                        return {
+                            "status": "pass",
+                            "configuration": config,
+                            "required": sorted(required_names),
+                            "observed": checks,
+                            "pr": self._pr_identity(current),
+                            "warnings": warnings,
+                        }
+                elif config in {"configured-empty", "not-configured"}:
+                    if checks.get("count") == 0 or checks.get("all_success") is True:
+                        return {
+                            "status": "pass",
+                            "configuration": config,
+                            "required": [],
+                            "observed": checks,
+                            "pr": self._pr_identity(current),
+                            "warnings": warnings,
+                        }
+                elif checks.get("count", 0) > 0 and checks.get("all_success") is True:
+                    # GitHub can hide branch-protection configuration behind a plan
+                    # boundary. Successful observed checks are preserved as a
+                    # capability-limited fact instead of being upgraded to proof of
+                    # required-check configuration.
                     return {
                         "status": "pass",
                         "configuration": config,
                         "required": [],
                         "observed": checks,
+                        "pr": self._pr_identity(current),
                         "warnings": warnings,
+                        "limitation": "required-check configuration unavailable",
                     }
-            elif checks.get("count", 0) > 0 and checks.get("all_success") is True:
-                # GitHub can hide branch-protection configuration behind a plan
-                # boundary. Successful observed checks are preserved as a
-                # capability-limited fact instead of being upgraded to proof of
-                # required-check configuration.
-                return {
-                    "status": "pass",
-                    "configuration": config,
-                    "required": [],
-                    "observed": checks,
-                    "warnings": warnings,
-                    "limitation": "required-check configuration unavailable",
-                }
 
             if time.monotonic() >= deadline:
                 detail = (
@@ -1346,14 +1361,25 @@ class DeliveryCompleter:
         """Require the latest live PR checks to match the completed gate."""
         if checks_result.get("status") != "pass":
             return False
+        current_pr = state.open_pr
+        gated_pr = checks_result.get("pr")
+        if not isinstance(current_pr, Mapping) or not isinstance(gated_pr, Mapping):
+            return False
+        if (
+            gated_pr.get("number") != current_pr.get("number")
+            or gated_pr.get("head_sha") != current_pr.get("headRefOid")
+            or gated_pr.get("base_sha") != current_pr.get("baseRefOid")
+        ):
+            return False
         checks = state.checks
         try:
             failed = int(checks.get("failed", 0) or 0)
+            pending = int(checks.get("pending", 0) or 0)
             unknown = int(checks.get("skipped_or_unknown", 0) or 0)
             count = int(checks.get("count", 0) or 0)
         except (TypeError, ValueError):
             return False
-        if failed > 0 or unknown > 0:
+        if failed > 0 or pending > 0 or unknown > 0:
             return False
 
         required = checks_result.get("required")
@@ -1373,7 +1399,7 @@ class DeliveryCompleter:
 
     def _final_verify(
         self,
-        task_number: int,
+        state: LiveState,
         head: str,
         *,
         base_sha: str,
@@ -1381,7 +1407,6 @@ class DeliveryCompleter:
         branch: str,
         checks_result: Mapping[str, Any],
     ) -> LiveState:
-        state = self.resolver.resolve(task_number)
         if state.status is not ResolutionStatus.RESOLVED:
             raise LckStopError(
                 "Delivery final verification unresolved: "
@@ -1518,8 +1543,11 @@ class DeliveryCompleter:
             head_sha=str(head),
         )
         effects.append(self.status_effect.execute(task_number))
+        # The status effect may race with GitHub check transitions. Reacquire
+        # one final live state after the effect and verify that exact state.
+        final_state = self.resolver.resolve(task_number)
         final_state = self._final_verify(
-            task_number,
+            final_state,
             str(head),
             base_sha=base_sha,
             body_sha256=body_sha256,

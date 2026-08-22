@@ -8,10 +8,12 @@ the semantic boundary remains while duplicate mechanics are removed, and
 `REMOVE` means the mechanism is not part of the target flow.
 
 Task #159 established live-state resolution, phase eligibility, and Delivery
-Prepare. Task #160 extends that same Runner-derived control plane through the
-**Initial Delivery** cutover: Critical Outcome + formal validation, validated-tree
-commit, remote synchronization, OPEN-PR resolve/create, checks, Project Status
-`Review`, and final `READY_FOR_REVIEW` verification. Review/Remediation, merge,
+Prepare. Task #160 implements the candidate **Initial Delivery** LCK controller:
+Critical Outcome + formal validation, validated-tree commit, remote
+synchronization, OPEN-PR resolve/create, checks, Project Status `Review`, and
+final `READY_FOR_REVIEW` verification. Task #160 itself is delivered through
+the pre-cutover Current Workflow; the candidate controller becomes lifecycle
+authority only after the maintainer merge boundary. Review/Remediation, merge,
 closeout, and recovery cutovers remain bounded follow-up work.
 
 | ID | #88 operation | Current owner | LCK v1 target | Task #159 boundary |
@@ -25,9 +27,9 @@ closeout, and recovery cutovers remain bounded follow-up work.
 | O07 | Targeted validation | Skill + Validation Runner | KEEP | KEEP |
 | O08 | Commit-ready identity | Skill / Git | MOVE | No commit effect here |
 | O09 | CI-equivalent validation | Validation Runner | KEEP | KEEP |
-| O10 | Push validated head | Skill / Agent | MOVE | Out of scope |
-| O11 | PR resolve/create | PR helper + Skill | MOVE | Out of scope |
-| O12 | Check wait/read and interpretation | Skill + Runner | SIMPLIFY | Live facts are returned; polling remains follow-up |
+| O10 | Push validated head | Skill / Agent | MOVE | Candidate implemented; Current Workflow remains authority for #160 pre-cutover delivery |
+| O11 | PR resolve/create | PR helper + Skill | MOVE | Candidate implemented; Current Workflow remains authority for #160 pre-cutover delivery |
+| O12 | Check wait/read and interpretation | Skill + Runner | SIMPLIFY | Candidate gate implemented; Current Workflow remains authority for #160 pre-cutover delivery |
 | O13 | Semantic self-review | Agent + helper | SIMPLIFY | Semantic judgement stays Agent-owned |
 | O14 | Delivery readiness snapshot | Evidence Runner + Skill | MOVE | Snapshot is diagnostic, not LCK authority |
 | O15 | Reviewed object identity lock | Review Skill + Runner | MOVE | Live resolver foundation only |
@@ -66,9 +68,9 @@ did not persist cross-phase authority, ignored CLOSED PRs when resolving the act
 PR, and exposed no commit/push/PR mutation. Task #160 intentionally extends only
 the Initial Delivery portion of that boundary.
 
-## Cumulative boundary after Task #160
+## Candidate boundary implemented by Task #160 (pre-activation)
 
-Initial Delivery now uses one LCK-owned path:
+The candidate Initial Delivery path uses one LCK-owned sequence after activation:
 
 1. `DeliveryPreparer` resolves and prepares the Task workspace.
 2. `DeliveryCompleter` reads the current Task Critical Outcome, stages the candidate
@@ -78,11 +80,16 @@ Initial Delivery now uses one LCK-owned path:
    push; divergence fails closed.
 4. `EnsureOpenPrEffect` re-resolves current identity and reuses or creates exactly one
    non-Draft OPEN PR using the existing deterministic PR helper.
-5. `DeliveryChecksGate` waits boundedly for applicable checks; failed/unknown checks
-   stop before Project Status moves to `Review`.
-6. Final live verification proves the Task body/base stayed stable within the operation
-   and local HEAD == remote Task branch == PR head before returning
-   `READY_FOR_REVIEW`.
+5. `DeliveryChecksGate` waits boundedly for applicable checks; failed, pending, or
+   unknown checks stop before Project Status moves to `Review`.
+6. Final live verification proves the Task body/base stayed stable within the
+   operation, the final state is the same PR/head observed by the checks gate,
+   applicable checks remain successful, and local HEAD == remote Task branch ==
+   PR head before returning `READY_FOR_REVIEW`.
+
+Until the maintainer merge boundary, #160 continues to use the pre-cutover
+Current Workflow for its own Delivery. The LCK path above is candidate behavior
+and is not retroactively treated as #160's lifecycle authority.
 
 The Task body now carries a required `Critical Outcome` contract. Its verification
 target is one bounded `tests/...::test_...` pytest node id; Issue text cannot inject
