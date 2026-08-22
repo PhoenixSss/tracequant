@@ -920,7 +920,10 @@ class FakeReviewChecks:
 
     def run(self, _task: int) -> dict[str, Any]:
         self.calls += 1
-        return {"status": "pass", "pr": {"number": 200}}
+        return {
+            "status": "pass",
+            "pr": {"number": 200, "head_sha": SHA, "base_sha": SHA},
+        }
 
 
 class FakeReviewValidation:
@@ -1206,6 +1209,53 @@ def test_review_complete_rechecks_identity_after_pass_checks_gate(
         ).complete(159, review_id, verdict="PASS")
 
     assert exc_info.value.code == "REVIEW_STALE_HEAD"
+
+
+def test_review_complete_rejects_checks_drift_after_pass_checks_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _review_state()
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    identity = _review_identity_value()
+    store.write_guard(
+        review_id,
+        {
+            "task_number": 159,
+            "identity": identity.to_dict(),
+            "review_root": str(tmp_path / "review-root"),
+            "checks": {"status": "pass"},
+            "validation": {"status": "pass"},
+        },
+    )
+    monkeypatch.setattr(
+        lck,
+        "_live_task_contract",
+        lambda *_args: {"body_sha256": "d" * 64},
+    )
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
+
+    class ChecksDriftAfterGate(FakeReviewChecks):
+        def run(self, _task: int) -> dict[str, Any]:
+            result = {
+                "status": "pass",
+                "pr": {"number": 200, "head_sha": SHA, "base_sha": SHA},
+            }
+            state.checks["failed"] = 1
+            state.checks["all_success"] = False
+            return result
+
+    with pytest.raises(lck.LckStopError, match="current PR checks"):
+        lck.ReviewCompleter(
+            resolver,
+            store=store,
+            workspace=cast(Any, FakeReviewWorkspace(tmp_path / "review-root")),
+            checks_gate=cast(Any, ChecksDriftAfterGate()),
+        ).complete(159, review_id, verdict="PASS")
+
+    assert not store.record_path(159, review_id).exists()
 
 
 def test_review_complete_rechecks_current_review_eligibility(

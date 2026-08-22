@@ -1528,6 +1528,12 @@ class ReviewCompleter:
                     f"Review Complete STOP for Task #{task_number}: "
                     + "; ".join(final_decision.reasons)
                 )
+            if verdict == "PASS" and not DeliveryChecksGate._checks_postcondition(
+                final_state, checks
+            ):
+                raise LckStopError(
+                    "Review Complete STOP: current PR checks are no longer passing"
+                )
             current = final_identity
             record = {
                 "schema_version": LCK_SCHEMA_VERSION,
