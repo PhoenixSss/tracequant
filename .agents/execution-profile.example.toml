@@ -6,13 +6,6 @@ schema_version = 1
 default_route = "sandbox-first"
 
 [[rules]]
-name = "python-skill-validator"
-executable = "python"
-argument_prefix = ["-X", "utf8"]
-route = "elevated-first"
-reason = "Repeated login-session isolation on this workstation"
-
-[[rules]]
 name = "uv-toolchain"
 executable = "uv"
 argument_prefix = []

@@ -14,6 +14,14 @@ ACTIVE_SKILLS = {
     / ".agents/skills/feature-completion-audit/SKILL.md",
 }
 PATH_AUDIT = ROOT / "tools/agent_workflow/skill_path_audit.py"
+LCK_COMMAND_PREFIX = "uv run --frozen python tools/agent_workflow/lck.py"
+LCK_COMMAND_SOURCES = (
+    ACTIVE_SKILLS["task-delivery-runner"],
+    ACTIVE_SKILLS["task-pr-review-runner"],
+    ROOT / ".claude/skills/task-delivery-runner/SKILL.md",
+    ROOT / ".claude/skills/task-pr-review-runner/SKILL.md",
+    ROOT / "docs/development/pr-review.md",
+)
 
 
 def _dual_skill(name: str) -> tuple[str, str]:
@@ -54,6 +62,21 @@ def test_current_runner_skills_use_one_mechanical_path() -> None:
         assert ".agents/policies/workflow-evidence.md" in ACTIVE_SKILLS[name].read_text(
             encoding="utf-8"
         )
+
+
+def test_lck_commands_use_the_pinned_project_python() -> None:
+    for path in LCK_COMMAND_SOURCES:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "tools/agent_workflow/lck.py" in line:
+                assert line.strip().startswith(LCK_COMMAND_PREFIX), (
+                    f"{path} contains a non-canonical LCK launcher: {line!r}"
+                )
+
+    profile = (ROOT / ".agents/execution-profile.example.toml").read_text(
+        encoding="utf-8"
+    )
+    assert 'executable = "python"' not in profile
+    assert 'name = "uv-toolchain"' in profile
 
 
 def test_delivery_runner_uses_lck_for_initial_delivery_and_explicit_remediation() -> (

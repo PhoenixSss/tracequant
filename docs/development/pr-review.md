@@ -22,12 +22,25 @@ Report
 
 Review 不修复实现、不提交 GitHub Review、不改 Issue / PR / Project、不 merge。
 
-## 2. LCK live target resolution
+## 2. LCK launcher preflight
+
+在第一次调用 LCK 前，先确认项目解释器入口可用：
+
+```bash
+command -v uv
+uv --version
+uv run --frozen python --version
+```
+
+该检查失败属于 environment/launcher failure，不是 Review verdict，也不得转换为
+`STOP_REQUIRED`。裸 `python` 不是本仓库的环境依赖；不要通过全局 alias 或软链接规避。
+
+## 3. LCK live target resolution
 
 Review 必须从以下入口开始：
 
 ```bash
-python tools/agent_workflow/lck.py review prepare <TASK>
+uv run --frozen python tools/agent_workflow/lck.py review prepare <TASK>
 ```
 
 调用方只提供 Task number。不得向 Review LCK 传入 Delivery 提供的 base SHA、head
@@ -46,7 +59,7 @@ LCK 在本次 invocation 开始时从 live Git / GitHub 重新解析：
 checks 和 isolated `review_root`。这些机械事实来自本次 LCK live acquisition，
 不是 Delivery handoff。
 
-## 3. Fresh semantic context and read-only workspace
+## 4. Fresh semantic context and read-only workspace
 
 LCK 创建 reviewed head 的 detached isolated worktree，先在该 exact head 上运行正式
 Review validation，然后将 implementation workspace 封为 read-only。
@@ -59,14 +72,14 @@ Review Agent 可以读取完整 effective diff、相关 unchanged code、tests�
 和 public interfaces；必须逐项判断 Acceptance Criteria、正确性、failure paths、
 安全边界与回归风险。
 
-## 4. Review completion and invocation-local stale guard
+## 5. Review completion and invocation-local stale guard
 
 语义审查结束后必须调用同一个 invocation 的 completion：
 
 PASS：
 
 ```bash
-python tools/agent_workflow/lck.py review complete <TASK> \
+uv run --frozen python tools/agent_workflow/lck.py review complete <TASK> \
   --review-id <REVIEW_ID> \
   --verdict PASS
 ```
@@ -75,7 +88,7 @@ FAIL：先把 blocking findings 写入 review workspace 之外的临时/ignored 
 再调用：
 
 ```bash
-python tools/agent_workflow/lck.py review complete <TASK> \
+uv run --frozen python tools/agent_workflow/lck.py review complete <TASK> \
   --review-id <REVIEW_ID> \
   --verdict FAIL \
   --findings-file <FINDINGS_FILE>
@@ -100,7 +113,7 @@ freshness contract 或 snapshot lineage；guard 只在本次 Review prepare → 
 任何 stale result 都不会发布为有效 PASS，旧 semantic verdict 不可复用；必须重新
 执行新的 Independent Review invocation。
 
-## 5. Verdict semantics
+## 6. Verdict semantics
 
 正式 Review 只有两种 semantic verdict：
 
@@ -143,7 +156,7 @@ Low / Nit 可以报告，但不应伪装成 blocking finding。
 formal validation / checks 自身无法产生 PASS 时，LCK 在 objective gate 处 STOP；
 不要通过 `CONDITIONAL`、fallback snapshot 或旧 Delivery evidence 绕过 gate。
 
-## 6. Review record boundary
+## 7. Review record boundary
 
 `review complete` 可以把 Review 结果写到 ignored `.workflow.local/lck/reviews/`
 作为 audit / diagnostic record。它可记录 reviewed identity、validation、checks 和
@@ -153,13 +166,13 @@ semantic findings，用于回答“当时审查了什么”。
 必须重新获取各自所需的 live Git / GitHub facts。尤其不得把 record 中的旧 head、
 base、checks 或 validation 当作后续写操作的 expected identity。
 
-## 7. Explicit Remediation
+## 8. Explicit Remediation
 
 Remediation 只能由 Human 明确发起，并且必须引用当前 Task **最新已完成且为 FAIL**
 的 LCK `review_id`：
 
 ```bash
-python tools/agent_workflow/lck.py remediation prepare <TASK> \
+uv run --frozen python tools/agent_workflow/lck.py remediation prepare <TASK> \
   --review-id <FAILED_REVIEW_ID>
 ```
 
@@ -187,12 +200,12 @@ Understand findings
 
 不得直接 commit / push / create PR / change lifecycle state。
 
-## 8. Remediation completion
+## 9. Remediation completion
 
 语义修复完成后：
 
 ```bash
-python tools/agent_workflow/lck.py remediation complete <TASK> \
+uv run --frozen python tools/agent_workflow/lck.py remediation complete <TASK> \
   --review-id <FAILED_REVIEW_ID> \
   --commit-message "<repair commit message>" \
   --summary "<repair summary>" \
@@ -223,14 +236,14 @@ Remediation 不允许创建替代 PR；current existing OPEN PR 若不存在或�
 重新启动 Independent Review。只有新的 Review verdict 被 LCK 正式接受后，该 boundary
 才解除；因此旧 FAIL `review_id` 不能连续驱动第二次 remediation。
 
-## 9. Provider neutrality
+## 10. Provider neutrality
 
 Codex 与 Claude 使用同一个 LCK mechanical contract。二者都可以作为
 Implementation Agent 或 fresh Review Agent；provider 选择不改变 lifecycle
 correctness、live-state authority、read-only Review、stale guard、Human boundary
 或 no-auto-remediation 规则。
 
-## 10. Merge / Closeout interaction
+## 11. Merge / Closeout interaction
 
 PASS 只表示当前 Review invocation 对当时 live-resolved reviewed object 可进入
 Human merge decision。实际 merge 前仍必须由 deterministic merge preflight / Human

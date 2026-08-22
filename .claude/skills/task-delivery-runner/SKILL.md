@@ -35,6 +35,17 @@ record are not write authorization.
 
 The Issue number is the primary key; the current Issue title is canonical.
 
+Before the first LCK command, verify the project launcher:
+
+```bash
+command -v uv
+uv --version
+uv run --frozen python --version
+```
+
+If this preflight fails, report an environment/launcher failure. It is not a
+Delivery or Review verdict, and must not be converted into `STOP_REQUIRED`.
+
 ## Policies and shared semantics
 
 Read applicable `AGENTS.md` and
@@ -89,7 +100,7 @@ maintainer or implementation action.
 The first lifecycle action is:
 
 ```bash
-python tools/agent_workflow/lck.py delivery prepare <TASK>
+uv run --frozen python tools/agent_workflow/lck.py delivery prepare <TASK>
 ```
 
 Proceed only when LCK returns a resolved Delivery context. LCK reacquires live
@@ -123,7 +134,7 @@ workspace presented to LCK is the candidate Task tree.
 After semantic implementation is complete, invoke LCK with semantic metadata:
 
 ```bash
-python tools/agent_workflow/lck.py delivery complete <TASK> \
+uv run --frozen python tools/agent_workflow/lck.py delivery complete <TASK> \
   --commit-message "<scoped commit message>" \
   --summary "<implementation summary>" \
   --risks "<risks or limitations>"
@@ -192,7 +203,7 @@ all actionable mechanical identity from current live Git / GitHub state.
 ### 1. LCK Remediation Prepare
 
 ```bash
-python tools/agent_workflow/lck.py remediation prepare <TASK> \
+uv run --frozen python tools/agent_workflow/lck.py remediation prepare <TASK> \
   --review-id <FAILED_REVIEW_ID>
 ```
 
@@ -221,7 +232,7 @@ new Review.
 After the repair is ready:
 
 ```bash
-python tools/agent_workflow/lck.py remediation complete <TASK> \
+uv run --frozen python tools/agent_workflow/lck.py remediation complete <TASK> \
   --review-id <FAILED_REVIEW_ID> \
   --commit-message "<scoped repair commit message>" \
   --summary "<repair summary>" \

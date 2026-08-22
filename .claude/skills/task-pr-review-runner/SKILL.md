@@ -20,10 +20,21 @@ The Task number is the only mechanical key supplied to LCK. A maintainer may men
 a PR number for human intent, but the Agent MUST NOT pass PR/base/head/checks/snapshot
 facts from Delivery as Review authority.
 
+Before the first LCK command, verify the project launcher:
+
+```bash
+command -v uv
+uv --version
+uv run --frozen python --version
+```
+
+If this preflight fails, report an environment/launcher failure. It is not a
+Review verdict, and must not be converted into `STOP_REQUIRED`.
+
 ## 1. LCK Review Prepare
 
 ```bash
-python tools/agent_workflow/lck.py review prepare <TASK>
+uv run --frozen python tools/agent_workflow/lck.py review prepare <TASK>
 ```
 
 Proceed only on `READY_FOR_SEMANTIC_REVIEW`. Use the returned `review_id`, current
@@ -62,7 +73,7 @@ Task requirements produce FAIL.
 PASS:
 
 ```bash
-python tools/agent_workflow/lck.py review complete <TASK> \
+uv run --frozen python tools/agent_workflow/lck.py review complete <TASK> \
   --review-id <REVIEW_ID> \
   --verdict PASS
 ```
@@ -71,7 +82,7 @@ FAIL: write the complete blocking findings to an ignored or temporary file outsi
 read-only implementation worktree, then:
 
 ```bash
-python tools/agent_workflow/lck.py review complete <TASK> \
+uv run --frozen python tools/agent_workflow/lck.py review complete <TASK> \
   --review-id <REVIEW_ID> \
   --verdict FAIL \
   --findings-file <FINDINGS_FILE>
