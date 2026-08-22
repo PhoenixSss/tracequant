@@ -112,6 +112,35 @@ def test_ensure_remote_branch_create_then_idempotent(tmp_path: Path) -> None:
     assert created.details["head_sha"] == repeated.details["remote_oid"]
 
 
+def test_ensure_remote_branch_repairs_missing_upstream_when_already_synced(
+    tmp_path: Path,
+) -> None:
+    repo, _ = _repo(tmp_path)
+    branch = "task/160-delivery"
+    _git(repo, "switch", "-c", branch)
+    (repo / "task.txt").write_text("task\n", encoding="utf-8")
+    _git(repo, "add", "task.txt")
+    _git(repo, "commit", "-m", "task")
+    effect = lck.EnsureRemoteBranchEffect(_resolver_for_repo(repo))
+    effect.execute(branch)
+    _git(repo, "branch", "--unset-upstream")
+
+    repaired = effect.execute(branch)
+
+    assert repaired.action == "already-synced"
+    assert repaired.details["upstream"] == f"origin/{branch}"
+    assert (
+        _git(
+            repo,
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        )
+        == f"origin/{branch}"
+    )
+
+
 def test_ensure_remote_branch_rejects_unvalidated_local_head(
     tmp_path: Path,
 ) -> None:
@@ -447,6 +476,7 @@ class CliDeliveryRunner:
         self.commands: list[tuple[str, ...]] = []
         self.command_ids: list[str] = []
         self.remote_oid: str | None = None
+        self.upstream: str | None = None
         self.open_pr = False
         self.project_status = "In Progress"
         self.dirty = True
@@ -575,6 +605,13 @@ Verification test: tests/tools/test_lck_delivery.py::test_task_160_critical_outc
             return self._result(command_id, command, stdout=self.tree_oid)
         if args == ["rev-parse", "FETCH_HEAD"]:
             return self._result(command_id, command, stdout=self.remote_oid or "")
+        if args == [
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ]:
+            return self._result(command_id, command, stdout=self.upstream or "")
         if args == ["rev-parse", "refs/heads/main"]:
             return self._result(command_id, command, stdout=self.base_sha)
         if args == ["rev-parse", "refs/remotes/origin/main"]:
@@ -614,6 +651,9 @@ Verification test: tests/tools/test_lck_delivery.py::test_task_160_critical_outc
             return self._result(command_id, command)
         if args == ["diff", "--name-only"]:
             return self._result(command_id, command, stdout="candidate.py")
+        if args[:2] == ["branch", "--set-upstream-to"]:
+            self.upstream = args[2]
+            return self._result(command_id, command)
         if args == ["add", "-A", "--", ":/"]:
             return self._result(command_id, command)
         if args == ["write-tree"]:
@@ -623,6 +663,8 @@ Verification test: tests/tools/test_lck_delivery.py::test_task_160_critical_outc
             return self._result(command_id, command)
         if args[:1] == ["push"]:
             self.remote_oid = self.new_head
+            if "-u" in args:
+                self.upstream = f"origin/{self.branch}"
             return self._result(command_id, command)
         if args[:3] == ["merge-base", "--is-ancestor", self.remote_oid or ""]:
             return self._result(command_id, command)

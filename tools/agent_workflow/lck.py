@@ -1868,6 +1868,57 @@ class EnsureRemoteBranchEffect:
         remote_oid = refs.get(branch)
         return head, remote_oid
 
+    def _ensure_upstream(self, branch: str) -> str:
+        expected = f"origin/{branch}"
+        upstream = self.resolver.runner.run(
+            [
+                "git",
+                "rev-parse",
+                "--abbrev-ref",
+                "--symbolic-full-name",
+                "@{upstream}",
+            ],
+            command_id="lck-task-branch-upstream",
+        )
+        current = upstream.stdout.strip() if upstream.returncode == 0 else ""
+        if current != expected:
+            set_upstream = self.resolver.runner.run(
+                [
+                    "git",
+                    "branch",
+                    "--set-upstream-to",
+                    expected,
+                    branch,
+                ],
+                command_id="lck-set-task-branch-upstream",
+            )
+            if set_upstream.returncode != 0:
+                raise LckStopError(
+                    "cannot establish Task branch upstream: "
+                    + (
+                        set_upstream.stderr.strip()
+                        or set_upstream.stdout.strip()
+                        or f"exit {set_upstream.returncode}"
+                    )
+                )
+            upstream = self.resolver.runner.run(
+                [
+                    "git",
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "--symbolic-full-name",
+                    "@{upstream}",
+                ],
+                command_id="lck-verify-task-branch-upstream",
+            )
+            current = upstream.stdout.strip() if upstream.returncode == 0 else ""
+        if current != expected:
+            raise LckStopError(
+                "Task branch upstream postcondition failed: "
+                f"expected {expected!r}, observed {current or 'unavailable'!r}"
+            )
+        return current
+
     def execute(
         self,
         branch: str,
@@ -1879,10 +1930,15 @@ class EnsureRemoteBranchEffect:
             expected_head_sha=expected_head_sha,
         )
         if remote_oid == head:
+            upstream = self._ensure_upstream(branch)
             return EffectReceipt(
                 effect="ensure_remote_branch",
                 action="already-synced",
-                details={"head_sha": head, "remote_oid": remote_oid},
+                details={
+                    "head_sha": head,
+                    "remote_oid": remote_oid,
+                    "upstream": upstream,
+                },
             )
         if remote_oid is not None:
             fetch = self.resolver.runner.run(
@@ -1934,10 +1990,15 @@ class EnsureRemoteBranchEffect:
             raise LckStopError(
                 "push postcondition failed: local and remote heads differ"
             )
+        upstream = self._ensure_upstream(branch)
         return EffectReceipt(
             effect="ensure_remote_branch",
             action=action,
-            details={"head_sha": head, "remote_oid": final_remote},
+            details={
+                "head_sha": head,
+                "remote_oid": final_remote,
+                "upstream": upstream,
+            },
         )
 
 
