@@ -33,6 +33,19 @@ body:
       required: true
 
   - type: textarea
+    id: critical_outcome
+    attributes:
+      label: Critical Outcome
+      description: 定义本 Task 必须打通的真实 supported path。四个字段必须各占一行；Verification test 只能填写仓库 tests/ 下一个明确 pytest node id，不得填写任意 shell 命令。
+      placeholder: |
+        Caller: 真实受支持入口或调用方
+        Capability: 本 Task 新增或改变的能力
+        Observable result: 从该入口可观察到的预期结果
+        Verification test: tests/.../test_*.py::test_*
+    validations:
+      required: true
+
+  - type: textarea
     id: acceptance_criteria
     attributes:
       label: Acceptance Criteria

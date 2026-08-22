@@ -116,6 +116,15 @@ def _issue() -> dict[str, Any]:
         "state": "OPEN",
         "labels": {"items": ["type:task", "codex:ready"]},
         "project_status": "Ready",
+        "critical_outcome": {
+            "status": "valid",
+            "contract": {
+                "caller": "task-delivery-runner initial Delivery",
+                "capability": "LCK Delivery",
+                "observable_result": "READY_FOR_REVIEW",
+                "verification_test": "tests/tools/test_lck.py::test_canonical_branch_is_derived_from_current_issue_title",
+            },
+        },
     }
 
 
@@ -770,3 +779,20 @@ def test_closeout_eligibility_uses_merged_live_pr_state(
 
     assert state.merged is True
     assert decision.eligible
+
+
+def test_delivery_prepare_requires_valid_critical_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRunner()
+    issue = _issue()
+    issue["critical_outcome"] = {"status": "invalid", "detail": "missing"}
+    _install_facts(monkeypatch, fake, issue=issue)
+    state = _resolver(fake).resolve(159)
+
+    decision = lck.PhaseEligibilityResolver().resolve(
+        state, lck.Phase.DELIVERY_PREPARE
+    )
+
+    assert decision.eligible is False
+    assert any("Critical Outcome contract invalid" in reason for reason in decision.reasons)

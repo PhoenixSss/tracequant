@@ -17,6 +17,7 @@ IDENTITY_FILES = (
     Path("tools/agent_workflow/wsl2_github_evidence_profiles.json"),
     Path(".codex/rules/tracequant-wsl-evidence.rules"),
     Path("tools/agent_workflow/workflow_evidence.py"),
+    Path("tools/agent_workflow/critical_outcome.py"),
     Path("tools/agent_workflow/workflow_common.py"),
 )
 REAL_GIT_OPTIONAL = shutil.which("git")

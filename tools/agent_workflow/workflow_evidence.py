@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final
 
+from critical_outcome import critical_outcome_snapshot
 from workflow_common import (
     CommandResult,
     CommandRunner,
@@ -460,7 +461,9 @@ def _issue_view(
         "number": value.get("number"),
         "title": safe_text(value.get("title")),
         "content_sha256": sha256_json(content_facts),
+        "body_sha256": sha256_json({"body": body}),
         "body_characters": len(body) if body is not None else None,
+        "critical_outcome": critical_outcome_snapshot(body),
         "comment_count": len(comment_facts),
         "state": safe_text(value.get("state")),
         "labels": bounded_list(sorted(normalized_labels)),

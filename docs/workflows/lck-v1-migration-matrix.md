@@ -7,10 +7,12 @@ Design Charter. `KEEP` means the responsibility remains in its current layer,
 the semantic boundary remains while duplicate mechanics are removed, and
 `REMOVE` means the mechanism is not part of the target flow.
 
-Task #159 implements only the live-state, phase-eligibility, and Delivery
-Prepare rows marked `implemented here`. Commit, push, PR mutation, merge,
-closeout, and full Skill cutover remain bounded follow-up work owned by their
-respective Tasks.
+Task #159 established live-state resolution, phase eligibility, and Delivery
+Prepare. Task #160 extends that same Runner-derived control plane through the
+**Initial Delivery** cutover: Critical Outcome + formal validation, validated-tree
+commit, remote synchronization, OPEN-PR resolve/create, checks, Project Status
+`Review`, and final `READY_FOR_REVIEW` verification. Review/Remediation, merge,
+closeout, and recovery cutovers remain bounded follow-up work.
 
 | ID | #88 operation | Current owner | LCK v1 target | Task #159 boundary |
 |---|---|---|---|---|
@@ -47,7 +49,7 @@ respective Tasks.
 | O31 | Homogeneous Agent command grouping | Agent orchestration | SIMPLIFY | Optional; never hides failure boundaries |
 | O32 | Context Compiler beyond Retrieval v2 | No current owner | REMOVE | Not justified by the Charter |
 
-## Implemented LCK Core boundary
+## Task #159 Core baseline
 
 `tools/agent_workflow/lck.py` provides three deterministic layers:
 
@@ -59,6 +61,35 @@ respective Tasks.
 3. `DeliveryPreparer` creates, selects, or restores the uniquely resolved Task
    workspace and verifies the postcondition by reacquiring live facts.
 
-The core does not accept `expected_sha` or `snapshot_id`, does not persist
-cross-phase authority, ignores CLOSED PRs when resolving the active PR, and
-does not expose commit, push, PR-create, merge, or arbitrary shell effects.
+At the Task #159 baseline the core did not accept `expected_sha` or `snapshot_id`,
+did not persist cross-phase authority, ignored CLOSED PRs when resolving the active
+PR, and exposed no commit/push/PR mutation. Task #160 intentionally extends only
+the Initial Delivery portion of that boundary.
+
+## Cumulative boundary after Task #160
+
+Initial Delivery now uses one LCK-owned path:
+
+1. `DeliveryPreparer` resolves and prepares the Task workspace.
+2. `DeliveryCompleter` reads the current Task Critical Outcome, stages the candidate
+   tree, runs the bounded Critical Outcome verifier and repository formal validation,
+   and commits exactly the validated tree.
+3. `EnsureRemoteBranchEffect` synchronizes only the resolved Task branch without force
+   push; divergence fails closed.
+4. `EnsureOpenPrEffect` re-resolves current identity and reuses or creates exactly one
+   non-Draft OPEN PR using the existing deterministic PR helper.
+5. `DeliveryChecksGate` waits boundedly for applicable checks; failed/unknown checks
+   stop before Project Status moves to `Review`.
+6. Final live verification proves the Task body/base stayed stable within the operation
+   and local HEAD == remote Task branch == PR head before returning
+   `READY_FOR_REVIEW`.
+
+The Task body now carries a required `Critical Outcome` contract. Its verification
+target is one bounded `tests/...::test_...` pytest node id; Issue text cannot inject
+arbitrary shell commands. Operation-local base/body/head guards are ephemeral and are
+reacquired on retry rather than persisted as cross-phase authority.
+
+The Initial Delivery section of `task-delivery-runner` is now semantic-only plus LCK
+entrypoint guidance. The existing Review remediation procedure remains temporarily on
+the current Runner contract because its authority cutover belongs to the next migration
+Task; merge and closeout remain Human/later-task boundaries.

@@ -27,10 +27,12 @@ CLAUDE_SKILLS: Final = {
 }
 REQUIRED: Final = {
     "task-delivery-runner": (
+        "tools/agent_workflow/lck.py",
+        "delivery prepare",
+        "delivery complete",
+        "Critical Outcome",
         "wsl2_github_evidence_runner.py",
         "wsl2_validation_runner.py",
-        "delivery-readiness",
-        "workflow-delivery",
         "Review remediation",
     ),
     "task-pr-review-runner": (
