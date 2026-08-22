@@ -303,7 +303,17 @@ class StubValidation:
 
 class StubChecks:
     def run(self, _task: int) -> dict[str, Any]:
-        return {"status": "pass", "configuration": "available"}
+        return {
+            "status": "pass",
+            "configuration": "not-configured",
+            "required": [],
+            "observed": {
+                "count": 0,
+                "failed": 0,
+                "skipped_or_unknown": 0,
+                "all_success": None,
+            },
+        }
 
 
 class StubCommit:
@@ -850,3 +860,77 @@ def test_failed_checks_do_not_move_project_status_to_review(tmp_path: Path) -> N
         )
 
     assert status.calls == 0
+
+
+def test_final_verification_stops_when_checks_regress_after_gate(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "test_critical_path.py"
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        "def test_critical_path(): pass\n",
+        encoding="utf-8",
+    )
+    head = "b" * 40
+    pre = _live_state(
+        head=head,
+        clean=True,
+        project_status="In Progress",
+        open_pr=None,
+        remote_oid=None,
+    )
+    remote = _live_state(
+        head=head,
+        clean=True,
+        project_status="In Progress",
+        open_pr=None,
+        remote_oid=head,
+    )
+    pr = {
+        "number": 10,
+        "state": "OPEN",
+        "isDraft": False,
+        "headRefOid": head,
+        "baseRefOid": SHA,
+    }
+    with_pr = _live_state(
+        head=head,
+        clean=True,
+        project_status="In Progress",
+        open_pr=pr,
+        remote_oid=head,
+    )
+    failed_final = _with_checks(
+        _live_state(
+            head=head,
+            clean=True,
+            project_status="Review",
+            open_pr={**pr},
+            remote_oid=head,
+        ),
+        _checks(category="failed", state_name="FAILURE"),
+    )
+    runner = CompletionRunner()
+    resolver = SequenceResolver(
+        tmp_path,
+        runner,
+        [pre, pre, remote, with_pr, with_pr, failed_final],
+    )
+    status = StubEffect("set_review_status", "updated")
+
+    with pytest.raises(lck.LckStopError, match="check/lifecycle state is not aligned"):
+        lck.DeliveryCompleter(
+            cast(Any, resolver),
+            formal_validation=cast(Any, StubValidation()),
+            commit_effect=cast(Any, StubCommit(dirty=False)),
+            remote_effect=cast(Any, StubEffect("ensure_remote_branch", "created")),
+            pr_effect=cast(Any, StubEffect("ensure_open_pr", "created")),
+            status_effect=cast(Any, status),
+            checks_gate=cast(Any, StubChecks()),
+        ).complete(
+            160,
+            commit_message="Implement LCK Delivery cutover",
+            summary="Move initial Delivery mechanics into LCK.",
+        )
+
+    assert status.calls == 1

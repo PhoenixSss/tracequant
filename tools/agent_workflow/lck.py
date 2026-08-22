@@ -1338,6 +1338,39 @@ class DeliveryCompleter:
             )
         return state
 
+    @staticmethod
+    def _checks_postcondition(
+        state: LiveState,
+        checks_result: Mapping[str, Any],
+    ) -> bool:
+        """Require the latest live PR checks to match the completed gate."""
+        if checks_result.get("status") != "pass":
+            return False
+        checks = state.checks
+        try:
+            failed = int(checks.get("failed", 0) or 0)
+            unknown = int(checks.get("skipped_or_unknown", 0) or 0)
+            count = int(checks.get("count", 0) or 0)
+        except (TypeError, ValueError):
+            return False
+        if failed > 0 or unknown > 0:
+            return False
+
+        required = checks_result.get("required")
+        required_names = (
+            {item for item in required if isinstance(item, str) and item}
+            if isinstance(required, list)
+            else set()
+        )
+        if required_names:
+            observed = DeliveryChecksGate._observed_categories(checks)
+            return all(observed.get(name) == "success" for name in required_names)
+
+        configuration = checks_result.get("configuration")
+        if configuration in {"configured-empty", "not-configured"}:
+            return count == 0 or checks.get("all_success") is True
+        return count > 0 and checks.get("all_success") is True
+
     def _final_verify(
         self,
         task_number: int,
@@ -1346,6 +1379,7 @@ class DeliveryCompleter:
         base_sha: str,
         body_sha256: str,
         branch: str,
+        checks_result: Mapping[str, Any],
     ) -> LiveState:
         state = self.resolver.resolve(task_number)
         if state.status is not ResolutionStatus.RESOLVED:
@@ -1370,9 +1404,10 @@ class DeliveryCompleter:
             and state.open_pr is not None
             and state.open_pr.get("isDraft") is False
             and state.project_status == "Review"
+            and self._checks_postcondition(state, checks_result)
         ):
             raise LckStopError(
-                "Delivery final verification failed: Task/base/local/remote/PR/lifecycle "
+                "Delivery final verification failed: Task/base/local/remote/PR/check/lifecycle "
                 "state is not aligned"
             )
         return state
@@ -1489,6 +1524,7 @@ class DeliveryCompleter:
             base_sha=base_sha,
             body_sha256=body_sha256,
             branch=branch,
+            checks_result=checks,
         )
         return DeliveryCompletionResult(
             task_number=task_number,
