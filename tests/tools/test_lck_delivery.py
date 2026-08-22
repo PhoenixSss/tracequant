@@ -514,7 +514,9 @@ Verification test: tests/tools/test_lck_delivery.py::test_task_160_critical_outc
         if command and command[0] == "uv":
             return self._result(command_id, command, stdout="1 passed")
         if command_id == "lck-formal-delivery-validation":
-            return self._result(command_id, command, stdout=json.dumps({"status": "pass"}))
+            return self._result(
+                command_id, command, stdout=json.dumps({"status": "pass"})
+            )
 
         if args[:1] == ["fetch"]:
             return self._result(command_id, command)
@@ -556,7 +558,9 @@ Verification test: tests/tools/test_lck_delivery.py::test_task_160_critical_outc
             "status",
             "--porcelain=v1",
         ]:
-            return self._result(command_id, command, stdout=" M candidate.py" if self.dirty else "")
+            return self._result(
+                command_id, command, stdout=" M candidate.py" if self.dirty else ""
+            )
         if args[:2] == ["diff", "--cached"] and "--name-only" in args:
             return self._result(command_id, command, stdout="candidate.py")
         if args[:2] == ["diff", "--cached"] and "--quiet" in args:
@@ -589,9 +593,13 @@ Verification test: tests/tools/test_lck_delivery.py::test_task_160_critical_outc
             )
 
         if command[:3] == ("gh", "issue", "view"):
-            return self._result(command_id, command, stdout=json.dumps(self._issue_payload()))
+            return self._result(
+                command_id, command, stdout=json.dumps(self._issue_payload())
+            )
         if command[:3] == ("gh", "api", "graphql"):
-            return self._result(command_id, command, stdout=self._graphql_payload(command))
+            return self._result(
+                command_id, command, stdout=self._graphql_payload(command)
+            )
         if command[:3] == ("gh", "pr", "list"):
             state_index = command.index("--state") + 1
             state = command[state_index]
@@ -599,17 +607,25 @@ Verification test: tests/tools/test_lck_delivery.py::test_task_160_critical_outc
                 return self._result(command_id, command, stdout="[]")
             if state == "merged":
                 return self._result(command_id, command, stdout="[]")
-            return self._result(command_id, command, stdout=json.dumps([self._pr_payload()]))
+            return self._result(
+                command_id, command, stdout=json.dumps([self._pr_payload()])
+            )
         if command[:3] == ("gh", "pr", "view"):
-            return self._result(command_id, command, stdout=json.dumps(self._pr_payload()))
+            return self._result(
+                command_id, command, stdout=json.dumps(self._pr_payload())
+            )
         if command[:3] == ("gh", "pr", "create"):
             self.open_pr = True
-            return self._result(command_id, command, stdout="https://github.com/owner/repo/pull/165")
+            return self._result(
+                command_id, command, stdout="https://github.com/owner/repo/pull/165"
+            )
         if command[:3] == ("gh", "project", "item-edit"):
             self.project_status = "Review"
             return self._result(command_id, command)
         if command[:2] == ("gh", "api"):
-            return self._result(command_id, command, returncode=1, stderr="404 not configured")
+            return self._result(
+                command_id, command, returncode=1, stderr="404 not configured"
+            )
 
         return self._result(command_id, command)
 
@@ -713,7 +729,10 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
         assert direct_write not in initial_section
     target = tmp_path / "tests" / "tools" / "test_lck_delivery.py"
     target.parent.mkdir(parents=True)
-    target.write_text("def test_task_160_critical_outcome_initial_delivery_is_lck_owned(): pass\n", encoding="utf-8")
+    target.write_text(
+        "def test_task_160_critical_outcome_initial_delivery_is_lck_owned(): pass\n",
+        encoding="utf-8",
+    )
     tool = tmp_path / "tools" / "agent_workflow" / "workflow_validation.py"
     tool.parent.mkdir(parents=True)
     tool.write_text("# deterministic external validation boundary\n", encoding="utf-8")
@@ -749,11 +768,15 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
     assert "lck-formal-delivery-validation" in runner.command_ids
     assert "lck-commit-current-tree" in runner.command_ids
     assert "lck-push-task-branch" in runner.command_ids
-    assert any(command[0] == "gh" and command[1:3] == ("pr", "create") for command in runner.commands)
-    assert any(command[0] == "gh" and command[1:3] == ("project", "item-edit") for command in runner.commands)
-    assert [
-        receipt["effect"] for receipt in payload["effects"]
-    ] == [
+    assert any(
+        command[0] == "gh" and command[1:3] == ("pr", "create")
+        for command in runner.commands
+    )
+    assert any(
+        command[0] == "gh" and command[1:3] == ("project", "item-edit")
+        for command in runner.commands
+    )
+    assert [receipt["effect"] for receipt in payload["effects"]] == [
         "commit_current_tree",
         "ensure_remote_branch",
         "ensure_open_pr",
