@@ -393,6 +393,227 @@ class StubEffect:
         return lck.EffectReceipt(self.name, self.action, {})
 
 
+class CliDeliveryRunner:
+    """Deterministic external boundary for the real LCK Delivery CLI path."""
+
+    branch = "task/160-delivery-lifecycle-control-lck"
+    base_sha = "a" * 40
+    old_head = "d" * 40
+    new_head = "b" * 40
+    tree_oid = "c" * 40
+
+    def __init__(self) -> None:
+        self.commands: list[tuple[str, ...]] = []
+        self.command_ids: list[str] = []
+        self.remote_oid: str | None = None
+        self.open_pr = False
+        self.project_status = "In Progress"
+        self.dirty = True
+
+    def _result(
+        self,
+        command_id: str,
+        command: tuple[str, ...],
+        *,
+        stdout: str = "",
+        returncode: int = 0,
+        stderr: str = "",
+    ) -> CommandResult:
+        return CommandResult(
+            command_id=command_id,
+            argv=command,
+            returncode=returncode,
+            stdout=f"{stdout}\n" if stdout else "",
+            stderr=stderr,
+        )
+
+    def _issue_payload(self) -> dict[str, Any]:
+        body = """### Critical Outcome
+Caller: task-delivery-runner initial Delivery
+Capability: LCK owns deterministic initial Delivery completion
+Observable result: a semantically completed Task reaches READY_FOR_REVIEW
+Verification test: tests/tools/test_lck_delivery.py::test_task_160_critical_outcome_initial_delivery_is_lck_owned
+"""
+        return {
+            "number": 160,
+            "title": "[Task] 将 Delivery lifecycle control 迁移至 LCK",
+            "body": body,
+            "comments": [],
+            "state": "OPEN",
+            "labels": [
+                {"name": "type:task"},
+                {"name": "codex:ready"},
+            ],
+            "projectItems": [{"status": {"name": self.project_status}}],
+            "url": "https://github.com/owner/repo/issues/160",
+            "closedAt": None,
+            "closedByPullRequestsReferences": [],
+        }
+
+    def _pr_payload(self) -> dict[str, Any]:
+        return {
+            "number": 165,
+            "url": "https://github.com/owner/repo/pull/165",
+            "state": "OPEN",
+            "isDraft": False,
+            "baseRefName": "main",
+            "baseRefOid": self.base_sha,
+            "headRefName": self.branch,
+            "headRefOid": self.new_head,
+            "statusCheckRollup": [
+                {"name": "quality", "conclusion": "SUCCESS"},
+            ],
+        }
+
+    def _graphql_payload(self, command: tuple[str, ...]) -> str:
+        query = command[4] if len(command) > 4 else ""
+        if "closedByPullRequestsReferences" in query:
+            issue: dict[str, Any] = {
+                "state": "OPEN",
+                "closedAt": None,
+                "closedByPullRequestsReferences": {
+                    "nodes": [],
+                    "pageInfo": {"hasNextPage": False},
+                },
+                "timelineItems": {
+                    "nodes": [],
+                    "pageInfo": {"hasPreviousPage": False},
+                },
+            }
+        else:
+            issue = {
+                "issueType": {"name": "Task"},
+                "parent": None,
+                "subIssues": {
+                    "nodes": [],
+                    "pageInfo": {"hasNextPage": False},
+                },
+                "blockedBy": {
+                    "nodes": [],
+                    "pageInfo": {"hasNextPage": False},
+                },
+                "blocking": {
+                    "nodes": [],
+                    "pageInfo": {"hasNextPage": False},
+                },
+            }
+        return json.dumps({"data": {"repository": {"issue": issue}}})
+
+    def run(
+        self,
+        argv: list[str] | tuple[str, ...],
+        *,
+        command_id: str,
+        **_: Any,
+    ) -> CommandResult:
+        command = tuple(str(item) for item in argv)
+        self.commands.append(command)
+        self.command_ids.append(command_id)
+        args = list(command[1:]) if command and command[0] == "git" else list(command)
+
+        if command and command[0] == "uv":
+            return self._result(command_id, command, stdout="1 passed")
+        if command_id == "lck-formal-delivery-validation":
+            return self._result(command_id, command, stdout=json.dumps({"status": "pass"}))
+
+        if args[:1] == ["fetch"]:
+            return self._result(command_id, command)
+        if args == ["branch", "--show-current"]:
+            return self._result(command_id, command, stdout=self.branch)
+        if args == ["rev-parse", "HEAD"]:
+            return self._result(
+                command_id,
+                command,
+                stdout=self.new_head if not self.dirty else self.old_head,
+            )
+        if args == ["rev-parse", "HEAD^"]:
+            return self._result(command_id, command, stdout=self.old_head)
+        if args == ["rev-parse", "HEAD^{tree}"]:
+            return self._result(command_id, command, stdout=self.tree_oid)
+        if args == ["rev-parse", "FETCH_HEAD"]:
+            return self._result(command_id, command, stdout=self.remote_oid or "")
+        if args == ["rev-parse", "refs/heads/main"]:
+            return self._result(command_id, command, stdout=self.base_sha)
+        if args == ["rev-parse", "refs/remotes/origin/main"]:
+            return self._result(command_id, command, stdout=self.base_sha)
+        if args[:1] == ["rev-parse"] and len(args) == 2:
+            return self._result(
+                command_id,
+                command,
+                stdout=self.new_head if not self.dirty else self.old_head,
+            )
+        if args[:2] == ["for-each-ref", "--format=%(refname:short)"]:
+            return self._result(command_id, command, stdout=self.branch)
+        if args[:3] == ["ls-remote", "--heads", "origin"]:
+            if self.remote_oid is None:
+                return self._result(command_id, command)
+            return self._result(
+                command_id,
+                command,
+                stdout=f"{self.remote_oid}\trefs/heads/{self.branch}",
+            )
+        if args[:2] == ["status", "--short"] or args[:2] == [
+            "status",
+            "--porcelain=v1",
+        ]:
+            return self._result(command_id, command, stdout=" M candidate.py" if self.dirty else "")
+        if args[:2] == ["diff", "--cached"] and "--name-only" in args:
+            return self._result(command_id, command, stdout="candidate.py")
+        if args[:2] == ["diff", "--cached"] and "--quiet" in args:
+            return self._result(command_id, command, returncode=1)
+        if args == ["diff", "--quiet"] or (
+            len(args) == 3 and args[:2] == ["diff", "--quiet"]
+        ):
+            return self._result(command_id, command)
+        if args == ["diff", "--cached", "--check"]:
+            return self._result(command_id, command)
+        if args == ["diff", "--name-only"]:
+            return self._result(command_id, command, stdout="candidate.py")
+        if args == ["add", "-A", "--", ":/"]:
+            return self._result(command_id, command)
+        if args == ["write-tree"]:
+            return self._result(command_id, command, stdout=self.tree_oid)
+        if args[:2] == ["commit", "-m"]:
+            self.dirty = False
+            return self._result(command_id, command)
+        if args[:1] == ["push"]:
+            self.remote_oid = self.new_head
+            return self._result(command_id, command)
+        if args[:3] == ["merge-base", "--is-ancestor", self.remote_oid or ""]:
+            return self._result(command_id, command)
+        if args[:2] == ["worktree", "list"]:
+            return self._result(
+                command_id,
+                command,
+                stdout=f"worktree /tmp/test-repo\nbranch refs/heads/{self.branch}",
+            )
+
+        if command[:3] == ("gh", "issue", "view"):
+            return self._result(command_id, command, stdout=json.dumps(self._issue_payload()))
+        if command[:3] == ("gh", "api", "graphql"):
+            return self._result(command_id, command, stdout=self._graphql_payload(command))
+        if command[:3] == ("gh", "pr", "list"):
+            state_index = command.index("--state") + 1
+            state = command[state_index]
+            if not self.open_pr:
+                return self._result(command_id, command, stdout="[]")
+            if state == "merged":
+                return self._result(command_id, command, stdout="[]")
+            return self._result(command_id, command, stdout=json.dumps([self._pr_payload()]))
+        if command[:3] == ("gh", "pr", "view"):
+            return self._result(command_id, command, stdout=json.dumps(self._pr_payload()))
+        if command[:3] == ("gh", "pr", "create"):
+            self.open_pr = True
+            return self._result(command_id, command, stdout="https://github.com/owner/repo/pull/165")
+        if command[:3] == ("gh", "project", "item-edit"):
+            self.project_status = "Review"
+            return self._result(command_id, command)
+        if command[:2] == ("gh", "api"):
+            return self._result(command_id, command, returncode=1, stderr="404 not configured")
+
+        return self._result(command_id, command)
+
+
 def test_delivery_complete_revalidates_clean_committed_head_and_stops_at_review_boundary(
     tmp_path: Path,
 ) -> None:
@@ -474,6 +695,8 @@ def test_delivery_complete_revalidates_clean_committed_head_and_stops_at_review_
 
 def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     root = Path(__file__).parents[2]
     agent_skill = (root / ".agents/skills/task-delivery-runner/SKILL.md").read_text(
@@ -488,85 +711,53 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
     initial_section = agent_skill.split("## Review remediation", 1)[0]
     for direct_write in ("git commit", "git push", "gh pr create"):
         assert direct_write not in initial_section
-    target = tmp_path / "tests" / "test_critical_path.py"
+    target = tmp_path / "tests" / "tools" / "test_lck_delivery.py"
     target.parent.mkdir(parents=True)
-    target.write_text("def test_critical_path(): pass\n", encoding="utf-8")
-    old_head = "d" * 40
-    new_head = "b" * 40
-    pre = _live_state(
-        head=old_head,
-        clean=False,
-        project_status="In Progress",
-        open_pr=None,
-        remote_oid=None,
-    )
-    final = _live_state(
-        head=new_head,
-        clean=True,
-        project_status="Review",
-        open_pr={
-            "number": 10,
-            "state": "OPEN",
-            "isDraft": False,
-            "headRefOid": new_head,
-            "baseRefOid": SHA,
-        },
-        remote_oid=new_head,
-    )
-    after_commit = _live_state(
-        head=new_head,
-        clean=True,
-        project_status="In Progress",
-        open_pr=None,
-        remote_oid=None,
-    )
-    after_remote = _live_state(
-        head=new_head,
-        clean=True,
-        project_status="In Progress",
-        open_pr=None,
-        remote_oid=new_head,
-    )
-    with_pr = _live_state(
-        head=new_head,
-        clean=True,
-        project_status="In Progress",
-        open_pr={
-            "number": 10,
-            "state": "OPEN",
-            "isDraft": False,
-            "headRefOid": new_head,
-            "baseRefOid": SHA,
-        },
-        remote_oid=new_head,
-    )
-    runner = CompletionRunner()
-    resolver = SequenceResolver(
-        tmp_path,
-        runner,
-        [pre, pre, after_commit, after_remote, with_pr, with_pr, final],
-    )
-    commit = StubCommit(dirty=True)
+    target.write_text("def test_task_160_critical_outcome_initial_delivery_is_lck_owned(): pass\n", encoding="utf-8")
+    tool = tmp_path / "tools" / "agent_workflow" / "workflow_validation.py"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("# deterministic external validation boundary\n", encoding="utf-8")
 
-    result = lck.DeliveryCompleter(
-        cast(Any, resolver),
-        formal_validation=cast(Any, StubValidation()),
-        commit_effect=cast(Any, commit),
-        remote_effect=cast(Any, StubEffect("ensure_remote_branch", "created")),
-        pr_effect=cast(Any, StubEffect("ensure_open_pr", "created")),
-        status_effect=cast(Any, StubEffect("set_review_status", "updated")),
-        checks_gate=cast(Any, StubChecks()),
-    ).complete(
-        160,
-        commit_message="Implement LCK Delivery cutover",
-        summary="Move initial Delivery mechanics into LCK.",
-    )
+    runner = CliDeliveryRunner()
+    monkeypatch.setattr(lck, "CommandRunner", lambda _repo_root: runner)
 
-    assert result.status == "READY_FOR_REVIEW"
-    assert commit.calls == [
-        "stage_candidate_tree",
-        "verify_tree_unchanged",
-        "execute",
+    exit_code = lck.main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--repository",
+            "owner/repo",
+            "delivery",
+            "complete",
+            "160",
+            "--commit-message",
+            "Implement LCK Delivery cutover",
+            "--summary",
+            "Move initial Delivery mechanics into LCK.",
+        ]
+    )
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+
+    assert exit_code == 0, output
+    assert payload["status"] == "READY_FOR_REVIEW"
+    assert payload["human_boundary"] == "Independent Review must be started separately"
+    assert payload["final_state"]["issue"]["project_status"] == "Review"
+    assert runner.remote_oid == runner.new_head
+    assert runner.open_pr is True
+    assert "lck-critical-outcome" in runner.command_ids
+    assert "lck-formal-delivery-validation" in runner.command_ids
+    assert "lck-commit-current-tree" in runner.command_ids
+    assert "lck-push-task-branch" in runner.command_ids
+    assert any(command[0] == "gh" and command[1:3] == ("pr", "create") for command in runner.commands)
+    assert any(command[0] == "gh" and command[1:3] == ("project", "item-edit") for command in runner.commands)
+    assert [
+        receipt["effect"] for receipt in payload["effects"]
+    ] == [
+        "commit_current_tree",
+        "ensure_remote_branch",
+        "ensure_open_pr",
+        "set_review_status",
     ]
 
 
