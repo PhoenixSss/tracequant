@@ -156,6 +156,9 @@ override remains supported.
 - PR 关联 `Closes #N` 仅当 maintainer 预期 merge 后 close。
 - merge 决策：passing Independent Review for current PR head
   + maintainer manual Squash Merge。
+- merge 前由 LCK 执行 deterministic preflight：
+  uv run --frozen python tools/agent_workflow/lck.py merge preflight <TASK>；
+  LCK 只返回人工合并就绪，不执行 merge。
 
 ## 8. Independent Review
 
@@ -218,11 +221,16 @@ Issue comments（Retrieval v2 comments default-off 仍适用）。
 
 Closeout 仅在 maintainer 已人工 Squash Merge 后执行：
 
-1. 验证 merge identity：reviewed head == 实际 merged head；
-2. Issue / Project lifecycle 收敛（state、Status、labels）；
-3. canonical `main` 同步与验证；
-4. branch lifecycle：仅删除已验证的 Task branch；
-5. post-merge validation。
+1. 由
+   uv run --frozen python tools/agent_workflow/lck.py closeout <TASK>
+   从当前 Git / GitHub facts 重新求解 merge identity（reviewed head == 实际 merged head）；
+2. 将 Business Delivery 与 Cleanup 分离：merged PR 可立即得到
+   Business Delivery = COMPLETE，cleanup 失败只产生 Cleanup = PENDING；
+3. 收敛 Issue / Project lifecycle（state、Status、labels）并同步 canonical
+   `main`；
+4. 仅在 head/tree/worktree proof 完整时删除已验证的 Task branch，识别
+   GitHub 已删除的 remote branch，并允许安全重试；
+5. 不依赖旧 Kernel session 或 authoritative snapshot lineage。
 
 Closeout 不 repair 代码、不手动 close Issue、不清理无关 branch、
 不评估 Feature completion。
