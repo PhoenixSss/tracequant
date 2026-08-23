@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -34,6 +36,12 @@ def _state(
         "state": issue_state,
         "labels": {"items": ["type:task", "codex:ready"]},
         "project_status": "Done",
+        "issue_closure": {
+            "evidence_status": "complete",
+            "status": "closed-by-pr",
+            "closer_repository": "owner/repo",
+            "closer_number": 262,
+        },
     }
     merged_pr = {
         "number": 262,
@@ -43,6 +51,8 @@ def _state(
         "headRefName": BRANCH,
         "headRefOid": merged_head,
         "mergeCommit": {"oid": MERGE_SHA},
+        "mergedAt": "2026-08-23T00:00:00Z",
+        "closingIssuesReferences": [{"number": 162}],
     }
     return lck.LiveState(
         task_number=162,
@@ -70,7 +80,13 @@ def _state(
         merged_pr_numbers=(262,),
         merged=True,
         merged_pr=merged_pr,
-        checks={},
+        checks={
+            "count": 0,
+            "failed": 0,
+            "pending": 0,
+            "skipped_or_unknown": 0,
+            "all_success": True,
+        },
         cleanup={
             "business_delivery": "complete",
             "cleanup": "pending",
@@ -86,6 +102,56 @@ class StaticResolver:
 
     def resolve(self, _task_number: int) -> lck.LiveState:
         return self.state
+
+
+class SequenceResolver:
+    def __init__(self, *states: lck.LiveState) -> None:
+        self.repo_root = Path.cwd()
+        self.states = states
+        self.index = 0
+        self.runner = cast(Any, object())
+
+    def resolve(self, _task_number: int) -> lck.LiveState:
+        state = self.states[min(self.index, len(self.states) - 1)]
+        self.index += 1
+        return state
+
+
+class StaticReviewStore:
+    def __init__(self, *, head_sha: str = SHA) -> None:
+        self.latest = {"task_number": 162, "review_id": "review", "verdict": "PASS"}
+        self.record = {
+            "task_number": 162,
+            "review_id": "review",
+            "verdict": "PASS",
+            "status": "READY_FOR_HUMAN_MERGE",
+            "identity": {
+                "task_number": 162,
+                "pr_number": 262,
+                "base_sha": SHA,
+                "head_sha": head_sha,
+                "task_body_sha256": "d" * 64,
+                "merge_base_sha": SHA,
+                "effective_diff_sha256": "e" * 64,
+                "changed_files": [],
+            },
+        }
+
+    def read_latest_review(self, _task_number: int) -> dict[str, Any]:
+        return self.latest
+
+    def read_record(self, _task_number: int, _review_id: str) -> dict[str, Any]:
+        return self.record
+
+
+class RecordingRunner:
+    def __init__(self, returncode: int = 0) -> None:
+        self.returncode = returncode
+        self.calls: list[tuple[str, ...]] = []
+
+    def run(self, argv: list[str], **_kwargs: Any) -> Any:
+        self.calls.append(tuple(argv))
+        return SimpleNamespace(returncode=self.returncode, stdout="", stderr="")
 
 
 class FixedEffect:
@@ -115,6 +181,7 @@ def test_closeout_resolves_business_delivery_and_cleanup_from_live_state() -> No
             Any,
             FixedEffect(_receipt("cleanup_task_refs", "already-clean")),
         ),
+        review_store=cast(Any, StaticReviewStore()),
     ).complete(162)
 
     assert result.business_delivery == "COMPLETE"
@@ -135,6 +202,7 @@ def test_closeout_keeps_business_complete_when_cleanup_is_pending() -> None:
             Any,
             FixedEffect(_receipt("cleanup_task_refs", "pending")),
         ),
+        review_store=cast(Any, StaticReviewStore()),
     ).complete(162)
 
     assert result.business_delivery == "COMPLETE"
@@ -161,6 +229,7 @@ def test_closeout_stops_on_remote_divergence() -> None:
                 Any,
                 FixedEffect(_receipt("cleanup_task_refs", "already-clean")),
             ),
+            review_store=cast(Any, StaticReviewStore()),
         ).complete(162)
 
 
@@ -207,7 +276,13 @@ def test_merge_preflight_has_manual_merge_boundary() -> None:
         open_pr=pr,
         merged_pr_numbers=(),
         merged=False,
-        checks={},
+        checks={
+            "count": 0,
+            "failed": 0,
+            "pending": 0,
+            "skipped_or_unknown": 0,
+            "all_success": True,
+        },
         cleanup={},
     )
 
@@ -219,6 +294,9 @@ def test_merge_preflight_has_manual_merge_boundary() -> None:
         def run(self, _task: int) -> dict[str, Any]:
             return {
                 "status": "pass",
+                "configuration": "not-configured",
+                "required": [],
+                "observed": {},
                 "pr": {"number": 262, "head_sha": SHA, "base_sha": SHA},
             }
 
@@ -230,3 +308,105 @@ def test_merge_preflight_has_manual_merge_boundary() -> None:
 
     assert result.status == "READY_FOR_HUMAN_MERGE"
     assert result.to_dict()["automatic_merge"] is False
+
+
+def test_merge_preflight_rechecks_project_status_after_checks() -> None:
+    pr = {
+        "number": 262,
+        "state": "OPEN",
+        "isDraft": False,
+        "baseRefName": "main",
+        "baseRefOid": SHA,
+        "headRefName": BRANCH,
+        "headRefOid": SHA,
+        "mergeable": "MERGEABLE",
+    }
+    issue = {
+        "number": 162,
+        "title": "[Task] closeout",
+        "state": "OPEN",
+        "labels": {"items": ["type:task", "codex:ready"]},
+        "project_status": "Review",
+    }
+    state = lck.LiveState(
+        task_number=162,
+        repository="owner/repo",
+        issue=issue,
+        relationships={
+            "available": True,
+            "blocked_by": {"items": [], "count": 0, "truncated": False},
+        },
+        git={"branch": BRANCH, "clean": True},
+        target_branch=BRANCH,
+        local_task_branch=BRANCH,
+        local_task_head=SHA,
+        remote_task_branch=BRANCH,
+        remote_task_oid=SHA,
+        open_pr=pr,
+        merged_pr_numbers=(),
+        merged=False,
+        checks={
+            "count": 0,
+            "failed": 0,
+            "pending": 0,
+            "skipped_or_unknown": 0,
+            "all_success": True,
+        },
+        cleanup={},
+    )
+    changed = replace(state, issue={**issue, "project_status": "In Progress"})
+
+    class Review:
+        def run(self, _task: int, _state: lck.LiveState) -> dict[str, Any]:
+            return {"status": "pass", "review_id": "review"}
+
+    class Checks:
+        def run(self, _task: int) -> dict[str, Any]:
+            return {
+                "status": "pass",
+                "configuration": "not-configured",
+                "required": [],
+                "observed": {},
+                "pr": {"number": 262, "head_sha": SHA, "base_sha": SHA},
+            }
+
+    with pytest.raises(lck.LckStopError, match="PR identity changed"):
+        lck.MergePreflight(
+            cast(Any, SequenceResolver(state, changed)),
+            review_gate=cast(Any, Review()),
+            checks_gate=cast(Any, Checks()),
+        ).run(162)
+
+
+def test_closeout_requires_reviewed_head_identity() -> None:
+    state = _state()
+    with pytest.raises(lck.LckStopError, match="does not match the latest Review PASS"):
+        lck.CloseoutCompleter(
+            cast(Any, StaticResolver(state)),
+            review_store=cast(Any, StaticReviewStore(head_sha="c" * 40)),
+        ).complete(162)
+
+
+def test_closeout_stops_on_incomplete_merge_identity() -> None:
+    state = _state()
+    incomplete = dict(cast(dict[str, Any], state.merged_pr))
+    incomplete.pop("mergeCommit")
+    with pytest.raises(lck.LckStopError, match="identity is incomplete"):
+        lck.CloseoutCompleter(
+            cast(Any, StaticResolver(replace(state, merged_pr=incomplete))),
+            review_store=cast(Any, StaticReviewStore()),
+        ).complete(162)
+
+
+def test_cleanup_proves_squash_tree_when_refs_are_already_deleted() -> None:
+    runner = RecordingRunner()
+    resolver = StaticResolver(_state())
+    resolver.runner = cast(Any, runner)
+    result = lck.CleanupTaskRefsEffect(cast(Any, resolver)).execute(
+        _state(),
+        expected_head_sha=SHA,
+        merge_sha=MERGE_SHA,
+    )
+
+    assert result.action == "already-clean"
+    assert ("git", "diff", "--quiet", SHA, MERGE_SHA) in runner.calls

@@ -33,11 +33,13 @@ _PR_URL_PATTERN: Final = re.compile(
 )
 _PR_LIST_FIELDS: Final = (
     "number,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,"
-    "mergeCommit,mergedAt,mergeable,reviewDecision,headRepository,statusCheckRollup"
+    "mergeCommit,mergedAt,mergeable,reviewDecision,headRepository,statusCheckRollup,"
+    "closingIssuesReferences"
 )
 _PR_VIEW_FIELDS: Final = (
     "number,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,"
-    "mergeCommit,mergedAt,mergeable,reviewDecision,headRepository,statusCheckRollup"
+    "mergeCommit,mergedAt,mergeable,reviewDecision,headRepository,statusCheckRollup,"
+    "closingIssuesReferences"
 )
 _REQUIRED_PR_FIELDS: Final = (
     "number",

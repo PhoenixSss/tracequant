@@ -2701,16 +2701,39 @@ class MergePreflight:
                 + str(checks["limitation"])
             )
         current = self.resolver.resolve(task_number)
+        current_pr = current.open_pr
         if (
             current.status is not ResolutionStatus.RESOLVED
-            or not isinstance(current.open_pr, Mapping)
-            or _pr_head_sha(current.open_pr) != head_sha
-            or _pr_base_sha(current.open_pr) != base_sha
+            or not isinstance(current_pr, Mapping)
+            or current.target_branch != state.target_branch
+            or current.project_status != "Review"
+            or current_pr.get("isDraft") is not False
+            or str(current_pr.get("state", "")).upper() != "OPEN"
+            or current_pr.get("baseRefName") != BASE_BRANCH
+            or current_pr.get("headRefName") != current.target_branch
+            or _pr_head_sha(current_pr) != head_sha
+            or _pr_base_sha(current_pr) != base_sha
+            or current.remote_task_oid != head_sha
+            or (
+                current.local_task_head is not None
+                and current.local_task_head != head_sha
+            )
         ):
             raise LckStopError(
                 "Merge Preflight PR identity changed while evaluating merge gates"
             )
-        mergeability_value = current.open_pr.get("mergeable")
+        blockers = _formal_blockers_gate(current.relationships)
+        if blockers.get("status") != "pass":
+            raise LckStopError(
+                "Merge Preflight unresolved blockers changed while evaluating gates: "
+                + str(blockers.get("detail") or blockers.get("status"))
+            )
+        review = self.review_gate.run(task_number, current)
+        if not DeliveryChecksGate._checks_postcondition(current, checks):
+            raise LckStopError(
+                "Merge Preflight checks changed or are no longer passing"
+            )
+        mergeability_value = current_pr.get("mergeable")
         mergeability = str(mergeability_value or "").upper()
         if mergeability not in {"MERGEABLE", "TRUE"}:
             raise LckStopError(
@@ -2720,7 +2743,7 @@ class MergePreflight:
         return MergePreflightResult(
             task_number=task_number,
             status="READY_FOR_HUMAN_MERGE",
-            pr=current.open_pr,
+            pr=current_pr,
             review=review,
             checks=checks,
             blockers=blockers,
@@ -2956,17 +2979,24 @@ class CleanupTaskRefsEffect:
                 reason="verified Task branch is still used by a worktree",
             )
 
+        if not is_sha(expected_head_sha) or not is_sha(merge_sha):
+            raise LckStopError(
+                "Cleanup STOP: merged PR head and squash merge identities are required"
+            )
+        tree_result = self.resolver.runner.run(
+            ["git", "diff", "--quiet", expected_head_sha, merge_sha],
+            command_id="lck-closeout-squash-tree-equality",
+        )
+        if tree_result.returncode != 0:
+            raise LckStopError(
+                "Cleanup STOP: PR head tree does not equal squash merge tree"
+            )
+
         if state.local_task_branch is None and state.remote_task_branch is None:
             return EffectReceipt(
                 effect="cleanup_task_refs",
                 action="already-clean",
                 details={"branch": branch, "remote_branch": "already-deleted"},
-            )
-        if expected_head_sha is None:
-            return _pending_receipt(
-                "cleanup_task_refs",
-                "pending",
-                reason="merged PR head identity is unavailable",
             )
         if state.local_task_branch is not None:
             local_result = self.resolver.runner.run(
@@ -2978,15 +3008,6 @@ class CleanupTaskRefsEffect:
                 raise LckStopError(
                     "Cleanup STOP: local Task branch diverges from merged PR head"
                 )
-            if is_sha(merge_sha):
-                tree_result = self.resolver.runner.run(
-                    ["git", "diff", "--quiet", expected_head_sha, merge_sha],
-                    command_id="lck-closeout-squash-tree-equality",
-                )
-                if tree_result.returncode != 0:
-                    raise LckStopError(
-                        "Cleanup STOP: PR head tree does not equal squash merge tree"
-                    )
             deleted = self.resolver.runner.run(
                 ["git", "branch", "-d", branch],
                 command_id="lck-closeout-local-branch-delete",
@@ -3069,48 +3090,115 @@ class CloseoutCompleter:
         main_effect: MainSynchronizationEffect | None = None,
         metadata_effect: CloseoutMetadataEffect | None = None,
         cleanup_effect: CleanupTaskRefsEffect | None = None,
+        review_store: ReviewInvocationStore | None = None,
     ) -> None:
         self.resolver = resolver
         self.eligibility = eligibility or PhaseEligibilityResolver()
         self.main_effect = main_effect or MainSynchronizationEffect(resolver)
         self.metadata_effect = metadata_effect or CloseoutMetadataEffect(resolver)
         self.cleanup_effect = cleanup_effect or CleanupTaskRefsEffect(resolver)
+        self.review_store = review_store or ReviewInvocationStore(resolver.repo_root)
 
     @staticmethod
-    def _validate_merged_identity(state: LiveState) -> tuple[str | None, str | None]:
+    def _validate_merged_identity(state: LiveState) -> tuple[str, str]:
         pr = state.merged_pr
-        if isinstance(pr, Mapping):
+        if not isinstance(pr, Mapping):
+            raise LckStopError("Closeout STOP: merged PR identity is unavailable")
+        if str(pr.get("state", "")).upper() != "MERGED":
+            raise LckStopError("Closeout STOP: merged PR state is not MERGED")
+        number = pr.get("number")
+        if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+            raise LckStopError("Closeout STOP: merged PR number is unavailable")
+        if pr.get("baseRefName") != BASE_BRANCH:
+            raise LckStopError("Closeout STOP: merged PR base branch is not main")
+        if pr.get("headRefName") != state.target_branch:
+            raise LckStopError(
+                "Closeout STOP: merged PR head branch is not the resolved Task branch"
+            )
+        expected_head = _pr_head_sha(pr)
+        base_sha = _pr_base_sha(pr)
+        merge_sha = _merge_commit_sha(pr)
+        merged_at = pr.get("mergedAt", pr.get("merged_at"))
+        if (
+            expected_head is None
+            or base_sha is None
+            or merge_sha is None
+            or not isinstance(merged_at, str)
+            or not merged_at
+        ):
+            raise LckStopError("Closeout STOP: merged PR identity is incomplete")
+        closing = pr.get("closingIssuesReferences")
+        if not isinstance(closing, list):
+            raise LckStopError(
+                "Closeout STOP: merged PR closing-Task linkage is unavailable"
+            )
+        closing_numbers = [
+            item.get("number")
+            for item in closing
+            if isinstance(item, Mapping) and isinstance(item.get("number"), int)
+        ]
+        if len(closing_numbers) != 1 or closing_numbers[0] != state.task_number:
+            raise LckStopError(
+                "Closeout STOP: merged PR does not close exactly this Task"
+            )
+        if state.issue_state == "CLOSED":
+            closure = (
+                state.issue.get("issue_closure")
+                if isinstance(state.issue, Mapping)
+                else None
+            )
             if (
-                pr.get("baseRefName") is not None
-                and pr.get("baseRefName") != BASE_BRANCH
-            ):
-                raise LckStopError("Closeout STOP: merged PR base branch is not main")
-            if (
-                pr.get("headRefName") is not None
-                and pr.get("headRefName") != state.target_branch
+                not isinstance(closure, Mapping)
+                or closure.get("evidence_status") != "complete"
+                or closure.get("status") != "closed-by-pr"
+                or closure.get("closer_repository") != state.repository
+                or closure.get("closer_number") != number
             ):
                 raise LckStopError(
-                    "Closeout STOP: merged PR head branch is not the resolved Task branch"
+                    "Closeout STOP: closed Task is not proven closed by the merged PR"
                 )
-            expected_head = _pr_head_sha(pr)
-            if (
-                expected_head is not None
-                and state.local_task_head is not None
-                and state.local_task_head != expected_head
-            ):
-                raise LckStopError(
-                    "Closeout STOP: local Task branch diverges from merged PR head"
-                )
-            if (
-                expected_head is not None
-                and state.remote_task_oid is not None
-                and state.remote_task_oid != expected_head
-            ):
-                raise LckStopError(
-                    "Closeout STOP: remote Task branch diverges from merged PR head"
-                )
-            return expected_head, _merge_commit_sha(pr)
-        return None, None
+        if state.local_task_head is not None and state.local_task_head != expected_head:
+            raise LckStopError(
+                "Closeout STOP: local Task branch diverges from merged PR head"
+            )
+        if state.remote_task_oid is not None and state.remote_task_oid != expected_head:
+            raise LckStopError(
+                "Closeout STOP: remote Task branch diverges from merged PR head"
+            )
+        return expected_head, merge_sha
+
+    def _validate_reviewed_identity(
+        self, state: LiveState, merged_pr: Mapping[str, Any]
+    ) -> None:
+        latest = self.review_store.read_latest_review(state.task_number)
+        if not isinstance(latest, Mapping) or latest.get("verdict") != "PASS":
+            raise LckStopError(
+                "Closeout STOP: latest Independent Review PASS is unavailable"
+            )
+        review_id = latest.get("review_id")
+        if not isinstance(review_id, str):
+            raise LckStopError("Closeout STOP: latest Review PASS has no review id")
+        record = self.review_store.read_record(state.task_number, review_id)
+        if (
+            record.get("task_number") != state.task_number
+            or record.get("review_id") != review_id
+            or record.get("verdict") != "PASS"
+            or record.get("status") != "READY_FOR_HUMAN_MERGE"
+        ):
+            raise LckStopError("Closeout STOP: latest Review PASS record is invalid")
+        raw_identity = record.get("identity")
+        if not isinstance(raw_identity, Mapping):
+            raise LckStopError("Closeout STOP: Review PASS identity is unavailable")
+        reviewed = _identity_from_mapping(raw_identity)
+        if (
+            reviewed.task_number != state.task_number
+            or reviewed.pr_number != merged_pr.get("number")
+            or reviewed.base_sha != _pr_base_sha(merged_pr)
+            or reviewed.head_sha != _pr_head_sha(merged_pr)
+        ):
+            raise LckStopError(
+                "Closeout STOP: merged PR/head does not match the latest Review PASS"
+            )
 
     def complete(self, task_number: int) -> CloseoutResult:
         state = self.resolver.resolve(task_number)
@@ -3120,6 +3208,9 @@ class CloseoutCompleter:
                 f"Closeout STOP for Task #{task_number}: " + "; ".join(decision.reasons)
             )
         expected_head, merge_sha = self._validate_merged_identity(state)
+        if not isinstance(state.merged_pr, Mapping):
+            raise LckStopError("Closeout STOP: merged PR identity is unavailable")
+        self._validate_reviewed_identity(state, state.merged_pr)
         effects: list[EffectReceipt] = []
         main = self.main_effect.execute(state, merge_sha=merge_sha)
         effects.append(main)
