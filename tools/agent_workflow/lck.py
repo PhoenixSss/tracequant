@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -1197,16 +1198,6 @@ class ReviewWorkspaceManager:
         path = self._validated_worktree_path(path)
         self._assert_registered_worktree(path)
         self._assert_clean_exact(path, expected_head_sha)
-        filemode = self.resolver.runner.run(
-            ["git", "config", "--worktree", "core.filemode", "false"],
-            command_id="lck-review-worktree-ignore-filemode",
-            cwd=path,
-        )
-        if filemode.returncode != 0:
-            raise LckStopError(
-                "cannot configure isolated Review worktree read-only sealing: "
-                + (filemode.stderr.strip() or filemode.stdout.strip())
-            )
         self.seal_read_only(path)
         self._assert_clean_exact(path, expected_head_sha)
         self._assert_read_only(path)
@@ -1221,18 +1212,23 @@ class ReviewWorkspaceManager:
         self._assert_read_only(path)
 
     @staticmethod
-    def seal_read_only(path: Path) -> None:
+    def _remove_write_bits(path: Path) -> None:
+        mode = stat.S_IMODE(path.stat().st_mode)
+        os.chmod(path, mode & ~0o222)
+
+    @classmethod
+    def seal_read_only(cls, path: Path) -> None:
         for root, dirs, files in os.walk(path, topdown=False, followlinks=False):
             root_path = Path(root)
             for name in files:
                 target = root_path / name
                 if not target.is_symlink():
-                    os.chmod(target, 0o444)
+                    cls._remove_write_bits(target)
             for name in dirs:
                 target = root_path / name
                 if not target.is_symlink():
-                    os.chmod(target, 0o555)
-        os.chmod(path, 0o555)
+                    cls._remove_write_bits(target)
+        cls._remove_write_bits(path)
 
     @staticmethod
     def _make_removable(path: Path) -> None:

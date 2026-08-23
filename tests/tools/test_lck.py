@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -19,7 +21,10 @@ from pr_resolve import (  # type: ignore[import-not-found]
     PrResolveError,
     resolve_open_pr,
 )  # noqa: E402
-from workflow_common import CommandResult  # type: ignore[import-not-found]  # noqa: E402
+from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
+    CommandResult,
+    CommandRunner,
+)
 
 
 SHA = "a" * 40
@@ -927,7 +932,7 @@ class FakeWorkspaceRunner:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.status_output = ""
-        self.configured = False
+        self.commands: list[tuple[str, ...]] = []
 
     def run(
         self,
@@ -937,6 +942,7 @@ class FakeWorkspaceRunner:
         **_: Any,
     ) -> CommandResult:
         command = tuple(str(item) for item in argv)
+        self.commands.append(command)
         args = list(command[1:]) if command and command[0] == "git" else list(command)
         stdout = ""
         if args == ["worktree", "list", "--porcelain"]:
@@ -945,8 +951,6 @@ class FakeWorkspaceRunner:
             stdout = self.status_output
         elif args == ["rev-parse", "HEAD"]:
             stdout = f"{SHA}\n"
-        elif args == ["config", "--worktree", "core.filemode", "false"]:
-            self.configured = True
         else:
             return CommandResult(
                 command_id=command_id,
@@ -1380,12 +1384,17 @@ def test_review_workspace_seal_removes_write_bits(tmp_path: Path) -> None:
     nested.mkdir(parents=True)
     target = nested / "file.py"
     target.write_text("print('read only')\n", encoding="utf-8")
+    executable = nested / "tool.py"
+    executable.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    executable.chmod(0o755)
 
     lck.ReviewWorkspaceManager.seal_read_only(root)
 
     assert root.stat().st_mode & 0o222 == 0
     assert nested.stat().st_mode & 0o222 == 0
     assert target.stat().st_mode & 0o222 == 0
+    assert executable.stat().st_mode & 0o222 == 0
+    assert executable.stat().st_mode & 0o111 != 0
     lck.ReviewWorkspaceManager._make_removable(root)
 
 
@@ -1402,7 +1411,10 @@ def test_review_workspace_seal_preserves_clean_status_and_rejects_mutation(
 
         manager.seal_for_review(root, SHA)
 
-        assert runner.configured is True
+        assert not any(
+            command[:3] == ("git", "config", "--worktree")
+            for command in runner.commands
+        )
         assert root.stat().st_mode & 0o222 == 0
         assert (root / "tracked.py").stat().st_mode & 0o222 == 0
         manager.assert_ready_for_completion(root, SHA)
@@ -1411,6 +1423,89 @@ def test_review_workspace_seal_preserves_clean_status_and_rejects_mutation(
         with pytest.raises(lck.LckStopError, match="changed the isolated worktree"):
             manager.assert_ready_for_completion(root, SHA)
         manager._make_removable(root)
+
+
+def test_review_workspace_seal_real_git_multi_worktree_without_worktree_config(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("git") is None:
+        pytest.skip("git is required for Review worktree integration test")
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str, cwd: Path = repo) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+    git("init")
+    git("config", "user.name", "TraceQuant Test")
+    git("config", "user.email", "tracequant-test@example.invalid")
+    tracked = repo / "tracked.py"
+    tracked.write_text("print('review')\n", encoding="utf-8")
+    executable = repo / "tool.py"
+    executable.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    executable.chmod(0o755)
+    git("add", "tracked.py", "tool.py")
+    git("commit", "-m", "initial")
+    head_sha = git("rev-parse", "HEAD").stdout.strip()
+
+    unset = subprocess.run(
+        ["git", "config", "--unset-all", "extensions.worktreeConfig"],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert unset.returncode in {0, 5}
+
+    resolver = cast(Any, StaticResolver(repo, _review_state()))
+    resolver.runner = CommandRunner(repo)
+    manager = lck.ReviewWorkspaceManager(resolver)
+    review_root = manager.create(159, head_sha)
+    worktrees = git("worktree", "list", "--porcelain").stdout
+    assert worktrees.count("worktree ") == 2
+    config_before_seal = (repo / ".git" / "config").read_text(encoding="utf-8")
+
+    try:
+        manager.seal_for_review(review_root, head_sha)
+
+        assert (repo / ".git" / "config").read_text(
+            encoding="utf-8"
+        ) == config_before_seal
+        status = git(
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            cwd=review_root,
+        )
+        assert status.stdout.strip() == ""
+        assert git("rev-parse", "HEAD", cwd=review_root).stdout.strip() == head_sha
+        assert review_root.stat().st_mode & 0o222 == 0
+        assert (review_root / "tracked.py").stat().st_mode & 0o222 == 0
+        sealed_executable = review_root / "tool.py"
+        assert sealed_executable.stat().st_mode & 0o222 == 0
+        assert sealed_executable.stat().st_mode & 0o111 != 0
+
+        configured = subprocess.run(
+            ["git", "config", "--get", "extensions.worktreeConfig"],
+            cwd=repo,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        assert configured.returncode == 1
+        assert configured.stdout.strip() == ""
+    finally:
+        manager.remove(review_root)
 
 
 def test_review_workspace_remove_rejects_unvalidated_path(tmp_path: Path) -> None:
