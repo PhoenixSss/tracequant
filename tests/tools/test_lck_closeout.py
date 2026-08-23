@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -145,13 +146,15 @@ class StaticReviewStore:
 
 
 class RecordingRunner:
-    def __init__(self, returncode: int = 0) -> None:
+    def __init__(self, returncode: int = 0, *, pr_view: str = "") -> None:
         self.returncode = returncode
+        self.pr_view = pr_view
         self.calls: list[tuple[str, ...]] = []
 
     def run(self, argv: list[str], **_kwargs: Any) -> Any:
         self.calls.append(tuple(argv))
-        return SimpleNamespace(returncode=self.returncode, stdout="", stderr="")
+        stdout = self.pr_view if argv[:3] == ["gh", "pr", "view"] else ""
+        return SimpleNamespace(returncode=self.returncode, stdout=stdout, stderr="")
 
 
 class FixedEffect:
@@ -410,3 +413,127 @@ def test_cleanup_proves_squash_tree_when_refs_are_already_deleted() -> None:
 
     assert result.action == "already-clean"
     assert ("git", "diff", "--quiet", SHA, MERGE_SHA) in runner.calls
+
+
+def test_cleanup_uses_an_expected_tip_lease_for_remote_deletion() -> None:
+    runner = RecordingRunner()
+    resolver = StaticResolver(_state(remote_branch=BRANCH, remote_oid=SHA))
+    resolver.runner = cast(Any, runner)
+
+    result = lck.CleanupTaskRefsEffect(cast(Any, resolver)).execute(
+        _state(remote_branch=BRANCH, remote_oid=SHA),
+        expected_head_sha=SHA,
+        merge_sha=MERGE_SHA,
+    )
+
+    assert result.action == "cleaned"
+    delete_call = next(call for call in runner.calls if "--delete" in call)
+    assert f"--force-with-lease=refs/heads/{BRANCH}:{SHA}" in delete_call
+
+
+def test_resolver_recovers_deleted_noncanonical_branch_from_closing_pr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = "PhoenixSss/tracequant"
+    branch = "task/162-merge-preflightcloseout-recovery-lck"
+    pr = {
+        "number": 167,
+        "url": f"https://github.com/{repository}/pull/167",
+        "state": "MERGED",
+        "isDraft": False,
+        "baseRefName": "main",
+        "baseRefOid": SHA,
+        "headRefName": branch,
+        "headRefOid": SHA,
+        "mergeCommit": {"oid": MERGE_SHA},
+        "mergedAt": "2026-08-23T00:00:00Z",
+        "headRepository": {"nameWithOwner": repository},
+        "closingIssuesReferences": [{"number": 162}],
+    }
+    issue = {
+        "number": 162,
+        "title": "[Task] 将 Merge Preflight、Closeout 与 Recovery 迁移至 LCK",
+        "state": "CLOSED",
+        "issue_closure": {
+            "evidence_status": "complete",
+            "closed_by_pull_requests": {
+                "items": [
+                    {
+                        "number": 167,
+                        "state": "MERGED",
+                        "merged": True,
+                        "url": pr["url"],
+                        "repository": repository,
+                    }
+                ],
+                "count": 1,
+                "truncated": False,
+            },
+        },
+    }
+    runner = RecordingRunner(pr_view=json.dumps(pr))
+    resolver = lck.LiveStateResolver(
+        Path.cwd(), runner=cast(Any, runner), repository=repository
+    )
+
+    monkeypatch.setattr(lck, "_issue_view", lambda *_args: issue)
+    monkeypatch.setattr(
+        lck,
+        "_relationship_snapshot",
+        lambda *_args: {
+            "available": True,
+            "blocked_by": {"items": [], "count": 0, "truncated": False},
+        },
+    )
+    monkeypatch.setattr(
+        lck,
+        "_git_snapshot",
+        lambda *_args: {
+            "origin_fetch": "pass",
+            "branch": "main",
+            "head_sha": MERGE_SHA,
+            "local_main_sha": MERGE_SHA,
+            "origin_main_sha": MERGE_SHA,
+            "clean": True,
+            "worktree_branches": {"items": ["main"], "count": 1},
+        },
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_task_branches",
+        lambda *_args: (set(), {}, True),
+    )
+    open_pr_branches: list[str] = []
+    history_branches: list[str] = []
+
+    def resolve_open(
+        _runner: Any,
+        _repository: str,
+        current_branch: str,
+        _base_branch: str,
+        _warnings: list[dict[str, Any]],
+    ) -> None:
+        open_pr_branches.append(current_branch)
+        return None
+
+    def list_history(
+        _runner: Any,
+        _repository: str,
+        current_branch: str,
+        _base_branch: str,
+        _warnings: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        history_branches.append(current_branch)
+        return [pr]
+
+    monkeypatch.setattr(lck, "resolve_open_pr", resolve_open)
+    monkeypatch.setattr(lck, "list_matching_prs", list_history)
+
+    state = resolver.resolve(162)
+
+    assert state.status is lck.ResolutionStatus.RESOLVED
+    assert state.target_branch == branch
+    assert state.merged is True
+    assert state.merged_pr == pr
+    assert open_pr_branches == [branch]
+    assert history_branches == [branch]

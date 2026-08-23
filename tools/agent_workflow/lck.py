@@ -71,6 +71,11 @@ LCK_SCHEMA_VERSION: Final = 1
 TASK_BRANCH_PATTERN: Final = re.compile(
     r"^(?:task/(?P<slash>\d+)(?:-.+)?|task-(?P<dash>\d+)(?:-.+)?|(?P<legacy>\d+)-.+)$"
 )
+RECOVERY_PR_FIELDS: Final = (
+    "number,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,"
+    "mergeCommit,mergedAt,mergeable,reviewDecision,headRepository,"
+    "closingIssuesReferences"
+)
 
 
 class Phase(StrEnum):
@@ -326,6 +331,156 @@ class LiveStateResolver:
         }
         return local, remote, True
 
+    def _recover_merged_pr_branch(
+        self,
+        task_number: int,
+        repository: str,
+        issue: Mapping[str, Any] | None,
+        warnings: list[dict[str, Any]],
+    ) -> tuple[str | None, Mapping[str, Any] | None, str | None]:
+        """Recover a deleted Task ref from authoritative closing-PR facts."""
+        if not isinstance(issue, Mapping):
+            return None, None, None
+        if str(issue.get("state", "")).upper() != "CLOSED":
+            return None, None, None
+
+        closure = issue.get("issue_closure")
+        if not isinstance(closure, Mapping):
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "Issue closure facts are unavailable",
+            )
+        if closure.get("evidence_status") != "complete":
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "Issue closure facts are incomplete",
+            )
+        refs = closure.get("closed_by_pull_requests")
+        if not isinstance(refs, Mapping) or refs.get("truncated") is True:
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "closing PR references are incomplete",
+            )
+        items = refs.get("items")
+        if not isinstance(items, list):
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "closing PR references are malformed",
+            )
+        merged_refs = [
+            item
+            for item in items
+            if isinstance(item, Mapping)
+            and item.get("repository") == repository
+            and item.get("merged") is True
+            and str(item.get("state", "")).upper() == "MERGED"
+            and isinstance(item.get("number"), int)
+            and not isinstance(item.get("number"), bool)
+        ]
+        if len(merged_refs) != 1:
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                f"expected one merged closing PR, found {len(merged_refs)}",
+            )
+
+        pr_number = merged_refs[0]["number"]
+        result = self.runner.run(
+            [
+                "gh",
+                "pr",
+                "view",
+                str(pr_number),
+                "--repo",
+                repository,
+                "--json",
+                RECOVERY_PR_FIELDS,
+            ],
+            command_id="lck-recover-merged-pr",
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            warnings.append(command_warning(result))
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "merged PR identity cannot be read",
+            )
+        try:
+            value = read_json_text(result.stdout, field="lck-recover-merged-pr")
+        except WorkflowToolError as exc:
+            warnings.append(
+                {
+                    "command_id": result.command_id,
+                    "exit_code": result.returncode,
+                    "error": str(exc),
+                }
+            )
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "merged PR identity is malformed",
+            )
+        if not isinstance(value, Mapping):
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "merged PR identity is not an object",
+            )
+        if (
+            value.get("number") != pr_number
+            or str(value.get("state", "")).upper() != "MERGED"
+            or value.get("baseRefName") != BASE_BRANCH
+            or not _branch_matches_task(str(value.get("headRefName", "")), task_number)
+        ):
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "merged PR identity does not match this Task",
+            )
+        head_repository = value.get("headRepository")
+        if (
+            not isinstance(head_repository, Mapping)
+            or head_repository.get("nameWithOwner") != repository
+        ):
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "merged PR head repository is not this repository",
+            )
+        closing = value.get("closingIssuesReferences")
+        closing_numbers = (
+            [
+                item.get("number")
+                for item in closing
+                if isinstance(item, Mapping) and isinstance(item.get("number"), int)
+            ]
+            if isinstance(closing, list)
+            else []
+        )
+        if task_number not in closing_numbers:
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "merged PR does not close this Task",
+            )
+        head_branch = value.get("headRefName")
+        return str(head_branch), dict(value), None
+
     def resolve(self, task_number: int) -> LiveState:
         if task_number <= 0:
             raise LckStopError(f"Task number must be positive: {task_number}")
@@ -371,7 +526,23 @@ class LiveStateResolver:
         candidates = sorted(local_branches | set(remote_branches))
         if len(candidates) > 1:
             reasons.append(f"multiple Task branch candidates: {candidates}")
-        target_branch = candidates[0] if len(candidates) == 1 else canonical
+        recovered_branch: str | None = None
+        recovered_pr: Mapping[str, Any] | None = None
+        if not candidates and repository is not None:
+            recovery_reason: str | None
+            recovered_branch, recovered_pr, recovery_reason = (
+                self._recover_merged_pr_branch(
+                    task_number,
+                    repository,
+                    issue,
+                    warnings,
+                )
+            )
+            if recovery_reason:
+                reasons.append(recovery_reason)
+        target_branch = (
+            candidates[0] if len(candidates) == 1 else recovered_branch or canonical
+        )
         local_branch = target_branch if target_branch in local_branches else None
         remote_branch = target_branch if target_branch in remote_branches else None
 
@@ -413,6 +584,8 @@ class LiveStateResolver:
                     BASE_BRANCH,
                     warnings,
                 )
+                if not history and recovered_pr is not None:
+                    history = [dict(recovered_pr)]
                 merged_items = [
                     item
                     for item in history
@@ -3029,7 +3202,14 @@ class CleanupTaskRefsEffect:
                     "Cleanup STOP: remote Task branch diverges from merged PR head"
                 )
             removed = self.resolver.runner.run(
-                ["git", "push", "origin", "--delete", branch],
+                [
+                    "git",
+                    "push",
+                    "origin",
+                    f"--force-with-lease=refs/heads/{branch}:{expected_head_sha}",
+                    "--delete",
+                    branch,
+                ],
                 command_id="lck-closeout-remote-branch-delete",
             )
             if removed.returncode != 0:
