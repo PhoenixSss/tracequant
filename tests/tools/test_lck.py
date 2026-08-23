@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, cast
 
@@ -922,10 +923,52 @@ class StaticResolver:
         return self.state
 
 
+class FakeWorkspaceRunner:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.status_output = ""
+        self.configured = False
+
+    def run(
+        self,
+        argv: list[str] | tuple[str, ...],
+        *,
+        command_id: str,
+        **_: Any,
+    ) -> CommandResult:
+        command = tuple(str(item) for item in argv)
+        args = list(command[1:]) if command and command[0] == "git" else list(command)
+        stdout = ""
+        if args == ["worktree", "list", "--porcelain"]:
+            stdout = f"worktree {self.root}\n"
+        elif args == ["status", "--porcelain=v1", "--untracked-files=all"]:
+            stdout = self.status_output
+        elif args == ["rev-parse", "HEAD"]:
+            stdout = f"{SHA}\n"
+        elif args == ["config", "--worktree", "core.filemode", "false"]:
+            self.configured = True
+        else:
+            return CommandResult(
+                command_id=command_id,
+                argv=command,
+                returncode=1,
+                stdout="",
+                stderr=f"unsupported fake command: {args}",
+            )
+        return CommandResult(
+            command_id=command_id,
+            argv=command,
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        )
+
+
 class FakeReviewWorkspace:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.sealed: list[Path] = []
+        self.ready_checked: list[Path] = []
         self.removed: list[Path] = []
 
     def create(self, _task: int, _head: str) -> Path:
@@ -934,6 +977,12 @@ class FakeReviewWorkspace:
 
     def seal_read_only(self, path: Path) -> None:
         self.sealed.append(path)
+
+    def seal_for_review(self, path: Path, _head: str) -> None:
+        self.seal_read_only(path)
+
+    def assert_ready_for_completion(self, path: Path, _head: str) -> None:
+        self.ready_checked.append(path)
 
     def remove(self, path: Path) -> None:
         self.removed.append(path)
@@ -1338,6 +1387,30 @@ def test_review_workspace_seal_removes_write_bits(tmp_path: Path) -> None:
     assert nested.stat().st_mode & 0o222 == 0
     assert target.stat().st_mode & 0o222 == 0
     lck.ReviewWorkspaceManager._make_removable(root)
+
+
+def test_review_workspace_seal_preserves_clean_status_and_rejects_mutation(
+    tmp_path: Path,
+) -> None:
+    with tempfile.TemporaryDirectory(prefix="tracequant-lck-review-test-") as raw:
+        root = Path(raw)
+        (root / "tracked.py").write_text("print('review')\n", encoding="utf-8")
+        resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+        runner = FakeWorkspaceRunner(root)
+        resolver.runner = runner
+        manager = lck.ReviewWorkspaceManager(resolver)
+
+        manager.seal_for_review(root, SHA)
+
+        assert runner.configured is True
+        assert root.stat().st_mode & 0o222 == 0
+        assert (root / "tracked.py").stat().st_mode & 0o222 == 0
+        manager.assert_ready_for_completion(root, SHA)
+
+        runner.status_output = " M tracked.py\n"
+        with pytest.raises(lck.LckStopError, match="changed the isolated worktree"):
+            manager.assert_ready_for_completion(root, SHA)
+        manager._make_removable(root)
 
 
 def test_review_workspace_remove_rejects_unvalidated_path(tmp_path: Path) -> None:

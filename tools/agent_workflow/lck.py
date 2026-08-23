@@ -1157,6 +1157,69 @@ class ReviewWorkspaceManager:
             raise LckStopError("isolated Review worktree postcondition failed")
         return path
 
+    def _assert_clean_exact(self, path: Path, expected_head_sha: str) -> None:
+        if not path.is_dir():
+            raise LckStopError("isolated Review worktree is unavailable")
+        status = self.resolver.runner.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            command_id="lck-review-worktree-post-validation-clean",
+            cwd=path,
+        )
+        head = self.resolver.runner.run(
+            ["git", "rev-parse", "HEAD"],
+            command_id="lck-review-worktree-post-validation-head",
+            cwd=path,
+        )
+        if status.returncode != 0 or head.returncode != 0:
+            raise LckStopError(
+                "cannot verify isolated Review worktree after validation"
+            )
+        if status.stdout.strip():
+            raise LckStopError("formal Review validation changed the isolated worktree")
+        if head.stdout.strip() != expected_head_sha:
+            raise LckStopError(
+                "isolated Review worktree HEAD changed during validation"
+            )
+
+    @staticmethod
+    def _assert_read_only(path: Path) -> None:
+        for root, dirs, files in os.walk(path, topdown=True, followlinks=False):
+            root_path = Path(root)
+            if root_path.stat().st_mode & 0o222:
+                raise LckStopError("isolated Review worktree is not read-only")
+            for name in (*dirs, *files):
+                target = root_path / name
+                if not target.is_symlink() and target.stat().st_mode & 0o222:
+                    raise LckStopError("isolated Review worktree is not read-only")
+
+    def seal_for_review(self, path: Path, expected_head_sha: str) -> None:
+        """Verify exact contents, seal files, and preserve clean Git status."""
+        path = self._validated_worktree_path(path)
+        self._assert_registered_worktree(path)
+        self._assert_clean_exact(path, expected_head_sha)
+        filemode = self.resolver.runner.run(
+            ["git", "config", "--worktree", "core.filemode", "false"],
+            command_id="lck-review-worktree-ignore-filemode",
+            cwd=path,
+        )
+        if filemode.returncode != 0:
+            raise LckStopError(
+                "cannot configure isolated Review worktree read-only sealing: "
+                + (filemode.stderr.strip() or filemode.stdout.strip())
+            )
+        self.seal_read_only(path)
+        self._assert_clean_exact(path, expected_head_sha)
+        self._assert_read_only(path)
+
+    def assert_ready_for_completion(self, path: Path, expected_head_sha: str) -> None:
+        """Fail closed unless the prepared Review context is still intact."""
+        path = self._validated_worktree_path(path)
+        if not path.is_dir():
+            raise LckStopError("prepared Review worktree is unavailable")
+        self._assert_registered_worktree(path)
+        self._assert_clean_exact(path, expected_head_sha)
+        self._assert_read_only(path)
+
     @staticmethod
     def seal_read_only(path: Path) -> None:
         for root, dirs, files in os.walk(path, topdown=False, followlinks=False):
@@ -1479,7 +1542,7 @@ class ReviewPreparer:
             )
             _assert_review_applicable(identity, final_identity)
             final_checks = self.checks_gate.run(task_number)
-            self.workspace.seal_read_only(review_root)
+            self.workspace.seal_for_review(review_root, identity.head_sha)
         except BaseException:
             self.workspace.remove(review_root)
             raise
@@ -1599,6 +1662,19 @@ class ReviewCompleter:
         review_root = Path(review_root_value)
 
         try:
+            validation = guard.get("validation")
+            if (
+                not isinstance(validation, Mapping)
+                or validation.get("status") != "pass"
+            ):
+                raise LckStopError(
+                    "Review invocation has no successful formal validation"
+                )
+            if start.task_number != task_number:
+                raise LckStopError(
+                    "Review invocation identity does not belong to this Task"
+                )
+            self.workspace.assert_ready_for_completion(review_root, start.head_sha)
             state = self.resolver.resolve(task_number)
             task_contract = _live_task_contract(self.resolver, task_number)
             if state.open_pr is None:
