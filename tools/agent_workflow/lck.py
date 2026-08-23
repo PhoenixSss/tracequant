@@ -71,6 +71,11 @@ LCK_SCHEMA_VERSION: Final = 1
 TASK_BRANCH_PATTERN: Final = re.compile(
     r"^(?:task/(?P<slash>\d+)(?:-.+)?|task-(?P<dash>\d+)(?:-.+)?|(?P<legacy>\d+)-.+)$"
 )
+RECOVERY_PR_FIELDS: Final = (
+    "number,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,"
+    "mergeCommit,mergedAt,mergeable,reviewDecision,headRepository,"
+    "closingIssuesReferences"
+)
 
 
 class Phase(StrEnum):
@@ -170,6 +175,32 @@ def _remote_refs(stdout: str) -> dict[str, str]:
     return refs
 
 
+def _merge_commit_sha(pr: Mapping[str, Any] | None) -> str | None:
+    """Return a normalized squash-merge commit identity from a PR fact."""
+    if not isinstance(pr, Mapping):
+        return None
+    value = pr.get("mergeCommit")
+    if isinstance(value, Mapping):
+        value = value.get("oid")
+    if not is_sha(value):
+        value = pr.get("merge_commit_sha")
+    return value if is_sha(value) else None
+
+
+def _pr_head_sha(pr: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(pr, Mapping):
+        return None
+    value = pr.get("headRefOid", pr.get("head_sha"))
+    return value if is_sha(value) else None
+
+
+def _pr_base_sha(pr: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(pr, Mapping):
+        return None
+    value = pr.get("baseRefOid", pr.get("base_sha"))
+    return value if is_sha(value) else None
+
+
 @dataclass(frozen=True)
 class LiveState:
     """Current mechanical facts acquired from Git and GitHub."""
@@ -192,6 +223,7 @@ class LiveState:
     status: ResolutionStatus = ResolutionStatus.RESOLVED
     stop_reasons: tuple[str, ...] = ()
     warnings: tuple[Mapping[str, Any], ...] = ()
+    merged_pr: Mapping[str, Any] | None = None
 
     @property
     def project_status(self) -> str | None:
@@ -235,6 +267,7 @@ class LiveState:
                     "status": self.status,
                     "stop_reasons": self.stop_reasons,
                     "warnings": self.warnings,
+                    "merged_pr": self.merged_pr,
                 }
             ),
         )
@@ -285,6 +318,7 @@ class LiveStateResolver:
         remote_result = self.runner.run(
             ["git", "ls-remote", "--heads", "origin"],
             command_id="lck-remote-task-branches",
+            retries=1,
         )
         if remote_result.returncode != 0:
             warnings.append(command_warning(remote_result))
@@ -296,6 +330,156 @@ class LiveStateResolver:
             if _branch_matches_task(branch, task_number)
         }
         return local, remote, True
+
+    def _recover_merged_pr_branch(
+        self,
+        task_number: int,
+        repository: str,
+        issue: Mapping[str, Any] | None,
+        warnings: list[dict[str, Any]],
+    ) -> tuple[str | None, Mapping[str, Any] | None, str | None]:
+        """Recover a deleted Task ref from authoritative closing-PR facts."""
+        if not isinstance(issue, Mapping):
+            return None, None, None
+        if str(issue.get("state", "")).upper() != "CLOSED":
+            return None, None, None
+
+        closure = issue.get("issue_closure")
+        if not isinstance(closure, Mapping):
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "Issue closure facts are unavailable",
+            )
+        if closure.get("evidence_status") != "complete":
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "Issue closure facts are incomplete",
+            )
+        refs = closure.get("closed_by_pull_requests")
+        if not isinstance(refs, Mapping) or refs.get("truncated") is True:
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "closing PR references are incomplete",
+            )
+        items = refs.get("items")
+        if not isinstance(items, list):
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "closing PR references are malformed",
+            )
+        merged_refs = [
+            item
+            for item in items
+            if isinstance(item, Mapping)
+            and item.get("repository") == repository
+            and item.get("merged") is True
+            and str(item.get("state", "")).upper() == "MERGED"
+            and isinstance(item.get("number"), int)
+            and not isinstance(item.get("number"), bool)
+        ]
+        if len(merged_refs) != 1:
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                f"expected one merged closing PR, found {len(merged_refs)}",
+            )
+
+        pr_number = merged_refs[0]["number"]
+        result = self.runner.run(
+            [
+                "gh",
+                "pr",
+                "view",
+                str(pr_number),
+                "--repo",
+                repository,
+                "--json",
+                RECOVERY_PR_FIELDS,
+            ],
+            command_id="lck-recover-merged-pr",
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            warnings.append(command_warning(result))
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "merged PR identity cannot be read",
+            )
+        try:
+            value = read_json_text(result.stdout, field="lck-recover-merged-pr")
+        except WorkflowToolError as exc:
+            warnings.append(
+                {
+                    "command_id": result.command_id,
+                    "exit_code": result.returncode,
+                    "error": str(exc),
+                }
+            )
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "merged PR identity is malformed",
+            )
+        if not isinstance(value, Mapping):
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "merged PR identity is not an object",
+            )
+        if (
+            value.get("number") != pr_number
+            or str(value.get("state", "")).upper() != "MERGED"
+            or value.get("baseRefName") != BASE_BRANCH
+            or not _branch_matches_task(str(value.get("headRefName", "")), task_number)
+        ):
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "merged PR identity does not match this Task",
+            )
+        head_repository = value.get("headRepository")
+        if (
+            not isinstance(head_repository, Mapping)
+            or head_repository.get("nameWithOwner") != repository
+        ):
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "merged PR head repository is not this repository",
+            )
+        closing = value.get("closingIssuesReferences")
+        closing_numbers = (
+            [
+                item.get("number")
+                for item in closing
+                if isinstance(item, Mapping) and isinstance(item.get("number"), int)
+            ]
+            if isinstance(closing, list)
+            else []
+        )
+        if task_number not in closing_numbers:
+            return (
+                None,
+                None,
+                "Task branch identity unavailable after ref deletion: "
+                "merged PR does not close this Task",
+            )
+        head_branch = value.get("headRefName")
+        return str(head_branch), dict(value), None
 
     def resolve(self, task_number: int) -> LiveState:
         if task_number <= 0:
@@ -342,7 +526,23 @@ class LiveStateResolver:
         candidates = sorted(local_branches | set(remote_branches))
         if len(candidates) > 1:
             reasons.append(f"multiple Task branch candidates: {candidates}")
-        target_branch = candidates[0] if len(candidates) == 1 else canonical
+        recovered_branch: str | None = None
+        recovered_pr: Mapping[str, Any] | None = None
+        if not candidates and repository is not None:
+            recovery_reason: str | None
+            recovered_branch, recovered_pr, recovery_reason = (
+                self._recover_merged_pr_branch(
+                    task_number,
+                    repository,
+                    issue,
+                    warnings,
+                )
+            )
+            if recovery_reason:
+                reasons.append(recovery_reason)
+        target_branch = (
+            candidates[0] if len(candidates) == 1 else recovered_branch or canonical
+        )
         local_branch = target_branch if target_branch in local_branches else None
         remote_branch = target_branch if target_branch in remote_branches else None
 
@@ -363,6 +563,7 @@ class LiveStateResolver:
         # observe a local validated commit that is not pushed yet.
 
         open_pr: Mapping[str, Any] | None = None
+        merged_pr: Mapping[str, Any] | None = None
         merged_numbers: tuple[int, ...] = ()
         if repository is not None:
             try:
@@ -383,14 +584,19 @@ class LiveStateResolver:
                     BASE_BRANCH,
                     warnings,
                 )
+                if not history and recovered_pr is not None:
+                    history = [dict(recovered_pr)]
+                merged_items = [
+                    item
+                    for item in history
+                    if str(item.get("state", "")).upper() == "MERGED"
+                    and isinstance(item.get("number"), int)
+                ]
                 merged_numbers = tuple(
-                    sorted(
-                        int(item["number"])
-                        for item in history
-                        if str(item.get("state", "")).upper() == "MERGED"
-                        and isinstance(item.get("number"), int)
-                    )
+                    sorted(int(item["number"]) for item in merged_items)
                 )
+                if len(merged_items) == 1:
+                    merged_pr = dict(merged_items[0])
             except PrResolveError as exc:
                 reasons.append(str(exc))
 
@@ -431,6 +637,9 @@ class LiveStateResolver:
                 open_pr.get("number") if isinstance(open_pr, Mapping) else None
             ),
             "merged_pr_numbers": merged_numbers,
+            "merged_pr_number": (
+                merged_pr.get("number") if isinstance(merged_pr, Mapping) else None
+            ),
         }
         status = ResolutionStatus.STOP if reasons else ResolutionStatus.RESOLVED
         return LiveState(
@@ -452,6 +661,7 @@ class LiveStateResolver:
             status=status,
             stop_reasons=tuple(reasons),
             warnings=tuple(warnings),
+            merged_pr=merged_pr,
         )
 
 
@@ -568,7 +778,15 @@ class PhaseEligibilityResolver:
                 Phase.REVIEW_PREPARE: {"Review", "In Progress"},
                 Phase.REMEDIATION_PREPARE: {"Review"},
                 Phase.REMEDIATION_COMPLETE: {"Review"},
-                Phase.CLOSEOUT: {"In Progress", "Review", "Done"},
+                Phase.CLOSEOUT: {
+                    "Inbox",
+                    "Specifying",
+                    "Ready",
+                    "In Progress",
+                    "Review",
+                    "Blocked",
+                    "Done",
+                },
             }[phase]
             if project not in allowed_projects:
                 reasons.append("Project Status is unavailable or unknown")
@@ -2511,6 +2729,742 @@ class DeliveryChecksGate:
             time.sleep(self.poll_seconds)
 
 
+class ReviewPassGate:
+    """Prove that the latest accepted Review PASS still matches live facts."""
+
+    def __init__(
+        self,
+        resolver: LiveStateResolver,
+        *,
+        store: ReviewInvocationStore | None = None,
+    ) -> None:
+        self.resolver = resolver
+        self.store = store or ReviewInvocationStore(resolver.repo_root)
+
+    def run(self, task_number: int, state: LiveState) -> dict[str, Any]:
+        latest = self.store.read_latest_review(task_number)
+        if not isinstance(latest, Mapping) or latest.get("verdict") != "PASS":
+            raise LckStopError(
+                "Merge Preflight requires the latest Independent Review PASS"
+            )
+        review_id = latest.get("review_id")
+        if not isinstance(review_id, str):
+            raise LckStopError("latest Independent Review PASS has no review id")
+        record = self.store.read_record(task_number, review_id)
+        if (
+            record.get("task_number") != task_number
+            or record.get("review_id") != review_id
+            or record.get("verdict") != "PASS"
+            or record.get("status") != "READY_FOR_HUMAN_MERGE"
+        ):
+            raise LckStopError("latest Independent Review PASS record is invalid")
+        raw_identity = record.get("identity")
+        if not isinstance(raw_identity, Mapping):
+            raise LckStopError("Independent Review PASS has no identity")
+        recorded = _identity_from_mapping(raw_identity)
+        issue = state.issue
+        body_sha256 = issue.get("body_sha256") if isinstance(issue, Mapping) else None
+        if not isinstance(body_sha256, str):
+            raise LckStopError("current Task body identity is unavailable")
+        current = _review_identity(
+            self.resolver,
+            state,
+            {"body_sha256": body_sha256},
+        )
+        try:
+            _assert_review_applicable(recorded, current)
+        except ReviewStaleError as exc:
+            raise LckStopError(f"Review PASS is stale: {exc}") from exc
+        return {
+            "status": "pass",
+            "review_id": review_id,
+            "identity": current.to_dict(),
+            "recorded_identity": recorded.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class MergePreflightResult:
+    task_number: int
+    status: str
+    pr: Mapping[str, Any]
+    review: Mapping[str, Any]
+    checks: Mapping[str, Any]
+    blockers: Mapping[str, Any]
+    mergeability: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "operation": "merge-preflight",
+            "task_number": self.task_number,
+            "status": self.status,
+            "pr": _jsonable(self.pr),
+            "review": _jsonable(self.review),
+            "checks": _jsonable(self.checks),
+            "blockers": _jsonable(self.blockers),
+            "mergeability": self.mergeability,
+            "human_boundary": (
+                "STOP — maintainer must perform the manual Squash Merge; "
+                "LCK has no auto-merge path"
+            ),
+            "automatic_merge": False,
+        }
+
+
+class MergePreflight:
+    """Run deterministic merge gates without mutating GitHub."""
+
+    def __init__(
+        self,
+        resolver: LiveStateResolver,
+        *,
+        review_gate: ReviewPassGate | None = None,
+        checks_gate: DeliveryChecksGate | None = None,
+    ) -> None:
+        self.resolver = resolver
+        self.review_gate = review_gate or ReviewPassGate(resolver)
+        self.checks_gate = checks_gate or DeliveryChecksGate(
+            resolver, timeout_seconds=0.0, poll_seconds=0.0
+        )
+
+    def run(self, task_number: int) -> MergePreflightResult:
+        state = self.resolver.resolve(task_number)
+        if state.status is not ResolutionStatus.RESOLVED:
+            raise LckStopError("Merge Preflight STOP: " + "; ".join(state.stop_reasons))
+        pr = state.open_pr
+        if not isinstance(pr, Mapping):
+            raise LckStopError("Merge Preflight requires one current OPEN PR")
+        if pr.get("isDraft") is not False:
+            raise LckStopError("Merge Preflight requires a non-Draft OPEN PR")
+        if str(pr.get("state", "")).upper() != "OPEN":
+            raise LckStopError("Merge Preflight requires an OPEN PR")
+        if pr.get("baseRefName") != BASE_BRANCH:
+            raise LckStopError("Merge Preflight PR base branch is not main")
+        if pr.get("headRefName") != state.target_branch:
+            raise LckStopError(
+                "Merge Preflight PR head branch is not the resolved Task branch"
+            )
+        head_sha = _pr_head_sha(pr)
+        base_sha = _pr_base_sha(pr)
+        if head_sha is None or base_sha is None:
+            raise LckStopError("Merge Preflight PR head/base identity is unavailable")
+        if state.remote_task_oid != head_sha:
+            raise LckStopError(
+                "Merge Preflight remote Task branch diverges from PR head"
+            )
+        if state.local_task_head is not None and state.local_task_head != head_sha:
+            raise LckStopError(
+                "Merge Preflight local Task branch diverges from PR head"
+            )
+        if state.project_status != "Review":
+            raise LckStopError("Merge Preflight requires Project Status Review")
+
+        blockers = _formal_blockers_gate(state.relationships)
+        if blockers.get("status") != "pass":
+            raise LckStopError(
+                "Merge Preflight unresolved blockers: "
+                + str(blockers.get("detail") or blockers.get("status"))
+            )
+        review = self.review_gate.run(task_number, state)
+        checks = self.checks_gate.run(task_number)
+        if checks.get("limitation"):
+            raise LckStopError(
+                "Merge Preflight cannot prove required checks: "
+                + str(checks["limitation"])
+            )
+        current = self.resolver.resolve(task_number)
+        current_pr = current.open_pr
+        if (
+            current.status is not ResolutionStatus.RESOLVED
+            or not isinstance(current_pr, Mapping)
+            or current.target_branch != state.target_branch
+            or current.project_status != "Review"
+            or current_pr.get("isDraft") is not False
+            or str(current_pr.get("state", "")).upper() != "OPEN"
+            or current_pr.get("baseRefName") != BASE_BRANCH
+            or current_pr.get("headRefName") != current.target_branch
+            or _pr_head_sha(current_pr) != head_sha
+            or _pr_base_sha(current_pr) != base_sha
+            or current.remote_task_oid != head_sha
+            or (
+                current.local_task_head is not None
+                and current.local_task_head != head_sha
+            )
+        ):
+            raise LckStopError(
+                "Merge Preflight PR identity changed while evaluating merge gates"
+            )
+        blockers = _formal_blockers_gate(current.relationships)
+        if blockers.get("status") != "pass":
+            raise LckStopError(
+                "Merge Preflight unresolved blockers changed while evaluating gates: "
+                + str(blockers.get("detail") or blockers.get("status"))
+            )
+        review = self.review_gate.run(task_number, current)
+        if not DeliveryChecksGate._checks_postcondition(current, checks):
+            raise LckStopError(
+                "Merge Preflight checks changed or are no longer passing"
+            )
+        mergeability_value = current_pr.get("mergeable")
+        mergeability = str(mergeability_value or "").upper()
+        if mergeability not in {"MERGEABLE", "TRUE"}:
+            raise LckStopError(
+                "Merge Preflight mergeability is not proven: "
+                + (mergeability or "UNKNOWN")
+            )
+        return MergePreflightResult(
+            task_number=task_number,
+            status="READY_FOR_HUMAN_MERGE",
+            pr=current_pr,
+            review=review,
+            checks=checks,
+            blockers=blockers,
+            mergeability=mergeability,
+        )
+
+
+MergePreflightRunner = MergePreflight
+
+
+def _label_names(issue: Mapping[str, Any] | None) -> set[str]:
+    if not isinstance(issue, Mapping):
+        return set()
+    raw = issue.get("labels")
+    if isinstance(raw, Mapping):
+        raw = raw.get("items")
+    if not isinstance(raw, list):
+        return set()
+    return {item for item in raw if isinstance(item, str)}
+
+
+def _pending_receipt(
+    effect: str,
+    action: str,
+    *,
+    reason: str,
+    details: Mapping[str, Any] | None = None,
+) -> EffectReceipt:
+    payload = {"reason": reason}
+    if details:
+        payload.update(details)
+    return EffectReceipt(effect=effect, action=action, details=payload)
+
+
+class MainSynchronizationEffect:
+    """Fast-forward the local main to origin/main and prove merge reachability."""
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+
+    def execute(
+        self,
+        state: LiveState,
+        *,
+        merge_sha: str | None,
+    ) -> EffectReceipt:
+        if not is_sha(merge_sha):
+            return _pending_receipt(
+                "synchronize_main",
+                "pending",
+                reason="merged PR merge commit identity is unavailable",
+            )
+        if state.git.get("clean") is not True:
+            return _pending_receipt(
+                "synchronize_main",
+                "pending",
+                reason="current worktree is not clean",
+            )
+        if state.git.get("branch") != BASE_BRANCH:
+            switched = self.resolver.runner.run(
+                ["git", "switch", BASE_BRANCH],
+                command_id="lck-closeout-switch-main",
+            )
+            if switched.returncode != 0:
+                return _pending_receipt(
+                    "synchronize_main",
+                    "pending",
+                    reason="cannot switch to main",
+                )
+        fetched = self.resolver.runner.run(
+            ["git", "fetch", "--prune", "origin"],
+            command_id="lck-closeout-fetch-origin",
+        )
+        if fetched.returncode != 0:
+            return _pending_receipt(
+                "synchronize_main",
+                "pending",
+                reason="cannot refresh origin/main",
+            )
+        merged = self.resolver.runner.run(
+            ["git", "merge", "--ff-only", f"refs/remotes/origin/{BASE_BRANCH}"],
+            command_id="lck-closeout-fast-forward-main",
+        )
+        if merged.returncode != 0:
+            return _pending_receipt(
+                "synchronize_main",
+                "pending",
+                reason="local main cannot fast-forward to origin/main",
+            )
+        head = self.resolver.runner.run(
+            ["git", "rev-parse", "HEAD"],
+            command_id="lck-closeout-main-head",
+        )
+        origin = self.resolver.runner.run(
+            ["git", "rev-parse", f"refs/remotes/origin/{BASE_BRANCH}"],
+            command_id="lck-closeout-origin-main-head",
+        )
+        ancestry = self.resolver.runner.run(
+            [
+                "git",
+                "merge-base",
+                "--is-ancestor",
+                merge_sha,
+                f"refs/remotes/origin/{BASE_BRANCH}",
+            ],
+            command_id="lck-closeout-merge-reachable",
+        )
+        if (
+            head.returncode != 0
+            or origin.returncode != 0
+            or not is_sha(head.stdout.strip())
+            or head.stdout.strip() != origin.stdout.strip()
+            or ancestry.returncode != 0
+        ):
+            return _pending_receipt(
+                "synchronize_main",
+                "pending",
+                reason="main synchronization postcondition is not proven",
+            )
+        return EffectReceipt(
+            effect="synchronize_main",
+            action="synchronized",
+            details={"main_sha": head.stdout.strip(), "merge_sha": merge_sha},
+        )
+
+
+class CloseoutMetadataEffect:
+    """Converge only the exact closed Task's Project status and lifecycle labels."""
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+
+    def execute(self, state: LiveState) -> EffectReceipt:
+        if state.issue_state != "CLOSED":
+            return _pending_receipt(
+                "converge_task_metadata",
+                "pending",
+                reason="Issue is not closed by authoritative GitHub state",
+            )
+        if state.repository is None:
+            return _pending_receipt(
+                "converge_task_metadata",
+                "pending",
+                reason="repository identity is unavailable",
+            )
+        actions: list[str] = []
+        try:
+            if state.project_status != "Done":
+                set_project_status_with_runner(
+                    self.resolver.runner,
+                    state.repository,
+                    state.task_number,
+                    value="Done",
+                )
+                actions.append("project-status-done")
+            labels = _label_names(state.issue)
+            if "codex:ready" not in labels or "codex:blocked" in labels:
+                label_result = self.resolver.runner.run(
+                    [
+                        "gh",
+                        "issue",
+                        "edit",
+                        str(state.task_number),
+                        "--repo",
+                        state.repository,
+                        "--add-label",
+                        "codex:ready",
+                        "--remove-label",
+                        "codex:blocked",
+                    ],
+                    command_id="lck-closeout-lifecycle-labels",
+                )
+                if label_result.returncode != 0:
+                    return _pending_receipt(
+                        "converge_task_metadata",
+                        "pending",
+                        reason="lifecycle label convergence failed",
+                        details={"actions": actions},
+                    )
+                actions.append("lifecycle-labels-converged")
+        except WorkflowToolError:
+            return _pending_receipt(
+                "converge_task_metadata",
+                "pending",
+                reason="Project Status convergence failed",
+                details={"actions": actions},
+            )
+        final = self.resolver.resolve(state.task_number)
+        if (
+            final.project_status != "Done"
+            or "codex:ready" not in _label_names(final.issue)
+            or "codex:blocked" in _label_names(final.issue)
+        ):
+            return _pending_receipt(
+                "converge_task_metadata",
+                "pending",
+                reason="metadata convergence postcondition is not proven",
+                details={"actions": actions},
+            )
+        return EffectReceipt(
+            effect="converge_task_metadata",
+            action="already-converged" if not actions else "updated",
+            details={"actions": actions},
+        )
+
+
+class CleanupTaskRefsEffect:
+    """Clean only the verified Task branch and recognize GitHub auto-deletion."""
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+
+    def execute(
+        self,
+        state: LiveState,
+        *,
+        expected_head_sha: str | None,
+        merge_sha: str | None,
+    ) -> EffectReceipt:
+        branch = state.target_branch
+        if branch == BASE_BRANCH or not _branch_matches_task(branch, state.task_number):
+            raise LckStopError("Cleanup target is not the verified Task branch")
+        worktree_branches = state.git.get("worktree_branches")
+        worktree_items = (
+            worktree_branches.get("items")
+            if isinstance(worktree_branches, Mapping)
+            else []
+        )
+        if isinstance(worktree_items, list) and branch in worktree_items:
+            return _pending_receipt(
+                "cleanup_task_refs",
+                "pending",
+                reason="verified Task branch is still used by a worktree",
+            )
+
+        if not is_sha(expected_head_sha) or not is_sha(merge_sha):
+            raise LckStopError(
+                "Cleanup STOP: merged PR head and squash merge identities are required"
+            )
+        tree_result = self.resolver.runner.run(
+            ["git", "diff", "--quiet", expected_head_sha, merge_sha],
+            command_id="lck-closeout-squash-tree-equality",
+        )
+        if tree_result.returncode != 0:
+            raise LckStopError(
+                "Cleanup STOP: PR head tree does not equal squash merge tree"
+            )
+
+        if state.local_task_branch is None and state.remote_task_branch is None:
+            return EffectReceipt(
+                effect="cleanup_task_refs",
+                action="already-clean",
+                details={"branch": branch, "remote_branch": "already-deleted"},
+            )
+        if state.local_task_branch is not None:
+            local_result = self.resolver.runner.run(
+                ["git", "rev-parse", f"refs/heads/{branch}"],
+                command_id="lck-closeout-local-branch-tip",
+            )
+            local_tip = local_result.stdout.strip()
+            if local_result.returncode != 0 or local_tip != expected_head_sha:
+                raise LckStopError(
+                    "Cleanup STOP: local Task branch diverges from merged PR head"
+                )
+            deleted = self.resolver.runner.run(
+                ["git", "branch", "-d", branch],
+                command_id="lck-closeout-local-branch-delete",
+            )
+            if deleted.returncode != 0:
+                deleted = self.resolver.runner.run(
+                    ["git", "branch", "-D", branch],
+                    command_id="lck-closeout-local-branch-force-delete-after-proof",
+                )
+            if deleted.returncode != 0:
+                return _pending_receipt(
+                    "cleanup_task_refs",
+                    "pending",
+                    reason="verified local Task branch could not be deleted",
+                )
+        if state.remote_task_branch is not None:
+            if state.remote_task_oid != expected_head_sha:
+                raise LckStopError(
+                    "Cleanup STOP: remote Task branch diverges from merged PR head"
+                )
+            remote_ref = self.resolver.runner.run(
+                ["git", "ls-remote", "--heads", "origin", branch],
+                command_id="lck-closeout-remote-branch-precondition",
+            )
+            if remote_ref.returncode != 0:
+                return _pending_receipt(
+                    "cleanup_task_refs",
+                    "pending",
+                    reason="remote Task branch precondition could not be verified",
+                )
+            remote_refs = _remote_refs(remote_ref.stdout)
+            observed_remote_oid = remote_refs.get(branch)
+            if observed_remote_oid is None:
+                if remote_ref.stdout.strip():
+                    raise LckStopError(
+                        "Cleanup STOP: remote Task branch identity is malformed"
+                    )
+                return EffectReceipt(
+                    effect="cleanup_task_refs",
+                    action="already-clean",
+                    details={"branch": branch, "remote_branch": "already-deleted"},
+                )
+            if observed_remote_oid != expected_head_sha:
+                raise LckStopError(
+                    "Cleanup STOP: remote Task branch diverges from merged PR head"
+                )
+            removed = self.resolver.runner.run(
+                [
+                    "git",
+                    "push",
+                    "origin",
+                    "--delete",
+                    branch,
+                ],
+                command_id="lck-closeout-remote-branch-delete",
+            )
+            if removed.returncode != 0:
+                return _pending_receipt(
+                    "cleanup_task_refs",
+                    "pending",
+                    reason="verified remote Task branch could not be deleted",
+                )
+            verified = self.resolver.runner.run(
+                ["git", "ls-remote", "--heads", "origin", branch],
+                command_id="lck-closeout-remote-branch-verify",
+            )
+            if verified.returncode != 0 or verified.stdout.strip():
+                return _pending_receipt(
+                    "cleanup_task_refs",
+                    "pending",
+                    reason="remote Task branch deletion postcondition is not proven",
+                )
+        return EffectReceipt(
+            effect="cleanup_task_refs",
+            action="cleaned",
+            details={"branch": branch, "expected_head_sha": expected_head_sha},
+        )
+
+
+@dataclass(frozen=True)
+class CloseoutResult:
+    task_number: int
+    status: str
+    business_delivery: str
+    cleanup: str
+    effects: tuple[EffectReceipt, ...]
+    final_state: LiveState
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "operation": "closeout",
+            "task_number": self.task_number,
+            "status": self.status,
+            "business_delivery": self.business_delivery,
+            "cleanup": self.cleanup,
+            "effects": [item.to_dict() for item in self.effects],
+            "final_state": self.final_state.to_dict(),
+            "automatic_merge": False,
+            "manual_issue_close": False,
+        }
+
+
+class CloseoutCompleter:
+    """Resolve and converge post-merge state without trusting prior snapshots."""
+
+    def __init__(
+        self,
+        resolver: LiveStateResolver,
+        *,
+        eligibility: PhaseEligibilityResolver | None = None,
+        main_effect: MainSynchronizationEffect | None = None,
+        metadata_effect: CloseoutMetadataEffect | None = None,
+        cleanup_effect: CleanupTaskRefsEffect | None = None,
+        review_store: ReviewInvocationStore | None = None,
+    ) -> None:
+        self.resolver = resolver
+        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.main_effect = main_effect or MainSynchronizationEffect(resolver)
+        self.metadata_effect = metadata_effect or CloseoutMetadataEffect(resolver)
+        self.cleanup_effect = cleanup_effect or CleanupTaskRefsEffect(resolver)
+        self.review_store = review_store or ReviewInvocationStore(resolver.repo_root)
+
+    @staticmethod
+    def _validate_merged_identity(state: LiveState) -> tuple[str, str]:
+        pr = state.merged_pr
+        if not isinstance(pr, Mapping):
+            raise LckStopError("Closeout STOP: merged PR identity is unavailable")
+        if str(pr.get("state", "")).upper() != "MERGED":
+            raise LckStopError("Closeout STOP: merged PR state is not MERGED")
+        number = pr.get("number")
+        if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+            raise LckStopError("Closeout STOP: merged PR number is unavailable")
+        if pr.get("baseRefName") != BASE_BRANCH:
+            raise LckStopError("Closeout STOP: merged PR base branch is not main")
+        if pr.get("headRefName") != state.target_branch:
+            raise LckStopError(
+                "Closeout STOP: merged PR head branch is not the resolved Task branch"
+            )
+        expected_head = _pr_head_sha(pr)
+        base_sha = _pr_base_sha(pr)
+        merge_sha = _merge_commit_sha(pr)
+        merged_at = pr.get("mergedAt", pr.get("merged_at"))
+        if (
+            expected_head is None
+            or base_sha is None
+            or merge_sha is None
+            or not isinstance(merged_at, str)
+            or not merged_at
+        ):
+            raise LckStopError("Closeout STOP: merged PR identity is incomplete")
+        closing = pr.get("closingIssuesReferences")
+        if not isinstance(closing, list):
+            raise LckStopError(
+                "Closeout STOP: merged PR closing-Task linkage is unavailable"
+            )
+        closing_numbers = [
+            item.get("number")
+            for item in closing
+            if isinstance(item, Mapping) and isinstance(item.get("number"), int)
+        ]
+        if len(closing_numbers) != 1 or closing_numbers[0] != state.task_number:
+            raise LckStopError(
+                "Closeout STOP: merged PR does not close exactly this Task"
+            )
+        if state.issue_state == "CLOSED":
+            closure = (
+                state.issue.get("issue_closure")
+                if isinstance(state.issue, Mapping)
+                else None
+            )
+            if (
+                not isinstance(closure, Mapping)
+                or closure.get("evidence_status") != "complete"
+                or closure.get("status") != "closed-by-pr"
+                or closure.get("closer_repository") != state.repository
+                or closure.get("closer_number") != number
+            ):
+                raise LckStopError(
+                    "Closeout STOP: closed Task is not proven closed by the merged PR"
+                )
+        if state.local_task_head is not None and state.local_task_head != expected_head:
+            raise LckStopError(
+                "Closeout STOP: local Task branch diverges from merged PR head"
+            )
+        if state.remote_task_oid is not None and state.remote_task_oid != expected_head:
+            raise LckStopError(
+                "Closeout STOP: remote Task branch diverges from merged PR head"
+            )
+        return expected_head, merge_sha
+
+    def _validate_reviewed_identity(
+        self, state: LiveState, merged_pr: Mapping[str, Any]
+    ) -> None:
+        latest = self.review_store.read_latest_review(state.task_number)
+        if not isinstance(latest, Mapping) or latest.get("verdict") != "PASS":
+            raise LckStopError(
+                "Closeout STOP: latest Independent Review PASS is unavailable"
+            )
+        review_id = latest.get("review_id")
+        if not isinstance(review_id, str):
+            raise LckStopError("Closeout STOP: latest Review PASS has no review id")
+        record = self.review_store.read_record(state.task_number, review_id)
+        if (
+            record.get("task_number") != state.task_number
+            or record.get("review_id") != review_id
+            or record.get("verdict") != "PASS"
+            or record.get("status") != "READY_FOR_HUMAN_MERGE"
+        ):
+            raise LckStopError("Closeout STOP: latest Review PASS record is invalid")
+        raw_identity = record.get("identity")
+        if not isinstance(raw_identity, Mapping):
+            raise LckStopError("Closeout STOP: Review PASS identity is unavailable")
+        reviewed = _identity_from_mapping(raw_identity)
+        if (
+            reviewed.task_number != state.task_number
+            or reviewed.pr_number != merged_pr.get("number")
+            or reviewed.base_sha != _pr_base_sha(merged_pr)
+            or reviewed.head_sha != _pr_head_sha(merged_pr)
+        ):
+            raise LckStopError(
+                "Closeout STOP: merged PR/head does not match the latest Review PASS"
+            )
+
+    def complete(self, task_number: int) -> CloseoutResult:
+        state = self.resolver.resolve(task_number)
+        decision = self.eligibility.resolve(state, Phase.CLOSEOUT)
+        if not decision.eligible:
+            raise LckStopError(
+                f"Closeout STOP for Task #{task_number}: " + "; ".join(decision.reasons)
+            )
+        expected_head, merge_sha = self._validate_merged_identity(state)
+        if not isinstance(state.merged_pr, Mapping):
+            raise LckStopError("Closeout STOP: merged PR identity is unavailable")
+        self._validate_reviewed_identity(state, state.merged_pr)
+        effects: list[EffectReceipt] = []
+        main = self.main_effect.execute(state, merge_sha=merge_sha)
+        effects.append(main)
+
+        current = self.resolver.resolve(task_number)
+        metadata = self.metadata_effect.execute(current)
+        effects.append(metadata)
+
+        current = self.resolver.resolve(task_number)
+        if main.action in {"synchronized", "already-synced"}:
+            cleanup = self.cleanup_effect.execute(
+                current,
+                expected_head_sha=expected_head,
+                merge_sha=merge_sha,
+            )
+        else:
+            cleanup = _pending_receipt(
+                "cleanup_task_refs",
+                "pending",
+                reason="main synchronization is incomplete",
+            )
+        effects.append(cleanup)
+        final = self.resolver.resolve(task_number)
+        if final.status is not ResolutionStatus.RESOLVED:
+            raise LckStopError(
+                "Closeout STOP: final live state is unresolved: "
+                + "; ".join(final.stop_reasons)
+            )
+        if final.merged is not True or final.open_pr is not None:
+            raise LckStopError(
+                "Closeout STOP: final merged PR state changed or an OPEN PR exists"
+            )
+        cleanup_complete = (
+            main.action in {"synchronized", "already-synced"}
+            and metadata.action in {"updated", "already-converged"}
+            and cleanup.action in {"cleaned", "already-clean"}
+            and final.local_task_branch is None
+            and final.remote_task_branch is None
+        )
+        return CloseoutResult(
+            task_number=task_number,
+            status="BUSINESS_DELIVERY_COMPLETE",
+            business_delivery="COMPLETE",
+            cleanup="COMPLETE" if cleanup_complete else "PENDING",
+            effects=tuple(effects),
+            final_state=final,
+        )
+
+
 @dataclass(frozen=True)
 class DeliveryCompletionResult:
     task_number: int
@@ -3158,6 +4112,17 @@ def _build_parser() -> argparse.ArgumentParser:
     remediation_complete.add_argument(
         "--check-timeout-seconds", type=float, default=600.0
     )
+
+    merge = commands.add_parser("merge")
+    merge_commands = merge.add_subparsers(dest="merge_command", required=True)
+    merge_preflight = merge_commands.add_parser("preflight")
+    merge_preflight.add_argument("task", type=int)
+
+    merge_preflight_alias = commands.add_parser("merge-preflight")
+    merge_preflight_alias.add_argument("task", type=int)
+
+    closeout = commands.add_parser("closeout")
+    closeout.add_argument("task", type=int)
     return parser
 
 
@@ -3220,6 +4185,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 summary=args.summary,
                 risks=args.risks,
             )
+            print_json(result.to_dict(), pretty=True)
+            return 0
+        if (
+            args.command == "merge" and args.merge_command == "preflight"
+        ) or args.command == "merge-preflight":
+            result = MergePreflight(resolver).run(args.task)
+            print_json(result.to_dict(), pretty=True)
+            return 0
+        if args.command == "closeout":
+            result = CloseoutCompleter(resolver).complete(args.task)
             print_json(result.to_dict(), pretty=True)
             return 0
         raise LckStopError("unsupported LCK command")

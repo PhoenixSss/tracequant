@@ -8,7 +8,9 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +20,12 @@ MAX_STRING: Final = 512
 MAX_LIST_ITEMS: Final = 50
 MAX_STDERR_TAIL: Final = 2000
 MAX_LOG_BYTES: Final = 1_000_000
+DEFAULT_COMMAND_TIMEOUT_SECONDS: Final = 30.0
+NETWORK_COMMAND_TIMEOUT_SECONDS: Final = 60.0
+VALIDATION_COMMAND_TIMEOUT_SECONDS: Final = 1200.0
+PROCESS_TERM_GRACE_SECONDS: Final = 2.0
+RETRY_DELAY_SECONDS: Final = 0.5
+TIMEOUT_EXIT_CODE: Final = 124
 SHA_PATTERN: Final = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
 WINDOWS_ABSOLUTE_PATH: Final = re.compile(r"^[A-Za-z]:[\\/]")
 WINDOWS_ABSOLUTE_PATH_IN_TEXT: Final = re.compile(
@@ -60,6 +68,68 @@ class CommandResult:
     returncode: int
     stdout: str
     stderr: str
+    timed_out: bool = False
+    timeout_seconds: float | None = None
+
+
+def _command_timeout(
+    argv: Sequence[str], *, executable: str, validation: bool
+) -> float:
+    """Choose a bounded timeout appropriate for the command class."""
+    if validation:
+        return VALIDATION_COMMAND_TIMEOUT_SECONDS
+    if executable in {"gh", "gh.exe", "gh.cmd"}:
+        return DEFAULT_COMMAND_TIMEOUT_SECONDS
+    if executable in {"git", "git.exe", "git.cmd"} and any(
+        item in {"fetch", "ls-remote", "push", "pull", "clone"} for item in argv[1:]
+    ):
+        return NETWORK_COMMAND_TIMEOUT_SECONDS
+    return DEFAULT_COMMAND_TIMEOUT_SECONDS
+
+
+def _signal_process_group(process: subprocess.Popen[str], sig: signal.Signals) -> None:
+    """Terminate a bounded command and its descendants when possible."""
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, sig)
+        else:
+            process.send_signal(sig)
+    except ProcessLookupError:
+        pass
+
+
+def _run_process(
+    resolved_argv: Sequence[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    timeout_seconds: float,
+) -> tuple[int, str, str, bool]:
+    """Run one command with a timeout and process-group cleanup."""
+    process = subprocess.Popen(
+        resolved_argv,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        start_new_session=os.name == "posix",
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        _signal_process_group(process, signal.SIGTERM)
+        try:
+            stdout, stderr = process.communicate(timeout=PROCESS_TERM_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            _signal_process_group(process, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+        timeout_message = f"command timed out after {timeout_seconds:g} seconds"
+        stderr = f"{stderr.rstrip()}\n{timeout_message}" if stderr else timeout_message
+        return TIMEOUT_EXIT_CODE, stdout, stderr, True
+    return process.returncode, stdout, stderr, False
 
 
 class CommandRunner:
@@ -80,9 +150,13 @@ class CommandRunner:
         cwd: Path | None = None,
         validation: bool = False,
         env: Mapping[str, str] | None = None,
+        timeout_seconds: float | None = None,
+        retries: int = 0,
     ) -> CommandResult:
         if not argv:
             raise WorkflowToolError("command argv cannot be empty")
+        if retries < 0 or retries > 2:
+            raise WorkflowToolError("command retries must be between 0 and 2")
         process_env = build_workflow_env(self.repo_root)
         process_env.setdefault("PYTHONUTF8", "1")
         process_env.setdefault("PYTHONIOENCODING", "utf-8")
@@ -101,31 +175,44 @@ class CommandRunner:
             self.github_queries += 1
         if validation:
             self.validation_commands += 1
-        try:
-            completed = subprocess.run(
+        effective_timeout = (
+            _command_timeout(
                 resolved_argv,
-                cwd=cwd or self.repo_root,
-                check=False,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=process_env,
+                executable=executable,
+                validation=validation,
             )
-        except FileNotFoundError:
-            return CommandResult(
-                command_id=command_id,
-                argv=tuple(resolved_argv),
-                returncode=127,
-                stdout="",
-                stderr=f"executable not found: {Path(argv[0]).name}",
-            )
+            if timeout_seconds is None
+            else timeout_seconds
+        )
+        if effective_timeout <= 0:
+            raise WorkflowToolError("command timeout must be positive")
+        for attempt in range(retries + 1):
+            try:
+                returncode, stdout, stderr, timed_out = _run_process(
+                    resolved_argv,
+                    cwd=cwd or self.repo_root,
+                    env=process_env,
+                    timeout_seconds=effective_timeout,
+                )
+            except FileNotFoundError:
+                return CommandResult(
+                    command_id=command_id,
+                    argv=tuple(resolved_argv),
+                    returncode=127,
+                    stdout="",
+                    stderr=f"executable not found: {Path(argv[0]).name}",
+                )
+            if returncode == 0 or returncode == 127 or attempt == retries:
+                break
+            time.sleep(RETRY_DELAY_SECONDS)
         return CommandResult(
             command_id=command_id,
             argv=tuple(resolved_argv),
-            returncode=completed.returncode,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+            timed_out=timed_out,
+            timeout_seconds=effective_timeout if timed_out else None,
         )
 
     def counters(self) -> dict[str, int]:
@@ -305,8 +392,12 @@ def parse_repository_slug(remote: str) -> str | None:
 
 
 def command_warning(result: CommandResult) -> dict[str, Any]:
-    return {
+    warning: dict[str, Any] = {
         "command_id": result.command_id,
         "exit_code": result.returncode,
         "error": stderr_tail(result.stderr or result.stdout),
     }
+    if result.timed_out:
+        warning["timed_out"] = True
+        warning["timeout_seconds"] = result.timeout_seconds
+    return warning

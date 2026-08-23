@@ -13,6 +13,7 @@ if AGENT_WORKFLOW not in sys.path:
 from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
     CommandRunner,
     build_workflow_env,
+    command_warning,
 )
 
 
@@ -63,3 +64,48 @@ def test_command_runner_passes_repo_local_uv_cache_to_subprocess(
     assert marker.read_text(encoding="utf-8") == str(
         tmp_path / ".workflow.local" / "uv-cache"
     )
+
+
+def test_command_runner_times_out_and_reports_bounded_diagnostic(
+    tmp_path: Path,
+) -> None:
+    result = CommandRunner(tmp_path).run(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        command_id="test-timeout",
+        timeout_seconds=0.2,
+    )
+
+    assert result.returncode == 124
+    assert result.stdout == ""
+    assert result.timed_out is True
+    assert result.timeout_seconds == 0.2
+    warning = command_warning(result)
+    assert warning["timed_out"] is True
+    assert warning["timeout_seconds"] == 0.2
+    assert "timed out after 0.2 seconds" in warning["error"]
+
+
+def test_command_runner_retries_only_when_requested(tmp_path: Path) -> None:
+    marker = tmp_path / "attempted"
+    flaky = tmp_path / "flaky-command"
+    flaky.write_text(
+        f"#!{sys.executable}\n"
+        "from pathlib import Path\n"
+        f"marker = Path({str(marker)!r})\n"
+        "if marker.exists():\n"
+        "    print('recovered')\n"
+        "else:\n"
+        "    marker.write_text('1', encoding='utf-8')\n"
+        "    raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    flaky.chmod(0o755)
+
+    result = CommandRunner(tmp_path).run(
+        [str(flaky)],
+        command_id="test-retry",
+        retries=1,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "recovered"

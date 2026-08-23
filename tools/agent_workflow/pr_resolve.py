@@ -31,10 +31,15 @@ from workflow_common import (
 _PR_URL_PATTERN: Final = re.compile(
     r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+"
 )
-_PR_LIST_FIELDS: Final = "number,url,state,isDraft,baseRefName,headRefName,headRefOid"
+_PR_LIST_FIELDS: Final = (
+    "number,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,"
+    "mergeCommit,mergedAt,mergeable,reviewDecision,headRepository,statusCheckRollup,"
+    "closingIssuesReferences"
+)
 _PR_VIEW_FIELDS: Final = (
     "number,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,"
-    "statusCheckRollup"
+    "mergeCommit,mergedAt,mergeable,reviewDecision,headRepository,statusCheckRollup,"
+    "closingIssuesReferences"
 )
 _REQUIRED_PR_FIELDS: Final = (
     "number",

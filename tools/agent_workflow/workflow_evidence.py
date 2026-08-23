@@ -260,6 +260,7 @@ def _repository_slug(
     result = runner.run(
         ["gh", "repo", "view", "--json", "nameWithOwner"],
         command_id="gh-repo-view",
+        retries=1,
     )
     if result.returncode != 0:
         warnings.append(command_warning(result))
@@ -280,6 +281,7 @@ def _git_snapshot(
         fetch = runner.run(
             ["git", "fetch", "--prune", "origin"],
             command_id="git-fetch-origin",
+            retries=1,
         )
         if fetch.returncode != 0:
             warnings.append(command_warning(fetch))
@@ -382,6 +384,7 @@ def _issue_view(
             fields,
         ],
         command_id=f"gh-issue-view-{number}",
+        retries=1,
     )
     if result.returncode != 0:
         fallback = runner.run(
@@ -522,6 +525,7 @@ def _graphql(
             f"number={number}",
         ],
         command_id=command_id,
+        retries=1,
     )
     if result.returncode != 0:
         warnings.append(command_warning(result))
