@@ -7,16 +7,13 @@ Design Charter. `KEEP` means the responsibility remains in its current layer,
 the semantic boundary remains while duplicate mechanics are removed, and
 `REMOVE` means the mechanism is not part of the target flow.
 
-Task #159 established live-state resolution, phase eligibility, and Delivery
-Prepare. Task #160 implements the candidate **Initial Delivery** LCK controller:
-Critical Outcome + formal validation, validated-tree commit, remote
-synchronization, OPEN-PR resolve/create, checks, Project Status `Review`, and
-final `READY_FOR_REVIEW` verification. Task #161 cuts over **Independent Review
-and explicit Remediation**: Review target identity is reacquired live, Review runs
-in an isolated implementation-read-only worktree with invocation-local stale
-guards, Review FAIL returns `STOP_REQUIRED`, and Human-started Remediation reuses
-the Task #160 Delivery effects while requiring the existing OPEN PR. Merge,
-Closeout redesign, and later recovery work remain bounded follow-up work.
+Tasks #164–#167 established the complete LCK v1 controller: live-state
+resolution, Delivery, Independent Review, explicit Remediation, Merge
+Preflight, Closeout, and recovery. Task #163 is the final convergence pass:
+active Task Skills are semantic-only, formal Task phases use LCK exclusively,
+and historical Evidence remains audit-only. See
+`lck-v1-closeout-architecture-delta.md` for the final authority and evidence
+boundary.
 
 | ID | #88 operation | Current owner | LCK v1 target | Task #159 boundary |
 |---|---|---|---|---|
@@ -29,9 +26,9 @@ Closeout redesign, and later recovery work remain bounded follow-up work.
 | O07 | Targeted validation | Skill + Validation Runner | KEEP | KEEP |
 | O08 | Commit-ready identity | Skill / Git | MOVE | No commit effect here |
 | O09 | CI-equivalent validation | Validation Runner | KEEP | KEEP |
-| O10 | Push validated head | Skill / Agent | MOVE | Candidate implemented; Current Workflow remains authority for #160 pre-cutover delivery |
-| O11 | PR resolve/create | PR helper + Skill | MOVE | Candidate implemented; Current Workflow remains authority for #160 pre-cutover delivery |
-| O12 | Check wait/read and interpretation | Skill + Runner | SIMPLIFY | Candidate gate implemented; Current Workflow remains authority for #160 pre-cutover delivery |
+| O10 | Push validated head | Skill / Agent | MOVE | LCK Delivery effect |
+| O11 | PR resolve/create | PR helper + Skill | MOVE | LCK Delivery effect |
+| O12 | Check wait/read and interpretation | Skill + Runner | SIMPLIFY | LCK checks gate; semantic interpretation remains Agent-owned |
 | O13 | Semantic self-review | Agent + helper | SIMPLIFY | Semantic judgement stays Agent-owned |
 | O14 | Delivery readiness snapshot | Evidence Runner + Skill | MOVE | Snapshot is diagnostic, not LCK authority |
 | O15 | Reviewed object identity lock | Review Skill + Runner | MOVE | LCK live Review target + invocation-local guard |
@@ -70,7 +67,7 @@ did not persist cross-phase authority, ignored CLOSED PRs when resolving the act
 PR, and exposed no commit/push/PR mutation. Task #160 intentionally extends only
 the Initial Delivery portion of that boundary.
 
-## Candidate boundary implemented by Task #160 (pre-activation)
+## Active Delivery boundary
 
 The candidate Initial Delivery path uses one LCK-owned sequence after activation:
 
@@ -89,23 +86,17 @@ The candidate Initial Delivery path uses one LCK-owned sequence after activation
    applicable checks remain successful, and local HEAD == remote Task branch ==
    PR head before returning `READY_FOR_REVIEW`.
 
-Until the maintainer merge boundary, #160 continues to use the pre-cutover
-Current Workflow for its own Delivery. The LCK path above is candidate behavior
-and is not retroactively treated as #160's lifecycle authority.
-
 The Task body now carries a required `Critical Outcome` contract. Its verification
 target is one bounded `tests/...::test_...` pytest node id; Issue text cannot inject
 arbitrary shell commands. Operation-local base/body/head guards are ephemeral and are
 reacquired on retry rather than persisted as cross-phase authority.
 
-The Initial Delivery and explicit Remediation sections of `task-delivery-runner` are now
-semantic-only plus LCK entrypoint guidance. The Review Skill likewise receives its
-mechanical target only from LCK. The pre-cutover `review-remediation` Evidence Runner
-entry point may remain for historical compatibility/diagnostics, but it is no longer a
-formal lifecycle authorization path. Merge and closeout remain Human/later-task
-boundaries.
+The Initial Delivery, Review, Remediation, and Closeout Skills are semantic-only
+plus LCK entrypoint guidance. Historical Evidence operations may remain for
+audit material, but they are not formal lifecycle authorization paths. Merge
+remains a maintainer-only manual Squash Merge boundary.
 
-## Review / Remediation cutover implemented by Task #161
+## Review / Remediation boundary
 
 The active path is now:
 
@@ -134,14 +125,13 @@ and generalized drift categories. Historical evidence remains audit-only.
 
 ## Mainline activation and rollback procedure
 
-The candidate becomes the Initial Delivery lifecycle authority only after all of the
-following have occurred:
+The final LCK cleanup becomes the sole Initial Delivery lifecycle authority after
+all of the following have occurred:
 
 1. an independent Review of the current PR head passes;
 2. the maintainer performs the required Squash Merge;
-3. `main` is synchronized and the post-merge validation confirms the merged
-   LCK controller, provider-neutral Delivery Skill contract, and repository
-   workflow validators are coherent.
+3. `main` is synchronized and post-merge validation confirms the merged LCK
+   controller, provider-neutral Skills, and repository workflow validators.
 
 If activation or post-merge validation fails, the maintainer must stop further
 LCK Initial Delivery activation, record the failure, and revert the candidate

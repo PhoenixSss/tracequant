@@ -499,7 +499,7 @@ class LiveStateResolver:
             reasons.append("repository identity unavailable")
 
         git_warning_count = len(warnings)
-        git = _git_snapshot(self.runner, warnings)
+        git = _git_snapshot(self.runner, warnings, read_only_local_refs=False)
         if len(warnings) > git_warning_count:
             reasons.append("local Git snapshot contains unavailable facts")
         if git.get("origin_fetch") != "pass":

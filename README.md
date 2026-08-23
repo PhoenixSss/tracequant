@@ -159,11 +159,11 @@ raw credentials in log messages.
 
 ## Agent workflow evidence and validation
 
-Repository workflow Skills use the current fixed Runner entries for deterministic
-metadata and validation summaries:
+Repository workflow Skills use LCK for lifecycle mechanics and the fixed
+Validation Runner for deterministic validation summaries:
 
 ```text
-tools/agent_workflow/wsl2_github_evidence_runner.py
+tools/agent_workflow/lck.py
 tools/agent_workflow/wsl2_validation_runner.py
 ```
 
@@ -177,7 +177,7 @@ Local outputs are stored only in Git-ignored directories:
 See `.agents/policies/workflow-evidence.md`. These tools do not replace semantic
 review, independent PR review, manual Merge, or Feature closeout.
 
-- [WSL2 GitHub evidence runner](docs/workflows/wsl2-github-evidence-runner/README.md): fixed read-only profiles, evidence snapshots, Git/GitHub approval boundaries, and live material capture.
+- [LCK v1 Design Charter](docs/workflows/LCK-v1-Design-Charter.md): live-state Task lifecycle authority and phase boundaries.
 - [Agent workflow Skills](docs/workflows/agent-skills.md): current Codex/Claude Skills, source-of-truth ownership, and validation entry points.
 - [Validation Runner](docs/workflows/wsl2-validation-runner/README.md): fixed validation profiles, compact artifacts, exact argv, and process cleanup.
 - [Task Skill runner migration](docs/workflows/task-skill-runner-migration/README.md): historical migration record only; not an operational guide.

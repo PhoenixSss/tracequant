@@ -42,8 +42,8 @@ Task Contract, current review target, validation/check state, and `review_root`.
 The `review_root` is a detached, clean, implementation-read-only worktree for the
 live-resolved head.
 
-If LCK returns STOP or stale, do not fall back to Evidence Runner snapshots, expected
-SHAs, direct `gh` selection, or a Delivery handoff.
+If LCK returns STOP or stale, do not fall back to archived evidence snapshots,
+expected SHAs, direct `gh` selection, or a Delivery handoff.
 
 ## 2. Semantic Review
 

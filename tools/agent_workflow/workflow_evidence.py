@@ -274,8 +274,11 @@ def _repository_slug(
 def _git_snapshot(
     runner: CommandRunner,
     warnings: list[dict[str, Any]],
+    *,
+    read_only_local_refs: bool | None = None,
 ) -> dict[str, Any]:
-    read_only_local_refs = os.environ.get("WORKFLOW_EVIDENCE_READ_ONLY") == "1"
+    if read_only_local_refs is None:
+        read_only_local_refs = os.environ.get("WORKFLOW_EVIDENCE_READ_ONLY") == "1"
     fetch: CommandResult | None = None
     if not read_only_local_refs:
         fetch = runner.run(

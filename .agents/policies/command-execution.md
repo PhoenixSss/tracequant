@@ -10,12 +10,12 @@ Read the optional ignored `.agents/execution-profile.local.toml` when present.
 It may route only exact documented Runner invocations. Repository Rules and the
 Runner still validate full argv, cwd, repository, profile, and identity.
 
-## Fixed Runner commands
+## Deterministic workflow commands
 
-Normal Runner commands are:
+Normal lifecycle and validation commands are:
 
 ```text
-tools/agent_workflow/wsl2_github_evidence_runner.py <named-profile> <fixed-args>
+uv run --frozen python tools/agent_workflow/lck.py <phase> <operation> <task>
 tools/agent_workflow/wsl2_validation_runner.py <named-profile> <fixed-args>
 ```
 
@@ -31,7 +31,7 @@ elevated-first  use the exact approved Runner argv when normal execution is know
 prompt          request approval
 ```
 
-A route is valid only for the exact Runner/profile/cwd contract. It cannot alter
+A route is valid only for the exact LCK/validation contract. It cannot alter
 Task/PR IDs, base/head SHAs, repository, output paths, or profile semantics.
 
 ## Failure classification
@@ -65,8 +65,10 @@ before an approved exact route.
 
 ## Git and GitHub boundaries
 
-Read-only Runner collection does not authorize writes. The active Skill must
-separately authorize every Git or GitHub mutation.
+LCK live-state collection and validation do not authorize writes by the Agent.
+The active Skill must separately authorize every Git or GitHub mutation; the
+LCK lifecycle command is the only formal mechanism allowed to perform the
+phase-owned effects.
 
 Always require explicit workflow authorization for:
 

@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Final
 
-SCHEMA_VERSION: Final = 5
+SCHEMA_VERSION: Final = 6
 ACTIVE_SKILLS: Final = {
     "task-delivery-runner": Path(".agents/skills/task-delivery-runner/SKILL.md"),
     "task-pr-review-runner": Path(".agents/skills/task-pr-review-runner/SKILL.md"),
@@ -45,11 +45,11 @@ REQUIRED: Final = {
         "STOP_REQUIRED",
     ),
     "task-closeout": (
-        "wsl2_github_evidence_runner.py",
-        "wsl2_validation_runner.py",
-        "closeout-readonly",
-        "workflow-closeout",
-        "recheck",
+        "tools/agent_workflow/lck.py merge preflight",
+        "tools/agent_workflow/lck.py closeout",
+        "Business Delivery",
+        "Cleanup",
+        "This Skill never merges",
     ),
     "feature-completion-audit": (
         "feature-audit-snapshot",
@@ -80,6 +80,14 @@ DIRECT_COMMAND_FRAGMENTS: Final = (
     "uv run --frozen ruff",
     "uv run --frozen mypy",
     "git status --short",
+)
+TASK_LEGACY_CONTROL_FRAGMENTS: Final = (
+    "wsl2_github_evidence_runner.py",
+    "closeout-readonly",
+    "workflow-closeout",
+    "review-remediation",
+    "write_actions_allowed",
+    "snapshot_id",
 )
 EVOLUTION_TRACES: Final = (
     "trusted_runner.py",
@@ -112,6 +120,11 @@ def _audit_skill(
     missing = [token for token in REQUIRED[name] if token not in text]
     direct = [item for item in DIRECT_COMMAND_FRAGMENTS if item in text]
     traces = [item for item in EVOLUTION_TRACES if item in lowered]
+    legacy = (
+        [item for item in TASK_LEGACY_CONTROL_FRAGMENTS if item in text]
+        if name != "feature-completion-audit"
+        else []
+    )
     missing_refs = [ref for ref in SHARED_DOC_REFS[name] if ref not in text]
     if missing:
         violations.append(f"{relative}: missing {', '.join(missing)}")
@@ -119,6 +132,8 @@ def _audit_skill(
         violations.append(f"{relative}: direct command path {', '.join(direct)}")
     if traces:
         violations.append(f"{relative}: evolution trace {', '.join(traces)}")
+    if legacy:
+        violations.append(f"{relative}: legacy control path {', '.join(legacy)}")
     if missing_refs:
         violations.append(
             f"{relative}: missing shared-doc reference {', '.join(missing_refs)}"
@@ -132,6 +147,7 @@ def _audit_skill(
         "validation_runner_mentions": text.count("wsl2_validation_runner.py"),
         "direct_command_paths": direct,
         "evolution_traces": traces,
+        "legacy_control_paths": legacy,
         "missing_contract_tokens": missing,
         "missing_shared_doc_refs": missing_refs,
     }
@@ -140,6 +156,8 @@ def _audit_skill(
     totals["validation_runner_mentions"] += entry["validation_runner_mentions"]
     totals["direct_command_path_count"] += len(direct)
     totals["evolution_trace_count"] += len(traces)
+    totals.setdefault("legacy_control_path_count", 0)
+    totals["legacy_control_path_count"] += len(legacy)
     totals["shared_doc_ref_violations"] += len(missing_refs)
     return entry
 

@@ -531,7 +531,7 @@ def test_resolver_recovers_deleted_noncanonical_branch_from_closing_pr(
     monkeypatch.setattr(
         lck,
         "_git_snapshot",
-        lambda *_args: {
+        lambda *_args, **_kwargs: {
             "origin_fetch": "pass",
             "branch": "main",
             "head_sha": MERGE_SHA,

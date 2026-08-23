@@ -25,11 +25,11 @@ tools/agent_workflow/lck.py review prepare|complete
 tools/agent_workflow/lck.py remediation prepare|complete
 ```
 
-The Evidence / Validation Runners remain current for non-migrated phases and
-for bounded deterministic validation internals:
+The Validation Runner remains current for bounded deterministic validation;
+historical Evidence output is audit material only and is not a Task lifecycle
+entry point:
 
 ```text
-tools/agent_workflow/wsl2_github_evidence_runner.py
 tools/agent_workflow/wsl2_validation_runner.py
 ```
 
@@ -45,11 +45,11 @@ tools/agent_workflow/workflow_validation.py
 | Initial Delivery | `lck.py delivery prepare|complete` | LCK runs formal Delivery validation |
 | Independent Review | `lck.py review prepare|complete` | LCK runs formal Review validation on the live-resolved head |
 | Explicit Remediation | `lck.py remediation prepare|complete` | LCK reuses migrated Delivery validation/effects |
-| Closeout | `closeout-readonly`, then `recheck` | `workflow-closeout --base-sha <PR base>` |
+| Closeout | `lck.py closeout <TASK>` | LCK closeout gate and effects |
 
-The old Evidence `review` / `recheck` path remains historical compatibility only;
-it must not select or authorize the current Review target. A targeted validation
-profile is not CI-equivalent.
+Historical Evidence snapshots may locate audit material, but they must not
+select or authorize a current Task target. A targeted validation profile is not
+CI-equivalent.
 
 ## Execution identity
 
@@ -121,30 +121,23 @@ credentials, auth headers, cookies, private keys, complete environment dumps,
 private reasoning, transcripts, unbounded source/diffs, and machine-sensitive
 absolute paths.
 
-## Evidence contract
+## Historical evidence contract
 
-The Evidence Runner still supports its historical profiles:
+The historical Evidence implementation may still be used for Feature audit
+evidence:
 
 ```text
-delivery
-delivery-readiness
-review
-pre-merge
-closeout-readonly
-recheck
+feature-audit-snapshot
+feature-audit-recheck
 ```
 
-After the LCK cutover, `review` / `recheck` are compatibility and audit tools,
-not the formal Independent Review selector or freshness authority. The Runner
-validates complete argv, repository identity, fixed queries, and fixed read-only
-Git operations. It accepts no arbitrary repository, API path, raw `gh`/Git argv,
-shell string, output path, or cwd.
+These operations are read-only audit evidence. They are not a formal Task
+phase selector, do not authorize writes, and do not create a cross-phase
+freshness or handoff contract.
 
-Snapshots contain bounded normalized facts, explicit `pass`/`fail`/`unknown`
-gates, operation counts, truncation state, content identities, snapshot ID, and
-stability fingerprint. Distinguish no Required Checks, plan-limited `403`, real
-permission/auth/network/rate-limit failure, pending/failed checks, and unavailable
-facts.
+Audit artifacts contain bounded normalized facts and explicit
+`pass`/`fail`/`unknown` gates. They are historical evidence, not lifecycle
+authority.
 
 The Agent still reads complete current specifications, diffs, source, tests,
 docs, and governance for semantic work. Snapshot metadata is not semantic
@@ -179,7 +172,7 @@ requires clean local `main == origin/main`.
 Success stdout is a compact digest. Full redacted results and bounded failure
 diagnostics remain in the ignored validation directory.
 
-## Preflight disposition and Recovery boundary
+## LCK admission and Recovery boundary
 
 Delivery Preflight is a terminal admission gate, not a remediation phase.
 Recovery rules apply only after Invocation Preflight has passed and never
@@ -188,22 +181,22 @@ result (`fail`, `partial`, `unknown`, `blocked`, lifecycle conflict,
 identity conflict, incompatible entry state, or maintainer-decision-required)
 is a final disposition — not a recoverable state.
 
-Preflight pass returns `disposition.workflow_may_continue = true` and
-`disposition.write_actions_allowed = true`. Any other disposition forbids
-all write operations, auto-remediation, state modification, and re-invocation
-of the same profile to obtain `pass`.
+LCK pass is required before a phase-owned effect may run. Any non-pass
+admission (`fail`, `partial`, `unknown`, `blocked`, lifecycle conflict,
+identity conflict, incompatible entry state, or maintainer-decision-required)
+forbids all write operations, auto-remediation, state modification, and
+re-invocation of the same operation to obtain `pass`.
 
 The `worktree_state_compatible` gate evaluates worktree cleanliness for the
 legacy Evidence Runner entry points. `delivery-start` and `implementation` may
 accept a dirty worktree with Task-owned changes; `final-validation` and
 `pr-readiness` require a clean committed head.
 
-`review-remediation` remains implemented only as **pre-cutover compatibility /
-diagnostic behavior** for historical evidence and tests. It is not part of the
-LCK Review / Remediation lifecycle and MUST NOT authorize a current repair from
-an expected base/head or bounded handoff. Current remediation authority is
-`lck.py remediation prepare`, which reacquires the live Task/PR/head/base and
-uses the failed Review record only for semantic findings.
+Historical remediation evidence is not part of the LCK Review / Remediation
+lifecycle and MUST NOT authorize a current repair from an expected base/head
+or bounded handoff. Current remediation authority is `lck.py remediation
+prepare`, which reacquires the live Task/PR/head/base and uses the failed
+Review record only for semantic findings.
 
 ## Failure expansion
 

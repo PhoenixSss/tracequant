@@ -213,8 +213,8 @@ non-Draft PR/head/base and Task branch, and selects/restores the current impleme
 workspace.
 
 Do not pass expected head/base/PR identity. If current live identity is ambiguous,
-diverged, missing, or unsafe, STOP; do not use the pre-cutover `review-remediation`
-Evidence Runner as a fallback.
+diverged, missing, or unsafe, STOP; do not use archived evidence snapshots or
+legacy command paths as a fallback.
 
 ### 2. Semantic repair
 

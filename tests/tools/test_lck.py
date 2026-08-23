@@ -177,7 +177,11 @@ def _install_facts(
         "_relationship_snapshot",
         lambda *_args: relationships if relationships is not None else _relationships(),
     )
-    monkeypatch.setattr(lck, "_git_snapshot", lambda *_args: _git_snapshot(fake))
+    monkeypatch.setattr(
+        lck,
+        "_git_snapshot",
+        lambda *_args, **_kwargs: _git_snapshot(fake),
+    )
     monkeypatch.setattr(lck, "resolve_open_pr", lambda *_args: open_pr)
     monkeypatch.setattr(
         lck, "list_matching_prs", lambda *_args, **_kwargs: history or []
@@ -277,7 +281,11 @@ def test_live_state_resolver_reads_non_empty_pr_checks(
     monkeypatch.setattr(lck, "_repository_slug", lambda *_args: "owner/repo")
     monkeypatch.setattr(lck, "_issue_view", lambda *_args: _issue())
     monkeypatch.setattr(lck, "_relationship_snapshot", lambda *_args: _relationships())
-    monkeypatch.setattr(lck, "_git_snapshot", lambda *_args: _git_snapshot(fake))
+    monkeypatch.setattr(
+        lck,
+        "_git_snapshot",
+        lambda *_args, **_kwargs: _git_snapshot(fake),
+    )
 
     state = _resolver(fake).resolve(159)
 
@@ -290,6 +298,24 @@ def test_live_state_resolver_reads_non_empty_pr_checks(
     assert len(view_commands) == 1
     fields = view_commands[0][view_commands[0].index("--json") + 1].split(",")
     assert "statusCheckRollup" in fields
+
+
+def test_lck_live_snapshot_overrides_legacy_read_only_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRunner(branch="main")
+    _install_facts(monkeypatch, fake)
+    monkeypatch.setenv("WORKFLOW_EVIDENCE_READ_ONLY", "1")
+    observed: dict[str, Any] = {}
+
+    def live_snapshot(*_args: Any, **kwargs: Any) -> dict[str, Any]:
+        observed.update(kwargs)
+        return _git_snapshot(fake)
+
+    monkeypatch.setattr(lck, "_git_snapshot", live_snapshot)
+    _resolver(fake).resolve(159)
+
+    assert observed == {"read_only_local_refs": False}
 
 
 def test_ambiguous_open_pr_stops_phase_resolution(
@@ -380,6 +406,7 @@ def test_git_snapshot_warning_stops_before_workspace_write(
     def unavailable_git_snapshot(
         _runner: Any,
         warnings: list[dict[str, Any]],
+        **_kwargs: Any,
     ) -> dict[str, Any]:
         warnings.append(
             {

@@ -93,7 +93,9 @@ def test_delivery_remediation_is_explicit_and_live_for_both_agents() -> None:
             in text
         )
         assert "READY_FOR_NEW_REVIEW" in text
-        assert "review-remediation`\nEvidence Runner as a fallback" in text
+        assert (
+            "archived evidence snapshots or\nlegacy command paths as a fallback" in text
+        )
         assert "bounded mechanical handoff" in text
         assert "MUST NOT accept" in text
 
@@ -216,12 +218,13 @@ def test_skill_path_audit_covers_both_roots_and_shared_docs() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     value = json.loads(result.stdout)
     assert value["status"] == "pass"
-    assert value["schema_version"] == 5
+    assert value["schema_version"] == 6
     assert set(value["claude_skills"]) == set(value["active_skills"])
     for entry in (*value["active_skills"].values(), *value["claude_skills"].values()):
         assert entry["missing_shared_doc_refs"] == []
         assert entry["direct_command_paths"] == []
         assert entry["evolution_traces"] == []
+        assert entry["legacy_control_paths"] == []
     assert value["shared_docs"] == {"issue-workflow": True, "pr-review": True}
     assert value["totals"]["shared_doc_ref_violations"] == 0
     assert value["totals"]["shared_doc_existence_violations"] == 0

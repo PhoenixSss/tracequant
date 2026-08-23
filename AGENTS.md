@@ -193,10 +193,10 @@ followed by maintainer manual merge.
 
 Deterministic workflow facts and compact validation are governed by
 `.agents/policies/workflow-evidence.md`; workflow command execution by
-`.agents/policies/command-execution.md`. Runner front doors:
+`.agents/policies/command-execution.md`. LCK and validation front doors:
 
 ```text
-tools/agent_workflow/wsl2_github_evidence_runner.py
+tools/agent_workflow/lck.py
 tools/agent_workflow/wsl2_validation_runner.py
 ```
 

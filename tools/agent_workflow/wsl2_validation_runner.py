@@ -74,8 +74,7 @@ CANONICAL_COMMANDS: Final[dict[str, tuple[str, ...]]] = {
         "tests/tools/test_workflow_evidence.py",
         "tests/tools/test_wsl2_validation_runner.py",
         "tests/tools/test_wsl2_validation_rules.py",
-        "tests/tools/test_wsl2_github_evidence_runner.py",
-        "tests/tools/test_wsl2_github_evidence_rules.py",
+        "tests/tools/test_lck_acceptance.py",
     ),
 }
 CANONICAL_PROFILE_COMMAND_IDS: Final[dict[str, tuple[str, ...]]] = {
