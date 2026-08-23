@@ -313,6 +313,7 @@ class LiveStateResolver:
         remote_result = self.runner.run(
             ["git", "ls-remote", "--heads", "origin"],
             command_id="lck-remote-task-branches",
+            retries=1,
         )
         if remote_result.returncode != 0:
             warnings.append(command_warning(remote_result))
