@@ -104,7 +104,6 @@ def test_command_runner_retries_only_when_requested(tmp_path: Path) -> None:
     result = CommandRunner(tmp_path).run(
         [str(flaky)],
         command_id="test-retry",
-        timeout_seconds=1,
         retries=1,
     )
 
