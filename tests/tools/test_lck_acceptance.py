@@ -135,6 +135,13 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     assert "not a Task lifecycle" in policy
     assert "LCK" in policy
 
+    architecture_delta = (
+        ROOT / "docs/workflows/lck-v1-closeout-architecture-delta.md"
+    ).read_text(encoding="utf-8")
+    assert "git fetch --prune origin" in architecture_delta
+    assert "refs/remotes/origin/main" in architecture_delta
+    assert "4,215-line" in architecture_delta
+
     # The pre-LCK compatibility/control front door must be physically absent,
     # not merely unreferenced by the active Skills. Historical publication
     # material may retain old path strings as provenance only.

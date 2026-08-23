@@ -38,10 +38,12 @@ publication material remains under
 executable compatibility/control assets. `workflow_evidence.py` remains as a
 read-only audit implementation and shared bounded query helper module; its
 historical Task snapshot operations are audit material only and active Task
-Skills do not invoke them. Formal LCK live-state resolution does not reuse the
-old Git snapshot path: LCK observes current remote branch identities directly
-with read-only `git ls-remote`, does not run `git fetch` merely to refresh facts,
-and does not use `refs/remotes/origin/main` as remote authority. Git object
+Skills do not invoke them. Formal LCK live-state resolution uses the shared Git
+fact helper with an explicit active mode: it refreshes `origin/main` with a
+bounded `git fetch --prune origin` and reads `refs/remotes/origin/main` for the
+current main identity, while it observes Task-branch identities directly with
+read-only `git ls-remote`. The fetched/refreshed local refs are ephemeral
+operation inputs, not cross-phase evidence or lifecycle authority. Git object
 materialization and other metadata writes remain bounded lifecycle effects.
 
 ## Acceptance coverage
@@ -90,7 +92,7 @@ after its earlier Runner migration; #88 supplies the operation inventory rather
 than a directly comparable LOC measurement. Current values above were measured
 from this candidate tree and are descriptive evidence, not lifecycle authority.
 
-The LOC boundary is explicit to avoid understating LCK complexity: the 4,465-line
+The LOC boundary is explicit to avoid understating LCK complexity: the 4,215-line
 core is reported separately from the 1,241 lines of support it directly calls.
 Validation infrastructure is reported separately because it predates LCK and is
 reused; audit-only Evidence code is also reported separately because it cannot
