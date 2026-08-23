@@ -3201,12 +3201,37 @@ class CleanupTaskRefsEffect:
                 raise LckStopError(
                     "Cleanup STOP: remote Task branch diverges from merged PR head"
                 )
+            remote_ref = self.resolver.runner.run(
+                ["git", "ls-remote", "--heads", "origin", branch],
+                command_id="lck-closeout-remote-branch-precondition",
+            )
+            if remote_ref.returncode != 0:
+                return _pending_receipt(
+                    "cleanup_task_refs",
+                    "pending",
+                    reason="remote Task branch precondition could not be verified",
+                )
+            remote_refs = _remote_refs(remote_ref.stdout)
+            observed_remote_oid = remote_refs.get(branch)
+            if observed_remote_oid is None:
+                if remote_ref.stdout.strip():
+                    raise LckStopError(
+                        "Cleanup STOP: remote Task branch identity is malformed"
+                    )
+                return EffectReceipt(
+                    effect="cleanup_task_refs",
+                    action="already-clean",
+                    details={"branch": branch, "remote_branch": "already-deleted"},
+                )
+            if observed_remote_oid != expected_head_sha:
+                raise LckStopError(
+                    "Cleanup STOP: remote Task branch diverges from merged PR head"
+                )
             removed = self.resolver.runner.run(
                 [
                     "git",
                     "push",
                     "origin",
-                    f"--force-with-lease=refs/heads/{branch}:{expected_head_sha}",
                     "--delete",
                     branch,
                 ],
@@ -3414,6 +3439,15 @@ class CloseoutCompleter:
             )
         effects.append(cleanup)
         final = self.resolver.resolve(task_number)
+        if final.status is not ResolutionStatus.RESOLVED:
+            raise LckStopError(
+                "Closeout STOP: final live state is unresolved: "
+                + "; ".join(final.stop_reasons)
+            )
+        if final.merged is not True or final.open_pr is not None:
+            raise LckStopError(
+                "Closeout STOP: final merged PR state changed or an OPEN PR exists"
+            )
         cleanup_complete = (
             main.action in {"synchronized", "already-synced"}
             and metadata.action in {"updated", "already-converged"}

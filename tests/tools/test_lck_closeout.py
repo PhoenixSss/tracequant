@@ -146,14 +146,26 @@ class StaticReviewStore:
 
 
 class RecordingRunner:
-    def __init__(self, returncode: int = 0, *, pr_view: str = "") -> None:
+    def __init__(
+        self,
+        returncode: int = 0,
+        *,
+        pr_view: str = "",
+        remote_outputs: list[str] | None = None,
+    ) -> None:
         self.returncode = returncode
         self.pr_view = pr_view
+        self.remote_outputs = list(remote_outputs or [])
         self.calls: list[tuple[str, ...]] = []
 
     def run(self, argv: list[str], **_kwargs: Any) -> Any:
         self.calls.append(tuple(argv))
-        stdout = self.pr_view if argv[:3] == ["gh", "pr", "view"] else ""
+        if argv[:3] == ["gh", "pr", "view"]:
+            stdout = self.pr_view
+        elif argv[:3] == ["git", "ls-remote", "--heads"] and self.remote_outputs:
+            stdout = self.remote_outputs.pop(0)
+        else:
+            stdout = ""
         return SimpleNamespace(returncode=self.returncode, stdout=stdout, stderr="")
 
 
@@ -415,8 +427,10 @@ def test_cleanup_proves_squash_tree_when_refs_are_already_deleted() -> None:
     assert ("git", "diff", "--quiet", SHA, MERGE_SHA) in runner.calls
 
 
-def test_cleanup_uses_an_expected_tip_lease_for_remote_deletion() -> None:
-    runner = RecordingRunner()
+def test_cleanup_rechecks_tip_before_non_force_remote_deletion() -> None:
+    runner = RecordingRunner(
+        remote_outputs=[f"{SHA}\trefs/heads/{BRANCH}\n", ""],
+    )
     resolver = StaticResolver(_state(remote_branch=BRANCH, remote_oid=SHA))
     resolver.runner = cast(Any, runner)
 
@@ -428,7 +442,36 @@ def test_cleanup_uses_an_expected_tip_lease_for_remote_deletion() -> None:
 
     assert result.action == "cleaned"
     delete_call = next(call for call in runner.calls if "--delete" in call)
-    assert f"--force-with-lease=refs/heads/{BRANCH}:{SHA}" in delete_call
+    assert delete_call == ("git", "push", "origin", "--delete", BRANCH)
+    assert all("force" not in item for item in delete_call)
+
+
+def test_cleanup_stops_when_final_live_state_is_unresolved() -> None:
+    state = _state()
+    unresolved = replace(
+        state,
+        status=lck.ResolutionStatus.STOP,
+        stop_reasons=("ambiguous recovery",),
+    )
+    resolver = SequenceResolver(state, state, state, unresolved)
+
+    with pytest.raises(lck.LckStopError, match="final live state is unresolved"):
+        lck.CloseoutCompleter(
+            cast(Any, resolver),
+            main_effect=cast(
+                Any,
+                FixedEffect(_receipt("synchronize_main", "synchronized")),
+            ),
+            metadata_effect=cast(
+                Any,
+                FixedEffect(_receipt("converge_task_metadata", "already-converged")),
+            ),
+            cleanup_effect=cast(
+                Any,
+                FixedEffect(_receipt("cleanup_task_refs", "already-clean")),
+            ),
+            review_store=cast(Any, StaticReviewStore()),
+        ).complete(162)
 
 
 def test_resolver_recovers_deleted_noncanonical_branch_from_closing_pr(
