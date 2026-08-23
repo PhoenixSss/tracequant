@@ -52,7 +52,7 @@ See [Repository structure](docs/architecture/repository-structure.md) for bounda
 - [Deep research report 2](docs/research/deep-research-report-2.md): historical follow-up research used to refine the technical direction.
 - [Technical roadmap research](docs/research/technical-roadmap-research.md): historical comparative research behind the selected implementation route.
 - [WSL2 Codex environment](docs/workflows/wsl2-codex-environment/README.md): reproducible WSL2 setup, diagnostics, approval boundaries, rollback, and troubleshooting.
-- [WSL2 GitHub evidence runner](docs/workflows/wsl2-github-evidence-runner/README.md): fixed read-only Task/PR snapshots, drift rechecks, least-privilege Rules, and Git/GitHub approval boundaries.
+- [Historical WSL2 GitHub evidence runner archive](docs/workflows/wsl2-github-evidence-runner/README.md): frozen pre-LCK publication evidence only; the executable Task lifecycle Runner, profiles, and Rules were removed during LCK v1 cutover.
 
 ## Current status
 

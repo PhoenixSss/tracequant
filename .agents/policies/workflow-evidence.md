@@ -77,35 +77,15 @@ failure behavior. Runner success is supporting evidence, never self-approval.
 
 ## PR resolve/create
 
-The deterministic PR resolve/create helper at
-`tools/agent_workflow/pr_resolve.py` is the canonical path for Delivery PR
-creation and recovery. It is a shared library, not a Runner. It enforces:
+`tools/agent_workflow/pr_resolve.py` is a shared deterministic helper used by
+LCK Delivery effects. It is not a Skill entry point and does not own lifecycle
+state. LCK supplies the live-resolved Task/base/branch context and rechecks the
+result before any dependent effect. Agents and Skills do not call this helper
+directly or supply PR identity as authority.
 
-- exactly one `gh pr list` → exit-code check → non-empty stdout check → JSON
-  parse → exactly zero or one match;
-- zero matches → `gh pr create` with exit-code/stdout/URL checks;
-- one match → reuse;
-- more than one match → fail-closed;
-- exactly one `gh pr view $URL` identity verification;
-- no stderr suppression, no empty-stdout-to-JSON, no retry with modified
-  `--json` fields, no fallback to text-mode queries.
-
-Delivery Skills use this helper as their single PR create/recovery path.
-
-## Semantic self-review
-
-Delivery Skills produce a structured self-review artifact before the
-`delivery-readiness` snapshot. The artifact schema is defined in
-`tools/agent_workflow/self_review.py`. It binds Task, base SHA, head SHA,
-effective-diff SHA-256, and PR identity.
-
-The self-review artifact is stored in `.agents/evidence.local/self-reviews/`
-(Git-ignored, never committed). It records acceptance-criteria mapping,
-changed-file group review, and evidence references — not source copies or
-complete logs. The model fills in semantic content; the helper validates
-structural completeness and evidence constraints.
-
-The self-review is an internal Delivery gate, not an independent review.
+Semantic implementation self-checking remains Agent-owned and ephemeral. The
+pre-LCK durable `self_review.py` binder/artifact gate was removed during LCK v1
+cleanup; no self-review artifact can authorize Delivery or Independent Review.
 
 ## Local artifacts
 
@@ -187,10 +167,9 @@ identity conflict, incompatible entry state, or maintainer-decision-required)
 forbids all write operations, auto-remediation, state modification, and
 re-invocation of the same operation to obtain `pass`.
 
-The `worktree_state_compatible` gate evaluates worktree cleanliness for the
-legacy Evidence Runner entry points. `delivery-start` and `implementation` may
-accept a dirty worktree with Task-owned changes; `final-validation` and
-`pr-readiness` require a clean committed head.
+Historical Task evidence records may mention the old `worktree_state_compatible`
+gate and Delivery entry-point names. Those records are audit provenance only; the
+executable Task Evidence Runner, profiles, and approval Rules have been removed.
 
 Historical remediation evidence is not part of the LCK Review / Remediation
 lifecycle and MUST NOT authorize a current repair from an expected base/head

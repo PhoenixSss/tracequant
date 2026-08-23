@@ -1,4 +1,4 @@
-# LCK v1 Current → Target Migration Matrix
+# LCK v1 Final Migration Matrix
 
 This matrix tracks the LCK v1 migration boundary. It normalizes the
 operation inventory from the Task #88 architecture audit against the LCK v1
@@ -15,42 +15,42 @@ and historical Evidence remains audit-only. See
 `lck-v1-closeout-architecture-delta.md` for the final authority and evidence
 boundary.
 
-| ID | #88 operation | Current owner | LCK v1 target | Task #159 boundary |
+| ID | #88 operation | Pre-LCK owner | LCK v1 target | Final LCK v1 disposition |
 |---|---|---|---|---|
-| O01 | Resolve intent and exact Task | Agent + Skill routing | KEEP | KEEP |
-| O02 | Delivery admission / readiness | Evidence Runner + Skill | MOVE | Live facts reused; full admission remains follow-up |
-| O03 | Ready → In Progress | Skill / project helper | MOVE | Not moved in this Task |
-| O04 | Read leaf spec and Retrieval v2 context | Agent | KEEP | KEEP |
-| O05 | Triggered context expansion | Agent + Human Gate | KEEP | KEEP |
-| O06 | Scoped design and implementation | Agent | KEEP | KEEP |
-| O07 | Targeted validation | Skill + Validation Runner | KEEP | KEEP |
-| O08 | Commit-ready identity | Skill / Git | MOVE | No commit effect here |
-| O09 | CI-equivalent validation | Validation Runner | KEEP | KEEP |
-| O10 | Push validated head | Skill / Agent | MOVE | LCK Delivery effect |
-| O11 | PR resolve/create | PR helper + Skill | MOVE | LCK Delivery effect |
-| O12 | Check wait/read and interpretation | Skill + Runner | SIMPLIFY | LCK checks gate; semantic interpretation remains Agent-owned |
-| O13 | Semantic self-review | Agent + helper | SIMPLIFY | Semantic judgement stays Agent-owned |
-| O14 | Delivery readiness snapshot | Evidence Runner + Skill | MOVE | Snapshot is diagnostic, not LCK authority |
-| O15 | Reviewed object identity lock | Review Skill + Runner | MOVE | LCK live Review target + invocation-local guard |
-| O16 | Complete effective-diff inspection | Review Agent | KEEP | KEEP |
-| O17 | Review correctness / AC / risk judgement | Review Agent | KEEP | KEEP |
-| O18 | Review CI-equivalent validation | Review Skill + Runner | KEEP | LCK runs formal Review validation on exact isolated head |
+| O01 | Resolve intent and exact Task | Agent + Skill routing | KEEP | Human intent + semantic Skill routing; LCK resolves mechanical identity |
+| O02 | Delivery admission / readiness | Evidence Runner + Skill | MOVE | LCK live-state admission; legacy Task Evidence Runner removed |
+| O03 | Ready → In Progress | Skill / project helper | MOVE | LCK phase-owned Project status effect |
+| O04 | Read leaf spec and Retrieval v2 context | Agent | KEEP | Agent semantic responsibility |
+| O05 | Triggered context expansion | Agent + Human Gate | KEEP | Agent/Human semantic responsibility |
+| O06 | Scoped design and implementation | Agent | KEEP | Agent semantic responsibility |
+| O07 | Targeted validation | Skill + Validation Runner | KEEP | Agent-requested development feedback; never lifecycle authority |
+| O08 | Commit-ready identity | Skill / Git | MOVE | LCK binds the validated tree/head before commit |
+| O09 | CI-equivalent validation | Validation Runner | KEEP | Validation Runner called by LCK formal phase gates |
+| O10 | Push validated head | Skill / Agent | MOVE | LCK bounded Delivery/Remediation effect |
+| O11 | PR resolve/create | PR helper + Skill | MOVE | LCK uses deterministic helper internally; Skill supplies no PR authority |
+| O12 | Check wait/read and interpretation | Skill + Runner | SIMPLIFY | LCK mechanical checks gate; semantic interpretation remains Agent-owned |
+| O13 | Semantic self-review | Agent + retired binder | SIMPLIFY | Agent semantic judgement only; durable `self_review.py` binder removed |
+| O14 | Delivery readiness snapshot | Evidence Runner + Skill | REMOVE | No formal cross-phase snapshot; historical evidence is audit-only |
+| O15 | Reviewed object identity lock | Review Skill + Runner | MOVE | LCK live Review target + invocation-local applicability guard |
+| O16 | Complete effective-diff inspection | Review Agent | KEEP | Fresh Review Agent semantic responsibility |
+| O17 | Review correctness / AC / risk judgement | Review Agent | KEEP | Fresh Review Agent semantic responsibility |
+| O18 | Review CI-equivalent validation | Review Skill + Runner | MOVE | LCK runs formal Review validation on exact isolated head |
 | O19 | Review recheck and stability | Runner + Review Skill | SIMPLIFY | `REVIEW_STALE_HEAD` / `REVIEW_STALE_BASE` invocation-local guard only |
-| O20 | Review verdict and handoff | Review Agent + Skill | SIMPLIFY | Review Agent returns PASS/FAIL; LCK records diagnostic result; no mechanical handoff authority |
-| O21 | Remediation admission | Delivery Skill + Runner | MOVE | Explicit `lck remediation prepare`; live mechanics + semantic findings only |
-| O22 | Repair and new head | Agent + Delivery Skill | MOVE | LCK completion reuses Delivery effects and existing PR, then STOP before new Review |
-| O23 | Manual Squash Merge checkpoint | Maintainer | KEEP | KEEP |
-| O24 | Closeout read-only plan | Closeout Skill + Runner | MOVE | Closeout phase eligibility only |
-| O25 | Main sync and post-merge validation | Skill + Runner | MOVE | Out of scope |
-| O26 | Lifecycle metadata convergence | Closeout Skill / GitHub | MOVE | Out of scope |
-| O27 | Exact Task branch cleanup | Closeout Skill | MOVE | Out of scope |
-| O28 | Recovery after valid gate / drift | Skill + Agent | MOVE | Reacquire live facts; no lineage; Review uses only invocation-local stale guards |
-| O29 | Feature child-set / completion mechanics | Feature Audit Skill + Agent | MOVE | Separate Feature audit boundary |
-| O30 | Repeated fact re-query / reformat | Agent / Skill ad hoc | REMOVE | No snapshot authority |
-| O31 | Homogeneous Agent command grouping | Agent orchestration | SIMPLIFY | Optional; never hides failure boundaries |
-| O32 | Context Compiler beyond Retrieval v2 | No current owner | REMOVE | Not justified by the Charter |
+| O20 | Review verdict and handoff | Review Agent + Skill | SIMPLIFY | PASS/FAIL semantic verdict; LCK records bounded result; no mechanical handoff authority |
+| O21 | Remediation admission | Delivery Skill + Runner | MOVE | Human-explicit `lck remediation prepare`; live mechanics + semantic findings only |
+| O22 | Repair and new head | Agent + Delivery Skill | MOVE | Agent repairs; LCK completion owns mechanical effects, then STOP before new Review |
+| O23 | Manual Squash Merge checkpoint | Maintainer | KEEP | Maintainer-only Squash Merge boundary |
+| O24 | Closeout read-only plan | Closeout Skill + Runner | MOVE | LCK closeout live-state eligibility |
+| O25 | Main sync and post-merge validation | Skill + Runner | MOVE | LCK bounded closeout synchronization + validation |
+| O26 | Lifecycle metadata convergence | Closeout Skill / GitHub | MOVE | LCK closeout effects after authoritative merged/closed state |
+| O27 | Exact Task branch cleanup | Closeout Skill | MOVE | LCK identity-proven cleanup effect; cleanup may remain pending |
+| O28 | Recovery after valid gate / drift | Skill + Agent | MOVE | LCK reacquires live facts; no lineage/snapshot recovery authority |
+| O29 | Feature child-set / completion mechanics | Feature Audit Skill + Agent | KEEP | Separate read-only Feature audit boundary; not Task lifecycle authority |
+| O30 | Repeated fact re-query / reformat | Agent / Skill ad hoc | REMOVE | One LCK Task resolver; historical audit queries do not control Task phases |
+| O31 | Homogeneous Agent command grouping | Agent orchestration | SIMPLIFY | Optional Agent ergonomics; never lifecycle authority |
+| O32 | Context Compiler beyond Retrieval v2 | No current owner | REMOVE | Not part of LCK v1 |
 
-## Task #159 Core baseline
+## Historical Task #159 core baseline (non-authoritative)
 
 `tools/agent_workflow/lck.py` provides three deterministic layers:
 
@@ -69,7 +69,7 @@ the Initial Delivery portion of that boundary.
 
 ## Active Delivery boundary
 
-The candidate Initial Delivery path uses one LCK-owned sequence after activation:
+The active Initial Delivery path uses one LCK-owned sequence:
 
 1. `DeliveryPreparer` resolves and prepares the Task workspace.
 2. `DeliveryCompleter` reads the current Task Critical Outcome, stages the candidate
@@ -125,8 +125,7 @@ and generalized drift categories. Historical evidence remains audit-only.
 
 ## Mainline activation and rollback procedure
 
-The final LCK cleanup becomes the sole Initial Delivery lifecycle authority after
-all of the following have occurred:
+The Task #163 cleanup is eligible for mainline activation only after all of the following have occurred:
 
 1. an independent Review of the current PR head passes;
 2. the maintainer performs the required Squash Merge;
@@ -134,10 +133,9 @@ all of the following have occurred:
    controller, provider-neutral Skills, and repository workflow validators.
 
 If activation or post-merge validation fails, the maintainer must stop further
-LCK Initial Delivery activation, record the failure, and revert the candidate
-merge as one controlled change. The pre-cutover Current Workflow remains the
-authority while the revert is validated. The maintainer then synchronizes
-`main`, reruns the relevant post-merge validation, and records the restored
-authority boundary before any later reactivation attempt. A later activation
-requires a new reviewed head and a fresh maintainer merge decision; no Agent or
-Delivery Skill may bypass this rollback boundary.
+activation, record the failure, and revert the candidate merge as one controlled
+change to the last reviewed/merged LCK v1 state. No Legacy Task control path is
+reactivated during rollback. The maintainer then synchronizes `main`, reruns the
+relevant post-merge validation, and records the restored LCK authority boundary.
+A later activation requires a new reviewed head and a fresh maintainer merge
+decision; no Agent or Skill may bypass this rollback boundary.

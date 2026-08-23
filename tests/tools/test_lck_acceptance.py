@@ -70,6 +70,11 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     assert "write_actions_allowed" not in lck_source
     assert "snapshot_id" not in lck_source
     assert "WORKFLOW_EVIDENCE_READ_ONLY" not in lck_source
+    assert "workflow_validation.py" in lck_source
+    assert "CommandRunner" in lck_source
+    assert "workflow database" not in lck_source.casefold()
+    assert "sqlite" not in lck_source.casefold()
+    assert "daemon" not in lck_source.casefold()
 
     for name in TASK_SKILLS:
         codex = _skill(name)
@@ -92,10 +97,17 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
 
     lifecycle_tests = {
         "tests/tools/test_lck.py": {
+            # Fresh Delivery / interrupted resume / historical PR / live Review.
             "test_delivery_prepare_creates_then_reuses_workspace",
+            "test_delivery_complete_allows_review_status_for_partial_effect_recovery",
+            "test_closed_pr_does_not_block_current_open_pr",
+            "test_closeout_eligibility_uses_merged_live_pr_state",
             "test_review_prepare_builds_context_only_from_live_resolution",
+            "test_review_pass_stops_at_human_merge_boundary",
             "test_review_fail_returns_stop_required_without_starting_remediation",
+            "test_remediation_prepare_uses_live_head_not_review_record_identity",
             "test_remediation_complete_requires_actual_repair_changes",
+            "test_remediation_complete_can_resume_committed_new_head_and_requires_re_review",
             "test_review_complete_head_change_is_review_stale_head",
             "test_review_complete_base_change_is_review_stale_base",
         },
@@ -110,6 +122,7 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
             "test_closeout_keeps_business_complete_when_cleanup_is_pending",
             "test_closeout_stops_on_remote_divergence",
             "test_cleanup_proves_squash_tree_when_refs_are_already_deleted",
+            "test_resolver_recovers_deleted_noncanonical_branch_from_closing_pr",
         },
     }
     for relative, required in lifecycle_tests.items():
@@ -121,3 +134,32 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     assert "historical Evidence" in policy
     assert "not a Task lifecycle" in policy
     assert "LCK" in policy
+
+    # The pre-LCK compatibility/control front door must be physically absent,
+    # not merely unreferenced by the active Skills. Historical publication
+    # material may retain old path strings as provenance only.
+    for retired in (
+        "tools/agent_workflow/wsl2_github_evidence_runner.py",
+        "tools/agent_workflow/wsl2_github_evidence_profiles.json",
+        ".codex/rules/tracequant-wsl-evidence.rules",
+        "tests/tools/test_wsl2_github_evidence_runner.py",
+        "tests/tools/test_wsl2_github_evidence_rules.py",
+        "tools/agent_workflow/self_review.py",
+        "tests/tools/test_self_review.py",
+    ):
+        assert not (ROOT / retired).exists(), retired
+
+    claude_settings = (ROOT / ".claude/settings.json").read_text(encoding="utf-8")
+    assert "wsl2_github_evidence_runner.py" not in claude_settings
+
+    validation_profile = (
+        ROOT / "tools/agent_workflow/wsl2_validation_profiles.json"
+    ).read_text(encoding="utf-8")
+    assert "test_wsl2_github_evidence_runner.py" not in validation_profile
+    assert "test_wsl2_github_evidence_rules.py" not in validation_profile
+
+    archive = (ROOT / "docs/workflows/wsl2-github-evidence-runner/README.md").read_text(
+        encoding="utf-8"
+    )
+    assert "frozen historical publication evidence" in archive
+    assert "not a current workflow entry point" in archive

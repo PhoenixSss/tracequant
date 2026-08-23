@@ -876,8 +876,11 @@ def test_lck_migration_matrix_records_activation_rollback_procedure() -> None:
     assert "independent Review" in matrix
     assert "required Squash Merge" in matrix
     assert "revert the candidate" in matrix
-    assert "pre-cutover Current Workflow" in matrix
-    assert "fresh maintainer merge decision" in matrix
+    assert "last reviewed/merged LCK v1 state" in matrix
+    assert "No Legacy Task control path is" in matrix
+    assert "pre-cutover Current Workflow remains the authority" not in matrix
+    assert "fresh maintainer merge" in matrix
+    assert "decision; no Agent or Skill" in matrix
 
 
 def _with_checks(state: lck.LiveState, checks: dict[str, Any]) -> lck.LiveState:
