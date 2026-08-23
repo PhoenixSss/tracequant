@@ -158,7 +158,7 @@ Tasks. No workflow Skill may merge a Pull Request.
 
 Maintainers can start a workflow with Agent-neutral natural language:
 
-- `实现 Issue #N` → Delivery (readiness, implementation, PR, review handoff)
+- `实现 Issue #N` → Delivery (readiness, implementation, PR, Human review boundary)
 - `审查 PR #N` → Independent Review (fresh session, read-only)
 - `PR #N 已人工合并，请完成 closeout` → Closeout (merge identity, convergence)
 - Feature completion audit request → `feature-completion-audit` (hierarchy-aware)
@@ -181,9 +181,10 @@ clearly identify different work.
 Independent PR Review runs in a fresh session that did not participate in
 implementation or remediation of the reviewed head. It is strictly read-only,
 does not submit a GitHub Review, does not fix findings, and never merges. A
-non-passing Review emits a bounded remediation handoff for the Delivery Skill;
-any new commit requires a fresh independent Review session. Detailed shared
-semantics: `docs/development/pr-review.md`.
+failing Review returns `STOP_REQUIRED`; remediation starts only after explicit
+Human intent and LCK reacquires the current mechanical target. Any new commit
+requires a fresh independent Review session. Detailed shared semantics:
+`docs/development/pr-review.md`.
 
 A final merge decision requires a passing Review for the current PR head,
 followed by maintainer manual merge.

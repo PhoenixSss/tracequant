@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Final
 
-SCHEMA_VERSION: Final = 4
+SCHEMA_VERSION: Final = 5
 ACTIVE_SKILLS: Final = {
     "task-delivery-runner": Path(".agents/skills/task-delivery-runner/SKILL.md"),
     "task-pr-review-runner": Path(".agents/skills/task-pr-review-runner/SKILL.md"),
@@ -31,16 +31,18 @@ REQUIRED: Final = {
         "delivery prepare",
         "delivery complete",
         "Critical Outcome",
-        "wsl2_github_evidence_runner.py",
-        "wsl2_validation_runner.py",
-        "Review remediation",
+        "remediation prepare",
+        "remediation complete",
+        "READY_FOR_NEW_REVIEW",
     ),
     "task-pr-review-runner": (
-        "wsl2_github_evidence_runner.py",
-        "wsl2_validation_runner.py",
-        "workflow-review",
-        "recheck",
-        "Remediation handoff",
+        "tools/agent_workflow/lck.py",
+        "review prepare",
+        "review complete",
+        "READY_FOR_SEMANTIC_REVIEW",
+        "REVIEW_STALE_HEAD",
+        "REVIEW_STALE_BASE",
+        "STOP_REQUIRED",
     ),
     "task-closeout": (
         "wsl2_github_evidence_runner.py",

@@ -1,9 +1,4 @@
-"""Focused validation for the Agent-neutral workflow / instruction architecture.
-
-Task #120: shared semantic owner docs (docs/development/issue-workflow.md,
-docs/development/pr-review.md), natural-language routing, dual-layer
-source-of-truth model, and Codex / Claude skill semantic parity.
-"""
+"""Focused validation for the Agent-neutral workflow / instruction architecture."""
 
 from __future__ import annotations
 
@@ -13,28 +8,21 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
-
 PATH_AUDIT = ROOT / "tools/agent_workflow/skill_path_audit.py"
-
 ISSUE_WORKFLOW = ROOT / "docs/development/issue-workflow.md"
 PR_REVIEW = ROOT / "docs/development/pr-review.md"
 AGENTS = ROOT / "AGENTS.md"
 CLAUDE_MD = ROOT / "CLAUDE.md"
 AGENT_SKILLS_GUIDE = ROOT / "docs/workflows/agent-skills.md"
-
-ACTIVE_SKILL_ROOTS = (
-    ROOT / ".agents" / "skills",
-    ROOT / ".claude" / "skills",
-)
-
+ACTIVE_SKILL_ROOTS = (ROOT / ".agents/skills", ROOT / ".claude/skills")
 REVIEW_SKILLS = ("task-pr-review-runner",)
 LIFECYCLE_SKILLS = ("task-delivery-runner", "task-closeout", "feature-completion-audit")
 
 
 def _skill_text(name: str) -> tuple[str, str]:
     return (
-        (ROOT / ".agents" / "skills" / name / "SKILL.md").read_text(encoding="utf-8"),
-        (ROOT / ".claude" / "skills" / name / "SKILL.md").read_text(encoding="utf-8"),
+        (ROOT / ".agents/skills" / name / "SKILL.md").read_text(encoding="utf-8"),
+        (ROOT / ".claude/skills" / name / "SKILL.md").read_text(encoding="utf-8"),
     )
 
 
@@ -81,20 +69,33 @@ def test_source_of_truth_is_dual_layer_not_linear_precedence() -> None:
     assert "不得覆盖 current Issue requirement" in text
 
 
-def test_failure_and_ambiguity_handling_is_defined() -> None:
+def test_failure_and_ambiguity_handling_has_review_stop_and_local_stale_results() -> (
+    None
+):
     text = ISSUE_WORKFLOW.read_text(encoding="utf-8")
     assert "Failure / Ambiguity handling" in text
     assert "fail closed" in text
-    assert "invalidate review" in text
+    assert "STOP_REQUIRED" in text
+    assert "Human explicit remediation" in text
+    assert "REVIEW_STALE_HEAD" in text
+    assert "REVIEW_STALE_BASE" in text
     assert "block closeout" in text
-    assert "bounded remediation handoff" in text
+    assert "bounded remediation handoff" not in text
 
 
-def test_delivery_remediation_requires_review_handoff_for_both_agents() -> None:
+def test_delivery_remediation_is_explicit_and_live_for_both_agents() -> None:
     for text in _skill_text("task-delivery-runner"):
-        assert "`review-remediation` requires the bounded handoff" in text
-        assert "stop before Runner or repair writes" in text
-        assert "generic snapshot fallback" in text
+        assert "tools/agent_workflow/lck.py remediation prepare" in text
+        assert "tools/agent_workflow/lck.py remediation complete" in text
+        assert "failed `review_id` locates semantic findings only" in text
+        assert (
+            "mechanical facts from the Review\nrecord are not write authorization"
+            in text
+        )
+        assert "READY_FOR_NEW_REVIEW" in text
+        assert "review-remediation`\nEvidence Runner as a fallback" in text
+        assert "bounded mechanical handoff" in text
+        assert "MUST NOT accept" in text
 
 
 def test_closeout_entry_owns_merge_identity_and_convergence() -> None:
@@ -104,72 +105,72 @@ def test_closeout_entry_owns_merge_identity_and_convergence() -> None:
     assert "reviewed head == 实际 merged head" in text
 
 
-def test_pr_review_doc_owns_review_semantics() -> None:
+def test_pr_review_doc_owns_lck_review_semantics() -> None:
     text = PR_REVIEW.read_text(encoding="utf-8")
     for marker in (
-        "fresh session",
-        "完全只读",
-        "Head lock",
-        "Effective diff",
+        "fresh",
+        "read-only",
+        "LCK live target resolution",
+        "current effective diff",
+        "current Task Contract",
+        "invocation-local stale guard",
+        "REVIEW_STALE_HEAD",
+        "REVIEW_STALE_BASE",
         "Verdict semantics",
-        "Remediation handoff",
-        "block closeout",
+        "Explicit Remediation",
+        "Provider neutrality",
     ):
         assert marker in text
 
 
-def test_pr_review_doc_has_tri_state_verdict_contract() -> None:
+def test_pr_review_doc_has_binary_pass_fail_stop_contract() -> None:
     text = PR_REVIEW.read_text(encoding="utf-8")
-    # Tri-state verdict contract (aligned with the executable Review Skills).
-    for verdict in ("通过，可以人工合并", "有条件通过，不得合并", "不通过，需要修复"):
-        assert verdict in text
-    # Conditional is explicitly not merge approval.
-    assert "DO NOT MERGE" in text
-    assert "CONDITIONAL" in text
-    # partial / unknown objective gates map to conditional, not to pass.
-    assert "partial" in text
-    assert "unknown" in text
-    # Semantic failure / gate fail / identity drift must not map to conditional.
-    assert "identity drift" in text
-    assert "FAIL" in text
-    # Head change during review is invalidation, not conditional pass.
-    assert "REVIEW INVALIDATED" in text
-    # The binary-era claim that conditional pass does not exist must not return.
-    assert "不产出「conditional pass」" not in text
+    assert "PASS / `通过，可以人工合并`" in text
+    assert "FAIL / `不通过，需要修复`" in text
+    assert "READY_FOR_HUMAN_MERGE" in text
+    assert "STOP_REQUIRED" in text
+    assert "不自动进入 Remediation" in text
+    assert "Review → Delivery → Review 自动循环" in text
+    assert "CONDITIONAL" in text  # named only as a forbidden bypass
+    assert "有条件通过，不得合并" not in text
 
 
-def test_pr_review_doc_owns_full_mapping_and_skills_do_not_duplicate() -> None:
-    owner = PR_REVIEW.read_text(encoding="utf-8")
+def test_pr_review_doc_removes_cross_phase_mechanical_handoff_authority() -> None:
+    text = PR_REVIEW.read_text(encoding="utf-8")
+    assert "Delivery 输出、旧 snapshot、expected SHA" in text
+    assert "不能授权后续 Review / Remediation" in text
+    assert "generic drift graph" in text
+    assert "跨阶段\nfreshness contract" in text
+    assert "snapshot lineage" in text
+    assert "diagnostic Review record" in text
+    assert "不是当前机械授权" in text
+    assert "semantic findings only" in text
+
+
+def test_review_skills_share_binary_lck_contract() -> None:
     codex, claude = _skill_text("task-pr-review-runner")
-    # The shared owner holds the full verdict mapping (incl. plan-limit 403).
-    assert "Deterministic mapping principle" in owner
-    assert "gate = `pass`" in owner
-    assert "plan-limit `403`" in owner
-    assert "REVIEW INVALIDATED — HEAD CHANGED" in owner
-    # Both Skills reference the owner sections for verdict / remediation.
+    assert codex == claude
     for text in (codex, claude):
         assert "docs/development/pr-review.md" in text
-        assert "§8" in text
-        assert "§9" in text
-    # Exact executable verdict tokens and the invalidation token are retained.
-    for text in (codex, claude):
-        for verdict in (
-            "通过，可以人工合并",
-            "有条件通过，不得合并",
-            "不通过，需要修复",
-        ):
-            assert verdict in text
-        assert "REVIEW INVALIDATED — HEAD CHANGED" in text
-    # Neither Skill duplicates the full shared mapping table.
-    for text in (codex, claude):
-        assert "### Deterministic mapping" not in text
-        assert "| Evidence `status` | Permitted verdict ceiling |" not in text
-        assert "### Verdict rules" not in text
+        assert "tools/agent_workflow/lck.py review prepare" in text
+        assert "tools/agent_workflow/lck.py review complete" in text
+        assert "READY_FOR_SEMANTIC_REVIEW" in text
+        assert "READY_FOR_HUMAN_MERGE" in text
+        assert "STOP_REQUIRED" in text
+        assert "REVIEW_STALE_HEAD" in text
+        assert "REVIEW_STALE_BASE" in text
+        assert "通过，可以人工合并" in text
+        assert "不通过，需要修复" in text
+        assert "有条件通过，不得合并" not in text
+        assert "workflow-review" not in text
+        assert "recheck --snapshot-id" not in text
+        assert "Remediation handoff" not in text
 
 
-def test_issue_workflow_doc_keeps_identity_locking_and_no_version_gate() -> None:
+def test_issue_workflow_doc_keeps_phase_identity_preconditions_and_no_version_gate() -> (
+    None
+):
     text = ISSUE_WORKFLOW.read_text(encoding="utf-8")
-    # Workflow identity locking is owned by the shared doc.
     for marker in (
         "Workflow identity locking",
         "必须锁定",
@@ -178,14 +179,12 @@ def test_issue_workflow_doc_keeps_identity_locking_and_no_version_gate() -> None
         "merge SHA",
     ):
         assert marker in text
-    # Skill / Runner version is not a default reload gate.
     for marker in (
         "Skill / Runner version is not itself a workflow gate",
         "不要求",
         "重新加载",
     ):
         assert marker in text
-    # Old trusted-version mechanisms are named only as explicitly rejected.
     assert "不重新引入" in text
     assert "trusted Skill" in text
     assert "main-only Skill" in text
@@ -217,10 +216,9 @@ def test_skill_path_audit_covers_both_roots_and_shared_docs() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     value = json.loads(result.stdout)
     assert value["status"] == "pass"
+    assert value["schema_version"] == 5
     assert set(value["claude_skills"]) == set(value["active_skills"])
-    for entry in value["active_skills"].values():
-        assert entry["missing_shared_doc_refs"] == []
-    for entry in value["claude_skills"].values():
+    for entry in (*value["active_skills"].values(), *value["claude_skills"].values()):
         assert entry["missing_shared_doc_refs"] == []
         assert entry["direct_command_paths"] == []
         assert entry["evolution_traces"] == []
@@ -255,10 +253,7 @@ def test_agent_skills_guide_is_registry_and_navigation_only() -> None:
 
 
 def test_legacy_skills_are_retired_from_active_namespace() -> None:
-    for relative in (
-        ".agents/skills/task-delivery",
-        ".agents/skills/task-pr-review",
-    ):
+    for relative in (".agents/skills/task-delivery", ".agents/skills/task-pr-review"):
         assert not (ROOT / relative).exists(), relative
     agents = AGENTS.read_text(encoding="utf-8")
     claude = CLAUDE_MD.read_text(encoding="utf-8")
