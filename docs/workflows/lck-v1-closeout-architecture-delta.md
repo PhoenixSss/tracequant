@@ -71,18 +71,18 @@ inventory; their aggregate command counts are not added to current LOC.
 
 | Measure | #88 / pre-LCK reference | LCK v1 current shape |
 | --- | --- | --- |
-| Formal lifecycle controller | Skill + Runner + handoff/snapshot paths | `lck.py`: 4,465 LOC |
+| Formal lifecycle controller | Skill + Runner + handoff/snapshot paths | `lck.py`: 4,215 LOC |
 | Task-control support called by LCK | mechanics split across Skill/Runner/helpers | 1,241 LOC: `critical_outcome.py` 204 + `pr_resolve.py` 481 + `project_status.py` 153 + shared `workflow_common.py` 403 |
-| Combined active Task control code | no single deterministic boundary in #88 | 5,706 LOC controller + direct support; reused validation/audit infrastructure excluded |
+| Combined active Task control code | no single deterministic boundary in #88 | 5,456 LOC controller + direct support; reused validation/audit infrastructure excluded |
 | Reused Validation infrastructure | existing fixed Validation Runner | 1,163 LOC: `workflow_validation.py` 344 + `wsl2_validation_runner.py` 819; reused rather than duplicated |
-| Audit-only Evidence implementation | Task Evidence Runner was part of lifecycle control | `workflow_evidence.py` 3,402 LOC retained as read-only audit/shared-query code, not Task authority |
+| Audit-only Evidence implementation | Task Evidence Runner was part of lifecycle control | `workflow_evidence.py` 1,566 LOC retained as read-only audit/shared-query code, not Task authority |
 | Task Skill lifecycle mechanics | direct command/procedure paths | 474 LOC per provider; 948 LOC across Codex + Claude; no direct lifecycle writes |
 | Durable cross-phase control state | snapshots, freshness, handoff fields | 0 authoritative cross-phase state in LCK; only diagnostic records and invocation-local guards |
 | Snapshot/freshness/drift concepts | cross-phase snapshot/freshness/drift graph | 0 snapshot/freshness authority; one operation-local stale-guard family |
 | Dynamic global write authorization | `write_actions_allowed` disposition | absent from LCK and active Task policy |
 | Direct Agent lifecycle writes | present in historical baseline | 0 in active Task Skills |
 | Duplicate Task identity resolution | Skill/Runner/current-workflow paths | one LCK `LiveStateResolver`; historical audit queries cannot authorize Task phases |
-| Main lifecycle test groups | split across old Runner and workflow paths | 89 tests: 51 + 26 + 11 + 1 acceptance |
+| Main lifecycle test groups | split across old Runner and workflow paths | 86 tests: 49 + 25 + 11 + 1 acceptance |
 | Legacy executable components removed in this convergence | old Task Runner/profiles/Rules + durable self-review binder | 7 files removed: Runner, profile spec, Codex Rule, two Runner/Rules tests, self-review binder, binder test |
 
 The historical #85 static Skill record reports 685 lines before and 547 lines

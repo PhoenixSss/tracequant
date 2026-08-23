@@ -195,20 +195,25 @@ def _repository_slug(
 def _git_snapshot(
     runner: CommandRunner,
     warnings: list[dict[str, Any]],
+    *,
+    read_only_local_refs: bool = False,
 ) -> dict[str, Any]:
-    """Collect Feature-audit Git facts.
+    """Collect bounded Git facts for Feature audit and LCK queries.
 
-    Feature audit is allowed to refresh refs. Task lifecycle live-state
-    resolution does not call this function and remains read-only in ``lck.py``.
+    Feature audit is allowed to refresh refs. LCK supplies the explicit query
+    mode when it reuses this shared helper; no environment variable or
+    persisted evidence record controls Task lifecycle behavior.
     """
 
-    fetch = runner.run(
-        ["git", "fetch", "--prune", "origin"],
-        command_id="git-fetch-origin",
-        retries=1,
-    )
-    if fetch.returncode != 0:
-        warnings.append(command_warning(fetch))
+    fetch: CommandResult | None = None
+    if not read_only_local_refs:
+        fetch = runner.run(
+            ["git", "fetch", "--prune", "origin"],
+            command_id="git-fetch-origin",
+            retries=1,
+        )
+        if fetch.returncode != 0:
+            warnings.append(command_warning(fetch))
     branch = _git_value(
         runner,
         ["branch", "--show-current"],
@@ -263,8 +268,16 @@ def _git_snapshot(
         if line.startswith("branch refs/heads/")
     )
     return {
-        "origin_fetch": "pass" if fetch.returncode == 0 else "unknown",
-        "origin_refresh": "attempted",
+        "origin_fetch": (
+            "pass"
+            if read_only_local_refs
+            else "pass"
+            if fetch is not None and fetch.returncode == 0
+            else "unknown"
+        ),
+        "origin_refresh": (
+            "skipped-read-only" if read_only_local_refs else "attempted"
+        ),
         "branch": safe_text(branch),
         "head_sha": head if is_sha(head) else None,
         "local_main_sha": local_main if is_sha(local_main) else None,
