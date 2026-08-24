@@ -12,6 +12,7 @@ branch/PR identity is workflow authority.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -53,7 +54,9 @@ from workflow_common import (
     print_json,
     read_json_file,
     read_json_text,
+    safe_text,
     sha256_json,
+    stderr_tail,
 )
 from workflow_evidence import (
     _git_snapshot,
@@ -1198,7 +1201,12 @@ class ReviewValidationGate:
         self.resolver = resolver
 
     def _persist_validation_artifacts(
-        self, review_root: Path, payload: dict[str, Any]
+        self,
+        review_root: Path,
+        payload: dict[str, Any],
+        *,
+        base_sha: str,
+        head_sha: str,
     ) -> dict[str, Any]:
         raw_output_dir = payload.get("output_dir")
         if not isinstance(raw_output_dir, str) or not raw_output_dir:
@@ -1241,6 +1249,9 @@ class ReviewValidationGate:
         ).as_posix()
         preserved = dict(payload)
         preserved["output_dir"] = durable_relative
+        preserved["evidence_path"] = durable_relative
+        preserved["validated_base_sha"] = base_sha
+        preserved["validated_head_sha"] = head_sha
         commands = preserved.get("commands")
         if isinstance(commands, list):
             for command in commands:
@@ -1257,11 +1268,60 @@ class ReviewValidationGate:
                         "formal Review validation log path escaped its output directory"
                     ) from exc
                 command["log_path"] = (Path(durable_relative) / log_relative).as_posix()
+        evidence_file = (
+            Path(durable_relative) / "lck-review-validation-result.json"
+        ).as_posix()
+        preserved["evidence_file"] = evidence_file
+        atomic_write_json(destination / "lck-review-validation-result.json", preserved)
         return preserved
 
-    def run(self, review_root: Path, base_sha: str) -> dict[str, Any]:
+    def _persist_unstructured_failure(
+        self,
+        result: Any,
+        *,
+        base_sha: str,
+        head_sha: str,
+    ) -> dict[str, Any]:
+        durable_root = (
+            self.resolver.repo_root / ".agents" / "validation.local"
+        ).resolve()
+        durable_root.mkdir(parents=True, exist_ok=True)
+        destination = durable_root / f"lck-review-{uuid.uuid4().hex}"
+        destination.mkdir()
+        durable_relative = destination.relative_to(
+            self.resolver.repo_root.resolve()
+        ).as_posix()
+        diagnostic = stderr_tail(result.stderr or result.stdout, limit=2000)
+        payload: dict[str, Any] = {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "operation": "workflow-validation",
+            "phase": "review",
+            "status": "fail",
+            "base_sha": base_sha,
+            "validated_base_sha": base_sha,
+            "validated_head_sha": head_sha,
+            "commands": [
+                {
+                    "command_id": result.command_id,
+                    "status": "fail",
+                    "exit_code": result.returncode,
+                    "diagnostic": diagnostic,
+                }
+            ],
+            "output_dir": durable_relative,
+            "evidence_path": durable_relative,
+        }
+        payload["evidence_file"] = (
+            Path(durable_relative) / "lck-review-validation-result.json"
+        ).as_posix()
+        atomic_write_json(destination / "lck-review-validation-result.json", payload)
+        return payload
+
+    def run(self, review_root: Path, base_sha: str, head_sha: str) -> dict[str, Any]:
         if not is_sha(base_sha):
             raise LckStopError("formal Review validation base SHA is unavailable")
+        if not is_sha(head_sha):
+            raise LckStopError("formal Review validation head SHA is unavailable")
         tool = review_root / "tools" / "agent_workflow" / "workflow_validation.py"
         if not tool.is_file():
             raise LckStopError("reviewed head does not contain workflow_validation.py")
@@ -1284,19 +1344,35 @@ class ReviewValidationGate:
             validation=True,
         )
         if not result.stdout.strip():
-            raise LckStopError(
-                "formal Review validation produced no structured result: "
-                + (result.stderr.strip() or f"exit {result.returncode}")
+            return self._persist_unstructured_failure(
+                result, base_sha=base_sha, head_sha=head_sha
             )
-        payload = read_json_text(result.stdout, field="lck-formal-review-validation")
-        if not isinstance(payload, dict):
-            raise LckStopError("formal Review validation result is not an object")
-        if result.returncode != 0 or payload.get("status") != "pass":
-            raise LckStopError(
-                "formal Review validation failed: "
-                + str(payload.get("status") or result.returncode)
+        try:
+            parsed = read_json_text(result.stdout, field="lck-formal-review-validation")
+        except WorkflowToolError:
+            return self._persist_unstructured_failure(
+                result, base_sha=base_sha, head_sha=head_sha
             )
-        return self._persist_validation_artifacts(review_root, payload)
+        if not isinstance(parsed, dict):
+            return self._persist_unstructured_failure(
+                result, base_sha=base_sha, head_sha=head_sha
+            )
+        payload = dict(parsed)
+        if result.returncode != 0 and payload.get("status") == "pass":
+            payload["status"] = "fail"
+        try:
+            return self._persist_validation_artifacts(
+                review_root,
+                payload,
+                base_sha=base_sha,
+                head_sha=head_sha,
+            )
+        except LckStopError:
+            if payload.get("status") != "fail" and result.returncode == 0:
+                raise
+            return self._persist_unstructured_failure(
+                result, base_sha=base_sha, head_sha=head_sha
+            )
 
 
 class ReviewWorkspaceManager:
@@ -1487,6 +1563,26 @@ class ReviewWorkspaceManager:
                 raise LckStopError("failed to remove isolated Review worktree")
 
 
+@dataclass
+class ReviewPrepareInvocation:
+    """Own one operation-local Review Prepare marker until it finishes."""
+
+    path: Path
+    operation_id: str
+    _lock_fd: int
+    recovered: Mapping[str, Any] | None = None
+
+    def update(self, payload: Mapping[str, Any]) -> None:
+        atomic_write_json(self.path, payload)
+
+    def finish(self) -> None:
+        try:
+            self.path.unlink()
+        finally:
+            fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+            os.close(self._lock_fd)
+
+
 class ReviewInvocationStore:
     """Persist invocation-local guards and diagnostic review records only."""
 
@@ -1515,6 +1611,99 @@ class ReviewInvocationStore:
 
     def review_required_path(self, task_number: int) -> Path:
         return self.root / "review-state" / f"task-{task_number}-required.json"
+
+    def review_prepare_inflight_path(self, task_number: int) -> Path:
+        return self.root / "review-inflight" / f"task-{task_number}.json"
+
+    def review_prepare_lock_path(self, task_number: int) -> Path:
+        return self.root / "review-inflight" / f"task-{task_number}.lock"
+
+    @staticmethod
+    def _pid_is_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def begin_review_prepare(self, task_number: int) -> ReviewPrepareInvocation:
+        """Claim one Task-local Review Prepare operation before side effects."""
+        path = self.review_prepare_inflight_path(task_number)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.review_prepare_lock_path(task_number)
+        lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                try:
+                    active = read_json_file(path)
+                except WorkflowToolError:
+                    active = {}
+                operation_id = (
+                    active.get("operation_id") if isinstance(active, Mapping) else None
+                )
+                state = active.get("state") if isinstance(active, Mapping) else None
+                raise LckStopError(
+                    f"Review Prepare already in flight for Task #{task_number}"
+                    + (
+                        f" (operation {operation_id}, state {state})"
+                        if operation_id
+                        else ""
+                    )
+                ) from exc
+
+            existing: Mapping[str, Any] | None = None
+            if path.exists():
+                parsed = read_json_file(path)
+                if not isinstance(parsed, Mapping):
+                    raise LckStopError("Review Prepare in-flight state is invalid")
+                if parsed.get("task_number") != task_number:
+                    raise LckStopError(
+                        "Review Prepare in-flight Task identity is invalid"
+                    )
+                owner_pid = parsed.get("pid")
+                if (
+                    not isinstance(owner_pid, int)
+                    or isinstance(owner_pid, bool)
+                    or owner_pid <= 0
+                ):
+                    raise LckStopError(
+                        "Review Prepare in-flight owner identity is invalid"
+                    )
+                if self._pid_is_alive(owner_pid):
+                    raise LckStopError(
+                        f"Review Prepare already in flight for Task #{task_number}"
+                    )
+                existing = dict(parsed)
+
+            operation_id = self.new_id()
+            payload: dict[str, Any] = {
+                "schema_version": LCK_SCHEMA_VERSION,
+                "kind": "review-prepare-in-flight",
+                "operation_id": operation_id,
+                "task_number": task_number,
+                "pid": os.getpid(),
+                "state": "starting",
+                "review_root": None,
+                "authority": "operation-local in-flight protection only",
+            }
+            if existing is not None:
+                payload["recovered_from"] = existing.get("operation_id")
+                payload["previous_review_root"] = existing.get("review_root")
+            invocation = ReviewPrepareInvocation(
+                path=path,
+                operation_id=operation_id,
+                _lock_fd=lock_fd,
+                recovered=existing,
+            )
+            invocation.update(payload)
+            return invocation
+        except BaseException:
+            os.close(lock_fd)
+            raise
 
     def write_guard(self, review_id: str, payload: Mapping[str, Any]) -> None:
         atomic_write_json(self.guard_path(review_id), payload)
@@ -1707,6 +1896,36 @@ class ReviewContext:
         }
 
 
+def _review_validation_failure(payload: Mapping[str, Any]) -> str:
+    failed_command: Mapping[str, Any] | None = None
+    commands = payload.get("commands")
+    if isinstance(commands, list):
+        failed_command = next(
+            (
+                item
+                for item in commands
+                if isinstance(item, Mapping) and item.get("status") == "fail"
+            ),
+            None,
+        )
+    evidence = payload.get("evidence_path") or payload.get("output_dir")
+    detail = [f"formal Review validation failed: {payload.get('status', 'fail')}"]
+    if failed_command is not None:
+        command_id = failed_command.get("command_id", "unknown")
+        exit_code = failed_command.get("exit_code", "unknown")
+        diagnostic = safe_text(failed_command.get("diagnostic"), limit=1200)
+        detail.append(f"failed command {command_id} (exit {exit_code})")
+        if diagnostic:
+            detail.append(f"diagnostic: {diagnostic}")
+    base_sha = payload.get("validated_base_sha")
+    head_sha = payload.get("validated_head_sha")
+    if is_sha(base_sha) and is_sha(head_sha):
+        detail.append(f"validated base {base_sha}, head {head_sha}")
+    if isinstance(evidence, str) and evidence:
+        detail.append(f"evidence: {evidence}")
+    return "; ".join(detail)
+
+
 class ReviewPreparer:
     """Resolve a fresh review target and construct one bounded read-only context."""
 
@@ -1730,19 +1949,59 @@ class ReviewPreparer:
         self.store = store or ReviewInvocationStore(resolver.repo_root)
 
     def prepare(self, task_number: int) -> ReviewContext:
-        state = self.resolver.resolve(task_number)
-        decision = self.eligibility.resolve(state, Phase.REVIEW_PREPARE)
-        if not decision.eligible:
-            raise LckStopError(
-                f"Review Prepare STOP for Task #{task_number}: "
-                + "; ".join(decision.reasons)
-            )
-        task_contract = _live_task_contract(self.resolver, task_number)
-        identity = _review_identity(self.resolver, state, task_contract)
-        self.checks_gate.run(task_number)
-        review_root = self.workspace.create(task_number, identity.head_sha)
+        invocation = self.store.begin_review_prepare(task_number)
+        review_root: Path | None = None
+
+        def mark(state: str, **fields: Any) -> None:
+            payload: dict[str, Any] = {
+                "schema_version": LCK_SCHEMA_VERSION,
+                "kind": "review-prepare-in-flight",
+                "operation_id": invocation.operation_id,
+                "task_number": task_number,
+                "pid": os.getpid(),
+                "state": state,
+                "review_root": str(review_root) if review_root else None,
+                "authority": "operation-local in-flight protection only",
+            }
+            payload.update(fields)
+            invocation.update(payload)
+
         try:
-            validation = self.validation.run(review_root, identity.base_sha)
+            recovered = invocation.recovered
+            if recovered is not None:
+                previous_root = recovered.get("review_root")
+                if previous_root is not None:
+                    if not isinstance(previous_root, str) or not previous_root:
+                        raise LckStopError(
+                            "stale Review Prepare has an invalid isolated worktree path"
+                        )
+                    previous_path = Path(previous_root)
+                    if previous_path.exists():
+                        self.workspace.remove(previous_path)
+            mark("resolving-live-state")
+            state = self.resolver.resolve(task_number)
+            decision = self.eligibility.resolve(state, Phase.REVIEW_PREPARE)
+            if not decision.eligible:
+                raise LckStopError(
+                    f"Review Prepare STOP for Task #{task_number}: "
+                    + "; ".join(decision.reasons)
+                )
+            task_contract = _live_task_contract(self.resolver, task_number)
+            identity = _review_identity(self.resolver, state, task_contract)
+            mark("checking-current-pr", identity=identity.to_dict())
+            self.checks_gate.run(task_number)
+            review_root = self.workspace.create(task_number, identity.head_sha)
+            mark("formal-validation", identity=identity.to_dict())
+            validation = self.validation.run(
+                review_root, identity.base_sha, identity.head_sha
+            )
+            mark(
+                "validation-persisted",
+                identity=identity.to_dict(),
+                validation=validation,
+            )
+            if validation.get("status") != "pass":
+                raise LckStopError(_review_validation_failure(validation))
             final_state = self.resolver.resolve(task_number)
             final_contract = _live_task_contract(self.resolver, task_number)
             final_decision = self.eligibility.resolve(final_state, Phase.REVIEW_PREPARE)
@@ -1756,36 +2015,51 @@ class ReviewPreparer:
             )
             _assert_review_applicable(identity, final_identity)
             final_checks = self.checks_gate.run(task_number)
+            mark(
+                "sealing-review-context",
+                identity=identity.to_dict(),
+                validation=validation,
+                checks=final_checks,
+            )
             self.workspace.seal_for_review(review_root, identity.head_sha)
-        except BaseException:
-            self.workspace.remove(review_root)
-            raise
-
-        review_id = self.store.new_id()
-        guard = {
-            "schema_version": LCK_SCHEMA_VERSION,
-            "kind": "review-invocation-guard",
-            "review_id": review_id,
-            "task_number": task_number,
-            "identity": identity.to_dict(),
-            "review_root": str(review_root),
-            "validation": validation,
-            "checks": final_checks,
-            "authority": "ephemeral applicability guard only",
-        }
-        try:
+            review_id = self.store.new_id()
+            guard = {
+                "schema_version": LCK_SCHEMA_VERSION,
+                "kind": "review-invocation-guard",
+                "review_id": review_id,
+                "task_number": task_number,
+                "identity": identity.to_dict(),
+                "review_root": str(review_root),
+                "validation": validation,
+                "checks": final_checks,
+                "authority": "ephemeral applicability guard only",
+            }
             self.store.write_guard(review_id, guard)
-        except BaseException:
-            self.workspace.remove(review_root)
+            context = ReviewContext(
+                review_id=review_id,
+                task_contract=task_contract,
+                identity=identity,
+                checks=final_checks,
+                validation=validation,
+                review_root=review_root,
+            )
+        except BaseException as exc:
+            cleanup_error: BaseException | None = None
+            try:
+                mark("failed", error=safe_text(str(exc), limit=1200))
+            except BaseException:
+                pass
+            if review_root is not None:
+                try:
+                    self.workspace.remove(review_root)
+                except BaseException as remove_exc:
+                    cleanup_error = remove_exc
+            if cleanup_error is not None:
+                raise cleanup_error from exc
+            invocation.finish()
             raise
-        return ReviewContext(
-            review_id=review_id,
-            task_contract=task_contract,
-            identity=identity,
-            checks=final_checks,
-            validation=validation,
-            review_root=review_root,
-        )
+        invocation.finish()
+        return context
 
 
 @dataclass(frozen=True)

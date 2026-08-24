@@ -1032,7 +1032,7 @@ class FakeReviewChecks:
 
 
 class FakeReviewValidation:
-    def run(self, _root: Path, _base: str) -> dict[str, Any]:
+    def run(self, _root: Path, _base: str, _head: str) -> dict[str, Any]:
         return {"status": "pass", "phase": "review"}
 
 
@@ -1092,10 +1092,10 @@ def test_review_prepare_rechecks_eligibility_after_validation(
     monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
 
     class DraftingValidation(FakeReviewValidation):
-        def run(self, _root: Path, _base: str) -> dict[str, Any]:
+        def run(self, _root: Path, _base: str, _head: str) -> dict[str, Any]:
             assert state.open_pr is not None
             state.open_pr["isDraft"] = True
-            return super().run(_root, _base)
+            return super().run(_root, _base, _head)
 
     workspace = FakeReviewWorkspace(tmp_path / "review-root")
     with pytest.raises(lck.LckStopError, match="post-validation STOP"):
@@ -1578,13 +1578,143 @@ def test_review_validation_artifacts_are_preserved_outside_review_worktree(
 
     resolver = cast(Any, StaticResolver(repo_root, _review_state()))
     resolver.runner = ValidationRunner()
-    validation = lck.ReviewValidationGate(resolver).run(review_root, SHA)
+    validation = lck.ReviewValidationGate(resolver).run(review_root, SHA, SHA)
 
     durable_output = repo_root / validation["output_dir"]
     durable_log = repo_root / validation["commands"][0]["log_path"]
     assert validation["output_dir"].startswith(".agents/validation.local/lck-review-")
+    assert validation["evidence_path"] == validation["output_dir"]
+    assert validation["validated_base_sha"] == SHA
+    assert validation["validated_head_sha"] == SHA
     assert durable_output.is_dir()
     assert durable_log.read_text(encoding="utf-8") == "pass\n"
+    evidence_file = repo_root / validation["evidence_file"]
+    evidence = json.loads(evidence_file.read_text(encoding="utf-8"))
+    assert evidence["validated_base_sha"] == SHA
+    assert evidence["commands"][0]["status"] == "pass"
+
+
+def test_review_validation_failure_is_persisted_before_prepare_stops(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    review_root = tmp_path / "review-root"
+    tool = review_root / "tools" / "agent_workflow" / "workflow_validation.py"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("# validation stub\n", encoding="utf-8")
+    output_dir = review_root / ".agents" / "validation.local" / "run"
+    output_dir.mkdir(parents=True)
+    (output_dir / "ruff-check.log").write_text("format mismatch\n", encoding="utf-8")
+
+    class ValidationRunner:
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            payload = {
+                "status": "fail",
+                "output_dir": ".agents/validation.local/run",
+                "commands": [
+                    {
+                        "command_id": "ruff-check",
+                        "status": "fail",
+                        "exit_code": 1,
+                        "diagnostic": "format mismatch",
+                        "log_path": ".agents/validation.local/run/ruff-check.log",
+                    }
+                ],
+            }
+            return CommandResult(
+                command_id=command_id,
+                argv=tuple(str(item) for item in argv),
+                returncode=1,
+                stdout=json.dumps(payload),
+                stderr="",
+            )
+
+    resolver = cast(Any, StaticResolver(repo_root, _review_state()))
+    resolver.runner = ValidationRunner()
+    validation = lck.ReviewValidationGate(resolver).run(review_root, SHA, "b" * 40)
+
+    assert validation["status"] == "fail"
+    assert validation["validated_base_sha"] == SHA
+    assert validation["validated_head_sha"] == "b" * 40
+    assert validation["commands"][0]["command_id"] == "ruff-check"
+    assert validation["commands"][0]["exit_code"] == 1
+    evidence = repo_root / validation["evidence_path"]
+    assert evidence.is_dir()
+    assert (evidence / "ruff-check.log").read_text(encoding="utf-8") == (
+        "format mismatch\n"
+    )
+    stored = json.loads(
+        (repo_root / validation["evidence_file"]).read_text(encoding="utf-8")
+    )
+    assert stored["commands"][0]["command_id"] == "ruff-check"
+    assert stored["commands"][0]["exit_code"] == 1
+    assert stored["commands"][0]["diagnostic"] == "format mismatch"
+    assert stored["validated_head_sha"] == "b" * 40
+
+
+def test_review_prepare_claims_operation_before_validation_and_has_no_review_id_on_fail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _review_state()
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    identity = _review_identity_value()
+    store = lck.ReviewInvocationStore(tmp_path)
+    monkeypatch.setattr(
+        lck,
+        "_live_task_contract",
+        lambda *_args: {"number": 159, "body_sha256": "d" * 64},
+    )
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
+
+    class FailingValidation:
+        def run(self, _root: Path, base: str, head: str) -> dict[str, Any]:
+            assert store.review_prepare_inflight_path(159).is_file()
+            return {
+                "status": "fail",
+                "validated_base_sha": base,
+                "validated_head_sha": head,
+                "commands": [
+                    {
+                        "command_id": "ruff-check",
+                        "status": "fail",
+                        "exit_code": 1,
+                        "diagnostic": "format mismatch",
+                    }
+                ],
+                "evidence_path": ".agents/validation.local/lck-review-failure",
+            }
+
+    workspace = FakeReviewWorkspace(tmp_path / "review-root")
+    with pytest.raises(
+        lck.LckStopError,
+        match="failed command ruff-check.*evidence",
+    ) as exc_info:
+        lck.ReviewPreparer(
+            resolver,
+            validation=cast(Any, FailingValidation()),
+            checks_gate=cast(Any, FakeReviewChecks()),
+            workspace=cast(Any, workspace),
+            store=store,
+        ).prepare(159)
+
+    assert "validated base" in str(exc_info.value)
+    assert workspace.removed == [tmp_path / "review-root"]
+    assert not (store.root / "review-invocations").exists()
+    assert not store.review_prepare_inflight_path(159).exists()
+
+
+def test_review_prepare_inflight_guard_blocks_second_operation(tmp_path: Path) -> None:
+    store = lck.ReviewInvocationStore(tmp_path)
+    first = store.begin_review_prepare(159)
+    try:
+        with pytest.raises(lck.LckStopError, match="already in flight"):
+            store.begin_review_prepare(159)
+    finally:
+        first.finish()
+
+    assert not store.review_prepare_inflight_path(159).exists()
 
 
 def test_remediation_prepare_uses_live_head_not_review_record_identity(

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 AGENT_WORKFLOW = str(Path(__file__).parents[2] / "tools" / "agent_workflow")
+ROOT = Path(__file__).parents[2]
 if AGENT_WORKFLOW not in sys.path:
     sys.path.insert(0, AGENT_WORKFLOW)
 
@@ -15,6 +18,29 @@ from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
     build_workflow_env,
     command_warning,
 )
+
+
+def test_project_uv_config_redirects_canonical_launcher_cache() -> None:
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv is not installed")
+
+    env = os.environ.copy()
+    env.pop("UV_CACHE_DIR", None)
+    result = subprocess.run(
+        [uv, "cache", "dir"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        Path(result.stdout.strip()).resolve()
+        == (ROOT / ".workflow.local" / "uv-cache").resolve()
+    )
 
 
 def test_build_workflow_env_defaults_to_repo_local_uv_cache(

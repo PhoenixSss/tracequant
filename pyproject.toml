@@ -13,6 +13,7 @@ dependencies = []
 [dependency-groups]
 dev = [
     "mypy",
+    "pyyaml",
     "pytest",
     "ruff",
 ]

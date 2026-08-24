@@ -55,9 +55,13 @@ LCK 在本次 invocation 开始时从 live Git / GitHub 重新解析：
 - current applicable checks；
 - current formal Review validation state。
 
-`review prepare` 返回 `review_id`、live review target、Task Contract、validation、
-checks 和 isolated `review_root`。这些机械事实来自本次 LCK live acquisition，
-不是 Delivery handoff。
+`review prepare` 在开始 live resolution、worktree 和 formal validation 前建立一个
+Task-local operation marker；它只用于阻止同一 Task 的重复 in-flight Prepare，不是
+`review_id` 或跨阶段 authority。成功时才返回 `review_id`、live review target、Task
+Contract、validation、checks 和 isolated `review_root`。Formal validation FAIL 会先
+把 command-level result、validated base/head 和 evidence path 持久化，再 fail closed，
+不产生 semantic Review `review_id`。异常退出留下的 operation marker 可由后续
+Prepare 在确认 owner 已退出后回收其 LCK-owned worktree。
 
 ## 4. Fresh semantic context and read-only workspace
 
