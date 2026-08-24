@@ -1244,7 +1244,7 @@ def test_review_prepare_builds_context_only_from_live_resolution(
     state = _review_state()
     resolver = cast(Any, StaticResolver(tmp_path, state))
     identity = _review_identity_value()
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
     workspace = FakeReviewWorkspace(tmp_path / "review-root")
     checks = FakeReviewChecks()
     store = lck.ReviewInvocationStore(tmp_path)
@@ -1280,7 +1280,7 @@ def test_review_prepare_freezes_authority_before_validation(
     state = _review_state()
     resolver = cast(Any, StaticResolver(tmp_path, state))
     identity = _review_identity_value()
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
 
     class DraftingValidation(FakeReviewValidation):
         def run(self, _root: Path, _base: str, _head: str) -> dict[str, Any]:
@@ -1307,7 +1307,7 @@ def test_review_complete_acquires_one_fresh_snapshot_and_accepts_unchanged_targe
 ) -> None:
     identity = _review_identity_value()
     resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
     store = lck.ReviewInvocationStore(tmp_path)
     review_id = store.new_id()
     review_root = tmp_path / "review-root"
@@ -1342,7 +1342,7 @@ def test_review_fail_returns_stop_required_without_starting_remediation(
 ) -> None:
     identity = _review_identity_value()
     resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
     store = lck.ReviewInvocationStore(tmp_path)
     review_id = store.new_id()
     review_root = tmp_path / "review-root"
@@ -1372,7 +1372,7 @@ def test_review_pass_stops_at_merge_preflight_boundary(
 ) -> None:
     identity = _review_identity_value()
     resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
     store = lck.ReviewInvocationStore(tmp_path)
     review_id = store.new_id()
     review_root = tmp_path / "review-root"
@@ -1445,7 +1445,9 @@ def test_review_complete_rejects_stale_target_from_one_fresh_snapshot(
 ) -> None:
     reviewed = _review_identity_value()
     resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: current_identity)
+    monkeypatch.setattr(
+        lck, "_review_identity", lambda *_args, **_kwargs: current_identity
+    )
     store = lck.ReviewInvocationStore(tmp_path)
     review_id = store.new_id()
     review_root = tmp_path / "review-root"
@@ -1495,7 +1497,7 @@ def test_review_complete_revalidates_current_checks(
 ) -> None:
     identity = _review_identity_value()
     resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
     store = lck.ReviewInvocationStore(tmp_path)
     review_id = store.new_id()
     review_root = tmp_path / "review-root"
@@ -1566,6 +1568,107 @@ def test_review_workspace_seal_preserves_clean_status_and_rejects_mutation(
         with pytest.raises(lck.LckStopError, match="changed the isolated clone"):
             manager.assert_ready_for_completion(root, SHA)
         manager._make_removable(root)
+
+
+def test_review_prepare_materializes_missing_pr_head_before_deriving_diff(
+    tmp_path: Path,
+) -> None:
+    """A fresh remote PR head need not already exist in the source object store."""
+    if shutil.which("git") is None:
+        pytest.skip("git is required for Review clone integration test")
+
+    remote = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "init", "--bare", str(remote)],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    producer = tmp_path / "producer"
+    subprocess.run(
+        ["git", "clone", str(remote), str(producer)],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    def git(
+        cwd: Path, *args: str, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            check=check,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+    git(producer, "config", "user.name", "TraceQuant Test")
+    git(producer, "config", "user.email", "tracequant-test@example.invalid")
+    (producer / "tracked.py").write_text("base\n", encoding="utf-8")
+    git(producer, "add", "tracked.py")
+    git(producer, "commit", "-m", "base")
+    git(producer, "branch", "-M", "main")
+    git(producer, "push", "origin", "main")
+    base_sha = git(producer, "rev-parse", "HEAD").stdout.strip()
+
+    source = tmp_path / "source"
+    subprocess.run(
+        ["git", "clone", "--branch", "main", str(remote), str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    git(producer, "checkout", "-b", "task/159-lck-core-live-state-resolution")
+    (producer / "tracked.py").write_text("base\nhead\n", encoding="utf-8")
+    git(producer, "add", "tracked.py")
+    git(producer, "commit", "-m", "head")
+    git(producer, "push", "origin", "HEAD")
+    head_sha = git(producer, "rev-parse", "HEAD").stdout.strip()
+
+    missing = git(source, "cat-file", "-e", f"{head_sha}^{{commit}}", check=False)
+    assert missing.returncode != 0
+
+    state = _review_state(head=head_sha, base=base_sha)
+    resolver = cast(Any, StaticResolver(source, state))
+    resolver.runner = CommandRunner(source)
+    store = lck.ReviewInvocationStore(source)
+    workspace = lck.ReviewWorkspaceManager(resolver)
+
+    context = lck.ReviewPreparer(
+        resolver,
+        validation=cast(Any, FakeReviewValidation()),
+        checks_gate=cast(Any, FakeReviewChecks()),
+        workspace=workspace,
+        store=store,
+    ).prepare(159)
+
+    try:
+        assert context.identity.base_sha == base_sha
+        assert context.identity.head_sha == head_sha
+        assert context.identity.merge_base_sha == base_sha
+        assert context.identity.changed_files == ("tracked.py",)
+        assert (
+            git(
+                source, "cat-file", "-e", f"{head_sha}^{{commit}}", check=False
+            ).returncode
+            != 0
+        )
+        assert (
+            git(
+                context.review_root, "cat-file", "-e", f"{head_sha}^{{commit}}"
+            ).returncode
+            == 0
+        )
+    finally:
+        workspace.remove(context.review_root)
+        store.delete_guard(context.review_id)
+        store.release_review_prepare(159, context.review_id)
 
 
 def test_review_workspace_uses_standalone_clone_without_source_git_mutation(
@@ -1800,7 +1903,7 @@ def test_review_prepare_claims_operation_before_validation_and_has_no_review_id_
     resolver = cast(Any, StaticResolver(tmp_path, state))
     identity = _review_identity_value()
     store = lck.ReviewInvocationStore(tmp_path)
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
 
     class FailingValidation:
         def run(self, _root: Path, base: str, head: str) -> dict[str, Any]:
@@ -1913,6 +2016,10 @@ def test_remediation_prepare_uses_live_head_not_review_record_identity(
         "operation snapshot acquired at Remediation entry"
         in context.to_dict()["mechanical_authority"]
     )
+    assert (
+        "do not block Remediation Complete" in context.to_dict()["acceptance_boundary"]
+    )
+    assert "must not be fabricated" in context.to_dict()["acceptance_boundary"]
 
 
 def test_remediation_complete_requires_actual_repair_changes(
@@ -2029,7 +2136,7 @@ def test_accepted_fresh_review_releases_post_remediation_boundary(
     findings = tmp_path / "findings-new.md"
     findings.write_text("[F2][Medium] New review finding.\n", encoding="utf-8")
 
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
     result = lck.ReviewCompleter(
         resolver,
         checks_gate=cast(Any, FakeReviewChecks()),
@@ -2102,6 +2209,10 @@ def test_remediation_complete_can_resume_committed_new_head_and_requires_re_revi
     )
 
     assert result.to_dict()["status"] == "READY_FOR_NEW_REVIEW"
+    assert (
+        "remains pending for the next Independent Review"
+        in result.to_dict()["deferred_review_acceptance"]
+    )
     assert result.to_dict()["automatic_review"] is False
     required = store.read_review_required(159)
     assert required is not None

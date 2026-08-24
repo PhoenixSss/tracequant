@@ -219,9 +219,24 @@ legacy command paths as a fallback.
 ### 2. Semantic repair
 
 Read the returned findings, confirm them against the current implementation, implement
-the smallest complete repair, and add regression coverage. If a finding requires a true
-scope/architecture/product decision, stop at Human Gate rather than silently expanding
-the Task.
+the smallest complete repair, and add regression coverage. Classify each finding by the
+boundary at which its evidence can truthfully exist:
+
+- implementation/config/docs/test defects that can be repaired on the current workspace
+  are Remediation work and must be addressed before completion;
+- a requirement whose evidence can only be produced **after the repaired candidate head
+  exists**, or by a **separate provider / fresh Independent Review invocation**, is a
+  deferred Review-acceptance item. It remains unsatisfied, but it is **not** a Human Gate
+  and **not** a prerequisite for `remediation complete`;
+- genuine scope/architecture/product ambiguity still stops at Human Gate rather than being
+  silently expanded.
+
+Do not fabricate deferred evidence and do not ask the maintainer to provide future-head
+provider/cross-provider receipts before the repaired head exists. If actual repair changes
+are ready, continue to LCK Remediation Complete and report the deferred acceptance item as
+pending for the next fresh Review. If **no repair change exists** and the only remaining
+item is external/future Review evidence, do not manufacture a commit merely to advance the
+lifecycle; stop and obtain that evidence for the unchanged head instead.
 
 The Agent may edit and run targeted development validation. It MUST NOT directly stage
 the final tree, commit, push, create/replace the PR, mutate lifecycle state, or start a
@@ -243,6 +258,13 @@ LCK reuses the Task-2 Delivery effects for Critical Outcome, formal validation, 
 validated-tree commit, remote synchronization, checks, and final local/remote/PR head
 verification. Unlike Initial Delivery, Remediation must reuse existing OPEN PR state; it never
 creates a replacement PR.
+
+`remediation complete` gates the repaired implementation and the mechanics needed to create
+a stable new candidate head. It MUST NOT require provider-attributed implementation receipts,
+fresh cross-provider Review receipts, or other acceptance evidence that can only be
+truthfully produced by a separate session after that new head exists. Those requirements
+remain pending and MUST still block the later Independent Review PASS when the Task requires
+them. `READY_FOR_NEW_REVIEW` means only that the repaired head is ready to be reviewed.
 
 A successful result is:
 

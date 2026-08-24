@@ -95,6 +95,17 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     assert "historical Evidence" in policy
     assert "not a Task lifecycle" in policy
     assert "LCK" in policy
+    assert ".workflow.local/lck/" in policy
+    assert "Independent Review MUST NOT write source" in policy
+    assert ".agents/evidence.local/" in policy
+    assert ".agents/validation.local/" in policy
+
+    command_policy = (ROOT / ".agents/policies/command-execution.md").read_text(
+        encoding="utf-8"
+    )
+    assert "these roots are not interchangeable fallbacks" in command_policy
+    assert "source repository" in command_policy
+    assert ".workflow.local/lck/review-validation/" in command_policy
 
     architecture_delta = (
         ROOT / "docs/workflows/lck-v1-closeout-architecture-delta.md"
@@ -151,3 +162,24 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     )
     assert "frozen historical publication evidence" in archive
     assert "not a current workflow entry point" in archive
+
+
+def test_remediation_candidate_creation_is_not_blocked_by_future_review_evidence() -> (
+    None
+):
+    root = Path(__file__).parents[2]
+    charter = (root / "docs/workflows/LCK-v1-Design-Charter.md").read_text(
+        encoding="utf-8"
+    )
+    delivery_skill = (root / ".agents/skills/task-delivery-runner/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    review_skill = (root / ".agents/skills/task-pr-review-runner/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Acceptance evidence is gated where it can truthfully exist" in charter
+    assert "MUST NOT form a circular precondition" in charter
+    assert "deferred Review-acceptance item" in delivery_skill
+    assert "not** a prerequisite for `remediation complete`" in delivery_skill
+    assert "Review-acceptance evidence gap" in review_skill

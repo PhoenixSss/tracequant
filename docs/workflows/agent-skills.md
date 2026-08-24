@@ -55,14 +55,17 @@ PR #N 已人工合并，请完成 closeout
 .agents/policies/command-execution.md
 ```
 
-本地 artifacts：
+本地 artifacts 按 ownership 分区：
 
 ```text
-.agents/evidence.local/
-.agents/validation.local/
+.agents/evidence.local/      # historical/non-LCK Evidence Runner
+.agents/validation.local/    # ordinary Validation Runner workspace output
+.workflow.local/lck/         # LCK runtime state / preserved Review evidence
 ```
 
-不得提交。
+不得提交。Independent Review 在 source repository 仅写 `.workflow.local/lck/`；
+`.agents/validation.local/` 如被 formal Review validation 使用，只存在于 disposable
+standalone clone 内。
 
 ## Task #88 architecture audit
 
@@ -124,8 +127,10 @@ Issue body (business specification)
   -> Git / GitHub Issues, relationships, Projects, PRs and CI (durable state)
 ```
 
-`.agents/evidence.local/` 与 `.agents/validation.local/` 仅保存 Git-ignored
-supporting evidence；它们不是 durable workflow state 或新的 source of truth。
+`.agents/evidence.local/`、`.agents/validation.local/` 与 `.workflow.local/lck/` 都是
+Git-ignored local artifacts，但 ownership 不同：前两者属于历史 Evidence / ordinary
+Validation Runner，后者属于 LCK runtime 与需要跨 temporary Review clone 生命周期保留的
+Review evidence。它们都不是 Git/GitHub authority 或新的 source of truth。
 
 ## 仓库外 Token 消耗分析边界
 

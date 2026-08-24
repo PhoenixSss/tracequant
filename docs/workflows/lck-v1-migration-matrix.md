@@ -127,7 +127,9 @@ The active Review path is:
 8. `remediation complete` requires actual repair changes, reruns Critical Outcome and
    formal Delivery validation, commits the exact validated tree, synchronizes the Task
    branch, reuses the existing OPEN PR, evaluates current operation checks, and returns
-   `READY_FOR_NEW_REVIEW` followed by STOP.
+   `READY_FOR_NEW_REVIEW` followed by STOP. Evidence that can only be produced by the
+   resulting repaired head or a separate provider/fresh Review remains pending for that
+   later Review acceptance boundary; it does not circularly block Remediation Complete.
 
 This cutover intentionally deletes the former formal dependence on bounded verified fact
 handoff, cross-phase freshness contracts, snapshot-derived current authority, repeated

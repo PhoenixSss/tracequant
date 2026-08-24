@@ -67,7 +67,11 @@ applicable. Delivery conclusions, old Review verdicts, and old remediation ratio
 not evidence.
 
 Findings use Blocking, High, Medium, Low, Nit. Blocking/High/Medium defects or unmet
-Task requirements produce FAIL.
+Task requirements produce FAIL. When the unmet requirement is provider-attributed,
+cross-provider, or otherwise can only be truthfully evidenced by a separate/fresh Review of
+the candidate head, report it explicitly as a **Review-acceptance evidence gap**. Do not
+word such a finding as a requirement to block the earlier Delivery/Remediation completion
+that creates the head being reviewed, and never suggest fabricating the receipt.
 
 ## 3. Complete Review with a fresh applicability snapshot
 

@@ -89,17 +89,28 @@ cleanup; no self-review artifact can authorize Delivery or Independent Review.
 
 ## Local artifacts
 
-Tools may write only below the exact Git-ignored roots:
+Mutable artifact roots have distinct owners and MUST NOT be treated as interchangeable
+fallback locations:
 
 ```text
-.agents/evidence.local/
-.agents/validation.local/
+.agents/evidence.local/            historical/non-LCK Evidence Runner output
+.agents/validation.local/          Validation Runner output in the workspace being validated
+.workflow.local/lck/               LCK runtime state and durable LCK Review evidence
 ```
 
-Never stage or commit these files. Stored output must be bounded and must exclude
-credentials, auth headers, cookies, private keys, complete environment dumps,
-private reasoning, transcripts, unbounded source/diffs, and machine-sensitive
-absolute paths.
+All repository-local roots above must be Git ignored and MUST never be staged or
+committed. The ownership boundary for Independent Review is stricter: the source
+repository writes Review runtime state and preserved evidence only below
+`.workflow.local/lck/`. Formal Review validation runs inside the operation-owned
+standalone clone and may emit its ordinary `.agents/validation.local/` result **inside
+that clone**; before the clone is sealed/deleted, LCK copies only the bounded evidence
+that must survive to `.workflow.local/lck/review-validation/` in the source repository.
+Independent Review MUST NOT write source `.agents/evidence.local/` or source
+`.agents/validation.local/`.
+
+Stored output must be bounded and must exclude credentials, auth headers, cookies,
+private keys, complete environment dumps, private reasoning, transcripts, unbounded
+source/diffs, and machine-sensitive absolute paths.
 
 ## Historical evidence contract
 
@@ -150,7 +161,10 @@ is invocation evidence, not a cross-phase snapshot. `workflow-closeout` addition
 requires clean local `main == origin/main`.
 
 Success stdout is a compact digest. Full redacted results and bounded failure
-diagnostics remain in the ignored validation directory.
+diagnostics remain in the artifact root owned by that execution context: ordinary
+Validation Runner invocations use `.agents/validation.local/`, while formal Review
+results that must outlive the temporary clone are preserved under
+`.workflow.local/lck/review-validation/`.
 
 ## LCK admission and Recovery boundary
 

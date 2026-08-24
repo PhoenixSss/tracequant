@@ -98,6 +98,9 @@ def test_delivery_runner_uses_lck_for_initial_delivery_and_explicit_remediation(
     assert "mechanical facts from the Review" in text
     assert "reuse existing OPEN PR" in text
     assert "READY_FOR_NEW_REVIEW" in text
+    assert "deferred Review-acceptance item" in text
+    assert "not** a prerequisite for `remediation complete`" in text
+    assert "provider-attributed implementation receipts" in text
     assert "MUST NOT start\nIndependent Review automatically" in text
 
 

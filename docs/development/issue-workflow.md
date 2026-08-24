@@ -195,6 +195,10 @@ Issue comments（Retrieval v2 comments default-off 仍适用）。
   LCK live reacquire。
 - Implementation Agent 修复后由 LCK 完成 validation / commit / push / existing
   PR reuse，产生 new head，并在 `READY_FOR_NEW_REVIEW` 再次 STOP。
+- 只能在 repaired head 形成后、独立 provider 会话或 fresh Review 中真实产生的验收
+  evidence（例如 Task 显式要求的 provider-attributed / cross-provider receipts）不得作为
+  `remediation complete` 的循环前置条件；它们保持 pending，并在后续 Independent Review
+  acceptance 中继续 fail-closed。`READY_FOR_NEW_REVIEW` 不表示这些 evidence 已满足。
 - successful remediation 设置 `fresh-review-required` negative boundary；在新的 Review
   verdict 被接受前不得再次 remediation。该 boundary 不携带 target authorization。
 - 任何新 commit 都需要 **fresh independent re-review**；不得复用旧 verdict。

@@ -732,6 +732,19 @@ The final LCK migration MUST reduce or contain control-plane complexity.
 
 Repeated nested resolution, hidden live queries, full-state refresh loops, and polling-based eligibility logic are control-plane complexity and SHOULD be removed.
 
+### P21 — Acceptance evidence is gated where it can truthfully exist
+
+A lifecycle operation MUST NOT require evidence that can only be produced by a later
+operation, by the candidate identity that the current operation is responsible for creating,
+or by a separate provider/fresh semantic invocation. Such evidence remains explicitly
+unsatisfied and gates the later acceptance boundary where it can truthfully be evaluated.
+
+In particular, Delivery/Remediation completion may create the stable candidate head needed
+for provider-attributed or cross-provider Review evidence. Those later Review requirements
+MUST NOT form a circular precondition that prevents the candidate head from being committed
+and pushed. Conversely, `READY_FOR_REVIEW` / `READY_FOR_NEW_REVIEW` MUST NOT imply that
+those later acceptance requirements are satisfied.
+
 ---
 
 ## 12. Capability Model
@@ -1023,18 +1036,25 @@ After the `ReviewPrepareSnapshot` is frozen:
 - no authoritative Git/GitHub fact is reacquired inside Review Prepare;
 - no downstream Review Prepare helper may call the full live-state resolver;
 - no checks polling or phase-internal refresh loop is allowed;
-- the exact Task contract, PR, base, head, and effective diff being handed to the reviewer remain immutable inputs.
+- the exact Task contract, PR, base, and head remain immutable authoritative inputs.
+
+The effective diff is a **derived repository fact**, not an additional live authority query.
+Review Prepare MUST NOT require the source repository to contain the current PR head object
+in order to acquire the authoritative snapshot. After the exact base/head identities are
+frozen, LCK materializes those commits only inside the standalone Review clone and derives
+merge-base, effective-diff hash, and changed-file inventory there.
 
 LCK then:
 
 1. allocates an operation-owned path in the system temporary directory;
 2. creates a standalone local clone of the source repository without registering a source Git worktree;
 3. gives the clone independent Git object storage (no source-object hardlinks), restores `origin` to the real repository remote, and materializes only an exact required base/head commit if the local clone does not already contain it;
-4. checks out the exact snapshot head in detached mode and verifies a clean workspace;
-5. runs deterministic applicable validation against that immutable target;
-6. persists validation/check evidence and exact review identity;
-7. seals the entire temporary clone read-only for the semantic Review Agent;
-8. returns `READY_FOR_SEMANTIC_REVIEW`.
+4. derives merge-base, effective diff identity, and changed-file inventory inside the clone from the frozen base/head identities;
+5. checks out the exact snapshot head in detached mode and verifies a clean workspace;
+6. runs deterministic applicable validation against that immutable target;
+7. persists validation/check evidence and exact review identity;
+8. seals the entire temporary clone read-only for the semantic Review Agent;
+9. returns `READY_FOR_SEMANTIC_REVIEW`.
 
 The source tracked tree and source Git metadata MUST remain read-only throughout Independent Review; LCK MAY write only ignored operation/evidence state such as `.workflow.local/lck/`. Review Prepare and cleanup MUST NOT use `git worktree add/remove/prune` or require writes to the source repository's `.git/worktrees`. Formal Review validation runs inside the temporary clone and any evidence that must survive clone deletion is copied only into the ignored LCK local evidence root. The temporary clone exists only from successful Review Prepare workspace creation through Review Complete. After Review Complete durably records PASS, FAIL, or STALE, LCK deletes the owned clone directly. If Prepare fails after clone creation, it records failure evidence and removes the clone. If the process is interrupted, the operation marker identifies the exact owned temporary path for later cleanup; no source Git registration recovery is required.
 
@@ -1069,7 +1089,9 @@ current effective diff != reviewed effective diff
 → REVIEW_STALE_DIFF
 ```
 
-Current applicable checks MUST also still satisfy the Review completion gate.
+Current applicable checks MUST also still satisfy the Review completion gate. If PR/base/head/Task
+identity is unchanged, Review Complete MAY re-derive the effective diff from the still-owned sealed
+Review clone; it MUST NOT require the source repository to materialize the reviewed PR commits.
 
 If any stale condition exists, the semantic verdict MAY remain historical evidence for the old target, but it MUST NOT become the current accepted Review PASS/FAIL, MUST NOT clear the requirement for a fresh Review, and MUST NOT authorize Remediation or Merge. A new Review Prepare is required for the new target.
 
@@ -1137,6 +1159,12 @@ LCK then:
 - stops at the next Independent Review boundary.
 
 LCK MUST NOT perform a final full-state refresh after these effects. Unexpected effect postconditions cause STOP; the next invocation reacquires current authority.
+
+Remediation Complete gates only facts and evidence that can truthfully exist at the
+Remediation Complete boundary. Requirements that depend on the newly created repaired head,
+a separate provider, or a fresh Independent Review remain pending Review-acceptance
+requirements and MUST NOT block creation of that head. They MUST still be enforced by the
+subsequent Review/merge acceptance path when the Task requires them.
 
 Remediation MUST NOT automatically trigger Review.
 

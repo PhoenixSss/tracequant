@@ -1198,6 +1198,26 @@ class FormalValidationGate:
 
 
 @dataclass(frozen=True)
+class ReviewTargetRefs:
+    """Authoritative Review target facts acquired before repository materialization."""
+
+    task_number: int
+    pr_number: int
+    base_sha: str
+    head_sha: str
+    task_body_sha256: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "task_number": self.task_number,
+            "pr_number": self.pr_number,
+            "base_sha": self.base_sha,
+            "head_sha": self.head_sha,
+            "task_body_sha256": self.task_body_sha256,
+        }
+
+
+@dataclass(frozen=True)
 class ReviewIdentity:
     task_number: int
     pr_number: int
@@ -1221,12 +1241,11 @@ class ReviewIdentity:
         }
 
 
-def _review_identity(
-    resolver: LiveStateResolver,
+def _review_target_refs(
     state: LiveState,
     task_contract: Mapping[str, Any],
-) -> ReviewIdentity:
-    """Bind one Review invocation to the live PR object without cross-phase input."""
+) -> ReviewTargetRefs:
+    """Extract immutable Git/GitHub identities without requiring local Git objects."""
     pr = state.open_pr
     if not isinstance(pr, Mapping):
         raise LckStopError("Review target has no current OPEN PR")
@@ -1240,10 +1259,34 @@ def _review_identity(
         raise LckStopError("Review target base/head identity is unavailable")
     if not isinstance(task_body_sha256, str) or not task_body_sha256:
         raise LckStopError("Review target Task Contract identity is unavailable")
+    return ReviewTargetRefs(
+        task_number=state.task_number,
+        pr_number=pr_number,
+        base_sha=str(base_sha),
+        head_sha=str(head_sha),
+        task_body_sha256=task_body_sha256,
+    )
 
+
+def _review_identity(
+    resolver: LiveStateResolver,
+    state: LiveState,
+    task_contract: Mapping[str, Any],
+    *,
+    repo_root: Path,
+) -> ReviewIdentity:
+    """Derive the effective diff from frozen refs inside a materialized repository.
+
+    GitHub supplies the authoritative PR/base/head/Task identities.  Merge-base,
+    effective diff, and changed-file inventory are derived facts and therefore
+    must be computed only after those exact commits exist in the isolated Review
+    clone.  The source repository is not required to contain the current PR head.
+    """
+    target = _review_target_refs(state, task_contract)
     merge_base = resolver.runner.run(
-        ["git", "merge-base", str(base_sha), str(head_sha)],
+        ["git", "merge-base", target.base_sha, target.head_sha],
         command_id="lck-review-merge-base",
+        cwd=repo_root,
     )
     if merge_base.returncode != 0 or not is_sha(merge_base.stdout.strip()):
         raise LckStopError("Review effective-diff merge base is unavailable")
@@ -1255,9 +1298,10 @@ def _review_identity(
             "--full-index",
             "--no-ext-diff",
             "--no-textconv",
-            f"{base_sha}...{head_sha}",
+            f"{target.base_sha}...{target.head_sha}",
         ],
         command_id="lck-review-effective-diff",
+        cwd=repo_root,
     )
     if diff.returncode != 0:
         raise LckStopError(
@@ -1265,18 +1309,19 @@ def _review_identity(
             + (diff.stderr.strip() or f"exit {diff.returncode}")
         )
     names = resolver.runner.run(
-        ["git", "diff", "--name-only", f"{base_sha}...{head_sha}"],
+        ["git", "diff", "--name-only", f"{target.base_sha}...{target.head_sha}"],
         command_id="lck-review-changed-files",
+        cwd=repo_root,
     )
     if names.returncode != 0:
         raise LckStopError("Review changed-file inventory is unavailable")
     changed_files = tuple(line for line in names.stdout.splitlines() if line)
     return ReviewIdentity(
-        task_number=state.task_number,
-        pr_number=pr_number,
-        base_sha=str(base_sha),
-        head_sha=str(head_sha),
-        task_body_sha256=task_body_sha256,
+        task_number=target.task_number,
+        pr_number=target.pr_number,
+        base_sha=target.base_sha,
+        head_sha=target.head_sha,
+        task_body_sha256=target.task_body_sha256,
         merge_base_sha=merge_base.stdout.strip(),
         effective_diff_sha256=hashlib.sha256(
             diff.stdout.encode("utf-8", errors="replace")
@@ -2307,20 +2352,31 @@ class ReviewPreparer:
                     + "; ".join(decision.reasons)
                 )
             task_contract = _task_contract_from_state(state)
-            identity = _review_identity(self.resolver, state, task_contract)
-            mark("checking-current-pr", identity=identity.to_dict())
+            target = _review_target_refs(state, task_contract)
+            mark("checking-current-pr", target=target.to_dict())
             checks = self.checks_gate.evaluate(snapshot)
             review_root = self.workspace.path_for(task_number, invocation.operation_id)
             mark(
                 "clone-reserved",
-                identity=identity.to_dict(),
+                target=target.to_dict(),
                 review_root=str(review_root),
             )
             self.workspace.create(
-                task_number, identity.base_sha, identity.head_sha, review_root
+                task_number, target.base_sha, target.head_sha, review_root
             )
             mark(
                 "clone-created",
+                target=target.to_dict(),
+                review_root=str(review_root),
+            )
+            identity = _review_identity(
+                self.resolver,
+                state,
+                task_contract,
+                repo_root=review_root,
+            )
+            mark(
+                "review-target-derived",
                 identity=identity.to_dict(),
                 review_root=str(review_root),
             )
@@ -2530,17 +2586,17 @@ class ReviewCompleter:
                 state,
                 current_contract,
             )
+            self.workspace.assert_ready_for_completion(
+                review_root, reviewed_identity.head_sha
+            )
             current_identity = _review_identity(
                 self.resolver,
                 state,
                 current_contract,
+                repo_root=review_root,
             )
             _assert_review_applicable(reviewed_identity, current_identity)
             completion_checks = self.checks_gate.evaluate(completion_snapshot)
-
-            self.workspace.assert_ready_for_completion(
-                review_root, reviewed_identity.head_sha
-            )
             record = {
                 "schema_version": LCK_SCHEMA_VERSION,
                 "kind": "independent-review-record",
@@ -3455,18 +3511,18 @@ class ReviewPassGate:
                 state,
                 current_contract,
             )
-            current = _review_identity(
-                self.resolver,
-                state,
-                current_contract,
-            )
-            _assert_review_applicable(recorded, current)
         except ReviewStaleError as exc:
             raise LckStopError(f"Review PASS is stale: {exc}") from exc
+
+        # Git commit objects are content-addressed. Once current PR/base/head and
+        # Task Contract identity still match the accepted Review receipt, the
+        # recorded merge-base/effective-diff identity remains mechanically bound
+        # to those same commits. Merge Preflight therefore needs no source-repo
+        # object materialization or duplicate local diff probe.
         return {
             "status": "pass",
             "review_id": review_id,
-            "identity": current.to_dict(),
+            "identity": recorded.to_dict(),
             "recorded_identity": recorded.to_dict(),
         }
 
@@ -4507,6 +4563,12 @@ class RemediationContext:
             "mechanical_authority": (
                 "operation snapshot acquired at Remediation entry; Review record supplies findings only"
             ),
+            "acceptance_boundary": (
+                "Requirements whose evidence can only be truthfully produced after the repaired "
+                "candidate head exists, or by a separate provider/fresh Review invocation, do not "
+                "block Remediation Complete. They remain unsatisfied Review-acceptance requirements "
+                "and must not be fabricated or treated as satisfied by remediation."
+            ),
         }
 
 
@@ -4669,6 +4731,11 @@ class RemediationCompletionResult:
             "operation_snapshot": payload["operation_snapshot"],
             "human_boundary": (
                 "STOP — a new Independent Review must be started explicitly in a fresh invocation"
+            ),
+            "deferred_review_acceptance": (
+                "Any requirement whose evidence depends on this new head or on a separate provider/"
+                "fresh Review remains pending for the next Independent Review. READY_FOR_NEW_REVIEW "
+                "does not claim that such evidence is satisfied."
             ),
             "automatic_review": False,
         }

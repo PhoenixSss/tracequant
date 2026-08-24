@@ -92,15 +92,30 @@ prevents read-only chmod operations in the clone from changing source Git object
 permissions.
 
 The source tracked tree and source Git metadata are observation-only during
-Independent Review. Validation artifacts that must outlive the clone are copied
-into ignored `.workflow.local/lck/review-validation/`; no Review path writes
-`.agents/validation.local` in the source repository. Review Complete removes the
-standalone clone directly after durable PASS / FAIL / STALE handling. Interrupted
-Prepare cleanup owns only the marker-recorded temporary path and does not call
-`git worktree remove` or `git worktree prune`. The real-Git integration regression
-verifies detached exact-head checkout, clean status, real-origin restoration,
-independent Git objects, unchanged source HEAD/status/worktree registrations and
-source Git file modes, plus direct temporary-directory cleanup.
+Independent Review. Authoritative PR/base/head/Task facts are frozen before clone
+creation, but merge-base, effective diff, and changed-file inventory are derived only
+after the exact base/head objects have been materialized inside the standalone clone.
+The source repository therefore does not need to contain a freshly pushed PR head
+object and never runs the Review `git merge-base/diff` probe before clone creation.
+Review Complete re-derives effective-diff identity from the still-owned sealed clone
+after fresh PR/base/head/Task facts match. Merge Preflight needs no local diff probe:
+fixed Git commit identities mechanically bind the recorded diff.
+
+Validation artifacts that must outlive the clone are copied into ignored
+`.workflow.local/lck/review-validation/`; no Review path writes `.agents/evidence.local`
+or `.agents/validation.local` in the source repository. Repository policy now assigns
+`.agents/evidence.local/` to historical/non-LCK Evidence output,
+`.agents/validation.local/` to ordinary Validation Runner workspace output (including
+ephemeral output inside the Review clone), and `.workflow.local/lck/` to mutable LCK
+runtime state plus durable Review evidence. These roots are explicitly not
+interchangeable fallback locations. Review Complete removes the standalone clone
+directly after durable PASS / FAIL / STALE handling. Interrupted Prepare cleanup owns
+only the marker-recorded temporary path and does not call `git worktree remove` or
+`git worktree prune`. The real-Git regressions verify detached exact-head checkout,
+materialization of a remote PR head absent from the source object database, clean
+status, real-origin restoration, independent Git objects, unchanged source
+HEAD/status/worktree registrations and source Git file modes, plus direct
+temporary-directory cleanup.
 
 ## Acceptance coverage
 
@@ -131,9 +146,9 @@ inventory; their aggregate command counts are not added to current LOC.
 
 | Measure | #88 / pre-LCK reference | LCK v1 current shape |
 | --- | --- | --- |
-| Formal lifecycle controller | Skill + Runner + handoff/snapshot paths | `lck.py`: 4,891 LOC |
+| Formal lifecycle controller | Skill + Runner + handoff/snapshot paths | `lck.py`: 4,958 LOC |
 | Task-control support called by LCK | mechanics split across Skill/Runner/helpers | 1,241 LOC: `critical_outcome.py` 204 + `pr_resolve.py` 481 + `project_status.py` 153 + shared `workflow_common.py` 403 |
-| Combined active Task control code | no single deterministic boundary in #88 | 6,132 LOC controller + direct support; reused validation/audit infrastructure excluded |
+| Combined active Task control code | no single deterministic boundary in #88 | 6,199 LOC controller + direct support; reused validation/audit infrastructure excluded |
 | Reused Validation infrastructure | existing fixed Validation Runner | 1,163 LOC: `workflow_validation.py` 344 + `wsl2_validation_runner.py` 819; reused rather than duplicated |
 | Audit-only Evidence implementation | Task Evidence Runner was part of lifecycle control | `workflow_evidence.py` 1,649 LOC retained as read-only audit/shared-query code, not Task authority |
 | Task Skill lifecycle mechanics | direct command/procedure paths | 269 LOC per provider; 538 LOC across Codex + Claude; no direct lifecycle writes |
@@ -142,7 +157,7 @@ inventory; their aggregate command counts are not added to current LOC.
 | Dynamic global write authorization | `write_actions_allowed` disposition | absent from LCK and active Task policy |
 | Direct Agent lifecycle writes | present in historical baseline | 0 in active Task Skills |
 | Duplicate Task identity resolution | Skill/Runner/current-workflow paths | one LCK `LiveStateResolver`; historical audit queries cannot authorize Task phases |
-| Main lifecycle test groups | split across old Runner and workflow paths | 105 tests: 67 + 26 + 11 + 1 acceptance |
+| Main lifecycle test groups | split across old Runner and workflow paths | 108 tests: 68 + 27 + 11 + 2 acceptance |
 | Legacy executable components removed in this convergence | old Task Runner/profiles/Rules + durable self-review binder | 7 files removed: Runner, profile spec, Codex Rule, two Runner/Rules tests, self-review binder, binder test |
 
 The historical #85 static Skill record reports 685 lines before and 547 lines
@@ -150,7 +165,7 @@ after its earlier Runner migration; #88 supplies the operation inventory rather
 than a directly comparable LOC measurement. Current values above were measured
 from this candidate tree and are descriptive evidence, not lifecycle authority.
 
-The LOC boundary is explicit to avoid understating LCK complexity: the 4,891-line
+The LOC boundary is explicit to avoid understating LCK complexity: the 4,947-line
 core is reported separately from the 1,241 lines of support it directly calls.
 Validation infrastructure is reported separately because it predates LCK and is
 reused; audit-only Evidence code is also reported separately because it cannot
@@ -175,7 +190,7 @@ provider-attributed live-session evidence.
 | 7 | Branch/SHA/PR actionable identity resolved by LCK | Satisfied | Delivery/Review/Remediation/Closeout live-resolution tests |
 | 8 | Agent does not own commit/push/PR/lifecycle mutation | Satisfied | Skill guards + LCK bounded effects |
 | 9 | Delivery stops before Independent Review | Satisfied | `READY_FOR_REVIEW`; no automatic Review invocation |
-| 10 | Fresh Review role + operation-bounded target/applicability snapshots | Satisfied | standalone read-only Review clone with source `.git` isolation + Review Complete stale-target regressions |
+| 10 | Fresh Review role + operation-bounded target/applicability snapshots | Satisfied | standalone read-only Review clone with source `.git` isolation, missing-remote-head materialization regression, clone-derived effective diff, and Review Complete stale-target regressions |
 | 11 | Review FAIL always stops | Satisfied | `STOP_REQUIRED` regression |
 | 12 | Remediation requires Human intent | Satisfied | explicit failed `review_id` admission; no auto-remediation |
 | 13 | Human Squash Merge mandatory | Satisfied | merge preflight stops at maintainer boundary; no merge effect |
@@ -190,7 +205,7 @@ provider-attributed live-session evidence.
 | 22 | Existing Runner infrastructure reused, not duplicated | Satisfied | existing Validation Runner retained and invoked by LCK; legacy Task Evidence Runner removed |
 | 23 | One explicit snapshot-acquisition boundary per new lifecycle operation | Satisfied | `OperationSnapshotBuilder`; prepare/complete/preflight/closeout regression coverage |
 | 24 | No hidden authoritative reacquisition after snapshot freeze | Satisfied | lifecycle code contains one `self.resolver.resolve(...)` call, inside `OperationSnapshotBuilder`; `status` is diagnostic-only |
-| 25 | Snapshot facts are phase-specific and complete, not lazily added | Satisfied | optional required-check configuration is acquired with the operation snapshot; downstream gates evaluate the frozen object |
+| 25 | Snapshot facts are phase-specific and complete, not lazily added | Satisfied | authoritative required-check/Task/PR/ref facts are acquired with the operation snapshot; merge-base/effective diff are deterministic derived facts computed later only from frozen refs inside the isolated clone |
 | 26 | Review Prepare and Review Complete each use one immutable operation snapshot; Complete rejects stale target before accepting verdict | Satisfied | Prepare acquisition regression + Complete `REVIEW_STALE_PR/HEAD/BASE/TASK/DIFF` regressions; one resolver acquisition per invocation |
 | 27 | Merge Preflight freshly rejects stale Review receipts | Satisfied | fresh merge snapshot + `ReviewPassGate` identity comparison |
 | 28 | Safe Effects use targeted postconditions, not full-state refresh | Satisfied | exact remote-ref, PR, Project Status, main-sync, metadata, and cleanup effect checks |
@@ -213,8 +228,13 @@ Codex and Claude live-session receipts or a maintainer-executed activation/rollb
 receipt. Fresh provider-attributed Codex and Claude implementation receipts and
 cross-provider Review receipts are **pre-merge** evidence. They remain pending
 and are not fabricated by this report; they must be recorded before the current
-OPEN PR can receive Independent Review PASS. Static Skill identity and unit
-tests do not substitute for the Task's explicit live Dual Agent requirement.
+OPEN PR can receive Independent Review PASS. Because truthful fresh evidence must bind
+the repaired candidate head and/or a separate provider Review, this pending acceptance
+MUST NOT block Delivery/Remediation completion needed to create that head.
+`READY_FOR_NEW_REVIEW` does not satisfy the requirement; the next Independent Review
+continues to fail closed until the required provider-attributed evidence exists. Static
+Skill identity and unit tests do not substitute for the Task's explicit live Dual Agent
+requirement.
 
 The current Task's Squash Merge receipt, mainline activation receipt, and
 Closeout receipt are **post-merge** evidence. They cannot be produced while the

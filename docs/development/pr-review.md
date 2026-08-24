@@ -46,14 +46,19 @@ uv run --frozen python tools/agent_workflow/lck.py review prepare <TASK>
 调用方只提供 Task number。不得向 Review LCK 传入 Delivery 提供的 base SHA、head
 SHA、PR number、checks snapshot、validation snapshot 或 snapshot id 作为 authority。
 
-LCK 在本次 invocation 开始时从 live Git / GitHub 重新解析：
+LCK 在本次 invocation 开始时从 live Git / GitHub 重新解析 authoritative inputs：
 
 - current OPEN non-Draft PR；
 - current PR base / head；
-- current effective diff、merge base、changed-file inventory；
 - current Task Contract；
 - current applicable checks；
-- current formal Review validation state。
+- Review eligibility 所需的其他 live facts。
+
+`merge base`、`effective diff` 与 `changed-file inventory` 不是额外的 live authority
+query；它们在 base/head identity 冻结、standalone clone 创建并按需 materialize exact
+commit 后，**只在 temporary clone 内机械推导**。因此 source repository 即使尚未拥有
+current PR head object，也不得在 clone 创建前因本地 `git merge-base/diff` 失败而阻止
+fresh Review。
 
 `review prepare` 在开始 live resolution、temporary clone 和 formal validation 前建立一个
 Task-local operation marker；它只用于阻止同一 Task 的重复 in-flight Prepare，不是
@@ -122,7 +127,9 @@ Task Contract changed → REVIEW_STALE_TASK
 effective diff changed→ REVIEW_STALE_DIFF
 ```
 
-current applicable checks 也必须仍然满足 completion gate。
+current applicable checks 也必须仍然满足 completion gate。若 PR/base/head/Task identity
+仍一致，effective diff applicability 从仍受 LCK ownership 保护的 sealed Review clone
+重新机械推导；Review Complete 不要求 source repository materialize reviewed commits。
 
 任何 stale result 都不会把 semantic verdict 发布成当前有效 Review PASS/FAIL，也不会
 解除 fresh-review requirement；必须重新执行新的 Review Prepare。Review Complete

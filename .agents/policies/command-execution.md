@@ -52,23 +52,29 @@ an equivalent direct command chain as fallback.
 
 ## Allowed local writes
 
-Runners may write exact bounded artifacts under:
+Mutable artifact ownership is explicit; these roots are not interchangeable fallbacks:
 
 ```text
-.agents/evidence.local/
-.agents/validation.local/
-.workflow.local/lck/              # ignored LCK operation state / preserved Review evidence
+.agents/evidence.local/            # legacy/non-LCK Evidence Runner output
+.agents/validation.local/          # Validation Runner output in a writable execution workspace
+.workflow.local/lck/               # source-repository LCK runtime state and durable Review evidence
 $TMPDIR/tracequant-lck-review-*    # operation-owned standalone Review clones only
 ```
 
-Repository-local roots must be Git ignored. Independent Review may write only its ignored
-LCK operation/evidence state; the source tracked tree and source Git metadata remain
-read-only. Temporary clones are owned by the Review operation, live only until Review
-Complete (or failed/interrupted Prepare cleanup), and MUST NOT register or mutate source
+Repository-local roots must be Git ignored. During Independent Review, the **source
+repository** may write only under `.workflow.local/lck/`; it MUST NOT write source
+`.agents/evidence.local/`, source `.agents/validation.local/`, the tracked tree, or source
+Git metadata. Formal Review validation may create `.agents/validation.local/` **inside the
+standalone temporary clone** because that directory is part of the disposable validation
+workspace; evidence that must survive clone deletion is copied to
+`.workflow.local/lck/review-validation/` in the source repository before cleanup.
+
+Temporary clones are owned by the Review operation, live only until Review Complete (or
+failed/interrupted Prepare cleanup), and MUST NOT register or mutate source
 `.git/worktrees`. Creating, sealing, or removing the Review clone is expected to work in
-the normal sandbox and is not by itself a reason to elevate the LCK command. A known required write route should
-be correct on the first formal call; do not intentionally run a known-failing sandbox
-probe before an approved exact route.
+the normal sandbox and is not by itself a reason to elevate the LCK command. A known
+required write route should be correct on the first formal call; do not intentionally run
+a known-failing sandbox probe before an approved exact route.
 
 ## Git and GitHub boundaries
 
