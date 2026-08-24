@@ -1286,7 +1286,7 @@ def _review_identity(
 
 
 class ReviewValidationGate:
-    """Run current Review validation inside the isolated reviewed worktree."""
+    """Run current Review validation inside the isolated reviewed clone."""
 
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.resolver = resolver
@@ -1315,7 +1315,7 @@ class ReviewValidationGate:
             source.relative_to(review_root)
         except ValueError as exc:
             raise LckStopError(
-                "formal Review validation output escaped the Review worktree"
+                "formal Review validation output escaped the Review clone"
             ) from exc
         if not source.is_dir():
             raise LckStopError(
@@ -1323,7 +1323,7 @@ class ReviewValidationGate:
             )
 
         durable_root = (
-            self.resolver.repo_root / ".agents" / "validation.local"
+            self.resolver.repo_root / ".workflow.local" / "lck" / "review-validation"
         ).resolve()
         durable_root.mkdir(parents=True, exist_ok=True)
         destination = durable_root / f"lck-review-{uuid.uuid4().hex}"
@@ -1374,7 +1374,7 @@ class ReviewValidationGate:
         head_sha: str,
     ) -> dict[str, Any]:
         durable_root = (
-            self.resolver.repo_root / ".agents" / "validation.local"
+            self.resolver.repo_root / ".workflow.local" / "lck" / "review-validation"
         ).resolve()
         durable_root.mkdir(parents=True, exist_ok=True)
         destination = durable_root / f"lck-review-{uuid.uuid4().hex}"
@@ -1467,138 +1467,265 @@ class ReviewValidationGate:
 
 
 class ReviewWorkspaceManager:
-    """Create and later remove one isolated, implementation-read-only worktree."""
+    """Own one standalone temporary clone for an Independent Review session.
+
+    Review is read-only with respect to the source repository.  The reviewed
+    workspace is therefore a self-contained temporary clone rather than a Git
+    worktree registered in the source repository.  All Review Git metadata writes
+    stay inside the temporary clone; durable validation evidence is copied only
+    to the ignored LCK local evidence root before clone cleanup.
+    """
+
+    OWNER_FILE: Final = "lck-review-owner.json"
 
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.resolver = resolver
 
     @staticmethod
-    def _validated_worktree_path(path: Path) -> Path:
+    def _validated_workspace_path(path: Path) -> Path:
         resolved = path.resolve(strict=False)
         temp_root = Path(tempfile.gettempdir()).resolve()
         try:
             relative = resolved.relative_to(temp_root)
         except ValueError as exc:
             raise LckStopError(
-                "Review worktree cleanup path is outside the temporary root"
+                "Review workspace cleanup path is outside the temporary root"
             ) from exc
         if len(relative.parts) != 1 or not resolved.name.startswith(
             "tracequant-lck-review-"
         ):
-            raise LckStopError("Review worktree cleanup path is not LCK-owned")
+            raise LckStopError("Review workspace cleanup path is not LCK-owned")
         return resolved
 
-    def _assert_registered_worktree(self, path: Path) -> None:
-        result = self.resolver.runner.run(
-            ["git", "worktree", "list", "--porcelain"],
-            command_id="lck-review-worktree-verify",
-        )
-        if result.returncode != 0:
-            raise LckStopError(
-                "cannot verify isolated Review worktree ownership: "
-                + (result.stderr.strip() or result.stdout.strip())
-            )
-        registered = {
-            Path(line.removeprefix("worktree ").strip()).resolve()
-            for line in result.stdout.splitlines()
-            if line.startswith("worktree ") and line.removeprefix("worktree ").strip()
-        }
-        if path not in registered:
-            raise LckStopError(
-                "Review worktree cleanup path is not a registered LCK worktree"
-            )
-
     def path_for(self, task_number: int, operation_id: str) -> Path:
-        """Return an uncreated, operation-owned temporary worktree path."""
-        return self._validated_worktree_path(
+        """Return an uncreated, operation-owned temporary clone path."""
+        return self._validated_workspace_path(
             Path(tempfile.gettempdir())
             / f"tracequant-lck-review-{task_number}-{operation_id}"
         )
 
-    def create(self, task_number: int, head_sha: str, path: Path | None = None) -> Path:
-        path = self.path_for(task_number, uuid.uuid4().hex) if path is None else path
-        path = self._validated_worktree_path(path)
-        if path.exists():
-            raise LckStopError("isolated Review worktree path is already occupied")
+    def _source_remote_url(self) -> str:
         result = self.resolver.runner.run(
-            ["git", "worktree", "add", "--detach", str(path), head_sha],
-            command_id="lck-review-worktree-add",
+            ["git", "remote", "get-url", "origin"],
+            command_id="lck-review-source-origin",
         )
-        if result.returncode != 0:
+        remote_url = result.stdout.strip()
+        if result.returncode != 0 or not remote_url:
+            raise LckStopError(
+                "cannot resolve source repository origin for isolated Review clone: "
+                + (
+                    result.stderr.strip()
+                    or result.stdout.strip()
+                    or "origin unavailable"
+                )
+            )
+        return remote_url
+
+    @classmethod
+    def _owner_path(cls, path: Path) -> Path:
+        return path / ".git" / cls.OWNER_FILE
+
+    def _write_owner(
+        self,
+        path: Path,
+        *,
+        task_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> None:
+        atomic_write_json(
+            self._owner_path(path),
+            {
+                "schema_version": LCK_SCHEMA_VERSION,
+                "kind": "lck-review-standalone-clone",
+                "task_number": task_number,
+                "review_root": str(path),
+                "source_repo": str(self.resolver.repo_root),
+                "expected_base_sha": base_sha,
+                "expected_head_sha": head_sha,
+                "authority": "operation-owned temporary Review workspace only",
+            },
+        )
+
+    def _assert_owned_clone(
+        self,
+        path: Path,
+        *,
+        expected_head_sha: str | None = None,
+    ) -> Mapping[str, Any]:
+        path = self._validated_workspace_path(path)
+        if not path.is_dir() or not (path / ".git").is_dir():
+            raise LckStopError("isolated Review clone is unavailable")
+        owner_path = self._owner_path(path)
+        try:
+            value = read_json_file(owner_path)
+        except WorkflowToolError as exc:
+            raise LckStopError(
+                "isolated Review clone ownership marker is unavailable"
+            ) from exc
+        if not isinstance(value, Mapping):
+            raise LckStopError("isolated Review clone ownership marker is invalid")
+        if value.get("kind") != "lck-review-standalone-clone":
+            raise LckStopError("isolated Review clone ownership marker is invalid")
+        if value.get("review_root") != str(path):
+            raise LckStopError("isolated Review clone ownership path does not match")
+        if value.get("source_repo") != str(self.resolver.repo_root):
+            raise LckStopError("isolated Review clone belongs to another repository")
+        if (
+            expected_head_sha is not None
+            and value.get("expected_head_sha") != expected_head_sha
+        ):
+            raise LckStopError("isolated Review clone expected HEAD does not match")
+        return value
+
+    def _ensure_commit(self, path: Path, sha: str, *, label: str) -> None:
+        available = self.resolver.runner.run(
+            ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+            command_id=f"lck-review-clone-{label}-available",
+            cwd=path,
+        )
+        if available.returncode == 0:
+            return
+        fetched = self.resolver.runner.run(
+            ["git", "fetch", "--no-tags", "origin", sha],
+            command_id=f"lck-review-clone-fetch-{label}",
+            cwd=path,
+            retries=1,
+        )
+        if fetched.returncode != 0:
+            raise LckStopError(
+                f"cannot materialize reviewed {label} commit in temporary clone: "
+                + (
+                    fetched.stderr.strip()
+                    or fetched.stdout.strip()
+                    or f"exit {fetched.returncode}"
+                )
+            )
+        verified = self.resolver.runner.run(
+            ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+            command_id=f"lck-review-clone-{label}-verified",
+            cwd=path,
+        )
+        if verified.returncode != 0:
+            raise LckStopError(
+                f"temporary Review clone does not contain expected {label} commit"
+            )
+
+    def create(
+        self,
+        task_number: int,
+        base_sha: str,
+        head_sha: str,
+        path: Path | None = None,
+    ) -> Path:
+        path = self.path_for(task_number, uuid.uuid4().hex) if path is None else path
+        path = self._validated_workspace_path(path)
+        if path.exists():
+            raise LckStopError("isolated Review clone path is already occupied")
+        remote_url = self._source_remote_url()
+        clone = self.resolver.runner.run(
+            [
+                "git",
+                "clone",
+                "--no-checkout",
+                "--no-hardlinks",
+                str(self.resolver.repo_root),
+                str(path),
+            ],
+            command_id="lck-review-clone-create",
+        )
+        if clone.returncode != 0:
             shutil.rmtree(path, ignore_errors=True)
             raise LckStopError(
-                "cannot create isolated Review worktree: "
-                + (result.stderr.strip() or result.stdout.strip())
+                "cannot create isolated Review clone: "
+                + (
+                    clone.stderr.strip()
+                    or clone.stdout.strip()
+                    or f"exit {clone.returncode}"
+                )
             )
-        status = self.resolver.runner.run(
-            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            command_id="lck-review-worktree-clean",
-            cwd=path,
-        )
-        head = self.resolver.runner.run(
-            ["git", "rev-parse", "HEAD"],
-            command_id="lck-review-worktree-head",
-            cwd=path,
-        )
-        if (
-            status.returncode != 0
-            or status.stdout.strip()
-            or head.stdout.strip() != head_sha
-        ):
-            self.remove(path)
-            raise LckStopError("isolated Review worktree postcondition failed")
+        try:
+            self._write_owner(
+                path,
+                task_number=task_number,
+                base_sha=base_sha,
+                head_sha=head_sha,
+            )
+            set_origin = self.resolver.runner.run(
+                ["git", "remote", "set-url", "origin", remote_url],
+                command_id="lck-review-clone-set-origin",
+                cwd=path,
+            )
+            if set_origin.returncode != 0:
+                raise LckStopError(
+                    "cannot restore authoritative origin in isolated Review clone: "
+                    + (set_origin.stderr.strip() or set_origin.stdout.strip())
+                )
+            self._ensure_commit(path, base_sha, label="base")
+            self._ensure_commit(path, head_sha, label="head")
+            checkout = self.resolver.runner.run(
+                ["git", "checkout", "--detach", head_sha],
+                command_id="lck-review-clone-checkout",
+                cwd=path,
+            )
+            if checkout.returncode != 0:
+                raise LckStopError(
+                    "cannot checkout exact reviewed HEAD in isolated Review clone: "
+                    + (checkout.stderr.strip() or checkout.stdout.strip())
+                )
+            self._assert_clean_exact(path, head_sha)
+        except BaseException:
+            self._make_removable(path)
+            shutil.rmtree(path, ignore_errors=True)
+            raise
         return path
 
     def _assert_clean_exact(self, path: Path, expected_head_sha: str) -> None:
         if not path.is_dir():
-            raise LckStopError("isolated Review worktree is unavailable")
+            raise LckStopError("isolated Review clone is unavailable")
         status = self.resolver.runner.run(
             ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            command_id="lck-review-worktree-post-validation-clean",
+            command_id="lck-review-clone-clean",
             cwd=path,
+            env={"GIT_OPTIONAL_LOCKS": "0"},
         )
         head = self.resolver.runner.run(
             ["git", "rev-parse", "HEAD"],
-            command_id="lck-review-worktree-post-validation-head",
+            command_id="lck-review-clone-head",
             cwd=path,
+            env={"GIT_OPTIONAL_LOCKS": "0"},
         )
         if status.returncode != 0 or head.returncode != 0:
-            raise LckStopError(
-                "cannot verify isolated Review worktree after validation"
-            )
+            raise LckStopError("cannot verify isolated Review clone")
         if status.stdout.strip():
-            raise LckStopError("formal Review validation changed the isolated worktree")
+            raise LckStopError("formal Review validation changed the isolated clone")
         if head.stdout.strip() != expected_head_sha:
-            raise LckStopError(
-                "isolated Review worktree HEAD changed during validation"
-            )
+            raise LckStopError("isolated Review clone HEAD changed during validation")
 
     @staticmethod
     def _assert_read_only(path: Path) -> None:
         for root, dirs, files in os.walk(path, topdown=True, followlinks=False):
             root_path = Path(root)
             if root_path.stat().st_mode & 0o222:
-                raise LckStopError("isolated Review worktree is not read-only")
+                raise LckStopError("isolated Review clone is not read-only")
             for name in (*dirs, *files):
                 target = root_path / name
                 if not target.is_symlink() and target.stat().st_mode & 0o222:
-                    raise LckStopError("isolated Review worktree is not read-only")
+                    raise LckStopError("isolated Review clone is not read-only")
 
     def seal_for_review(self, path: Path, expected_head_sha: str) -> None:
-        """Verify exact contents, seal files, and preserve clean Git status."""
-        path = self._validated_worktree_path(path)
-        self._assert_registered_worktree(path)
+        """Verify exact contents, seal the independent clone, and keep it clean."""
+        path = self._validated_workspace_path(path)
+        self._assert_owned_clone(path, expected_head_sha=expected_head_sha)
         self._assert_clean_exact(path, expected_head_sha)
         self.seal_read_only(path)
         self._assert_clean_exact(path, expected_head_sha)
         self._assert_read_only(path)
 
     def assert_ready_for_completion(self, path: Path, expected_head_sha: str) -> None:
-        """Fail closed unless the prepared Review context is still intact."""
-        path = self._validated_worktree_path(path)
-        if not path.is_dir():
-            raise LckStopError("prepared Review worktree is unavailable")
-        self._assert_registered_worktree(path)
+        """Fail closed unless the prepared standalone Review clone is intact."""
+        path = self._validated_workspace_path(path)
+        self._assert_owned_clone(path, expected_head_sha=expected_head_sha)
         self._assert_clean_exact(path, expected_head_sha)
         self._assert_read_only(path)
 
@@ -1639,58 +1766,24 @@ class ReviewWorkspaceManager:
                     os.chmod(target, 0o644)
 
     def remove(self, path: Path) -> None:
-        path = self._validated_worktree_path(path)
-        self._assert_registered_worktree(path)
-        self._make_removable(path)
-        result = self.resolver.runner.run(
-            ["git", "worktree", "remove", "--force", str(path)],
-            command_id="lck-review-worktree-remove",
-        )
-        if result.returncode != 0:
-            shutil.rmtree(path, ignore_errors=True)
-            if path.exists():
-                raise LckStopError(
-                    "failed to remove isolated Review worktree directory"
-                )
-            prune = self.resolver.runner.run(
-                ["git", "worktree", "prune"],
-                command_id="lck-review-worktree-prune",
-            )
-            if prune.returncode != 0:
-                raise LckStopError("failed to remove isolated Review worktree")
-
-    def remove_recovered(self, path: Path) -> None:
-        """Remove a marker-owned worktree, including interrupted registration."""
-        path = self._validated_worktree_path(path)
+        path = self._validated_workspace_path(path)
         if not path.exists():
             return
-        result = self.resolver.runner.run(
-            ["git", "worktree", "list", "--porcelain"],
-            command_id="lck-review-recovered-worktree-verify",
-        )
-        if result.returncode != 0:
-            raise LckStopError(
-                "cannot verify recovered Review worktree ownership: "
-                + (result.stderr.strip() or result.stdout.strip())
-            )
-        registered = {
-            Path(line.removeprefix("worktree ").strip()).resolve()
-            for line in result.stdout.splitlines()
-            if line.startswith("worktree ") and line.removeprefix("worktree ").strip()
-        }
-        if path in registered:
-            self.remove(path)
+        self._assert_owned_clone(path)
+        self._make_removable(path)
+        shutil.rmtree(path, ignore_errors=True)
+        if path.exists():
+            raise LckStopError("failed to remove isolated Review clone directory")
+
+    def remove_recovered(self, path: Path) -> None:
+        """Remove a marker-owned clone, including an interrupted partial clone."""
+        path = self._validated_workspace_path(path)
+        if not path.exists():
             return
         self._make_removable(path)
         shutil.rmtree(path, ignore_errors=True)
         if path.exists():
-            raise LckStopError("failed to remove recovered Review worktree directory")
-        prune = self.resolver.runner.run(
-            ["git", "worktree", "prune"],
-            command_id="lck-review-recovered-worktree-prune",
-        )
-        if prune.returncode != 0:
-            raise LckStopError("failed to prune recovered Review worktree metadata")
+            raise LckStopError("failed to remove recovered Review clone directory")
 
 
 @dataclass
@@ -2192,7 +2285,7 @@ class ReviewPreparer:
                 if previous_root is not None:
                     if not isinstance(previous_root, str) or not previous_root:
                         raise LckStopError(
-                            "stale Review Prepare has an invalid isolated worktree path"
+                            "stale Review Prepare has an invalid isolated clone path"
                         )
                     previous_path = Path(previous_root)
                     if previous_path.exists():
@@ -2219,13 +2312,15 @@ class ReviewPreparer:
             checks = self.checks_gate.evaluate(snapshot)
             review_root = self.workspace.path_for(task_number, invocation.operation_id)
             mark(
-                "worktree-reserved",
+                "clone-reserved",
                 identity=identity.to_dict(),
                 review_root=str(review_root),
             )
-            self.workspace.create(task_number, identity.head_sha, review_root)
+            self.workspace.create(
+                task_number, identity.base_sha, identity.head_sha, review_root
+            )
             mark(
-                "worktree-created",
+                "clone-created",
                 identity=identity.to_dict(),
                 review_root=str(review_root),
             )

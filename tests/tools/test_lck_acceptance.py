@@ -102,6 +102,13 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     assert "git ls-remote origin refs/heads/main" in architecture_delta
     assert "refs/remotes/origin/main" in architecture_delta
     assert "git fetch --prune origin" not in lck_source
+    assert "lck-review-worktree-" not in lck_source
+    assert '["git", "worktree", "add"' not in lck_source
+    assert '["git", "worktree", "remove"' not in lck_source
+    assert '["git", "worktree", "prune"' not in lck_source
+    assert '"clone",' in lck_source
+    assert '"--no-hardlinks",' in lck_source
+    assert '"review-validation"' in lck_source
     assert lck_source.count("self.resolver.resolve(task_number)") == 1
     assert "while time.monotonic" not in lck_source
     assert "check-timeout-seconds" not in lck_source

@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any, cast
 
@@ -1160,7 +1161,13 @@ class FakeReviewWorkspace:
     def path_for(self, _task: int, _operation_id: str) -> Path:
         return self.root
 
-    def create(self, _task: int, _head: str, path: Path | None = None) -> Path:
+    def create(
+        self,
+        _task: int,
+        _base: str,
+        _head: str,
+        path: Path | None = None,
+    ) -> Path:
         root = path or self.root
         root.mkdir(parents=True, exist_ok=True)
         return root
@@ -1534,35 +1541,38 @@ def test_review_workspace_seal_removes_write_bits(tmp_path: Path) -> None:
 def test_review_workspace_seal_preserves_clean_status_and_rejects_mutation(
     tmp_path: Path,
 ) -> None:
-    with tempfile.TemporaryDirectory(prefix="tracequant-lck-review-test-") as raw:
+    with tempfile.TemporaryDirectory(prefix="tracequant-lck-review-") as raw:
         root = Path(raw)
+        (root / ".git").mkdir()
         (root / "tracked.py").write_text("print('review')\n", encoding="utf-8")
         resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
         runner = FakeWorkspaceRunner(root)
         resolver.runner = runner
         manager = lck.ReviewWorkspaceManager(resolver)
+        manager._write_owner(
+            root,
+            task_number=159,
+            base_sha=SHA,
+            head_sha=SHA,
+        )
 
         manager.seal_for_review(root, SHA)
 
-        assert not any(
-            command[:3] == ("git", "config", "--worktree")
-            for command in runner.commands
-        )
         assert root.stat().st_mode & 0o222 == 0
         assert (root / "tracked.py").stat().st_mode & 0o222 == 0
         manager.assert_ready_for_completion(root, SHA)
 
         runner.status_output = " M tracked.py\n"
-        with pytest.raises(lck.LckStopError, match="changed the isolated worktree"):
+        with pytest.raises(lck.LckStopError, match="changed the isolated clone"):
             manager.assert_ready_for_completion(root, SHA)
         manager._make_removable(root)
 
 
-def test_review_workspace_seal_real_git_multi_worktree_without_worktree_config(
+def test_review_workspace_uses_standalone_clone_without_source_git_mutation(
     tmp_path: Path,
 ) -> None:
     if shutil.which("git") is None:
-        pytest.skip("git is required for Review worktree integration test")
+        pytest.skip("git is required for Review clone integration test")
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1580,6 +1590,7 @@ def test_review_workspace_seal_real_git_multi_worktree_without_worktree_config(
     git("init")
     git("config", "user.name", "TraceQuant Test")
     git("config", "user.email", "tracequant-test@example.invalid")
+    git("remote", "add", "origin", "https://example.invalid/tracequant.git")
     tracked = repo / "tracked.py"
     tracked.write_text("print('review')\n", encoding="utf-8")
     executable = repo / "tool.py"
@@ -1589,56 +1600,56 @@ def test_review_workspace_seal_real_git_multi_worktree_without_worktree_config(
     git("commit", "-m", "initial")
     head_sha = git("rev-parse", "HEAD").stdout.strip()
 
-    unset = subprocess.run(
-        ["git", "config", "--unset-all", "extensions.worktreeConfig"],
-        cwd=repo,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    assert unset.returncode in {0, 5}
+    source_worktrees_before = git("worktree", "list", "--porcelain").stdout
+    source_head_before = git("rev-parse", "HEAD").stdout.strip()
+    source_status_before = git("status", "--porcelain=v1").stdout
+    source_git_modes_before = {
+        path.relative_to(repo / ".git"): path.stat().st_mode
+        for path in (repo / ".git").rglob("*")
+        if not path.is_symlink()
+    }
+    source_object = repo / ".git" / "objects" / head_sha[:2] / head_sha[2:]
+    assert source_object.is_file()
 
     resolver = cast(Any, StaticResolver(repo, _review_state()))
     resolver.runner = CommandRunner(repo)
     manager = lck.ReviewWorkspaceManager(resolver)
-    review_root = manager.create(159, head_sha)
-    worktrees = git("worktree", "list", "--porcelain").stdout
-    assert worktrees.count("worktree ") == 2
-    config_before_seal = (repo / ".git" / "config").read_text(encoding="utf-8")
+    review_root = manager.create(159, head_sha, head_sha)
 
     try:
-        manager.seal_for_review(review_root, head_sha)
-
-        assert (repo / ".git" / "config").read_text(
-            encoding="utf-8"
-        ) == config_before_seal
-        status = git(
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-            cwd=review_root,
-        )
-        assert status.stdout.strip() == ""
         assert git("rev-parse", "HEAD", cwd=review_root).stdout.strip() == head_sha
+        assert git("branch", "--show-current", cwd=review_root).stdout.strip() == ""
+        assert git("status", "--porcelain=v1", cwd=review_root).stdout.strip() == ""
+        assert (
+            git("remote", "get-url", "origin", cwd=review_root).stdout.strip()
+            == "https://example.invalid/tracequant.git"
+        )
+        clone_object = review_root / ".git" / "objects" / head_sha[:2] / head_sha[2:]
+        assert clone_object.is_file()
+        assert clone_object.stat().st_ino != source_object.stat().st_ino
+
+        manager.seal_for_review(review_root, head_sha)
+        manager.assert_ready_for_completion(review_root, head_sha)
         assert review_root.stat().st_mode & 0o222 == 0
         assert (review_root / "tracked.py").stat().st_mode & 0o222 == 0
         sealed_executable = review_root / "tool.py"
         assert sealed_executable.stat().st_mode & 0o222 == 0
         assert sealed_executable.stat().st_mode & 0o111 != 0
 
-        configured = subprocess.run(
-            ["git", "config", "--get", "extensions.worktreeConfig"],
-            cwd=repo,
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
-        assert configured.returncode == 1
-        assert configured.stdout.strip() == ""
+        assert git("rev-parse", "HEAD").stdout.strip() == source_head_before
+        assert git("status", "--porcelain=v1").stdout == source_status_before
+        assert git("worktree", "list", "--porcelain").stdout == source_worktrees_before
+        source_git_modes_after = {
+            path.relative_to(repo / ".git"): path.stat().st_mode
+            for path in (repo / ".git").rglob("*")
+            if not path.is_symlink()
+        }
+        assert source_git_modes_after == source_git_modes_before
     finally:
         manager.remove(review_root)
+
+    assert not review_root.exists()
+    assert git("worktree", "list", "--porcelain").stdout == source_worktrees_before
 
 
 def test_review_workspace_remove_rejects_unvalidated_path(tmp_path: Path) -> None:
@@ -1646,14 +1657,33 @@ def test_review_workspace_remove_rejects_unvalidated_path(tmp_path: Path) -> Non
     manager = lck.ReviewWorkspaceManager(resolver)
 
     with pytest.raises(lck.LckStopError, match="cleanup path"):
-        manager.remove(tmp_path / "not-an-lck-worktree")
+        manager.remove(tmp_path / "not-an-lck-workspace")
 
 
-def test_review_validation_artifacts_are_preserved_outside_review_worktree(
+def test_review_workspace_recovered_partial_clone_cleanup_is_path_local(
+    tmp_path: Path,
+) -> None:
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    manager = lck.ReviewWorkspaceManager(resolver)
+    review_root = manager.path_for(159, uuid.uuid4().hex)
+    review_root.mkdir()
+    partial_git = review_root / ".git"
+    partial_git.mkdir()
+    (partial_git / "partial").write_text("interrupted clone\n", encoding="utf-8")
+    manager.seal_read_only(review_root)
+
+    manager.remove_recovered(review_root)
+
+    assert not review_root.exists()
+
+
+def test_review_validation_artifacts_are_preserved_outside_review_clone(
     tmp_path: Path,
 ) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
+    source_agents = repo_root / ".agents"
+    source_agents.mkdir()
     review_root = tmp_path / "review-root"
     tool = review_root / "tools" / "agent_workflow" / "workflow_validation.py"
     tool.parent.mkdir(parents=True)
@@ -1688,7 +1718,9 @@ def test_review_validation_artifacts_are_preserved_outside_review_worktree(
 
     durable_output = repo_root / validation["output_dir"]
     durable_log = repo_root / validation["commands"][0]["log_path"]
-    assert validation["output_dir"].startswith(".agents/validation.local/lck-review-")
+    assert validation["output_dir"].startswith(
+        ".workflow.local/lck/review-validation/lck-review-"
+    )
     assert validation["evidence_path"] == validation["output_dir"]
     assert validation["validated_base_sha"] == SHA
     assert validation["validated_head_sha"] == SHA
@@ -1698,6 +1730,7 @@ def test_review_validation_artifacts_are_preserved_outside_review_worktree(
     evidence = json.loads(evidence_file.read_text(encoding="utf-8"))
     assert evidence["validated_base_sha"] == SHA
     assert evidence["commands"][0]["status"] == "pass"
+    assert not (source_agents / "validation.local").exists()
 
 
 def test_review_validation_failure_is_persisted_before_prepare_stops(
@@ -1784,7 +1817,7 @@ def test_review_prepare_claims_operation_before_validation_and_has_no_review_id_
                         "diagnostic": "format mismatch",
                     }
                 ],
-                "evidence_path": ".agents/validation.local/lck-review-failure",
+                "evidence_path": ".workflow.local/lck/review-validation/lck-review-failure",
             }
 
     workspace = FakeReviewWorkspace(tmp_path / "review-root")

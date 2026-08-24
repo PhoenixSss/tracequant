@@ -998,6 +998,66 @@ def test_lck_migration_matrix_records_activation_rollback_procedure() -> None:
     assert "decision; no Agent or Skill" in matrix
 
 
+def test_lck_rollback_procedure_reverts_candidate_and_requires_fresh_review(
+    tmp_path: Path,
+) -> None:
+    repo, _ = _repo(tmp_path)
+    last_reviewed_head = _git(repo, "rev-parse", "HEAD")
+
+    _git(repo, "switch", "-c", "task/163-activation")
+    (repo / "activation.txt").write_text("candidate\n", encoding="utf-8")
+    _git(repo, "add", "activation.txt")
+    _git(repo, "commit", "-m", "prepare Task 163 activation")
+    candidate_head = _git(repo, "rev-parse", "HEAD")
+
+    _git(repo, "switch", "main")
+    _git(repo, "merge", "--squash", candidate_head)
+    _git(repo, "commit", "-m", "squash Task 163 candidate")
+    activated_head = _git(repo, "rev-parse", "HEAD")
+    assert activated_head != last_reviewed_head
+
+    # Simulate activation failure recovery with one controlled revert of the
+    # candidate merge, without reactivating any legacy workflow path.
+    _git(repo, "revert", "--no-edit", activated_head)
+    rollback_head = _git(repo, "rev-parse", "HEAD")
+    assert rollback_head != activated_head
+    assert _git(repo, "show", "-s", "--format=%P", rollback_head) == activated_head
+    assert _git(repo, "diff", "--quiet", last_reviewed_head, "HEAD") == ""
+    assert _git(repo, "status", "--porcelain") == ""
+
+    # A later activation candidate must have a new reviewed head; the old
+    # Review identity cannot authorize it after rollback.
+    _git(repo, "switch", "-c", "task/163-activation-retry")
+    (repo / "activation.txt").write_text("retry\n", encoding="utf-8")
+    _git(repo, "add", "activation.txt")
+    _git(repo, "commit", "-m", "prepare fresh Task 163 activation")
+    fresh_head = _git(repo, "rev-parse", "HEAD")
+    assert fresh_head not in {last_reviewed_head, activated_head, rollback_head}
+
+    reviewed_identity = lck.ReviewIdentity(
+        task_number=163,
+        pr_number=168,
+        base_sha=last_reviewed_head,
+        head_sha=activated_head,
+        task_body_sha256="a" * 64,
+        merge_base_sha=last_reviewed_head,
+        effective_diff_sha256="b" * 64,
+        changed_files=("activation.txt",),
+    )
+    current_identity = lck.ReviewIdentity(
+        task_number=163,
+        pr_number=168,
+        base_sha=last_reviewed_head,
+        head_sha=fresh_head,
+        task_body_sha256="a" * 64,
+        merge_base_sha=last_reviewed_head,
+        effective_diff_sha256="b" * 64,
+        changed_files=("activation.txt",),
+    )
+    with pytest.raises(lck.ReviewStaleError, match="REVIEW_STALE_HEAD"):
+        lck._assert_review_applicable(reviewed_identity, current_identity)
+
+
 def _with_checks(state: lck.LiveState, checks: dict[str, Any]) -> lck.LiveState:
     pr = dict(state.open_pr or {})
     items = (

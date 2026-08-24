@@ -52,16 +52,23 @@ an equivalent direct command chain as fallback.
 
 ## Allowed local writes
 
-Runners may write exact bounded artifacts only under:
+Runners may write exact bounded artifacts under:
 
 ```text
 .agents/evidence.local/
 .agents/validation.local/
+.workflow.local/lck/              # ignored LCK operation state / preserved Review evidence
+$TMPDIR/tracequant-lck-review-*    # operation-owned standalone Review clones only
 ```
 
-These roots must be Git ignored. A known required write route should be correct
-on the first formal call; do not intentionally run a known-failing sandbox probe
-before an approved exact route.
+Repository-local roots must be Git ignored. Independent Review may write only its ignored
+LCK operation/evidence state; the source tracked tree and source Git metadata remain
+read-only. Temporary clones are owned by the Review operation, live only until Review
+Complete (or failed/interrupted Prepare cleanup), and MUST NOT register or mutate source
+`.git/worktrees`. Creating, sealing, or removing the Review clone is expected to work in
+the normal sandbox and is not by itself a reason to elevate the LCK command. A known required write route should
+be correct on the first formal call; do not intentionally run a known-failing sandbox
+probe before an approved exact route.
 
 ## Git and GitHub boundaries
 

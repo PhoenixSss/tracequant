@@ -571,7 +571,7 @@ Within one bounded operation, LCK MAY persist operation-owned state required to 
 ```text
 operation ID
 sealed target identity / Operation Snapshot evidence
-owned workspace / worktree path
+owned workspace / temporary-clone path
 in-flight guard / lease metadata
 formal-validation evidence path
 review handoff marker
@@ -1027,11 +1027,16 @@ After the `ReviewPrepareSnapshot` is frozen:
 
 LCK then:
 
-1. prepares a clean isolated review context for the exact snapshot head;
-2. runs deterministic applicable validation against that immutable target;
-3. persists validation/check evidence and exact review identity;
-4. seals the workspace / target for the semantic Review Agent;
-5. returns `READY_FOR_SEMANTIC_REVIEW`.
+1. allocates an operation-owned path in the system temporary directory;
+2. creates a standalone local clone of the source repository without registering a source Git worktree;
+3. gives the clone independent Git object storage (no source-object hardlinks), restores `origin` to the real repository remote, and materializes only an exact required base/head commit if the local clone does not already contain it;
+4. checks out the exact snapshot head in detached mode and verifies a clean workspace;
+5. runs deterministic applicable validation against that immutable target;
+6. persists validation/check evidence and exact review identity;
+7. seals the entire temporary clone read-only for the semantic Review Agent;
+8. returns `READY_FOR_SEMANTIC_REVIEW`.
+
+The source tracked tree and source Git metadata MUST remain read-only throughout Independent Review; LCK MAY write only ignored operation/evidence state such as `.workflow.local/lck/`. Review Prepare and cleanup MUST NOT use `git worktree add/remove/prune` or require writes to the source repository's `.git/worktrees`. Formal Review validation runs inside the temporary clone and any evidence that must survive clone deletion is copied only into the ignored LCK local evidence root. The temporary clone exists only from successful Review Prepare workspace creation through Review Complete. After Review Complete durably records PASS, FAIL, or STALE, LCK deletes the owned clone directly. If Prepare fails after clone creation, it records failure evidence and removes the clone. If the process is interrupted, the operation marker identifies the exact owned temporary path for later cleanup; no source Git registration recovery is required.
 
 The Review Agent:
 

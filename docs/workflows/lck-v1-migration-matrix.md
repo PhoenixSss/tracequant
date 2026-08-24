@@ -105,9 +105,11 @@ The active Review path is:
 1. `review prepare <Task>` acquires one fresh Review Prepare snapshot containing the
    current OPEN PR, base/head, current Task Contract, effective diff and checks; no
    expected SHA/PR input is accepted.
-2. LCK creates a detached clean worktree for the exact reviewed head, runs formal Review
-   validation there, then removes implementation write bits before the semantic Agent
-   inspects it.
+2. LCK creates a detached standalone temporary clone for the exact reviewed head without
+   registering or mutating source `.git/worktrees`, restores the clone origin to the real
+   remote, runs formal Review validation there, then seals the whole clone read-only before
+   the semantic Agent inspects it. Review Complete deletes the clone directly after recording
+   PASS / FAIL / STALE; interruption recovery owns only the temporary path.
 3. The semantic Review Agent judges only that sealed target.
 4. `review complete <Task> --review-id ...` is a **new LCK operation**. It acquires one
    fresh Review Complete snapshot and compares current PR/head/base/Task Contract/effective
@@ -148,3 +150,11 @@ reactivated during rollback. The maintainer then synchronizes `main`, reruns the
 relevant post-merge validation, and records the restored LCK authority boundary.
 A later activation requires a new reviewed head and a fresh maintainer merge
 decision; no Agent or Skill may bypass this rollback boundary.
+
+The controlled rollback boundary is mechanically verified by
+`tests/tools/test_lck_delivery.py::test_lck_rollback_procedure_reverts_candidate_and_requires_fresh_review`.
+That regression creates a squash candidate in an isolated Git repository, executes one
+`git revert` after simulated activation failure, proves the restored main tree is clean
+and equal to the last reviewed state, then proves the old Review identity is rejected
+with `REVIEW_STALE_HEAD` for a fresh activation head. It does not inject a failure into
+the healthy live activation path.

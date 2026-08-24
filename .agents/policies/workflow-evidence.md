@@ -145,7 +145,7 @@ workflow-closeout --base-sha <PR base>
 
 Workflow profiles run the current CI-equivalent plan and all repository Skill
 validators. LCK invokes formal Review validation inside the isolated exact-head
-Review worktree before sealing implementation files read-only; the profile result
+standalone Review clone before sealing the temporary repository read-only; the profile result
 is invocation evidence, not a cross-phase snapshot. `workflow-closeout` additionally
 requires clean local `main == origin/main`.
 

@@ -55,21 +55,26 @@ LCK 在本次 invocation 开始时从 live Git / GitHub 重新解析：
 - current applicable checks；
 - current formal Review validation state。
 
-`review prepare` 在开始 live resolution、worktree 和 formal validation 前建立一个
+`review prepare` 在开始 live resolution、temporary clone 和 formal validation 前建立一个
 Task-local operation marker；它只用于阻止同一 Task 的重复 in-flight Prepare，不是
 `review_id` 或跨阶段 authority。成功时才返回 `review_id`、live review target、Task
 Contract、validation、checks 和 isolated `review_root`。Formal validation FAIL 会先
 把 command-level result、validated base/head 和 evidence path 持久化，再 fail closed，
-不产生 semantic Review `review_id`。Marker 在 isolated worktree path 被预留之前
+不产生 semantic Review `review_id`。Marker 在 standalone clone path 被预留之前
 只记录 operation ownership；创建后、validation、异常退出和成功 handoff 都更新
 同一个 marker。成功 handoff 会一直保留到 Review completion，以便 command result
 丢失时仍能从 marker + guard 判断 ownership；后续 Prepare 只有在 owner 已退出且
-handoff 的 worktree/guard 不完整时才回收其 LCK-owned state。
+handoff 的 clone/guard 不完整时才回收其 LCK-owned state。
 
 ## 4. Fresh semantic context and read-only workspace
 
-LCK 创建 reviewed head 的 detached isolated worktree，先在该 exact head 上运行正式
-Review validation，然后将 implementation workspace 封为 read-only。
+LCK 在系统临时目录创建 reviewed head 的 detached standalone clone；它通过本地 clone
+读取 source repository，但不注册 source worktree、不修改 source `.git/worktrees`。Clone
+使用独立 Git metadata/object storage，origin 恢复为真实 remote；LCK 先在 exact head 上运行
+正式 Review validation；需要跨 clone 生命周期保留的 validation evidence 复制到 ignored
+`.workflow.local/lck/`，再将整个 temporary Review clone 封为 read-only。Review Complete
+持久化 PASS / FAIL / STALE 结果后直接删除该 clone；异常中断只需按 operation-owned path
+回收临时目录，不需要 `git worktree remove/prune`。
 
 Reviewer 只从 `review_root`、当前 Task Contract 和必要的 current GitHub context
 建立新的 semantic context。不得把 Delivery self-review、旧 Review verdict、旧

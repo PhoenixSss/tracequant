@@ -39,8 +39,9 @@ uv run --frozen python tools/agent_workflow/lck.py review prepare <TASK>
 
 Proceed only on `READY_FOR_SEMANTIC_REVIEW`. Use the returned `review_id`, current
 Task Contract, current review target, validation/check state, and `review_root`.
-The `review_root` is a detached, clean, implementation-read-only worktree for the
-live-resolved head.
+The `review_root` is a detached, clean, implementation-read-only standalone temporary
+clone for the live-resolved head. The source tracked tree and source Git metadata remain
+read-only; only ignored LCK operation/evidence state may be written outside the clone.
 
 If LCK returns STOP or stale, do not fall back to archived evidence snapshots,
 expected SHAs, direct `gh` selection, or a Delivery handoff.
@@ -82,7 +83,7 @@ uv run --frozen python tools/agent_workflow/lck.py review complete <TASK> \
 ```
 
 FAIL: write the complete blocking findings to an ignored or temporary file outside the
-read-only implementation worktree, then:
+read-only standalone Review clone, then:
 
 ```bash
 uv run --frozen python tools/agent_workflow/lck.py review complete <TASK> \
