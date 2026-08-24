@@ -166,7 +166,7 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
 shared semantics 由 `docs/development/pr-review.md` 权威定义：
 fresh session、strict read-only、head lock、independent judgement、
 no Delivery mechanical authority inheritance、LCK live target resolution、
-invocation-local stale guard、PASS / FAIL、new head → fresh re-review。
+Review Prepare/Complete operation-boundary stale guard、PASS / FAIL、new head → fresh re-review。
 
 本文件只声明其在 lifecycle 中的位置：Review 在 CI checks 通过后、
 maintainer merge 前执行；Review FAIL 必须先 STOP，只有 Human 显式发起后

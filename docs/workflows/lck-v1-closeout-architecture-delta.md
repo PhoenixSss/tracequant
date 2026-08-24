@@ -52,12 +52,14 @@ materialization and other metadata writes remain bounded lifecycle effects.
 
 ## Operation Snapshot Isolation
 
-The converged LCK v1 state model is **one authoritative snapshot per lifecycle
-operation**. `OperationSnapshotBuilder` is the sole lifecycle entry boundary that
-may call the full `LiveStateResolver`. Delivery Prepare, Delivery Complete,
-Review Prepare, Remediation Prepare/Complete, Merge Preflight, and Closeout
-consume one immutable operation snapshot; Review Complete consumes the sealed
-Review snapshot created by Review Prepare. The `status` diagnostic CLI remains
+The converged LCK v1 state model is **one authoritative snapshot per LCK
+invocation / lifecycle operation**. `OperationSnapshotBuilder` is the sole lifecycle
+entry boundary that may call the full `LiveStateResolver`. Delivery Prepare,
+Delivery Complete, Review Prepare, Review Complete, Remediation Prepare/Complete,
+Merge Preflight, and Closeout each consume one immutable operation snapshot. The
+sealed Review Prepare identity is historical evidence describing what the semantic
+Agent reviewed; Review Complete reacquires current authority once and compares it
+with that target before accepting the verdict. The `status` diagnostic CLI remains
 a direct read-only resolver caller and does not authorize lifecycle effects.
 
 After snapshot acquisition:
@@ -66,9 +68,11 @@ After snapshot acquisition:
 - CI/checks pending at acquisition stop the operation rather than starting a
   polling loop;
 - local/remote/PR/metadata writes use effect-local exact postcondition queries;
-- an external push or Task edit does not mutate an in-flight Review target;
-- the next lifecycle transition acquires a fresh snapshot and rejects stale
-  prior receipts where applicable.
+- an external push or Task edit does not mutate the already-reviewed target;
+- Review Complete is a new operation and rejects a stale semantic verdict before
+  it becomes the current accepted Review result;
+- Merge Preflight is another new operation and independently rejects an accepted
+  Review receipt that became stale after completion.
 
 This replaces the former pattern of nested `resolver.resolve()` calls before and
 after validation. It is both the consistency boundary and the query-complexity
@@ -85,8 +89,9 @@ authority in active Skills/LCK, and the named full-lifecycle regression tests.
 The lifecycle regression suite covers:
 
 - fresh Delivery and validated-tree completion;
-- Review PASS/FAIL on one immutable Review Snapshot, explicit Remediation, and
-  stale Review head/base rejection at the fresh Merge Preflight boundary;
+- Review Prepare/Complete with one snapshot per invocation, explicit
+  `REVIEW_STALE_PR/HEAD/BASE/TASK/DIFF` rejection before verdict acceptance,
+  explicit Remediation, and independent stale receipt rejection at Merge Preflight;
 - manual Squash Merge preflight;
 - Business Delivery complete with Cleanup complete or pending;
 - remote divergence, deleted refs, and live recovery behavior.
@@ -103,9 +108,9 @@ inventory; their aggregate command counts are not added to current LOC.
 
 | Measure | #88 / pre-LCK reference | LCK v1 current shape |
 | --- | --- | --- |
-| Formal lifecycle controller | Skill + Runner + handoff/snapshot paths | `lck.py`: 4,699 LOC |
+| Formal lifecycle controller | Skill + Runner + handoff/snapshot paths | `lck.py`: 4,796 LOC |
 | Task-control support called by LCK | mechanics split across Skill/Runner/helpers | 1,241 LOC: `critical_outcome.py` 204 + `pr_resolve.py` 481 + `project_status.py` 153 + shared `workflow_common.py` 403 |
-| Combined active Task control code | no single deterministic boundary in #88 | 5,940 LOC controller + direct support; reused validation/audit infrastructure excluded |
+| Combined active Task control code | no single deterministic boundary in #88 | 6,039 LOC controller + direct support; reused validation/audit infrastructure excluded |
 | Reused Validation infrastructure | existing fixed Validation Runner | 1,163 LOC: `workflow_validation.py` 344 + `wsl2_validation_runner.py` 819; reused rather than duplicated |
 | Audit-only Evidence implementation | Task Evidence Runner was part of lifecycle control | `workflow_evidence.py` 1,649 LOC retained as read-only audit/shared-query code, not Task authority |
 | Task Skill lifecycle mechanics | direct command/procedure paths | 269 LOC per provider; 538 LOC across Codex + Claude; no direct lifecycle writes |
@@ -114,7 +119,7 @@ inventory; their aggregate command counts are not added to current LOC.
 | Dynamic global write authorization | `write_actions_allowed` disposition | absent from LCK and active Task policy |
 | Direct Agent lifecycle writes | present in historical baseline | 0 in active Task Skills |
 | Duplicate Task identity resolution | Skill/Runner/current-workflow paths | one LCK `LiveStateResolver`; historical audit queries cannot authorize Task phases |
-| Main lifecycle test groups | split across old Runner and workflow paths | 98 tests: 60 + 26 + 11 + 1 acceptance |
+| Main lifecycle test groups | split across old Runner and workflow paths | 104 tests: 66 + 26 + 11 + 1 acceptance |
 | Legacy executable components removed in this convergence | old Task Runner/profiles/Rules + durable self-review binder | 7 files removed: Runner, profile spec, Codex Rule, two Runner/Rules tests, self-review binder, binder test |
 
 The historical #85 static Skill record reports 685 lines before and 547 lines
@@ -122,7 +127,7 @@ after its earlier Runner migration; #88 supplies the operation inventory rather
 than a directly comparable LOC measurement. Current values above were measured
 from this candidate tree and are descriptive evidence, not lifecycle authority.
 
-The LOC boundary is explicit to avoid understating LCK complexity: the 4,699-line
+The LOC boundary is explicit to avoid understating LCK complexity: the 4,796-line
 core is reported separately from the 1,241 lines of support it directly calls.
 Validation infrastructure is reported separately because it predates LCK and is
 reused; audit-only Evidence code is also reported separately because it cannot
@@ -147,7 +152,7 @@ provider-attributed live-session evidence.
 | 7 | Branch/SHA/PR actionable identity resolved by LCK | Satisfied | Delivery/Review/Remediation/Closeout live-resolution tests |
 | 8 | Agent does not own commit/push/PR/lifecycle mutation | Satisfied | Skill guards + LCK bounded effects |
 | 9 | Delivery stops before Independent Review | Satisfied | `READY_FOR_REVIEW`; no automatic Review invocation |
-| 10 | Fresh Review role + live target | Satisfied | isolated read-only review worktree + live target tests |
+| 10 | Fresh Review role + operation-bounded target/applicability snapshots | Satisfied | isolated read-only review worktree + Review Complete stale-target regressions |
 | 11 | Review FAIL always stops | Satisfied | `STOP_REQUIRED` regression |
 | 12 | Remediation requires Human intent | Satisfied | explicit failed `review_id` admission; no auto-remediation |
 | 13 | Human Squash Merge mandatory | Satisfied | merge preflight stops at maintainer boundary; no merge effect |
@@ -163,11 +168,11 @@ provider-attributed live-session evidence.
 | 23 | One explicit snapshot-acquisition boundary per new lifecycle operation | Satisfied | `OperationSnapshotBuilder`; prepare/complete/preflight/closeout regression coverage |
 | 24 | No hidden authoritative reacquisition after snapshot freeze | Satisfied | lifecycle code contains one `self.resolver.resolve(...)` call, inside `OperationSnapshotBuilder`; `status` is diagnostic-only |
 | 25 | Snapshot facts are phase-specific and complete, not lazily added | Satisfied | optional required-check configuration is acquired with the operation snapshot; downstream gates evaluate the frozen object |
-| 26 | Independent Review does not refresh authority after Review Snapshot freeze | Satisfied | Review Prepare performs one acquisition; Review Complete consumes the sealed guard/snapshot without resolver access |
+| 26 | Review Prepare and Review Complete each use one immutable operation snapshot; Complete rejects stale target before accepting verdict | Satisfied | Prepare acquisition regression + Complete `REVIEW_STALE_PR/HEAD/BASE/TASK/DIFF` regressions; one resolver acquisition per invocation |
 | 27 | Merge Preflight freshly rejects stale Review receipts | Satisfied | fresh merge snapshot + `ReviewPassGate` identity comparison |
 | 28 | Safe Effects use targeted postconditions, not full-state refresh | Satisfied | exact remote-ref, PR, Project Status, main-sync, metadata, and cleanup effect checks |
 | 29 | Pending asynchronous eligibility stops rather than polls | Satisfied | `DeliveryChecksGate` has no timeout/poll loop; pending checks require a later fresh invocation |
-| 30 | Operation guards resume only the same interrupted operation | Satisfied (regression); real workflow revalidation required | Review operation ownership/guard tests; guard is not later lifecycle authority |
+| 30 | Operation guards identify prior ownership/target evidence but never become later current authority | Satisfied (regression); real workflow revalidation required | Review ownership/guard tests; Review Complete and retries reacquire fresh authority |
 | 31 | Read-only remote observation avoids broad local Git mutation | Satisfied | authoritative main uses `git ls-remote`; remote-tracking ref is diagnostic only |
 | 32 | Failure diagnostics preserve the concrete unavailable/failed fact | Satisfied for formal validation and snapshot gates | durable validation evidence plus fact-specific snapshot/check errors |
 

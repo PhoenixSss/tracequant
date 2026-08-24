@@ -449,22 +449,23 @@ LCK exits or seals operation-owned continuation state
 Codex / Claude continues semantic work
 ```
 
-A new lifecycle transition MUST acquire a new snapshot. Examples:
+Every LCK invocation is an **operation boundary** and MUST acquire a fresh phase-specific snapshot. Examples:
 
 ```text
 Delivery Prepare      → fresh DeliveryPrepareSnapshot
 Delivery Complete     → fresh DeliveryCompleteSnapshot
-Review                → fresh ReviewSnapshot
+Review Prepare        → fresh ReviewPrepareSnapshot
+Review Complete       → fresh ReviewCompleteSnapshot
 Remediation Prepare   → fresh RemediationPrepareSnapshot
 Remediation Complete  → fresh RemediationCompleteSnapshot
 Merge Preflight       → fresh MergeSnapshot
-Closeout               → fresh CloseoutSnapshot
-Recovery invocation    → fresh RecoverySnapshot
+Closeout              → fresh CloseoutSnapshot
+Recovery invocation   → fresh RecoverySnapshot
 ```
 
-A semantic operation MAY span multiple process invocations when an Agent must act between LCK entrypoints. Independent Review is the primary example: `review prepare` may seal the Review Snapshot and workspace, the Review Agent performs semantic analysis, and `review complete` consumes that same sealed Review Snapshot. `review complete` MUST NOT reacquire Git/GitHub authority for the in-flight Review.
+When semantic Agent work occurs between two LCK entrypoints, the later entrypoint is a **new operation**, not a continuation of the earlier operation's authority. The earlier operation may persist an exact target identity, evidence, or owned-resource marker as historical input for comparison, but the later operation MUST acquire current authority once and decide whether that historical target is still applicable.
 
-Operation-owned continuation state is allowed only to finish or recover the same operation. It MUST NOT be reused as authority by the next lifecycle operation.
+Operation-owned interruption metadata may survive a crashed process only to identify resources and support deterministic cleanup/recovery. A retry is a new operation and MUST reacquire fresh authority; it MUST NOT resume the prior operation's snapshot as current authority.
 
 Example conceptual entrypoints remain:
 
@@ -563,26 +564,27 @@ It MUST NOT answer:
 
 > **What is currently authorized for a new lifecycle operation?**
 
-### 10.4 Operation-owned continuation state
+### 10.4 Operation-owned interruption and handoff evidence
 
-Within one bounded operation, LCK MAY persist operation-owned state required to survive process interruption, such as:
+Within one bounded operation, LCK MAY persist operation-owned state required to explain or recover from interruption, such as:
 
 ```text
 operation ID
-sealed Operation Snapshot
+sealed target identity / Operation Snapshot evidence
 owned workspace / worktree path
 in-flight guard / lease metadata
 formal-validation evidence path
 review handoff marker
 ```
 
-This state MAY be durable enough to resume the same operation after an interrupted process or Agent handoff.
+This state MAY survive process termination so a later invocation can identify and clean owned resources, or compare a previously reviewed target with fresh current authority. It is historical evidence, not current authority.
 
 It MUST:
 
-- be scoped to one operation;
+- be scoped to the invocation / operation that created it;
 - have explicit ownership and cleanup rules;
-- be invalid as authority for the next lifecycle transition;
+- be invalid as current authority for every later invocation;
+- require a fresh snapshot before any later lifecycle decision;
 - never require generalized snapshot lineage.
 
 ### 10.5 Derived operation evidence
@@ -661,7 +663,7 @@ Each lifecycle operation MUST acquire its required authoritative input facts onc
 
 Downstream helpers MUST NOT silently reacquire live authority after snapshot freeze.
 
-Operation-local identity guards and sealed continuation state are allowed to prevent TOCTOU and support interruption recovery for the same operation.
+Operation-local identity guards are allowed inside the invocation. Persisted ownership/target evidence may survive interruption, but any later invocation MUST reacquire fresh authority before using that evidence for applicability or cleanup decisions.
 
 ### P9 — Audit is not authority
 
@@ -987,11 +989,23 @@ Delivery MUST end at a Human boundary before Independent Review.
 
 ## 16. Independent Review Contract
 
-Independent Review MUST be a separate semantic workflow operation with **snapshot isolation**.
+Independent Review is a semantic workflow spanning **two distinct LCK operations** with a fresh semantic Review Agent between them:
 
-### Review Snapshot acquisition
+```text
+Review Prepare operation
+        ↓
+sealed Review target + isolated workspace
+        ↓
+fresh semantic Review Agent
+        ↓
+Review Complete operation
+```
 
-Before creating a review workspace, running formal validation, or starting semantic review, LCK MUST acquire one complete immutable `ReviewSnapshot` containing every authoritative fact required by that Review, including as applicable:
+The two LCK invocations do not share current authority. Review Prepare records exactly what was reviewed; Review Complete reacquires current authority exactly once and determines whether the semantic verdict is still applicable.
+
+### Review Prepare operation
+
+Before creating a review workspace, running formal validation, or starting semantic review, LCK MUST acquire one complete immutable `ReviewPrepareSnapshot` containing every authoritative fact required to establish the review target, including as applicable:
 
 - repository identity;
 - Task identity, state, labels, Task contract, and Task contract hash;
@@ -1002,68 +1016,81 @@ Before creating a review workspace, running formal validation, or starting seman
 - current check results bound to the exact reviewed head;
 - Review-specific relationship / eligibility facts.
 
-If any required fact cannot be acquired unambiguously, Review MUST STOP **before** expensive validation or review work begins.
+If any required fact cannot be acquired unambiguously, Review Prepare MUST STOP **before** expensive validation or semantic review work begins.
 
-After the `ReviewSnapshot` is frozen:
+After the `ReviewPrepareSnapshot` is frozen:
 
-- no authoritative Git/GitHub fact is reacquired for that in-flight Review;
-- no downstream Review helper may call the full live-state resolver;
+- no authoritative Git/GitHub fact is reacquired inside Review Prepare;
+- no downstream Review Prepare helper may call the full live-state resolver;
 - no checks polling or phase-internal refresh loop is allowed;
-- the exact Task contract, PR, base, and head being reviewed remain immutable Review inputs.
+- the exact Task contract, PR, base, head, and effective diff being handed to the reviewer remain immutable inputs.
 
 LCK then:
 
 1. prepares a clean isolated review context for the exact snapshot head;
 2. runs deterministic applicable validation against that immutable target;
-3. persists validation evidence;
-4. invokes or enables a fresh semantic Review Agent.
+3. persists validation/check evidence and exact review identity;
+4. seals the workspace / target for the semantic Review Agent;
+5. returns `READY_FOR_SEMANTIC_REVIEW`.
 
 The Review Agent:
 
-- independently inspects the effective change bound to the `ReviewSnapshot`;
+- independently inspects the exact effective change bound to the sealed Review target;
 - evaluates Task requirements;
-- evaluates Critical Outcome evidence included in or bound to that snapshot / validation evidence;
-- returns PASS / FAIL with findings.
+- evaluates Critical Outcome evidence bound to that target / validation evidence;
+- returns PASS / FAIL with findings;
+- does not mutate implementation or current lifecycle state.
 
-If Review uses separate `review prepare` and `review complete` process invocations, the sealed `ReviewSnapshot` and owned review workspace are operation-owned continuation state. `review complete` MUST consume them and MUST NOT query current Git/GitHub state as new authority.
+### Review Complete operation
 
-### External changes during Review
+`review complete` is a **new LCK operation**. Before accepting either PASS or FAIL as the current Independent Review result, LCK MUST acquire one fresh immutable `ReviewCompleteSnapshot` containing the current facts required to test verdict applicability.
 
-External Git/GitHub changes occurring after Review Snapshot acquisition do **not** mutate the in-flight Review.
-
-For example, if Review begins on head `A` and another actor later pushes head `B`, the Review may still complete and produce:
-
-```text
-ReviewReceipt
-  reviewed_head = A
-  reviewed_task_contract = T
-  verdict = PASS | FAIL
-```
-
-The resulting receipt is exact historical evidence for `A` / `T`. Whether it is still applicable is evaluated by the **next lifecycle transition**, especially Merge Preflight, which acquires a fresh snapshot.
-
-Therefore LCK MUST NOT perform a final `Review` live-state refresh solely to detect:
+Review Complete then compares the fresh identity with the sealed Review Prepare target. At minimum:
 
 ```text
-PR head changed during review
-base changed during review
-Task body changed during review
-checks changed during review
+current PR != reviewed PR
+→ REVIEW_STALE_PR
+
+current PR head != reviewed head
+→ REVIEW_STALE_HEAD
+
+current relevant base != reviewed base
+→ REVIEW_STALE_BASE
+
+current Task Contract hash != reviewed Task Contract hash
+→ REVIEW_STALE_TASK
+
+current effective diff != reviewed effective diff
+→ REVIEW_STALE_DIFF
 ```
 
-Those conditions become **receipt-staleness conditions at the next transition**, not reasons to mix multiple live-state times inside one Review.
+Current applicable checks MUST also still satisfy the Review completion gate.
+
+If any stale condition exists, the semantic verdict MAY remain historical evidence for the old target, but it MUST NOT become the current accepted Review PASS/FAIL, MUST NOT clear the requirement for a fresh Review, and MUST NOT authorize Remediation or Merge. A new Review Prepare is required for the new target.
+
+Within Review Complete itself, authority is still acquired only once: downstream helpers consume the `ReviewCompleteSnapshot` and MUST NOT perform hidden full-state resolution.
 
 ### PASS
 
-Produces a Review receipt for the exact frozen Review Snapshot and returns readiness for a later Human merge decision / Merge Preflight.
+If the semantic verdict is PASS and the fresh Review Complete snapshot still matches the sealed target, LCK records an accepted Review receipt for that exact identity and returns:
+
+```text
+READY_FOR_MERGE_PREFLIGHT
+```
+
+This is **not** readiness for Human merge. Merge Preflight is a later lifecycle operation that must reacquire current authority again.
 
 ### FAIL
 
-Returns `STOP_REQUIRED` and publishes / persists findings bound to the exact Review Snapshot.
+If the semantic verdict is FAIL and the fresh Review Complete snapshot still matches the sealed target, LCK records the failed Review and returns `STOP_REQUIRED`.
 
-No automatic remediation occurs.
+No automatic remediation occurs. Human intent is required to start Remediation.
 
----
+### Why both Review Complete and Merge Preflight recheck freshness
+
+Review Complete protects the correctness of the lifecycle statement being published: it must not accept a PASS/FAIL for target `A` as the current Review result after the PR or Task has already moved to `B`.
+
+Merge Preflight independently protects the later merge transition because state may change again after Review Complete. These are separate operation boundaries, not redundant refreshes inside one operation.
 
 ## 17. Remediation Contract
 
@@ -1480,7 +1507,7 @@ Before LCK v1 implementation is considered architecturally complete, the design 
 7. Branch / SHA / PR actionable identity is resolved by LCK.
 8. Agent cannot directly own commit / push / PR mutation / lifecycle transition.
 9. Delivery ends at a Human boundary before Independent Review.
-10. Independent Review uses a fresh review role and a single immutable Review Snapshot.
+10. Independent Review uses a fresh review role; Review Prepare and Review Complete each use one immutable operation snapshot, and Complete rejects stale reviewed targets before accepting the verdict.
 11. Review FAIL always stops.
 12. Remediation requires explicit Human intent.
 13. Human Squash Merge remains mandatory in v1.
@@ -1496,11 +1523,11 @@ Before LCK v1 implementation is considered architecturally complete, the design 
 23. Every new lifecycle operation has one explicit authoritative snapshot-acquisition boundary before expensive or effectful work.
 24. After snapshot freeze, downstream helpers do not reacquire authoritative Git/GitHub state or invoke hidden full-state resolution.
 25. Operation Snapshot facts are phase-specific and complete for that operation; authoritative facts are not lazily added later.
-26. Independent Review performs no authoritative Git/GitHub refresh after Review Snapshot freeze; external changes do not mutate the in-flight review target.
-27. Merge Preflight acquires fresh authority and rejects a Review receipt whose Task contract / PR / head / relevant base identity is stale.
+26. Review Prepare performs no authoritative Git/GitHub refresh after its snapshot freeze; Review Complete is a separate operation that acquires one fresh snapshot and rejects stale PR / head / base / Task Contract / effective-diff identity before accepting the verdict.
+27. Merge Preflight independently acquires fresh authority and rejects an accepted Review receipt whose Task contract / PR / head / relevant base identity is stale.
 28. Safe Effects verify their own targeted postconditions and do not trigger unrelated full-state re-resolution.
 29. Pending asynchronous eligibility such as CI checks causes a STOP / WAIT boundary and a later fresh invocation rather than an in-operation polling loop.
-30. Operation-owned sealed snapshots / guards may resume the same interrupted operation but cannot authorize later lifecycle operations.
+30. Operation-owned snapshots / guards may identify an interrupted operation and its resources, but any retry or later invocation must acquire fresh authority and cannot reuse the prior snapshot as current authority.
 31. Observation-only remote fact acquisition does not require broad mutation of local Git metadata when a read-only authoritative remote query is sufficient.
 32. Failure reports preserve the exact unavailable / ambiguous fact or failed query instead of collapsing unrelated failures into a generic unresolved-state message.
 
@@ -1523,9 +1550,10 @@ The following decisions are considered the current LCK v1 design baseline.
 - Each new lifecycle operation acquires one phase-specific complete authoritative snapshot and freezes it before expensive/effectful work.
 - Authoritative input facts are not reacquired or lazily added after snapshot freeze.
 - Downstream helpers consume the Operation Snapshot and do not own hidden live-state resolution.
-- Freshness is checked at the next lifecycle transition, not by repeatedly refreshing an in-flight operation.
-- Independent Review stays bound to one immutable Review Snapshot; Merge Preflight detects stale Review receipts against fresh authority.
-- Operation-owned sealed snapshots / guards are allowed only to resume the same operation and are not cross-phase authority.
+- Freshness is checked once at every LCK invocation / lifecycle operation boundary, not by repeatedly refreshing inside an invocation.
+- Review Prepare seals the reviewed target; Review Complete is a new operation that reacquires current authority once and rejects stale verdict applicability before publishing the current Review result.
+- Merge Preflight is another new operation and independently rejects stale accepted Review receipts before Human merge.
+- Operation-owned snapshots / guards are historical target/ownership evidence only; retries and later invocations reacquire authority and do not resume old snapshot authority.
 - Audit evidence is not workflow authority.
 - Phase authority is static; operation eligibility is dynamic from the fresh operation snapshot.
 - LCK uses bounded Safe Effects.

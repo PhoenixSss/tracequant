@@ -79,9 +79,10 @@ Review Agent 可以读取完整 effective diff、相关 unchanged code、tests�
 和 public interfaces；必须逐项判断 Acceptance Criteria、正确性、failure paths、
 安全边界与回归风险。
 
-## 5. Review completion and invocation-local stale guard
+## 5. Review Complete：fresh applicability snapshot
 
-语义审查结束后必须调用同一个 invocation 的 completion：
+语义审查结束后，调用 `review complete`。它是一个**新的 LCK operation**，不是
+Review Prepare authority 的延续：
 
 PASS：
 
@@ -101,49 +102,69 @@ uv run --frozen python tools/agent_workflow/lck.py review complete <TASK> \
   --findings-file <FINDINGS_FILE>
 ```
 
-`review_id` 只定位本次 ephemeral applicability guard 和 diagnostic Review record；
-它不把旧机械事实升级成跨阶段 authority。
+`review_id` 定位 Review Prepare 封存的 reviewed target、validation evidence 和
+workspace ownership；这些是“审查了什么”的历史证据，不是 Review Complete 的当前
+机械 authority。
 
-在接受 verdict 前，LCK 重新解析 current OPEN PR、base/head、Task Contract 和
-effective diff。至少执行以下 invocation-local stale preconditions：
+Review Complete 在 operation 入口只获取一次 fresh `ReviewCompleteSnapshot`，并与
+Prepare 时封存的 target 比较：
 
 ```text
-PR head changed → REVIEW_STALE_HEAD
-PR base changed → REVIEW_STALE_BASE
+PR changed            → REVIEW_STALE_PR
+PR head changed       → REVIEW_STALE_HEAD
+PR base changed       → REVIEW_STALE_BASE
+Task Contract changed → REVIEW_STALE_TASK
+effective diff changed→ REVIEW_STALE_DIFF
 ```
 
-Task Contract 或 effective diff 在同一 invocation 内发生变化时，LCK 也会以明确的
-`REVIEW_STALE_*` 结果使本次 Review 失效。这里没有 generic drift graph、跨阶段
-freshness contract 或 snapshot lineage；guard 只在本次 Review prepare → complete
-之间有效。
+current applicable checks 也必须仍然满足 completion gate。
 
-任何 stale result 都不会发布为有效 PASS，旧 semantic verdict 不可复用；必须重新
-执行新的 Independent Review invocation。
+任何 stale result 都不会把 semantic verdict 发布成当前有效 Review PASS/FAIL，也不会
+解除 fresh-review requirement；必须重新执行新的 Review Prepare。Review Complete
+snapshot 冻结后不得再 nested/full Resolve。
 
-## 6. Verdict semantics
+## 6. Verdict semantics and Merge Preflight
 
-正式 Review 只有两种 semantic verdict：
+正式 Review 只有两种 semantic verdict：PASS / FAIL，但 PASS 还必须经过独立的
+Merge Preflight operation 才能进入人工合并边界。
 
-### PASS / `通过，可以人工合并`
+### PASS
 
-要求：semantic Review 无 blocking finding，prepare 时 formal Review validation
-通过，completion 时 live identity 仍适用，current applicable checks 仍通过。
+要求：semantic Review 无 blocking finding，Prepare 时 formal Review validation 通过，
+Review Complete fresh identity 与 sealed reviewed target 一致，current applicable checks
+仍通过。
 
-LCK 返回：
+Review Complete 返回：
+
+```text
+READY_FOR_MERGE_PREFLIGHT
+```
+
+随后执行新的只读 operation：
+
+```bash
+uv run --frozen python tools/agent_workflow/lck.py merge preflight <TASK>
+```
+
+Merge Preflight 再获取一次 fresh `MergeSnapshot`，独立确认 current Task / PR / head /
+base、accepted Review receipt、required checks、blockers 和 mergeability。只有它返回：
 
 ```text
 READY_FOR_HUMAN_MERGE
 ```
 
-随后立即停在 Human manual Squash Merge boundary。Agent / Skill / LCK v1 都不
-自动 merge。
+才可报告 `通过，可以人工合并`，并立即停在 Human manual Squash Merge boundary。
+Agent / Skill / LCK v1 都不自动 merge。
+
+Review Complete 与 Merge Preflight 都做 freshness 检查并不重复：二者是两个独立
+operation，中间 current state 仍可能变化。
 
 ### FAIL / `不通过，需要修复`
 
-当当前 reviewed object 存在 Blocking / High / Medium semantic finding，或 Task
-要求未满足时使用。FAIL 必须提供可供后续修复理解的 findings。
+当当前 reviewed object 存在 Blocking / High / Medium semantic finding，或 Task 要求
+未满足时使用。FAIL 必须提供可供后续修复理解的 findings。
 
-LCK 返回：
+如果 Review Complete 证明该 reviewed target 仍适用，LCK 返回：
 
 ```text
 STOP_REQUIRED
@@ -157,21 +178,22 @@ Review FAIL
 → Human decides what to do
 ```
 
-绝不自动进入 Remediation，也不存在 Review → Delivery → Review 自动循环。
-Low / Nit 可以报告，但不应伪装成 blocking finding。
+绝不自动进入 Remediation，也不存在 Review → Delivery → Review 自动循环。Low / Nit
+可以报告，但不应伪装成 blocking finding。
 
-formal validation / checks 自身无法产生 PASS 时，LCK 在 objective gate 处 STOP；
+formal validation / checks 自身无法产生可接受结果时，LCK 在 objective gate 处 STOP；
 不要通过 `CONDITIONAL`、fallback snapshot 或旧 Delivery evidence 绕过 gate。
 
 ## 7. Review record boundary
 
-`review complete` 可以把 Review 结果写到 ignored `.workflow.local/lck/reviews/`
-作为 audit / diagnostic record。它可记录 reviewed identity、validation、checks 和
-semantic findings，用于回答“当时审查了什么”。
+`review complete` 可以把 accepted Review 结果写到 ignored
+`.workflow.local/lck/reviews/` 作为 audit / diagnostic record。它可记录 sealed reviewed
+identity、Prepare validation/checks、fresh completion snapshot/checks 和 semantic findings，
+用于回答“当时审查了什么、在接受 verdict 时它是否仍适用”。
 
-该 record **不是当前机械授权**。后续 Remediation、merge preflight、Closeout 都
-必须重新获取各自所需的 live Git / GitHub facts。尤其不得把 record 中的旧 head、
-base、checks 或 validation 当作后续写操作的 expected identity。
+该 record **不是当前机械授权**。Merge Preflight、Remediation、Closeout 都必须在自己的
+operation boundary 获取 fresh Git / GitHub facts。尤其不得把 record 中的旧 head、base、
+checks 或 validation 当作后续写操作的 current identity。
 
 ## 8. Explicit Remediation
 

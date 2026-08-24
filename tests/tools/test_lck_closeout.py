@@ -149,7 +149,7 @@ class StaticReviewStore:
             "task_number": 162,
             "review_id": "review",
             "verdict": "PASS",
-            "status": "READY_FOR_HUMAN_MERGE",
+            "status": "READY_FOR_MERGE_PREFLIGHT",
             "identity": {
                 "task_number": 162,
                 "pr_number": 262,

@@ -115,7 +115,7 @@ def test_pr_review_doc_owns_lck_review_semantics() -> None:
         "LCK live target resolution",
         "current effective diff",
         "current Task Contract",
-        "invocation-local stale guard",
+        "fresh `ReviewCompleteSnapshot`",
         "REVIEW_STALE_HEAD",
         "REVIEW_STALE_BASE",
         "Verdict semantics",
@@ -127,7 +127,7 @@ def test_pr_review_doc_owns_lck_review_semantics() -> None:
 
 def test_pr_review_doc_has_binary_pass_fail_stop_contract() -> None:
     text = PR_REVIEW.read_text(encoding="utf-8")
-    assert "PASS / `通过，可以人工合并`" in text
+    assert "READY_FOR_MERGE_PREFLIGHT" in text
     assert "FAIL / `不通过，需要修复`" in text
     assert "READY_FOR_HUMAN_MERGE" in text
     assert "STOP_REQUIRED" in text
@@ -141,10 +141,9 @@ def test_pr_review_doc_removes_cross_phase_mechanical_handoff_authority() -> Non
     text = PR_REVIEW.read_text(encoding="utf-8")
     assert "Delivery 输出、旧 snapshot、expected SHA" in text
     assert "不能授权后续 Review / Remediation" in text
-    assert "generic drift graph" in text
-    assert "跨阶段\nfreshness contract" in text
-    assert "snapshot lineage" in text
-    assert "diagnostic Review record" in text
+    assert "不是 Review Complete 的当前" in text
+    assert "fresh Git / GitHub facts" in text
+    assert "audit / diagnostic record" in text
     assert "不是当前机械授权" in text
     assert "semantic findings only" in text
 
@@ -157,6 +156,8 @@ def test_review_skills_share_binary_lck_contract() -> None:
         assert "tools/agent_workflow/lck.py review prepare" in text
         assert "tools/agent_workflow/lck.py review complete" in text
         assert "READY_FOR_SEMANTIC_REVIEW" in text
+        assert "READY_FOR_MERGE_PREFLIGHT" in text
+        assert "tools/agent_workflow/lck.py merge preflight" in text
         assert "READY_FOR_HUMAN_MERGE" in text
         assert "STOP_REQUIRED" in text
         assert "REVIEW_STALE_HEAD" in text

@@ -88,6 +88,7 @@ class Phase(StrEnum):
     DELIVERY_PREPARE = "Delivery Prepare"
     DELIVERY_COMPLETE = "Delivery Complete"
     REVIEW_PREPARE = "Review Prepare"
+    REVIEW_COMPLETE = "Review Complete"
     REMEDIATION_PREPARE = "Remediation Prepare"
     REMEDIATION_COMPLETE = "Remediation Complete"
     CLOSEOUT = "Closeout"
@@ -103,7 +104,7 @@ class LckStopError(WorkflowToolError):
 
 
 class ReviewStaleError(LckStopError):
-    """The live PR target changed during one bounded Review invocation."""
+    """The reviewed target is no longer current at a later operation boundary."""
 
     def __init__(self, code: str, detail: str) -> None:
         self.code = code
@@ -845,6 +846,7 @@ class PhaseEligibilityResolver:
                 # partial invocation.
                 Phase.DELIVERY_COMPLETE: {"Ready", "In Progress", "Review"},
                 Phase.REVIEW_PREPARE: {"Review", "In Progress"},
+                Phase.REVIEW_COMPLETE: {"Review", "In Progress"},
                 Phase.REMEDIATION_PREPARE: {"Review"},
                 Phase.REMEDIATION_COMPLETE: {"Review"},
                 Phase.CLOSEOUT: {
@@ -923,14 +925,18 @@ class PhaseEligibilityResolver:
                 "ensure_open_pr",
                 "set_review_status",
             )
-        elif phase is Phase.REVIEW_PREPARE:
+        elif phase in {Phase.REVIEW_PREPARE, Phase.REVIEW_COMPLETE}:
             if state.open_pr is None:
                 reasons.append("no current OPEN PR")
             elif state.open_pr.get("isDraft") is not False:
-                reasons.append("Review Prepare requires a non-Draft OPEN PR")
+                reasons.append(f"{phase.value} requires a non-Draft OPEN PR")
             if state.project_status not in {"Review", "In Progress"}:
-                reasons.append("Task is not eligible for Review Prepare")
-            capabilities = ("prepare_read_only_review_context",)
+                reasons.append(f"Task is not eligible for {phase.value}")
+            capabilities = (
+                ("prepare_read_only_review_context",)
+                if phase is Phase.REVIEW_PREPARE
+                else ("accept_semantic_review_verdict",)
+            )
         elif phase in {Phase.REMEDIATION_PREPARE, Phase.REMEDIATION_COMPLETE}:
             if state.open_pr is None:
                 reasons.append("no current OPEN PR")
@@ -2000,8 +2006,52 @@ def _identity_from_mapping(value: Mapping[str, Any]) -> ReviewIdentity:
     )
 
 
+def _assert_review_target_facts_applicable(
+    reviewed: ReviewIdentity,
+    state: LiveState,
+    task_contract: Mapping[str, Any],
+) -> None:
+    """Reject obvious stale Review identity before computing the current diff.
+
+    This ordering matters when another actor pushed a new head that is visible on
+    GitHub but whose Git object is not materialized locally.  Head/base/Task
+    staleness must still produce the precise REVIEW_STALE_* result without a
+    fetch or a failed local diff probe.
+    """
+    pr = state.open_pr
+    if not isinstance(pr, Mapping):
+        raise ReviewStaleError(
+            "REVIEW_STALE_PR",
+            f"reviewed PR #{reviewed.pr_number} is no longer the unique current OPEN PR",
+        )
+    current_number = pr.get("number")
+    if current_number != reviewed.pr_number:
+        raise ReviewStaleError(
+            "REVIEW_STALE_PR",
+            f"OPEN PR changed from #{reviewed.pr_number} to #{current_number}",
+        )
+    current_head = _pr_head_sha(pr)
+    if current_head != reviewed.head_sha:
+        raise ReviewStaleError(
+            "REVIEW_STALE_HEAD",
+            f"PR head changed from {reviewed.head_sha} to {current_head or 'unavailable'}",
+        )
+    current_base = _pr_base_sha(pr)
+    if current_base != reviewed.base_sha:
+        raise ReviewStaleError(
+            "REVIEW_STALE_BASE",
+            f"PR base changed from {reviewed.base_sha} to {current_base or 'unavailable'}",
+        )
+    current_task = task_contract.get("body_sha256")
+    if current_task != reviewed.task_body_sha256:
+        raise ReviewStaleError(
+            "REVIEW_STALE_TASK",
+            "Task Contract changed since Review Prepare",
+        )
+
+
 def _assert_review_applicable(start: ReviewIdentity, current: ReviewIdentity) -> None:
-    """Apply only invocation-local stale guards; this is not a drift framework."""
+    """Compare exact reviewed/current identities after basic target facts match."""
     if current.pr_number != start.pr_number:
         raise ReviewStaleError(
             "REVIEW_STALE_PR",
@@ -2153,7 +2203,7 @@ class ReviewPreparer:
             mark("resolving-live-state")
             snapshot = self.snapshots.acquire(
                 task_number,
-                operation="review",
+                operation="review-prepare",
                 include_required_checks=True,
             )
             state = snapshot.state
@@ -2208,7 +2258,10 @@ class ReviewPreparer:
                 "validation": validation,
                 "checks": checks,
                 "snapshot": snapshot.to_dict(),
-                "authority": "sealed operation snapshot for this Review only",
+                "authority": (
+                    "sealed Review Prepare target; historical identity for Review Complete "
+                    "applicability comparison, never current authority"
+                ),
             }
             self.store.write_guard(review_id, guard)
             mark(
@@ -2256,7 +2309,7 @@ class ReviewCompletionResult:
 
     def to_dict(self) -> dict[str, Any]:
         human_boundary = (
-            "Maintainer manual merge decision"
+            "STOP; run deterministic Merge Preflight before any manual merge"
             if self.verdict == "PASS"
             else "STOP; Human must explicitly choose remediation, redesign, or abandon"
         )
@@ -2275,23 +2328,29 @@ class ReviewCompletionResult:
 
 
 class ReviewCompleter:
-    """Accept one semantic verdict for the sealed Review operation snapshot.
+    """Accept a semantic verdict only if a fresh completion snapshot still applies.
 
-    Review Complete is the continuation of the Review operation created by
-    Review Prepare.  It therefore consumes the sealed identity/check evidence
-    from that operation and MUST NOT reacquire Git/GitHub authority.  A later
-    Merge Preflight acquires fresh authority and invalidates stale Review
-    receipts when external state changed while Review was in flight.
+    ``review prepare`` and ``review complete`` are separate LCK operations.
+    Prepare seals the exact target that the semantic reviewer inspected. Complete
+    acquires one fresh, phase-specific authoritative snapshot, compares it with
+    that sealed target, and accepts the verdict only when the PR, base, head,
+    Task Contract, and effective diff are still identical. Downstream helpers do
+    not reacquire authority inside the Review Complete operation.
     """
 
     def __init__(
         self,
         resolver: LiveStateResolver,
         *,
+        eligibility: PhaseEligibilityResolver | None = None,
+        checks_gate: DeliveryChecksGate | None = None,
         store: ReviewInvocationStore | None = None,
         workspace: ReviewWorkspaceManager | None = None,
     ) -> None:
         self.resolver = resolver
+        self.snapshots = OperationSnapshotBuilder(resolver)
+        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.workspace = workspace or ReviewWorkspaceManager(resolver)
 
@@ -2327,7 +2386,7 @@ class ReviewCompleter:
         raw_identity = guard.get("identity")
         if not isinstance(raw_identity, Mapping):
             raise LckStopError("Review invocation guard has no identity")
-        identity = _identity_from_mapping(raw_identity)
+        reviewed_identity = _identity_from_mapping(raw_identity)
         review_root_value = guard.get("review_root")
         if not isinstance(review_root_value, str) or not review_root_value:
             raise LckStopError("Review invocation guard has no review root")
@@ -2342,20 +2401,51 @@ class ReviewCompleter:
                 raise LckStopError(
                     "Review invocation has no successful formal validation"
                 )
-            if identity.task_number != task_number:
+            if reviewed_identity.task_number != task_number:
                 raise LckStopError(
                     "Review invocation identity does not belong to this Task"
                 )
-            checks = guard.get("checks")
-            if not isinstance(checks, Mapping) or checks.get("status") != "pass":
+            prepared_checks = guard.get("checks")
+            if (
+                not isinstance(prepared_checks, Mapping)
+                or prepared_checks.get("status") != "pass"
+            ):
                 raise LckStopError("Review invocation has no successful PR check gate")
-            snapshot = guard.get("snapshot")
-            if not isinstance(snapshot, Mapping):
+            prepared_snapshot = guard.get("snapshot")
+            if not isinstance(prepared_snapshot, Mapping):
                 raise LckStopError("Review invocation has no sealed operation snapshot")
-            if snapshot.get("operation") != "review":
+            if prepared_snapshot.get("operation") != "review-prepare":
                 raise LckStopError("Review invocation snapshot has the wrong operation")
 
-            self.workspace.assert_ready_for_completion(review_root, identity.head_sha)
+            completion_snapshot = self.snapshots.acquire(
+                task_number,
+                operation="review-complete",
+                include_required_checks=True,
+            )
+            state = completion_snapshot.state
+            decision = self.eligibility.resolve(state, Phase.REVIEW_COMPLETE)
+            if not decision.eligible:
+                raise LckStopError(
+                    f"Review Complete STOP for Task #{task_number}: "
+                    + "; ".join(decision.reasons)
+                )
+            current_contract = _task_contract_from_state(state)
+            _assert_review_target_facts_applicable(
+                reviewed_identity,
+                state,
+                current_contract,
+            )
+            current_identity = _review_identity(
+                self.resolver,
+                state,
+                current_contract,
+            )
+            _assert_review_applicable(reviewed_identity, current_identity)
+            completion_checks = self.checks_gate.evaluate(completion_snapshot)
+
+            self.workspace.assert_ready_for_completion(
+                review_root, reviewed_identity.head_sha
+            )
             record = {
                 "schema_version": LCK_SCHEMA_VERSION,
                 "kind": "independent-review-record",
@@ -2363,17 +2453,22 @@ class ReviewCompleter:
                 "task_number": task_number,
                 "verdict": verdict,
                 "status": (
-                    "READY_FOR_HUMAN_MERGE" if verdict == "PASS" else "STOP_REQUIRED"
+                    "READY_FOR_MERGE_PREFLIGHT"
+                    if verdict == "PASS"
+                    else "STOP_REQUIRED"
                 ),
-                "identity": identity.to_dict(),
+                "identity": reviewed_identity.to_dict(),
                 "findings": findings,
                 "findings_sha256": hashlib.sha256(findings.encode("utf-8")).hexdigest(),
                 "validation": validation,
-                "checks": dict(checks),
-                "review_snapshot": dict(snapshot),
+                "checks": dict(prepared_checks),
+                "completion_checks": completion_checks,
+                "review_snapshot": dict(prepared_snapshot),
+                "completion_snapshot": completion_snapshot.to_dict(),
                 "authority_note": (
-                    "record is audit evidence for the sealed Review snapshot; "
-                    "the next lifecycle operation must reacquire live Git/GitHub state"
+                    "Review Prepare target and fresh Review Complete snapshot matched; "
+                    "this record is audit evidence, while Merge Preflight must reacquire "
+                    "current Git/GitHub authority before human merge"
                 ),
             }
             record_path = self.store.write_record(task_number, review_id, record)
@@ -2384,7 +2479,7 @@ class ReviewCompleter:
                 task_number=task_number,
                 verdict=verdict,
                 status=cast(str, record["status"]),
-                identity=identity,
+                identity=reviewed_identity,
                 record_path=record_path,
             )
         finally:
@@ -3251,23 +3346,25 @@ class ReviewPassGate:
             record.get("task_number") != task_number
             or record.get("review_id") != review_id
             or record.get("verdict") != "PASS"
-            or record.get("status") != "READY_FOR_HUMAN_MERGE"
+            or record.get("status") != "READY_FOR_MERGE_PREFLIGHT"
         ):
             raise LckStopError("latest Independent Review PASS record is invalid")
         raw_identity = record.get("identity")
         if not isinstance(raw_identity, Mapping):
             raise LckStopError("Independent Review PASS has no identity")
         recorded = _identity_from_mapping(raw_identity)
-        issue = state.issue
-        body_sha256 = issue.get("body_sha256") if isinstance(issue, Mapping) else None
-        if not isinstance(body_sha256, str):
-            raise LckStopError("current Task body identity is unavailable")
-        current = _review_identity(
-            self.resolver,
-            state,
-            {"body_sha256": body_sha256},
-        )
+        current_contract = _task_contract_from_state(state)
         try:
+            _assert_review_target_facts_applicable(
+                recorded,
+                state,
+                current_contract,
+            )
+            current = _review_identity(
+                self.resolver,
+                state,
+                current_contract,
+            )
             _assert_review_applicable(recorded, current)
         except ReviewStaleError as exc:
             raise LckStopError(f"Review PASS is stale: {exc}") from exc
@@ -3905,7 +4002,7 @@ class CloseoutCompleter:
             record.get("task_number") != state.task_number
             or record.get("review_id") != review_id
             or record.get("verdict") != "PASS"
-            or record.get("status") != "READY_FOR_HUMAN_MERGE"
+            or record.get("status") != "READY_FOR_MERGE_PREFLIGHT"
         ):
             raise LckStopError("Closeout STOP: latest Review PASS record is invalid")
         raw_identity = record.get("identity")

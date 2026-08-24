@@ -1224,7 +1224,7 @@ def _review_guard(
         "validation": {"status": "pass"},
         "snapshot": {
             "schema_version": lck.LCK_SCHEMA_VERSION,
-            "operation": "review",
+            "operation": "review-prepare",
             "state": {"task_number": identity.task_number},
         },
     }
@@ -1294,16 +1294,13 @@ def test_review_prepare_freezes_authority_before_validation(
     assert workspace.sealed == [tmp_path / "review-root"]
 
 
-def test_review_complete_consumes_sealed_snapshot_without_live_resolution(
+def test_review_complete_acquires_one_fresh_snapshot_and_accepts_unchanged_target(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     identity = _review_identity_value()
-
-    class NoResolveResolver(StaticResolver):
-        def resolve(self, _task_number: int) -> lck.LiveState:
-            raise AssertionError("Review Complete must not reacquire live authority")
-
-    resolver = cast(Any, NoResolveResolver(tmp_path, _review_state(head="b" * 40)))
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
     store = lck.ReviewInvocationStore(tmp_path)
     review_id = store.new_id()
     review_root = tmp_path / "review-root"
@@ -1316,24 +1313,29 @@ def test_review_complete_consumes_sealed_snapshot_without_live_resolution(
 
     result = lck.ReviewCompleter(
         resolver,
+        checks_gate=cast(Any, FakeReviewChecks()),
         store=store,
         workspace=cast(Any, workspace),
     ).complete(159, review_id, verdict="PASS")
 
-    assert result.status == "READY_FOR_HUMAN_MERGE"
+    assert result.status == "READY_FOR_MERGE_PREFLIGHT"
     assert result.identity == identity
+    assert resolver.calls == 1
     record = store.read_record(159, review_id)
-    assert record["review_snapshot"]["operation"] == "review"
-    assert "next lifecycle operation must reacquire" in record["authority_note"]
+    assert record["review_snapshot"]["operation"] == "review-prepare"
+    assert record["completion_snapshot"]["operation"] == "review-complete"
+    assert "fresh Review Complete snapshot matched" in record["authority_note"]
     assert workspace.ready_checked == [review_root]
     assert workspace.removed == [review_root]
 
 
 def test_review_fail_returns_stop_required_without_starting_remediation(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     identity = _review_identity_value()
     resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
     store = lck.ReviewInvocationStore(tmp_path)
     review_id = store.new_id()
     review_root = tmp_path / "review-root"
@@ -1344,48 +1346,26 @@ def test_review_fail_returns_stop_required_without_starting_remediation(
 
     result = lck.ReviewCompleter(
         resolver,
+        checks_gate=cast(Any, FakeReviewChecks()),
         store=store,
         workspace=cast(Any, FakeReviewWorkspace(review_root)),
     ).complete(159, review_id, verdict="FAIL", findings_file=findings)
 
     assert result.status == "STOP_REQUIRED"
     assert result.to_dict()["automatic_remediation"] is False
-    assert resolver.calls == 0
+    assert resolver.calls == 1
     record = store.read_record(159, review_id)
     assert record["findings"].startswith("[F1][Medium]")
-    assert record["authority_note"].startswith("record is audit evidence")
+    assert "fresh Review Complete snapshot matched" in record["authority_note"]
 
 
-def test_review_pass_stops_at_human_merge_boundary(tmp_path: Path) -> None:
-    identity = _review_identity_value()
-    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
-    store = lck.ReviewInvocationStore(tmp_path)
-    review_id = store.new_id()
-    review_root = tmp_path / "review-root"
-    review_root.mkdir()
-    store.write_guard(review_id, _review_guard(identity, review_root=review_root))
-
-    result = lck.ReviewCompleter(
-        resolver,
-        store=store,
-        workspace=cast(Any, FakeReviewWorkspace(review_root)),
-    ).complete(159, review_id, verdict="PASS")
-
-    assert result.status == "READY_FOR_HUMAN_MERGE"
-    assert "manual merge" in result.to_dict()["human_boundary"]
-    assert resolver.calls == 0
-
-
-def test_review_complete_does_not_absorb_external_head_or_check_changes(
+def test_review_pass_stops_at_merge_preflight_boundary(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     identity = _review_identity_value()
-    state = _review_state(head="b" * 40)
-    assert state.open_pr is not None
-    state.open_pr["isDraft"] = True
-    state.checks["failed"] = 1
-    state.checks["all_success"] = False
-    resolver = cast(Any, StaticResolver(tmp_path, state))
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
     store = lck.ReviewInvocationStore(tmp_path)
     review_id = store.new_id()
     review_root = tmp_path / "review-root"
@@ -1394,13 +1374,141 @@ def test_review_complete_does_not_absorb_external_head_or_check_changes(
 
     result = lck.ReviewCompleter(
         resolver,
+        checks_gate=cast(Any, FakeReviewChecks()),
         store=store,
         workspace=cast(Any, FakeReviewWorkspace(review_root)),
     ).complete(159, review_id, verdict="PASS")
 
-    assert result.identity.head_sha == SHA
-    assert result.status == "READY_FOR_HUMAN_MERGE"
-    assert resolver.calls == 0
+    assert result.status == "READY_FOR_MERGE_PREFLIGHT"
+    assert "Merge Preflight" in result.to_dict()["human_boundary"]
+    assert resolver.calls == 1
+
+
+@pytest.mark.parametrize(
+    ("code", "current_identity"),
+    [
+        (
+            "REVIEW_STALE_PR",
+            lck.ReviewIdentity(
+                task_number=159,
+                pr_number=201,
+                base_sha=SHA,
+                head_sha=SHA,
+                task_body_sha256="d" * 64,
+                merge_base_sha=SHA,
+                effective_diff_sha256="e" * 64,
+                changed_files=("tools/agent_workflow/lck.py",),
+            ),
+        ),
+        ("REVIEW_STALE_HEAD", _review_identity_value(head="b" * 40)),
+        ("REVIEW_STALE_BASE", _review_identity_value(base="b" * 40)),
+        (
+            "REVIEW_STALE_TASK",
+            lck.ReviewIdentity(
+                task_number=159,
+                pr_number=200,
+                base_sha=SHA,
+                head_sha=SHA,
+                task_body_sha256="f" * 64,
+                merge_base_sha=SHA,
+                effective_diff_sha256="e" * 64,
+                changed_files=("tools/agent_workflow/lck.py",),
+            ),
+        ),
+        (
+            "REVIEW_STALE_DIFF",
+            lck.ReviewIdentity(
+                task_number=159,
+                pr_number=200,
+                base_sha=SHA,
+                head_sha=SHA,
+                task_body_sha256="d" * 64,
+                merge_base_sha=SHA,
+                effective_diff_sha256="f" * 64,
+                changed_files=("tools/agent_workflow/lck.py",),
+            ),
+        ),
+    ],
+)
+def test_review_complete_rejects_stale_target_from_one_fresh_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    code: str,
+    current_identity: lck.ReviewIdentity,
+) -> None:
+    reviewed = _review_identity_value()
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args: current_identity)
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    store.write_guard(review_id, _review_guard(reviewed, review_root=review_root))
+
+    with pytest.raises(lck.ReviewStaleError, match=code):
+        lck.ReviewCompleter(
+            resolver,
+            checks_gate=cast(Any, FakeReviewChecks()),
+            store=store,
+            workspace=cast(Any, FakeReviewWorkspace(review_root)),
+        ).complete(159, review_id, verdict="PASS")
+
+    assert resolver.calls == 1
+    assert store.read_latest_review(159) is None
+    assert not store.record_path(159, review_id).exists()
+
+
+def test_review_complete_reports_changed_remote_head_before_local_diff_probe(
+    tmp_path: Path,
+) -> None:
+    reviewed = _review_identity_value()
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state(head="b" * 40)))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    store.write_guard(review_id, _review_guard(reviewed, review_root=review_root))
+
+    with pytest.raises(lck.ReviewStaleError, match="REVIEW_STALE_HEAD"):
+        lck.ReviewCompleter(
+            resolver,
+            checks_gate=cast(Any, FakeReviewChecks()),
+            store=store,
+            workspace=cast(Any, FakeReviewWorkspace(review_root)),
+        ).complete(159, review_id, verdict="PASS")
+
+    assert resolver.calls == 1
+    assert not any("merge-base" in command for command in resolver.runner.commands)
+    assert not any("diff" in command for command in resolver.runner.commands)
+
+
+def test_review_complete_revalidates_current_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = _review_identity_value()
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    store.write_guard(review_id, _review_guard(identity, review_root=review_root))
+
+    class CurrentChecksFail:
+        def evaluate(self, _snapshot: lck.OperationSnapshot) -> dict[str, Any]:
+            raise lck.LckStopError("PR checks are pending")
+
+    with pytest.raises(lck.LckStopError, match="PR checks are pending"):
+        lck.ReviewCompleter(
+            resolver,
+            checks_gate=cast(Any, CurrentChecksFail()),
+            store=store,
+            workspace=cast(Any, FakeReviewWorkspace(review_root)),
+        ).complete(159, review_id, verdict="PASS")
+
+    assert resolver.calls == 1
+    assert store.read_latest_review(159) is None
 
 
 def test_review_workspace_seal_removes_write_bits(tmp_path: Path) -> None:
@@ -1888,8 +1996,10 @@ def test_accepted_fresh_review_releases_post_remediation_boundary(
     findings = tmp_path / "findings-new.md"
     findings.write_text("[F2][Medium] New review finding.\n", encoding="utf-8")
 
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
     result = lck.ReviewCompleter(
         resolver,
+        checks_gate=cast(Any, FakeReviewChecks()),
         store=store,
         workspace=cast(Any, FakeReviewWorkspace(tmp_path / "review-root")),
     ).complete(159, review_id, verdict="FAIL", findings_file=findings)

@@ -35,7 +35,7 @@ boundary.
 | O16 | Complete effective-diff inspection | Review Agent | KEEP | Fresh Review Agent semantic responsibility |
 | O17 | Review correctness / AC / risk judgement | Review Agent | KEEP | Fresh Review Agent semantic responsibility |
 | O18 | Review CI-equivalent validation | Review Skill + Runner | MOVE | LCK runs formal Review validation on exact isolated head |
-| O19 | Review recheck and stability | Runner + Review Skill | SIMPLIFY | `REVIEW_STALE_HEAD` / `REVIEW_STALE_BASE` invocation-local guard only |
+| O19 | Review recheck and stability | Runner + Review Skill | SIMPLIFY | Review Complete acquires one fresh snapshot and rejects `REVIEW_STALE_PR/HEAD/BASE/TASK/DIFF`; Merge Preflight independently rechecks the accepted receipt |
 | O20 | Review verdict and handoff | Review Agent + Skill | SIMPLIFY | PASS/FAIL semantic verdict; LCK records bounded result; no mechanical handoff authority |
 | O21 | Remediation admission | Delivery Skill + Runner | MOVE | Human-explicit `lck remediation prepare`; live mechanics + semantic findings only |
 | O22 | Repair and new head | Agent + Delivery Skill | MOVE | Agent repairs; LCK completion owns mechanical effects, then STOP before new Review |
@@ -69,59 +69,68 @@ the Initial Delivery portion of that boundary.
 
 ## Active Delivery boundary
 
-The active Initial Delivery path uses one LCK-owned sequence:
+The active Initial Delivery path uses explicit operation boundaries rather than repeated
+full-state refresh:
 
-1. `DeliveryPreparer` resolves and prepares the Task workspace.
-2. `DeliveryCompleter` reads the current Task Critical Outcome, stages the candidate
-   tree, runs the bounded Critical Outcome verifier and repository formal validation,
-   and commits exactly the validated tree.
+1. `DeliveryPreparer` acquires one fresh Delivery Prepare snapshot and prepares the Task
+   workspace from that frozen authority.
+2. `DeliveryCompleter` is a new operation. It acquires one fresh Delivery Complete
+   snapshot, reads the current Task Critical Outcome, stages the candidate tree, runs the
+   bounded Critical Outcome verifier and repository formal validation, and commits exactly
+   the validated tree.
 3. `EnsureRemoteBranchEffect` synchronizes only the resolved Task branch without force
-   push; divergence fails closed.
-4. `EnsureOpenPrEffect` re-resolves current identity and reuses or creates exactly one
-   non-Draft OPEN PR using the existing deterministic PR helper.
-5. `DeliveryChecksGate` waits boundedly for applicable checks; failed, pending, or
-   unknown checks stop before Project Status moves to `Review`.
-6. Final live verification proves the Task body/base stayed stable within the
-   operation, the final state is the same PR/head observed by the checks gate,
-   applicable checks remain successful, and local HEAD == remote Task branch ==
-   PR head before returning `READY_FOR_REVIEW`.
+   push and verifies the exact remote-ref postcondition; divergence fails closed.
+4. `EnsureOpenPrEffect` reuses or creates exactly one non-Draft OPEN PR from the frozen
+   operation identity and verifies only the exact PR postcondition.
+5. `DeliveryChecksGate` evaluates the checks captured for the operation. Pending CI ends
+   the invocation; LCK does not poll waiting for external state to change.
+6. Bounded metadata effects use targeted postcondition verification. Delivery Complete
+   does not run a final full `LiveStateResolver` refresh; the next lifecycle invocation
+   acquires fresh authority before making its own decision.
 
-The Task body now carries a required `Critical Outcome` contract. Its verification
-target is one bounded `tests/...::test_...` pytest node id; Issue text cannot inject
-arbitrary shell commands. Operation-local base/body/head guards are ephemeral and are
-reacquired on retry rather than persisted as cross-phase authority.
+The Task body carries a required `Critical Outcome` contract. Its verification target is
+one bounded `tests/...::test_...` pytest node id; Issue text cannot inject arbitrary shell
+commands. Operation snapshots are immutable within each invocation and never become
+cross-operation authority.
 
-The Initial Delivery, Review, Remediation, and Closeout Skills are semantic-only
-plus LCK entrypoint guidance. Historical Evidence operations may remain for
-audit material, but they are not formal lifecycle authorization paths. Merge
-remains a maintainer-only manual Squash Merge boundary.
+The Initial Delivery, Review, Remediation, and Closeout Skills are semantic-only plus LCK
+entrypoint guidance. Historical Evidence operations may remain for audit material, but
+they are not formal lifecycle authorization paths. Merge remains a maintainer-only manual
+Squash Merge boundary.
 
 ## Review / Remediation boundary
 
-The active path is now:
+The active Review path is:
 
-1. `review prepare <Task>` resolves the current OPEN PR, base/head, current Task
-   Contract, effective diff and checks from live authority; no expected SHA/PR input is
-   accepted.
-2. LCK creates a detached clean worktree for the reviewed head, runs formal Review
+1. `review prepare <Task>` acquires one fresh Review Prepare snapshot containing the
+   current OPEN PR, base/head, current Task Contract, effective diff and checks; no
+   expected SHA/PR input is accepted.
+2. LCK creates a detached clean worktree for the exact reviewed head, runs formal Review
    validation there, then removes implementation write bits before the semantic Agent
    inspects it.
-3. A random `review_id` locates only the bounded prepare→complete applicability guard.
-   Completion reacquires live facts; a changed head/base produces
-   `REVIEW_STALE_HEAD` / `REVIEW_STALE_BASE` instead of accepting the verdict.
-4. PASS returns `READY_FOR_HUMAN_MERGE`; FAIL returns `STOP_REQUIRED`. Neither path
-   starts another lifecycle phase automatically.
-5. A failed Review record is diagnostic/audit state. Human-started Remediation uses its
+3. The semantic Review Agent judges only that sealed target.
+4. `review complete <Task> --review-id ...` is a **new LCK operation**. It acquires one
+   fresh Review Complete snapshot and compares current PR/head/base/Task Contract/effective
+   diff with the sealed reviewed identity. Changes return
+   `REVIEW_STALE_PR/HEAD/BASE/TASK/DIFF` and the semantic verdict is not accepted for the
+   current target.
+5. An applicable PASS returns `READY_FOR_MERGE_PREFLIGHT`; an applicable FAIL returns
+   `STOP_REQUIRED`. Neither path starts another write lifecycle phase automatically.
+6. After PASS, the Review Skill runs the separate read-only `merge preflight` operation.
+   Merge Preflight reacquires fresh authority and only then may return
+   `READY_FOR_HUMAN_MERGE` for the maintainer manual Squash Merge boundary.
+7. A failed Review record is diagnostic/audit state. Human-started Remediation uses its
    findings as semantic input, while `remediation prepare` independently reacquires the
    current Task/PR/head/base/workspace.
-6. `remediation complete` requires actual repair changes, reruns Critical Outcome and
+8. `remediation complete` requires actual repair changes, reruns Critical Outcome and
    formal Delivery validation, commits the exact validated tree, synchronizes the Task
-   branch, reuses the existing OPEN PR, waits for current checks, and returns
+   branch, reuses the existing OPEN PR, evaluates current operation checks, and returns
    `READY_FOR_NEW_REVIEW` followed by STOP.
 
-This cutover intentionally deletes the former formal dependence on bounded verified
-fact handoff, cross-phase freshness contracts, snapshot-derived Review target authority,
-and generalized drift categories. Historical evidence remains audit-only.
+This cutover intentionally deletes the former formal dependence on bounded verified fact
+handoff, cross-phase freshness contracts, snapshot-derived current authority, repeated
+nested resolution, and generalized drift categories. Historical evidence remains
+audit-only.
 
 ## Mainline activation and rollback procedure
 
