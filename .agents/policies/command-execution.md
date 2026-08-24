@@ -20,8 +20,8 @@ tools/agent_workflow/wsl2_validation_runner.py <named-profile> <fixed-args>
 ```
 
 Run them from the current repository root on the WSL2 Linux filesystem. Do not
-wrap them in `python`, `bash -c`, `sh -c`, `uv run`, command substitution,
-pipelines, redirection, or a generic shell string.
+wrap them in `bash -c`, `sh -c`, command substitution, pipelines, redirection,
+or a generic shell string.
 
 The local profile may choose:
 

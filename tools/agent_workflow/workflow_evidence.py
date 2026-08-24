@@ -333,12 +333,19 @@ def _git_snapshot(
     }
 
 
-def _issue_view(
+def _issue_view_with_contract(
     runner: CommandRunner,
     repository: str,
     number: int,
     warnings: list[dict[str, Any]],
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Read one Issue once and return compact facts plus the Task contract.
+
+    The compact Issue snapshot intentionally omits the full body so audit/state
+    payloads stay bounded.  LCK, however, needs the body as semantic input.  A
+    single GitHub read therefore produces both representations so callers do
+    not re-query the same Task later in an operation.
+    """
     fields = (
         "number,title,body,comments,state,labels,projectItems,url,closedAt,"
         "closedByPullRequestsReferences"
@@ -374,7 +381,7 @@ def _issue_view(
         if fallback.returncode != 0:
             warnings.append(command_warning(result))
             warnings.append(command_warning(fallback))
-            return None
+            return None, None
         result = fallback
     value = read_json_text(result.stdout, field=f"Issue #{number}")
     if not isinstance(value, dict):
@@ -385,7 +392,7 @@ def _issue_view(
                 "error": "Issue response is not an object",
             }
         )
-        return None
+        return None, None
     labels = value.get("labels", [])
     normalized_labels: list[str] = []
     if isinstance(labels, list):
@@ -448,6 +455,33 @@ def _issue_view(
     }
     issue["issue_closure"] = _issue_closure_snapshot(
         runner, repository, number, warnings
+    )
+    contract = (
+        {
+            "number": value.get("number"),
+            "title": safe_text(value.get("title")),
+            "url": safe_text(value.get("url")),
+            "body": body,
+            "body_sha256": issue["body_sha256"],
+            "critical_outcome": issue["critical_outcome"],
+        }
+        if body is not None
+        else None
+    )
+    return issue, contract
+
+
+def _issue_view(
+    runner: CommandRunner,
+    repository: str,
+    number: int,
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    issue, _contract = _issue_view_with_contract(
+        runner,
+        repository,
+        number,
+        warnings,
     )
     return issue
 

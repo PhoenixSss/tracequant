@@ -102,6 +102,9 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     assert "git ls-remote origin refs/heads/main" in architecture_delta
     assert "refs/remotes/origin/main" in architecture_delta
     assert "git fetch --prune origin" not in lck_source
+    assert lck_source.count("self.resolver.resolve(task_number)") == 1
+    assert "while time.monotonic" not in lck_source
+    assert "check-timeout-seconds" not in lck_source
     core_lines = len((ROOT / "tools/agent_workflow/lck.py").read_text().splitlines())
     assert f"`lck.py`: {core_lines:,} LOC" in architecture_delta
     assert "remote_main_sha" in lck_source
