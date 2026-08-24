@@ -21,6 +21,28 @@ from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
 SHA = "a" * 40
 
 
+def _write_required_checks_config(root: Path) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "pyproject.toml").write_text(
+        '[tool.tracequant.lck]\nrequired-checks = ["quality"]\n',
+        encoding="utf-8",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _repository_required_checks_contract(tmp_path: Path) -> None:
+    _write_required_checks_config(tmp_path)
+
+
+def _required_policy(*names: str) -> dict[str, Any]:
+    items = list(names)
+    return {
+        "configuration": "repository",
+        "source": "pyproject.toml:[tool.tracequant.lck].required-checks",
+        "contexts": {"items": items, "count": len(items), "truncated": False},
+    }
+
+
 def _git(cwd: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
@@ -371,11 +393,7 @@ def _snapshot(
     return lck.OperationSnapshot(
         operation=operation,
         state=state,
-        required_checks=required
-        or {
-            "configuration": "configured-empty",
-            "contexts": {"items": [], "count": 0, "truncated": False},
-        },
+        required_checks=required or _required_policy("quality"),
     )
 
 
@@ -447,8 +465,8 @@ class StubChecks:
             raise lck.LckStopError(self.fail)
         return {
             "status": "pass",
-            "configuration": "configured-empty",
-            "required": [],
+            "configuration": "repository",
+            "required": ["quality"],
             "checks": {
                 "count": 0,
                 "failed": 0,
@@ -1109,6 +1127,70 @@ def _checks(*, category: str, state_name: str) -> dict[str, Any]:
     }
 
 
+def test_repository_required_checks_policy_is_repo_controlled(tmp_path: Path) -> None:
+    policy = lck._repository_required_checks(tmp_path)
+
+    assert policy["configuration"] == "repository"
+    assert policy["source"] == "pyproject.toml:[tool.tracequant.lck].required-checks"
+    assert policy["contexts"]["items"] == ["quality"]
+
+
+def test_repository_required_checks_policy_missing_fails_closed(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").unlink()
+
+    with pytest.raises(
+        lck.LckStopError, match="required PR check policy is unavailable"
+    ):
+        lck._repository_required_checks(tmp_path)
+
+
+def test_delivery_rejects_unresolved_required_check_policy_before_effects(
+    tmp_path: Path,
+) -> None:
+    head = "b" * 40
+    state = _live_state(
+        head=head,
+        clean=True,
+        project_status="In Progress",
+        open_pr=None,
+        remote_oid=None,
+    )
+    snapshot = _snapshot(
+        state,
+        required={
+            "configuration": "plan-limited-403",
+            "contexts": {"items": [], "count": 0, "truncated": False},
+        },
+    )
+    runner = CompletionRunner()
+    resolver = SequenceResolver(tmp_path, runner, [state])
+    commit = StubCommit(dirty=False)
+    remote = StubEffect("ensure_remote_branch", "created")
+    pr = StubEffect("ensure_open_pr", "created")
+    status = StubEffect("set_review_status", "updated")
+
+    with pytest.raises(lck.LckStopError, match="repository-controlled check contract"):
+        lck.DeliveryCompleter(
+            cast(Any, resolver),
+            formal_validation=cast(Any, StubValidation()),
+            commit_effect=cast(Any, commit),
+            remote_effect=cast(Any, remote),
+            pr_effect=cast(Any, pr),
+            status_effect=cast(Any, status),
+            checks_gate=cast(Any, StubChecks()),
+        ).complete(
+            160,
+            commit_message="candidate",
+            summary="candidate",
+            operation_snapshot=snapshot,
+        )
+
+    assert commit.calls == []
+    assert remote.calls == 0
+    assert pr.calls == 0
+    assert status.calls == 0
+
+
 def test_delivery_checks_gate_requires_named_required_check_success(
     tmp_path: Path,
 ) -> None:
@@ -1131,8 +1213,7 @@ def test_delivery_checks_gate_requires_named_required_check_success(
     snapshot = _snapshot(
         state,
         required={
-            "configuration": "available",
-            "contexts": {"items": ["quality"], "count": 1, "truncated": False},
+            **_required_policy("quality"),
         },
     )
 
@@ -1166,8 +1247,7 @@ def test_delivery_checks_gate_stops_on_failed_check(tmp_path: Path) -> None:
             _snapshot(
                 state,
                 required={
-                    "configuration": "available",
-                    "contexts": {"items": ["quality"], "count": 1, "truncated": False},
+                    **_required_policy("quality"),
                 },
             )
         )
@@ -1197,15 +1277,14 @@ def test_delivery_checks_gate_pending_stops_without_polling(tmp_path: Path) -> N
             _snapshot(
                 state,
                 required={
-                    "configuration": "configured-empty",
-                    "contexts": {"items": [], "count": 0, "truncated": False},
+                    **_required_policy("quality"),
                 },
             )
         )
     assert resolver.calls == 0
 
 
-def test_delivery_checks_gate_preserves_plan_limit_as_limitation(
+def test_delivery_checks_gate_rejects_legacy_plan_limited_policy(
     tmp_path: Path,
 ) -> None:
     head = "b" * 40
@@ -1224,23 +1303,17 @@ def test_delivery_checks_gate_preserves_plan_limit_as_limitation(
     )
     state = _with_checks(base, _checks(category="success", state_name="SUCCESS"))
     resolver = SequenceResolver(tmp_path, CompletionRunner(), [state])
-    limitation = {
-        "category": "plan-limit",
-        "diagnostic": "required-check configuration unavailable",
-    }
     snapshot = _snapshot(
         state,
         required={
             "configuration": "plan-limited-403",
-            "failure": limitation,
+            "failure": {"category": "plan-limit"},
             "contexts": {"items": [], "count": 0, "truncated": False},
         },
     )
 
-    result = lck.DeliveryChecksGate(cast(Any, resolver)).evaluate(snapshot)
-
-    assert result["status"] == "pass"
-    assert result["limitation"] == limitation
+    with pytest.raises(lck.LckStopError, match="repository-controlled check contract"):
+        lck.DeliveryChecksGate(cast(Any, resolver)).evaluate(snapshot)
     assert resolver.calls == 0
 
 

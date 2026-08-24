@@ -131,6 +131,10 @@ The lifecycle regression suite covers:
   `REVIEW_STALE_PR/HEAD/BASE/TASK/DIFF` rejection before verdict acceptance,
   explicit Remediation, and independent stale receipt rejection at Merge Preflight;
 - manual Squash Merge preflight;
+- repository-controlled Required Checks contract from
+  `pyproject.toml:[tool.tracequant.lck].required-checks`, with GitHub used only for
+  exact-head check results; plan-limited branch-protection discovery cannot authorize
+  Delivery/Remediation and unresolved policy stops before lifecycle effects;
 - Business Delivery complete with Cleanup complete or pending;
 - remote divergence, deleted refs, and live recovery behavior.
 
@@ -146,9 +150,9 @@ inventory; their aggregate command counts are not added to current LOC.
 
 | Measure | #88 / pre-LCK reference | LCK v1 current shape |
 | --- | --- | --- |
-| Formal lifecycle controller | Skill + Runner + handoff/snapshot paths | `lck.py`: 4,958 LOC |
+| Formal lifecycle controller | Skill + Runner + handoff/snapshot paths | `lck.py`: 5,007 LOC |
 | Task-control support called by LCK | mechanics split across Skill/Runner/helpers | 1,241 LOC: `critical_outcome.py` 204 + `pr_resolve.py` 481 + `project_status.py` 153 + shared `workflow_common.py` 403 |
-| Combined active Task control code | no single deterministic boundary in #88 | 6,199 LOC controller + direct support; reused validation/audit infrastructure excluded |
+| Combined active Task control code | no single deterministic boundary in #88 | 6,248 LOC controller + direct support; reused validation/audit infrastructure excluded |
 | Reused Validation infrastructure | existing fixed Validation Runner | 1,163 LOC: `workflow_validation.py` 344 + `wsl2_validation_runner.py` 819; reused rather than duplicated |
 | Audit-only Evidence implementation | Task Evidence Runner was part of lifecycle control | `workflow_evidence.py` 1,649 LOC retained as read-only audit/shared-query code, not Task authority |
 | Task Skill lifecycle mechanics | direct command/procedure paths | 269 LOC per provider; 538 LOC across Codex + Claude; no direct lifecycle writes |
@@ -157,7 +161,7 @@ inventory; their aggregate command counts are not added to current LOC.
 | Dynamic global write authorization | `write_actions_allowed` disposition | absent from LCK and active Task policy |
 | Direct Agent lifecycle writes | present in historical baseline | 0 in active Task Skills |
 | Duplicate Task identity resolution | Skill/Runner/current-workflow paths | one LCK `LiveStateResolver`; historical audit queries cannot authorize Task phases |
-| Main lifecycle test groups | split across old Runner and workflow paths | 108 tests: 68 + 27 + 11 + 2 acceptance |
+| Main lifecycle test groups | split across old Runner and workflow paths | 111 tests: 68 + 30 + 11 + 2 acceptance |
 | Legacy executable components removed in this convergence | old Task Runner/profiles/Rules + durable self-review binder | 7 files removed: Runner, profile spec, Codex Rule, two Runner/Rules tests, self-review binder, binder test |
 
 The historical #85 static Skill record reports 685 lines before and 547 lines
@@ -165,8 +169,9 @@ after its earlier Runner migration; #88 supplies the operation inventory rather
 than a directly comparable LOC measurement. Current values above were measured
 from this candidate tree and are descriptive evidence, not lifecycle authority.
 
-The LOC boundary is explicit to avoid understating LCK complexity: the 4,947-line
-core is reported separately from the 1,241 lines of support it directly calls.
+The LOC boundary is explicit to avoid understating LCK complexity: the controller
+measurement in the table above is reported separately from the 1,241 lines of support
+it directly calls.
 Validation infrastructure is reported separately because it predates LCK and is
 reused; audit-only Evidence code is also reported separately because it cannot
 authorize a Task transition. This comparison demonstrates containment, not a
@@ -205,7 +210,7 @@ provider-attributed live-session evidence.
 | 22 | Existing Runner infrastructure reused, not duplicated | Satisfied | existing Validation Runner retained and invoked by LCK; legacy Task Evidence Runner removed |
 | 23 | One explicit snapshot-acquisition boundary per new lifecycle operation | Satisfied | `OperationSnapshotBuilder`; prepare/complete/preflight/closeout regression coverage |
 | 24 | No hidden authoritative reacquisition after snapshot freeze | Satisfied | lifecycle code contains one `self.resolver.resolve(...)` call, inside `OperationSnapshotBuilder`; `status` is diagnostic-only |
-| 25 | Snapshot facts are phase-specific and complete, not lazily added | Satisfied | authoritative required-check/Task/PR/ref facts are acquired with the operation snapshot; merge-base/effective diff are deterministic derived facts computed later only from frozen refs inside the isolated clone |
+| 25 | Snapshot facts are phase-specific and complete, not lazily added | Satisfied | repository-controlled required-check policy plus authoritative Task/PR/ref/check-result facts are acquired with the operation snapshot; merge-base/effective diff are deterministic derived facts computed later only from frozen refs inside the isolated clone |
 | 26 | Review Prepare and Review Complete each use one immutable operation snapshot; Complete rejects stale target before accepting verdict | Satisfied | Prepare acquisition regression + Complete `REVIEW_STALE_PR/HEAD/BASE/TASK/DIFF` regressions; one resolver acquisition per invocation |
 | 27 | Merge Preflight freshly rejects stale Review receipts | Satisfied | fresh merge snapshot + `ReviewPassGate` identity comparison |
 | 28 | Safe Effects use targeted postconditions, not full-state refresh | Satisfied | exact remote-ref, PR, Project Status, main-sync, metadata, and cleanup effect checks |

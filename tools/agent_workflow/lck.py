@@ -22,6 +22,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import tomllib
 import unicodedata
 import uuid
 from collections.abc import Mapping, Sequence
@@ -65,7 +66,6 @@ from workflow_evidence import (
     _normalize_checks,
     _relationship_snapshot,
     _formal_blockers_gate,
-    _required_checks,
     _repository_slug,
 )
 
@@ -726,6 +726,91 @@ class LiveStateResolver:
         )
 
 
+def _repository_required_checks(repo_root: Path) -> dict[str, Any]:
+    """Load the LCK required-check contract from repository-controlled config.
+
+    GitHub check *results* are live authority, but the set of checks that LCK
+    requires is a repository workflow contract.  This deliberately avoids using
+    plan/permission-dependent branch-protection discovery as lifecycle authority.
+    """
+
+    config_path = repo_root / "pyproject.toml"
+    try:
+        parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise LckStopError(
+            f"required PR check policy is unavailable from {config_path.name}: {exc}"
+        ) from exc
+
+    tool = parsed.get("tool")
+    tracequant = tool.get("tracequant") if isinstance(tool, Mapping) else None
+    lck_config = tracequant.get("lck") if isinstance(tracequant, Mapping) else None
+    raw = lck_config.get("required-checks") if isinstance(lck_config, Mapping) else None
+    if not isinstance(raw, list):
+        raise LckStopError(
+            "required PR check policy is unresolved: "
+            "pyproject.toml [tool.tracequant.lck].required-checks must be a list"
+        )
+
+    names: list[str] = []
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            raise LckStopError(
+                "required PR check policy is invalid: every required check must be "
+                "a non-empty string"
+            )
+        name = item.strip()
+        if name in names:
+            raise LckStopError(
+                f"required PR check policy is invalid: duplicate check {name!r}"
+            )
+        names.append(name)
+
+    return {
+        "configuration": "repository",
+        "source": "pyproject.toml:[tool.tracequant.lck].required-checks",
+        "contexts": {
+            "items": names,
+            "count": len(names),
+            "truncated": False,
+        },
+    }
+
+
+def _required_check_contract(required: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """Validate and return the repository-controlled required-check set.
+
+    Legacy GitHub-discovery states such as ``unknown`` or ``plan-limited-403``
+    are diagnostic evidence only and can never authorize an LCK lifecycle effect.
+    """
+
+    if not isinstance(required, Mapping):
+        raise LckStopError("required PR check policy was not acquired")
+    if required.get("configuration") != "repository":
+        raise LckStopError(
+            "required PR check policy is unresolved; LCK requires the "
+            "repository-controlled check contract before lifecycle effects"
+        )
+    contexts = required.get("contexts")
+    if not isinstance(contexts, Mapping):
+        raise LckStopError("required PR check policy contexts are malformed")
+    items = contexts.get("items")
+    if not isinstance(items, list):
+        raise LckStopError("required PR check policy items are malformed")
+    names: list[str] = []
+    for item in items:
+        if not isinstance(item, str) or not item:
+            raise LckStopError(
+                "required PR check policy contains an invalid check name"
+            )
+        if item in names:
+            raise LckStopError(
+                f"required PR check policy contains duplicate check {item!r}"
+            )
+        names.append(item)
+    return tuple(names)
+
+
 class OperationSnapshotBuilder:
     """Acquire one phase-specific authoritative snapshot at operation entry."""
 
@@ -743,18 +828,8 @@ class OperationSnapshotBuilder:
         required: Mapping[str, Any] | None = None
         warnings: list[dict[str, Any]] = []
         if include_required_checks:
-            if state.repository is None:
-                required = {
-                    "configuration": "unknown",
-                    "contexts": {"items": []},
-                }
-            else:
-                required = _required_checks(
-                    self.resolver.runner,
-                    state.repository,
-                    BASE_BRANCH,
-                    warnings,
-                )
+            required = _repository_required_checks(self.resolver.repo_root)
+            _required_check_contract(required)
         return OperationSnapshot(
             operation=operation,
             state=state,
@@ -3280,13 +3355,7 @@ class DeliveryChecksGate:
 
     @staticmethod
     def _required_names(required: Mapping[str, Any]) -> set[str]:
-        contexts = required.get("contexts")
-        if not isinstance(contexts, Mapping):
-            return set()
-        items = contexts.get("items")
-        if not isinstance(items, list):
-            return set()
-        return {str(item) for item in items if isinstance(item, str) and item}
+        return set(_required_check_contract(required))
 
     @staticmethod
     def _observed_categories(checks: Mapping[str, Any]) -> dict[str, str]:
@@ -3335,7 +3404,6 @@ class DeliveryChecksGate:
             failed = int(checks.get("failed", 0) or 0)
             unknown = int(checks.get("skipped_or_unknown", 0) or 0)
             pending = int(checks.get("pending", 0) or 0)
-            count = int(checks.get("count", 0) or 0)
         except (TypeError, ValueError) as exc:
             raise LckStopError("PR check summary is malformed") from exc
 
@@ -3362,25 +3430,6 @@ class DeliveryChecksGate:
                 raise LckStopError(
                     "required PR checks are not present: " + ", ".join(sorted(missing))
                 )
-        elif config == "unknown":
-            raise LckStopError("required PR check configuration is unavailable")
-        elif config == "plan-limited-403":
-            limitation = required.get("failure")
-            return {
-                "status": "pass" if checks.get("all_success") is True else "stop",
-                "configuration": config,
-                "required": [],
-                "pr": cls._pr_identity_from_pr(pr),
-                "checks": checks,
-                "limitation": limitation,
-            }
-        elif config in {"configured-empty", "not-configured"}:
-            if count > 0 and checks.get("all_success") is not True:
-                raise LckStopError("observed PR checks are not all successful")
-        elif count == 0:
-            raise LckStopError("no PR checks are available")
-        elif checks.get("all_success") is not True:
-            raise LckStopError("PR checks are not all successful")
 
         return {
             "status": "pass",
@@ -4357,6 +4406,9 @@ class DeliveryCompleter:
     ) -> DeliveryCompletionResult:
         state = snapshot.state
         task_number = state.task_number
+        required_checks = snapshot.required_checks
+        _required_check_contract(required_checks)
+        required_checks_mapping = cast(Mapping[str, Any], required_checks)
         decision = self.eligibility.resolve(state, phase)
         if not decision.eligible:
             raise LckStopError(
@@ -4451,9 +4503,6 @@ class DeliveryCompleter:
         ):
             raise LckStopError("PR effect did not prove the validated head/base")
 
-        required_checks = snapshot.required_checks
-        if not isinstance(required_checks, Mapping):
-            raise LckStopError("required PR check configuration was not acquired")
         snapshot_pr = state.open_pr
         if (
             isinstance(snapshot_pr, Mapping)
@@ -4470,7 +4519,7 @@ class DeliveryCompleter:
                 pr_number,
                 expected_head_sha=str(head),
                 expected_base_sha=base_sha,
-                required_checks=required_checks,
+                required_checks=required_checks_mapping,
             )
 
         checks_pr = checks.get("pr")

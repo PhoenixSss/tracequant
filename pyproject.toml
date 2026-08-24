@@ -22,6 +22,12 @@ dev = [
 module-name = "tracequant"
 module-root = "src"
 
+[tool.tracequant.lck]
+# LCK lifecycle authority for which exact GitHub check contexts must pass.
+# GitHub supplies live results; LCK does not discover this policy from
+# plan/permission-dependent branch-protection APIs.
+required-checks = ["quality"]
+
 [tool.pytest.ini_options]
 addopts = [
     "--strict-config",

@@ -31,6 +31,28 @@ from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
 SHA = "a" * 40
 
 
+def _write_required_checks_config(root: Path) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "pyproject.toml").write_text(
+        '[tool.tracequant.lck]\nrequired-checks = ["quality"]\n',
+        encoding="utf-8",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _repository_required_checks_contract(tmp_path: Path) -> None:
+    _write_required_checks_config(tmp_path)
+
+
+def _required_policy(*names: str) -> dict[str, Any]:
+    items = list(names)
+    return {
+        "configuration": "repository",
+        "source": "pyproject.toml:[tool.tracequant.lck].required-checks",
+        "contexts": {"items": items, "count": len(items), "truncated": False},
+    }
+
+
 class FakeRunner:
     def __init__(
         self,
@@ -1623,6 +1645,7 @@ def test_review_prepare_materializes_missing_pr_head_before_deriving_diff(
         text=True,
         encoding="utf-8",
     )
+    _write_required_checks_config(source)
 
     git(producer, "checkout", "-b", "task/159-lck-core-live-state-resolution")
     (producer / "tracked.py").write_text("base\nhead\n", encoding="utf-8")
@@ -2185,10 +2208,7 @@ def test_remediation_complete_can_resume_committed_new_head_and_requires_re_revi
         operation_snapshot=lck.OperationSnapshot(
             operation=lck.Phase.REMEDIATION_COMPLETE.value,
             state=state,
-            required_checks={
-                "configuration": "not-configured",
-                "contexts": {"items": []},
-            },
+            required_checks=_required_policy("quality"),
         ),
     )
 

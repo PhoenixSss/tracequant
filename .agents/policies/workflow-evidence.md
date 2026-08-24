@@ -204,8 +204,18 @@ unavailability never becomes `pass` through selective fallback.
 
 ## Capability-limited cleanup
 
-A recognized Required-Checks plan-limit `403` remains
-`required_checks_configuration = unknown` and keeps Evidence `partial`.
+Historical/read-only Evidence diagnostics may still observe a Required-Checks
+plan-limit `403`; in that evidence model the observation remains
+`required_checks_configuration = unknown` and keeps Evidence `partial`. It is
+never LCK lifecycle authority.
+
+LCK itself does **not** discover its required-check policy from the
+plan/permission-dependent branch-protection endpoint. The repository-controlled
+required-check policy is declared in `pyproject.toml` under
+`[tool.tracequant.lck].required-checks`; GitHub supplies only the live result for
+those named checks on the exact PR head. Missing or malformed repository policy
+fails closed before Delivery/Remediation lifecycle effects.
+
 Closeout may compute `eligible-under-capability-limited-policy` only for exact
 Task branch cleanup and only under the complete conditions defined by
 `task-closeout`. It never authorizes Merge, push, Issue/Project/label writes, or

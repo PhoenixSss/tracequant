@@ -500,7 +500,8 @@ The authoritative durable sources are:
 - GitHub Issue state;
 - GitHub PR state;
 - GitHub current PR head/base;
-- GitHub checks;
+- GitHub check results for exact PR heads;
+- repository-controlled required-check policy;
 - GitHub review state;
 - GitHub merge state;
 - Task contract;
@@ -509,6 +510,14 @@ The authoritative durable sources are:
 Local remote-tracking refs such as `refs/remotes/origin/main` MAY be used as diagnostics or local materialization state, but MUST NOT silently replace an authoritative remote query when current remote identity is required.
 
 Observation of remote authority SHOULD be read-only when no local materialization is required. A resolver MUST NOT mutate local Git state merely to learn what the remote currently contains.
+
+The **set of checks required by LCK** is repository-controlled workflow policy, not a
+plan/permission-dependent GitHub discovery result. In v1 it is declared in
+`pyproject.toml` under `[tool.tracequant.lck].required-checks`. GitHub remains the
+authority for whether those named checks are present/pending/successful on the exact PR
+head. If the repository policy is missing, malformed, or otherwise unresolved, LCK MUST
+fail closed before Delivery/Remediation lifecycle effects rather than reinterpret the
+unknown policy as an empty required-check set.
 
 ### 10.2 Operation Snapshot Isolation
 
@@ -522,7 +531,8 @@ Task identity / contract / contract hash
 local repository identity and relevant local refs
 current authoritative remote refs
 current PR identity / head / base
-required checks and current check results
+repository-controlled required-check policy
+current GitHub check results bound to the exact PR head
 phase-specific relationship / merge / project facts
 acquisition metadata and source diagnostics
 ```
@@ -1025,7 +1035,7 @@ Before creating a review workspace, running formal validation, or starting seman
 - authoritative remote main and Task branch identity;
 - the unique current OPEN PR;
 - exact PR head / base / branch identities;
-- current required checks configuration;
+- repository-controlled required-check policy;
 - current check results bound to the exact reviewed head;
 - Review-specific relationship / eligibility facts.
 
@@ -1184,7 +1194,7 @@ The snapshot MAY include:
 - current Task contract / relevant Task state;
 - current head;
 - current base;
-- current required checks and results;
+- repository-controlled required-check policy and current exact-head check results;
 - mergeability;
 - the applicable Review receipt / verdict as historical evidence;
 - unresolved blocking conditions.
@@ -1324,7 +1334,8 @@ Retries MUST be classified and MUST preserve Operation Snapshot Isolation.
 |---|---|
 | transient HTTP/network failure during authoritative snapshot acquisition | bounded retry of the same idempotent fact query is allowed **before snapshot freeze** |
 | required authoritative fact still unavailable after bounded acquisition retry | STOP before expensive/effectful work |
-| CI / required checks are pending at snapshot acquisition | STOP / WAIT boundary; start a fresh operation later; no in-operation polling loop |
+| repository required-check policy is missing / malformed / unresolved | STOP before Delivery/Remediation lifecycle effects; do not use GitHub plan limitations as an implicit empty policy |
+| required check result is missing or CI / required checks are pending at snapshot acquisition | STOP / WAIT boundary; start a fresh operation later; no in-operation polling loop |
 | targeted Safe Effect postcondition query has a transient HTTP/network failure | bounded retry of that exact postcondition query allowed |
 | targeted Safe Effect postcondition reveals state conflict / unexpected external change | STOP; do not full re-resolve; next lifecycle operation reacquires fresh authority |
 | deterministic validation failure | persist diagnostic evidence and return failure to semantic implementation/remediation flow |
