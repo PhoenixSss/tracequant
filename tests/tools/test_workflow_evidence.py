@@ -44,6 +44,8 @@ elif args[:2] == ['branch','--show-current']: out(state.get('branch','main'))
 elif args[:2] == ['rev-parse','HEAD']: out(state.get('git_head','a'*40))
 elif args[:2] == ['rev-parse','refs/heads/main']: out(state.get('local_main',state.get('origin_main','b'*40)))
 elif args[:2] == ['rev-parse','refs/remotes/origin/main']: out(state.get('origin_main','b'*40))
+elif args[:3] == ['ls-remote','origin','refs/heads/main']:
+    out(state.get('origin_main','b'*40)+'\trefs/heads/main')
 elif args[:1] == ['rev-parse'] and args[1].startswith('refs/heads/'):
     branch=args[1].removeprefix('refs/heads/')
     out(state.get('local_branch_tips',{{}}).get(branch, state.get('pr',{{}}).get('headRefOid','d'*40)))

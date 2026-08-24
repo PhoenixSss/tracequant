@@ -39,11 +39,12 @@ executable compatibility/control assets. `workflow_evidence.py` remains as a
 read-only audit implementation and shared bounded query helper module; its
 historical Task snapshot operations are audit material only and active Task
 Skills do not invoke them. Formal LCK live-state resolution uses the shared Git
-fact helper with an explicit active mode: it refreshes `origin/main` with a
-bounded `git fetch --prune origin` and reads `refs/remotes/origin/main` for the
-current main identity, while it observes Task-branch identities directly with
-read-only `git ls-remote`. The fetched/refreshed local refs are ephemeral
-operation inputs, not cross-phase evidence or lifecycle authority. Git object
+fact helper in read-only observation mode: `local_main_sha` comes from
+`refs/heads/main`, `tracking_main_sha` comes from the local
+`refs/remotes/origin/main` cache, and authoritative `remote_main_sha` comes
+from `git ls-remote origin refs/heads/main`. A stale tracking cache is retained
+as a diagnostic fact and never substitutes for the authoritative remote query.
+The LCK observation path does not run `git fetch --prune origin`; Git object
 materialization and other metadata writes remain bounded lifecycle effects.
 
 ## Acceptance coverage
@@ -73,18 +74,18 @@ inventory; their aggregate command counts are not added to current LOC.
 
 | Measure | #88 / pre-LCK reference | LCK v1 current shape |
 | --- | --- | --- |
-| Formal lifecycle controller | Skill + Runner + handoff/snapshot paths | `lck.py`: 4,215 LOC |
+| Formal lifecycle controller | Skill + Runner + handoff/snapshot paths | `lck.py`: 4,613 LOC |
 | Task-control support called by LCK | mechanics split across Skill/Runner/helpers | 1,241 LOC: `critical_outcome.py` 204 + `pr_resolve.py` 481 + `project_status.py` 153 + shared `workflow_common.py` 403 |
-| Combined active Task control code | no single deterministic boundary in #88 | 5,456 LOC controller + direct support; reused validation/audit infrastructure excluded |
+| Combined active Task control code | no single deterministic boundary in #88 | 5,854 LOC controller + direct support; reused validation/audit infrastructure excluded |
 | Reused Validation infrastructure | existing fixed Validation Runner | 1,163 LOC: `workflow_validation.py` 344 + `wsl2_validation_runner.py` 819; reused rather than duplicated |
-| Audit-only Evidence implementation | Task Evidence Runner was part of lifecycle control | `workflow_evidence.py` 1,566 LOC retained as read-only audit/shared-query code, not Task authority |
-| Task Skill lifecycle mechanics | direct command/procedure paths | 474 LOC per provider; 948 LOC across Codex + Claude; no direct lifecycle writes |
+| Audit-only Evidence implementation | Task Evidence Runner was part of lifecycle control | `workflow_evidence.py` 1,615 LOC retained as read-only audit/shared-query code, not Task authority |
+| Task Skill lifecycle mechanics | direct command/procedure paths | 269 LOC per provider; 538 LOC across Codex + Claude; no direct lifecycle writes |
 | Durable cross-phase control state | snapshots, freshness, handoff fields | 0 authoritative cross-phase state in LCK; only diagnostic records and invocation-local guards |
 | Snapshot/freshness/drift concepts | cross-phase snapshot/freshness/drift graph | 0 snapshot/freshness authority; one operation-local stale-guard family |
 | Dynamic global write authorization | `write_actions_allowed` disposition | absent from LCK and active Task policy |
 | Direct Agent lifecycle writes | present in historical baseline | 0 in active Task Skills |
 | Duplicate Task identity resolution | Skill/Runner/current-workflow paths | one LCK `LiveStateResolver`; historical audit queries cannot authorize Task phases |
-| Main lifecycle test groups | split across old Runner and workflow paths | 86 tests: 49 + 25 + 11 + 1 acceptance |
+| Main lifecycle test groups | split across old Runner and workflow paths | 92 tests: 55 + 25 + 11 + 1 acceptance |
 | Legacy executable components removed in this convergence | old Task Runner/profiles/Rules + durable self-review binder | 7 files removed: Runner, profile spec, Codex Rule, two Runner/Rules tests, self-review binder, binder test |
 
 The historical #85 static Skill record reports 685 lines before and 547 lines
@@ -92,7 +93,7 @@ after its earlier Runner migration; #88 supplies the operation inventory rather
 than a directly comparable LOC measurement. Current values above were measured
 from this candidate tree and are descriptive evidence, not lifecycle authority.
 
-The LOC boundary is explicit to avoid understating LCK complexity: the 4,215-line
+The LOC boundary is explicit to avoid understating LCK complexity: the 4,613-line
 core is reported separately from the 1,241 lines of support it directly calls.
 Validation infrastructure is reported separately because it predates LCK and is
 reused; audit-only Evidence code is also reported separately because it cannot
@@ -142,13 +143,19 @@ Tasks #164–#167 established the LCK implementation on `main` before this
 cleanup. This Task removes the remaining active dual-path references and adds
 the acceptance verifier. The repository does not contain provider-attributed
 Codex and Claude live-session receipts or a maintainer-executed activation/rollback
-receipt. Those external acceptance facts are therefore recorded as **Task-level
-evidence pending** and are not fabricated by this report. Task #163 MUST NOT be
-declared fully accepted until a real Codex implementation path, an equivalent
-Claude implementation path, fresh cross-provider Review combinations, and the
-required maintainer activation/rollback evidence have been recorded. Static Skill
-identity and unit tests establish provider-neutral design, but do not substitute
-for the Task's explicit live dual-Agent acceptance requirement.
+receipt. Fresh provider-attributed Codex and Claude implementation receipts and
+cross-provider Review receipts are **pre-merge** evidence. They remain pending
+and are not fabricated by this report; they must be recorded before the current
+OPEN PR can receive Independent Review PASS. Static Skill identity and unit
+tests do not substitute for the Task's explicit live Dual Agent requirement.
+
+The current Task's Squash Merge receipt, mainline activation receipt, and
+Closeout receipt are **post-merge** evidence. They cannot be produced while the
+PR is OPEN and are not prerequisites for this PR's Independent Review PASS.
+They remain required for final Task acceptance after a maintainer performs the
+Human Squash Merge. Rollback evidence is required only if a real activation
+failure occurs; the rollback procedure/mechanics are pre-merge acceptance and
+must not be turned into a forced failure injection.
 
 The required rollback boundary remains: stop activation on failure, manually
 revert the candidate merge as one controlled change, validate restored main,

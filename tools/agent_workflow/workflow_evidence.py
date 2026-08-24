@@ -161,6 +161,35 @@ def _git_lines(
     return [line for line in value.splitlines() if line]
 
 
+def _remote_main_sha(
+    runner: CommandRunner, warnings: list[dict[str, Any]]
+) -> str | None:
+    """Read the authoritative remote main ref without changing local refs."""
+    result = runner.run(
+        ["git", "ls-remote", "origin", "refs/heads/main"],
+        command_id="git-remote-main",
+        retries=1,
+    )
+    if result.returncode != 0:
+        warnings.append(command_warning(result))
+        return None
+    matches = [
+        line.split("\t", 1)[0]
+        for line in result.stdout.splitlines()
+        if "\t" in line and line.split("\t", 1)[1] == "refs/heads/main"
+    ]
+    if len(matches) != 1 or not is_sha(matches[0]):
+        warnings.append(
+            {
+                "command_id": result.command_id,
+                "exit_code": result.returncode,
+                "error": "authoritative refs/heads/main result is missing or malformed",
+            }
+        )
+        return None
+    return matches[0]
+
+
 def _repository_slug(
     runner: CommandRunner,
     explicit: str | None,
@@ -200,9 +229,11 @@ def _git_snapshot(
 ) -> dict[str, Any]:
     """Collect bounded Git facts for Feature audit and LCK queries.
 
-    Feature audit is allowed to refresh refs. LCK supplies the explicit query
-    mode when it reuses this shared helper; no environment variable or
-    persisted evidence record controls Task lifecycle behavior.
+    Feature audit may refresh refs for its local object inventory. LCK supplies
+    the read-only mode when it reuses this helper; its authoritative main
+    identity always comes from ``git ls-remote`` rather than a tracking ref.
+    No environment variable or persisted evidence record controls Task
+    lifecycle behavior.
     """
 
     fetch: CommandResult | None = None
@@ -232,18 +263,22 @@ def _git_snapshot(
         command_id="git-local-main",
         warnings=warnings,
     )
-    origin_main = _git_value(
+    tracking_main = _git_value(
         runner,
         ["rev-parse", "refs/remotes/origin/main"],
-        command_id="git-origin-main",
+        command_id="git-tracking-main",
         warnings=warnings,
     )
-    status_lines = _git_lines(
-        runner,
-        ["status", "--short", "--untracked-files=all"],
+    remote_main = _remote_main_sha(runner, warnings)
+    status_result = runner.run(
+        ["git", "status", "--short", "--untracked-files=all"],
         command_id="git-status",
-        warnings=warnings,
     )
+    if status_result.returncode != 0:
+        warnings.append(command_warning(status_result))
+        status_lines: list[str] | None = None
+    else:
+        status_lines = [line for line in status_result.stdout.splitlines() if line]
     staged = _git_lines(
         runner,
         ["diff", "--cached", "--name-only"],
@@ -281,9 +316,16 @@ def _git_snapshot(
         "branch": safe_text(branch),
         "head_sha": head if is_sha(head) else None,
         "local_main_sha": local_main if is_sha(local_main) else None,
-        "origin_main_sha": origin_main if is_sha(origin_main) else None,
-        "clean": len(status_lines) == 0,
-        "status_entries": len(status_lines),
+        "tracking_main_sha": tracking_main if is_sha(tracking_main) else None,
+        "remote_main_sha": remote_main,
+        "tracking_main_stale": (
+            is_sha(tracking_main)
+            and is_sha(remote_main)
+            and tracking_main != remote_main
+        ),
+        "remote_main_query": "pass" if is_sha(remote_main) else "unknown",
+        "clean": None if status_lines is None else len(status_lines) == 0,
+        "status_entries": None if status_lines is None else len(status_lines),
         "staged_files": bounded_list(staged, item_limit=MAX_FILES),
         "changed_files": bounded_list(changed, item_limit=MAX_FILES),
         "worktree_count": sum(1 for line in worktrees if line.startswith("worktree ")),
@@ -1375,7 +1417,13 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
         gates["repository"] = _gate("pass")
         gates["origin_fetch"] = _gate(git.get("origin_fetch", "unknown"))
         gates["audited_main_sha"] = _sha_gate(
-            git.get("origin_main_sha"), args.expected_main_sha, "origin/main SHA"
+            git.get("remote_main_sha"), args.expected_main_sha, "remote main SHA"
+        )
+        gates["tracking_main"] = _gate(
+            "unknown" if git.get("tracking_main_sha") is None else "pass",
+            "local remote-tracking ref is unavailable"
+            if git.get("tracking_main_sha") is None
+            else None,
         )
         gates["direct_children_available"] = _gate(
             "pass" if relationships.get("available") else "unknown"
@@ -1403,7 +1451,7 @@ def _feature_snapshot(args: argparse.Namespace, repo_root: Path) -> dict[str, An
     observed["direct_child_evidence_digest"] = sha256_json(direct_children_items)
     observed["relationships_digest"] = sha256_json(relationships_digest_source)
     execution_context = {
-        "object_base_sha": git.get("origin_main_sha"),
+        "object_base_sha": git.get("remote_main_sha"),
         "runner": _runner_source(runner, warnings),
     }
     return _base_snapshot(
@@ -1452,7 +1500,8 @@ def _feature_stability_projection(snapshot: Mapping[str, Any]) -> dict[str, Any]
                 "relationships": observed.get("relationships"),
             }
         ),
-        "origin_main_sha": git_facts.get("origin_main_sha"),
+        "remote_main_sha": git_facts.get("remote_main_sha"),
+        "tracking_main_sha": git_facts.get("tracking_main_sha"),
         "direct_child_set_digest": observed.get("direct_child_set_digest"),
         "direct_child_evidence_digest": observed.get("direct_child_evidence_digest"),
         "relationships_digest": observed.get("relationships_digest"),

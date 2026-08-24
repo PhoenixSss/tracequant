@@ -157,15 +157,24 @@ def _is_clean_current_main(git: Mapping[str, Any]) -> bool:
     """Return whether a new Task branch can safely be based on current main."""
     head_sha = git.get("head_sha")
     local_main_sha = git.get("local_main_sha")
-    origin_main_sha = git.get("origin_main_sha")
+    remote_main_sha = _authoritative_remote_main_sha(git)
     return (
         git.get("branch") == BASE_BRANCH
         and git.get("clean") is True
         and is_sha(head_sha)
         and is_sha(local_main_sha)
-        and is_sha(origin_main_sha)
-        and head_sha == local_main_sha == origin_main_sha
+        and is_sha(remote_main_sha)
+        and head_sha == local_main_sha == remote_main_sha
     )
+
+
+def _authoritative_remote_main_sha(git: Mapping[str, Any]) -> str | None:
+    """Return remote main authority, with a test/legacy input compatibility fallback."""
+    remote_main_sha = git.get("remote_main_sha")
+    if isinstance(remote_main_sha, str):
+        return remote_main_sha
+    legacy_sha = git.get("origin_main_sha")
+    return legacy_sha if isinstance(legacy_sha, str) else None
 
 
 def _remote_refs(stdout: str) -> dict[str, str]:
@@ -501,16 +510,17 @@ class LiveStateResolver:
         else:
             reasons.append("repository identity unavailable")
 
-        git_warning_count = len(warnings)
-        git = _git_snapshot(self.runner, warnings, read_only_local_refs=False)
-        if len(warnings) > git_warning_count:
-            reasons.append("local Git snapshot contains unavailable facts")
-        if git.get("origin_fetch") != "pass":
-            reasons.append("current origin/main facts are unavailable")
-        if not is_sha(git.get("local_main_sha")) or not is_sha(
-            git.get("origin_main_sha")
-        ):
-            reasons.append("current main identity is unavailable")
+        git = _git_snapshot(self.runner, warnings, read_only_local_refs=True)
+        if not isinstance(git.get("branch"), str) or not git.get("branch"):
+            reasons.append("current local branch is unavailable")
+        if not is_sha(git.get("head_sha")):
+            reasons.append("current local HEAD is unavailable")
+        if not is_sha(git.get("local_main_sha")):
+            reasons.append("local main ref unavailable")
+        if not is_sha(_authoritative_remote_main_sha(git)):
+            reasons.append("remote main query failed")
+        if git.get("clean") not in {True, False}:
+            reasons.append("current worktree cleanliness is unavailable")
         if issue is None:
             reasons.append("Task metadata unavailable")
         if relationships.get("available") is not True:
@@ -876,8 +886,8 @@ class PhaseEligibilityResolver:
             if not is_sha(pr_head):
                 reasons.append("current OPEN PR head OID is unavailable")
             pr_base = state.open_pr.get("baseRefOid") if state.open_pr else None
-            origin_main = state.git.get("origin_main_sha")
-            if not is_sha(pr_base) or not is_sha(origin_main) or pr_base != origin_main:
+            remote_main = _authoritative_remote_main_sha(state.git)
+            if not is_sha(pr_base) or not is_sha(remote_main) or pr_base != remote_main:
                 reasons.append("current OPEN PR base must match current origin/main")
             if state.remote_task_oid != pr_head:
                 reasons.append("remote Task branch must match current OPEN PR head")
@@ -1417,12 +1427,18 @@ class ReviewWorkspaceManager:
                 "Review worktree cleanup path is not a registered LCK worktree"
             )
 
-    def create(self, task_number: int, head_sha: str) -> Path:
-        path = Path(
-            tempfile.mkdtemp(prefix=f"tracequant-lck-review-{task_number}-")
-        ).resolve()
-        # mkdtemp creates the path, while git worktree requires an absent target.
-        path.rmdir()
+    def path_for(self, task_number: int, operation_id: str) -> Path:
+        """Return an uncreated, operation-owned temporary worktree path."""
+        return self._validated_worktree_path(
+            Path(tempfile.gettempdir())
+            / f"tracequant-lck-review-{task_number}-{operation_id}"
+        )
+
+    def create(self, task_number: int, head_sha: str, path: Path | None = None) -> Path:
+        path = self.path_for(task_number, uuid.uuid4().hex) if path is None else path
+        path = self._validated_worktree_path(path)
+        if path.exists():
+            raise LckStopError("isolated Review worktree path is already occupied")
         result = self.resolver.runner.run(
             ["git", "worktree", "add", "--detach", str(path), head_sha],
             command_id="lck-review-worktree-add",
@@ -1562,6 +1578,39 @@ class ReviewWorkspaceManager:
             if prune.returncode != 0:
                 raise LckStopError("failed to remove isolated Review worktree")
 
+    def remove_recovered(self, path: Path) -> None:
+        """Remove a marker-owned worktree, including interrupted registration."""
+        path = self._validated_worktree_path(path)
+        if not path.exists():
+            return
+        result = self.resolver.runner.run(
+            ["git", "worktree", "list", "--porcelain"],
+            command_id="lck-review-recovered-worktree-verify",
+        )
+        if result.returncode != 0:
+            raise LckStopError(
+                "cannot verify recovered Review worktree ownership: "
+                + (result.stderr.strip() or result.stdout.strip())
+            )
+        registered = {
+            Path(line.removeprefix("worktree ").strip()).resolve()
+            for line in result.stdout.splitlines()
+            if line.startswith("worktree ") and line.removeprefix("worktree ").strip()
+        }
+        if path in registered:
+            self.remove(path)
+            return
+        self._make_removable(path)
+        shutil.rmtree(path, ignore_errors=True)
+        if path.exists():
+            raise LckStopError("failed to remove recovered Review worktree directory")
+        prune = self.resolver.runner.run(
+            ["git", "worktree", "prune"],
+            command_id="lck-review-recovered-worktree-prune",
+        )
+        if prune.returncode != 0:
+            raise LckStopError("failed to prune recovered Review worktree metadata")
+
 
 @dataclass
 class ReviewPrepareInvocation:
@@ -1575,12 +1624,19 @@ class ReviewPrepareInvocation:
     def update(self, payload: Mapping[str, Any]) -> None:
         atomic_write_json(self.path, payload)
 
+    def release_lock(self) -> None:
+        """Release the process lock while retaining durable handoff state."""
+        if self._lock_fd < 0:
+            return
+        fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+        os.close(self._lock_fd)
+        self._lock_fd = -1
+
     def finish(self) -> None:
         try:
             self.path.unlink()
         finally:
-            fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
-            os.close(self._lock_fd)
+            self.release_lock()
 
 
 class ReviewInvocationStore:
@@ -1677,6 +1733,21 @@ class ReviewInvocationStore:
                     raise LckStopError(
                         f"Review Prepare already in flight for Task #{task_number}"
                     )
+                if parsed.get("state") == "handed-off":
+                    review_id = parsed.get("review_id")
+                    review_root = parsed.get("review_root")
+                    guard_exists = (
+                        isinstance(review_id, str)
+                        and self.guard_path(review_id).exists()
+                    )
+                    root_exists = (
+                        isinstance(review_root, str) and Path(review_root).exists()
+                    )
+                    if guard_exists and root_exists:
+                        raise LckStopError(
+                            "Review Prepare handoff is still owned by the prior "
+                            f"operation (review {review_id})"
+                        )
                 existing = dict(parsed)
 
             operation_id = self.new_id()
@@ -1704,6 +1775,30 @@ class ReviewInvocationStore:
         except BaseException:
             os.close(lock_fd)
             raise
+
+    def release_review_prepare(self, task_number: int, review_id: str) -> None:
+        """Release a successful Prepare handoff after Review cleanup."""
+        path = self.review_prepare_inflight_path(task_number)
+        if not path.exists():
+            return
+        lock_path = self.review_prepare_lock_path(task_number)
+        lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            if not path.exists():
+                return
+            value = read_json_file(path)
+            if not isinstance(value, Mapping):
+                raise LckStopError("Review Prepare in-flight state is invalid")
+            owner_review_id = value.get("review_id")
+            if owner_review_id != review_id:
+                raise LckStopError(
+                    "Review Prepare handoff belongs to a different Review invocation"
+                )
+            path.unlink()
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
 
     def write_guard(self, review_id: str, payload: Mapping[str, Any]) -> None:
         atomic_write_json(self.guard_path(review_id), payload)
@@ -1977,7 +2072,10 @@ class ReviewPreparer:
                         )
                     previous_path = Path(previous_root)
                     if previous_path.exists():
-                        self.workspace.remove(previous_path)
+                        self.workspace.remove_recovered(previous_path)
+                previous_review_id = recovered.get("review_id")
+                if isinstance(previous_review_id, str):
+                    self.store.delete_guard(previous_review_id)
             mark("resolving-live-state")
             state = self.resolver.resolve(task_number)
             decision = self.eligibility.resolve(state, Phase.REVIEW_PREPARE)
@@ -1990,7 +2088,18 @@ class ReviewPreparer:
             identity = _review_identity(self.resolver, state, task_contract)
             mark("checking-current-pr", identity=identity.to_dict())
             self.checks_gate.run(task_number)
-            review_root = self.workspace.create(task_number, identity.head_sha)
+            review_root = self.workspace.path_for(task_number, invocation.operation_id)
+            mark(
+                "worktree-reserved",
+                identity=identity.to_dict(),
+                review_root=str(review_root),
+            )
+            self.workspace.create(task_number, identity.head_sha, review_root)
+            mark(
+                "worktree-created",
+                identity=identity.to_dict(),
+                review_root=str(review_root),
+            )
             mark("formal-validation", identity=identity.to_dict())
             validation = self.validation.run(
                 review_root, identity.base_sha, identity.head_sha
@@ -2035,6 +2144,13 @@ class ReviewPreparer:
                 "authority": "ephemeral applicability guard only",
             }
             self.store.write_guard(review_id, guard)
+            mark(
+                "handed-off",
+                identity=identity.to_dict(),
+                validation=validation,
+                checks=final_checks,
+                review_id=review_id,
+            )
             context = ReviewContext(
                 review_id=review_id,
                 task_contract=task_contract,
@@ -2043,13 +2159,14 @@ class ReviewPreparer:
                 validation=validation,
                 review_root=review_root,
             )
+            invocation.release_lock()
         except BaseException as exc:
             cleanup_error: BaseException | None = None
             try:
                 mark("failed", error=safe_text(str(exc), limit=1200))
             except BaseException:
                 pass
-            if review_root is not None:
+            if review_root is not None and review_root.exists():
                 try:
                     self.workspace.remove(review_root)
                 except BaseException as remove_exc:
@@ -2058,7 +2175,6 @@ class ReviewPreparer:
                 raise cleanup_error from exc
             invocation.finish()
             raise
-        invocation.finish()
         return context
 
 
@@ -2240,8 +2356,16 @@ class ReviewCompleter:
                 record_path=record_path,
             )
         finally:
-            self.workspace.remove(review_root)
-            self.store.delete_guard(review_id)
+            cleanup_error: BaseException | None = None
+            try:
+                self.workspace.remove(review_root)
+            except BaseException as exc:
+                cleanup_error = exc
+            if cleanup_error is None:
+                self.store.delete_guard(review_id)
+                self.store.release_review_prepare(task_number, review_id)
+            else:
+                raise cleanup_error
 
 
 class CommitCurrentTreeEffect:
@@ -2592,7 +2716,7 @@ class EnsureOpenPrEffect:
         repository = state.repository
         head = state.local_task_head
         remote = state.remote_task_oid
-        base = state.git.get("origin_main_sha")
+        base = _authoritative_remote_main_sha(state.git)
         issue = state.issue
         if (
             not isinstance(repository, str)
@@ -2687,7 +2811,7 @@ class ReuseExistingOpenPrEffect:
         issue = state.issue
         if not isinstance(pr, Mapping) or pr.get("isDraft") is not False:
             raise LckStopError("Remediation requires the existing non-Draft OPEN PR")
-        if state.git.get("origin_main_sha") != expected_base_sha:
+        if _authoritative_remote_main_sha(state.git) != expected_base_sha:
             raise LckStopError(
                 "Remediation PR precondition failed: origin/main changed"
             )
@@ -3843,7 +3967,7 @@ class DeliveryCompleter:
                 "Delivery operation guard stopped: " + "; ".join(decision.reasons)
             )
         issue = state.issue
-        if state.git.get("origin_main_sha") != base_sha:
+        if _authoritative_remote_main_sha(state.git) != base_sha:
             raise LckStopError("Delivery operation guard stopped: origin/main changed")
         if not isinstance(issue, Mapping) or issue.get("body_sha256") != body_sha256:
             raise LckStopError("Delivery operation guard stopped: Task body changed")
@@ -3895,7 +4019,7 @@ class DeliveryCompleter:
             state.target_branch == branch
             and state.git.get("branch") == branch
             and state.git.get("clean") is True
-            and state.git.get("origin_main_sha") == base_sha
+            and _authoritative_remote_main_sha(state.git) == base_sha
             and isinstance(issue, Mapping)
             and issue.get("body_sha256") == body_sha256
             and state.local_task_head == head
@@ -3930,7 +4054,7 @@ class DeliveryCompleter:
                 f"Delivery Complete STOP for Task #{task_number}: "
                 + "; ".join(decision.reasons)
             )
-        base_sha = state.git.get("origin_main_sha")
+        base_sha = _authoritative_remote_main_sha(state.git)
         if not is_sha(base_sha):
             raise LckStopError("current origin/main identity is unavailable")
         issue = state.issue

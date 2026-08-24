@@ -99,9 +99,19 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     architecture_delta = (
         ROOT / "docs/workflows/lck-v1-closeout-architecture-delta.md"
     ).read_text(encoding="utf-8")
-    assert "git fetch --prune origin" in architecture_delta
+    assert "git ls-remote origin refs/heads/main" in architecture_delta
     assert "refs/remotes/origin/main" in architecture_delta
-    assert "4,215-line" in architecture_delta
+    assert "git fetch --prune origin" not in lck_source
+    core_lines = len((ROOT / "tools/agent_workflow/lck.py").read_text().splitlines())
+    assert f"`lck.py`: {core_lines:,} LOC" in architecture_delta
+    assert "remote_main_sha" in lck_source
+    assert "local_main_sha" in architecture_delta
+    assert "tracking_main_sha" in architecture_delta
+    assert "pre-merge" in architecture_delta
+    assert "post-merge" in architecture_delta
+    assert (
+        "not prerequisites for this PR's Independent Review PASS" in architecture_delta
+    )
 
     # The pre-LCK compatibility/control front door must be physically absent,
     # not merely unreferenced by the active Skills. Historical publication

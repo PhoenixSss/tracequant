@@ -60,8 +60,11 @@ Task-local operation marker；它只用于阻止同一 Task 的重复 in-flight 
 `review_id` 或跨阶段 authority。成功时才返回 `review_id`、live review target、Task
 Contract、validation、checks 和 isolated `review_root`。Formal validation FAIL 会先
 把 command-level result、validated base/head 和 evidence path 持久化，再 fail closed，
-不产生 semantic Review `review_id`。异常退出留下的 operation marker 可由后续
-Prepare 在确认 owner 已退出后回收其 LCK-owned worktree。
+不产生 semantic Review `review_id`。Marker 在 isolated worktree path 被预留之前
+只记录 operation ownership；创建后、validation、异常退出和成功 handoff 都更新
+同一个 marker。成功 handoff 会一直保留到 Review completion，以便 command result
+丢失时仍能从 marker + guard 判断 ownership；后续 Prepare 只有在 owner 已退出且
+handoff 的 worktree/guard 不完整时才回收其 LCK-owned state。
 
 ## 4. Fresh semantic context and read-only workspace
 

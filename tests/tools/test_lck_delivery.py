@@ -632,6 +632,12 @@ Verification test: tests/tools/test_lck_delivery.py::test_task_160_critical_outc
                 command,
                 stdout=f"{self.remote_oid}\trefs/heads/{self.branch}",
             )
+        if args == ["ls-remote", "origin", "refs/heads/main"]:
+            return self._result(
+                command_id,
+                command,
+                stdout=f"{self.base_sha}\trefs/heads/main",
+            )
         if args[:2] == ["status", "--short"] or args[:2] == [
             "status",
             "--porcelain=v1",

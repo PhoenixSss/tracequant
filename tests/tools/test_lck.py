@@ -153,8 +153,10 @@ def _git_snapshot(fake: FakeRunner) -> dict[str, Any]:
         "branch": fake.branch,
         "head_sha": fake.head_sha,
         "local_main_sha": fake.local_main_sha,
+        "tracking_main_sha": fake.origin_main_sha,
+        "remote_main_sha": fake.origin_main_sha,
         "origin_main_sha": fake.origin_main_sha,
-        "origin_fetch": "pass",
+        "remote_main_query": "pass",
         "clean": fake.clean,
         "status_entries": 0 if fake.clean else 1,
         "worktree_branches": {"items": [fake.branch], "count": 1, "truncated": False},
@@ -315,7 +317,65 @@ def test_lck_live_snapshot_overrides_legacy_read_only_environment(
     monkeypatch.setattr(lck, "_git_snapshot", live_snapshot)
     _resolver(fake).resolve(159)
 
-    assert observed == {"read_only_local_refs": False}
+    assert observed == {"read_only_local_refs": True}
+
+
+def test_live_git_snapshot_separates_remote_main_from_tracking_cache() -> None:
+    class ReadOnlyGitRunner:
+        def __init__(self) -> None:
+            self.commands: list[tuple[str, ...]] = []
+
+        def run(
+            self,
+            argv: list[str] | tuple[str, ...],
+            *,
+            command_id: str,
+            **_: Any,
+        ) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            self.commands.append(command)
+            outputs = {
+                ("git", "branch", "--show-current"): "task/159-live",
+                ("git", "rev-parse", "HEAD"): SHA,
+                ("git", "rev-parse", "refs/heads/main"): SHA,
+                ("git", "rev-parse", "refs/remotes/origin/main"): "b" * 40,
+                (
+                    "git",
+                    "ls-remote",
+                    "origin",
+                    "refs/heads/main",
+                ): f"{SHA}\trefs/heads/main",
+                (
+                    "git",
+                    "status",
+                    "--short",
+                    "--untracked-files=all",
+                ): "",
+                ("git", "diff", "--cached", "--name-only"): "",
+                ("git", "diff", "--name-only"): "",
+                ("git", "worktree", "list", "--porcelain"): "worktree /repo\n",
+            }
+            if command == ("git", "fetch", "--prune", "origin"):
+                return CommandResult(command_id, command, 1, "", "fetch forbidden")
+            return CommandResult(
+                command_id,
+                command,
+                0 if command in outputs else 1,
+                outputs.get(command, ""),
+                "" if command in outputs else "unsupported",
+            )
+
+    runner = ReadOnlyGitRunner()
+    warnings: list[dict[str, Any]] = []
+    snapshot = lck._git_snapshot(cast(Any, runner), warnings, read_only_local_refs=True)
+
+    assert snapshot["local_main_sha"] == SHA
+    assert snapshot["tracking_main_sha"] == "b" * 40
+    assert snapshot["remote_main_sha"] == SHA
+    assert snapshot["tracking_main_stale"] is True
+    assert not any(
+        command[1:4] == ("fetch", "--prune", "origin") for command in runner.commands
+    )
 
 
 def test_ambiguous_open_pr_stops_phase_resolution(
@@ -397,7 +457,7 @@ def test_open_pr_head_mismatch_stops_before_workspace_write(
     assert not any(command[:2] == ("git", "switch") for command in fake.commands)
 
 
-def test_git_snapshot_warning_stops_before_workspace_write(
+def test_optional_git_snapshot_warning_does_not_stop_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = FakeRunner(branch="main")
@@ -419,7 +479,31 @@ def test_git_snapshot_warning_stops_before_workspace_write(
 
     monkeypatch.setattr(lck, "_git_snapshot", unavailable_git_snapshot)
 
-    with pytest.raises(lck.LckStopError, match="local Git snapshot"):
+    state = _resolver(fake).resolve(159)
+
+    assert state.status is lck.ResolutionStatus.RESOLVED
+
+
+def test_remote_main_query_failure_stops_before_workspace_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRunner(branch="main")
+    _install_facts(monkeypatch, fake)
+
+    def unavailable_remote_main(
+        _runner: Any,
+        _warnings: list[dict[str, Any]],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        value = _git_snapshot(fake)
+        value["remote_main_sha"] = None
+        value["remote_main_query"] = "unknown"
+        value.pop("origin_main_sha", None)
+        return value
+
+    monkeypatch.setattr(lck, "_git_snapshot", unavailable_remote_main)
+
+    with pytest.raises(lck.LckStopError, match="remote main query failed"):
         lck.DeliveryPreparer(_resolver(fake)).prepare(159)
 
     assert fake.branch == "main"
@@ -1002,9 +1086,13 @@ class FakeReviewWorkspace:
         self.ready_checked: list[Path] = []
         self.removed: list[Path] = []
 
-    def create(self, _task: int, _head: str) -> Path:
-        self.root.mkdir(parents=True, exist_ok=True)
+    def path_for(self, _task: int, _operation_id: str) -> Path:
         return self.root
+
+    def create(self, _task: int, _head: str, path: Path | None = None) -> Path:
+        root = path or self.root
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
     def seal_read_only(self, path: Path) -> None:
         self.sealed.append(path)
@@ -1017,6 +1105,9 @@ class FakeReviewWorkspace:
 
     def remove(self, path: Path) -> None:
         self.removed.append(path)
+
+    def remove_recovered(self, path: Path) -> None:
+        self.remove(path)
 
 
 class FakeReviewChecks:
@@ -1074,6 +1165,11 @@ def test_review_prepare_builds_context_only_from_live_resolution(
     assert value["mechanical_authority"].startswith("live Git/GitHub")
     assert workspace.sealed == [tmp_path / "review-root"]
     assert store.guard_path(context.review_id).is_file()
+    inflight = json.loads(
+        store.review_prepare_inflight_path(159).read_text(encoding="utf-8")
+    )
+    assert inflight["state"] == "handed-off"
+    assert inflight["review_id"] == context.review_id
     assert checks.calls == 2
 
 
@@ -1715,6 +1811,40 @@ def test_review_prepare_inflight_guard_blocks_second_operation(tmp_path: Path) -
         first.finish()
 
     assert not store.review_prepare_inflight_path(159).exists()
+
+
+def test_review_prepare_handoff_keeps_explicit_ownership_until_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    review_root = tmp_path / "tracequant-lck-review-159-handoff"
+    review_root.mkdir()
+    store.write_guard(review_id, {"review_id": review_id})
+    store.review_prepare_inflight_path(159).parent.mkdir(parents=True, exist_ok=True)
+    store.review_prepare_inflight_path(159).write_text(
+        json.dumps(
+            {
+                "task_number": 159,
+                "pid": 1,
+                "operation_id": store.new_id(),
+                "state": "handed-off",
+                "review_id": review_id,
+                "review_root": str(review_root),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        lck.ReviewInvocationStore,
+        "_pid_is_alive",
+        staticmethod(lambda _pid: False),
+    )
+
+    with pytest.raises(lck.LckStopError, match="handoff is still owned"):
+        store.begin_review_prepare(159)
+
+    assert store.review_prepare_inflight_path(159).is_file()
 
 
 def test_remediation_prepare_uses_live_head_not_review_record_identity(
