@@ -188,8 +188,13 @@ executable Task Evidence Runner, profiles, and approval Rules have been removed.
 Historical remediation evidence is not part of the LCK Review / Remediation
 lifecycle and MUST NOT authorize a current repair from an expected base/head
 or bounded handoff. Current remediation authority is `lck.py remediation
-prepare`, which reacquires the live Task/PR/head/base and uses the failed
-Review record only for semantic findings.
+prepare`, which reacquires the live Task/PR/head/base. A workspace-local failed
+Review record is the default semantic-findings source only. If a maintainer
+intentionally switches clone or Agent runtime and that ignored audit record is
+unavailable, `remediation prepare --findings-file <FILE>` may carry the completed
+Review findings across that boundary. This is a semantic-only handoff: it cannot
+supply or override PR/head/base/branch/check/check-policy authority, and the normal
+Codex/local-record path remains unchanged.
 
 ## Failure expansion
 

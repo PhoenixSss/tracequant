@@ -2131,6 +2131,9 @@ class ReviewInvocationStore:
     def review_required_path(self, task_number: int) -> Path:
         return self.root / "review-state" / f"task-{task_number}-required.json"
 
+    def remediation_session_path(self, task_number: int) -> Path:
+        return self.root / "remediation-sessions" / f"task-{task_number}.json"
+
     def review_prepare_inflight_path(self, task_number: int) -> Path:
         return self.root / "review-inflight" / f"task-{task_number}.json"
 
@@ -2346,6 +2349,41 @@ class ReviewInvocationStore:
     def clear_review_required(self, task_number: int) -> None:
         try:
             self.review_required_path(task_number).unlink()
+        except FileNotFoundError:
+            pass
+
+    def write_remediation_session(
+        self, task_number: int, payload: Mapping[str, Any]
+    ) -> Path:
+        path = self.remediation_session_path(task_number)
+        existing: Mapping[str, Any] | None = None
+        if path.exists():
+            value = read_json_file(path)
+            if not isinstance(value, Mapping):
+                raise LckStopError("Remediation session state is invalid")
+            existing = value
+        if existing is not None and (
+            existing.get("review_id") != payload.get("review_id")
+            or existing.get("start_head_sha") != payload.get("start_head_sha")
+        ):
+            raise LckStopError(
+                "another Remediation session is already prepared for this Task"
+            )
+        atomic_write_json(path, payload)
+        return path
+
+    def read_remediation_session(self, task_number: int) -> dict[str, Any] | None:
+        path = self.remediation_session_path(task_number)
+        if not path.exists():
+            return None
+        value = read_json_file(path)
+        if not isinstance(value, dict) or value.get("task_number") != task_number:
+            raise LckStopError("Remediation session state is invalid")
+        return value
+
+    def clear_remediation_session(self, task_number: int) -> None:
+        try:
+            self.remediation_session_path(task_number).unlink()
         except FileNotFoundError:
             pass
 
@@ -4758,6 +4796,7 @@ class RemediationContext:
     task_number: int
     review_id: str
     findings: str
+    findings_source: str
     operation_snapshot: OperationSnapshot
     action: str
 
@@ -4775,6 +4814,7 @@ class RemediationContext:
             "review_id": self.review_id,
             "action": self.action,
             "findings": self.findings,
+            "findings_source": self.findings_source,
             "operation_snapshot": self.operation_snapshot.to_dict(),
             "live_target": {
                 "pr_number": pr.get("number"),
@@ -4788,7 +4828,9 @@ class RemediationContext:
                 ),
             },
             "mechanical_authority": (
-                "operation snapshot acquired at Remediation entry; Review record supplies findings only"
+                "operation snapshot acquired at Remediation entry; Review findings are semantic "
+                "input only, whether loaded from the local audit record or an explicitly supplied "
+                "portable findings file"
             ),
             "acceptance_boundary": (
                 "Requirements whose evidence can only be truthfully produced after the repaired "
@@ -4826,11 +4868,37 @@ def _failed_review_record(
     return record
 
 
-def _failed_review_findings(
-    store: ReviewInvocationStore, task_number: int, review_id: str
-) -> str:
-    record = _failed_review_record(store, task_number, review_id)
-    return cast(str, record["findings"])
+def _read_portable_review_findings(path: Path) -> str:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise LckStopError(f"cannot read portable Review findings file: {exc}") from exc
+    if not text.strip():
+        raise LckStopError("portable Review findings file is empty")
+    return text
+
+
+def _remediation_findings(
+    store: ReviewInvocationStore,
+    task_number: int,
+    review_id: str,
+    *,
+    findings_file: Path | None = None,
+) -> tuple[str, str]:
+    # Constructing the path validates the caller-provided review id even when the
+    # originating workspace-local audit record is unavailable.
+    record_path = store.record_path(task_number, review_id)
+    if record_path.exists():
+        record = _failed_review_record(store, task_number, review_id)
+        return cast(str, record["findings"]), "local-review-record"
+    if findings_file is None:
+        raise LckStopError(
+            "failed Review audit record is unavailable in this workspace; "
+            "for an explicit cross-workspace/provider Remediation handoff, provide "
+            "--findings-file with the completed Review findings. The file is semantic "
+            "input only; LCK still reacquires all mechanical authority from live state."
+        )
+    return _read_portable_review_findings(findings_file), "portable-findings-file"
 
 
 class RemediationPreparer:
@@ -4876,13 +4944,24 @@ class RemediationPreparer:
                 "the operation snapshot PR head"
             )
 
-    def prepare(self, task_number: int, review_id: str) -> RemediationContext:
+    def prepare(
+        self,
+        task_number: int,
+        review_id: str,
+        *,
+        findings_file: Path | None = None,
+    ) -> RemediationContext:
         required = self.store.read_review_required(task_number)
         if required is not None:
             raise LckStopError(
                 "Remediation STOP: a fresh Independent Review is required after the previous remediation"
             )
-        findings = _failed_review_findings(self.store, task_number, review_id)
+        findings, findings_source = _remediation_findings(
+            self.store,
+            task_number,
+            review_id,
+            findings_file=findings_file,
+        )
         snapshot = self.snapshots.acquire(
             task_number,
             operation=Phase.REMEDIATION_PREPARE.value,
@@ -4927,10 +5006,33 @@ class RemediationPreparer:
         if not is_sha(pr_head):
             raise LckStopError("Remediation Prepare PR head is unavailable")
         self._verify_local_review_head(branch, pr_head)
+        pr_number = state.open_pr.get("number") if state.open_pr else None
+        pr_base = state.open_pr.get("baseRefOid") if state.open_pr else None
+        if not isinstance(pr_number, int) or not is_sha(pr_base):
+            raise LckStopError("Remediation Prepare PR identity is unavailable")
+        self.store.write_remediation_session(
+            task_number,
+            {
+                "schema_version": LCK_SCHEMA_VERSION,
+                "kind": "remediation-session",
+                "task_number": task_number,
+                "review_id": review_id,
+                "start_head_sha": pr_head,
+                "pr_number": pr_number,
+                "base_sha": pr_base,
+                "findings_sha256": hashlib.sha256(findings.encode("utf-8")).hexdigest(),
+                "findings_source": findings_source,
+                "authority": (
+                    "operation-local continuity only; current mechanical target must be "
+                    "reacquired by Remediation Complete"
+                ),
+            },
+        )
         return RemediationContext(
             task_number=task_number,
             review_id=review_id,
             findings=findings,
+            findings_source=findings_source,
             operation_snapshot=snapshot,
             action=action,
         )
@@ -4998,10 +5100,26 @@ class RemediationCompleter:
             raise LckStopError(
                 "Remediation STOP: a fresh Independent Review is required after the previous remediation"
             )
-        record = _failed_review_record(self.store, task_number, review_id)
-        reviewed_identity = _identity_from_mapping(
-            cast(Mapping[str, Any], record["identity"])
-        )
+        session = self.store.read_remediation_session(task_number)
+        start_head: str | None = None
+        if session is not None:
+            if session.get("review_id") != review_id:
+                raise LckStopError(
+                    "Remediation Complete review id does not match the prepared Remediation session"
+                )
+            candidate = session.get("start_head_sha")
+            if not is_sha(candidate):
+                raise LckStopError("Remediation session start head is unavailable")
+            start_head = cast(str, candidate)
+        else:
+            # Backward-compatible path for an already-prepared Codex workspace from
+            # before remediation sessions were introduced. Existing local Review
+            # records retain their previous behavior.
+            record = _failed_review_record(self.store, task_number, review_id)
+            reviewed_identity = _identity_from_mapping(
+                cast(Mapping[str, Any], record["identity"])
+            )
+            start_head = reviewed_identity.head_sha
         snapshot = self.snapshots.acquire(
             task_number,
             operation=Phase.REMEDIATION_COMPLETE.value,
@@ -5014,10 +5132,7 @@ class RemediationCompleter:
                 f"Remediation Complete STOP for Task #{task_number}: "
                 + "; ".join(decision.reasons)
             )
-        if (
-            state.git.get("clean") is True
-            and state.local_task_head == reviewed_identity.head_sha
-        ):
+        if state.git.get("clean") is True and state.local_task_head == start_head:
             raise LckStopError(
                 "Remediation Complete requires a repaired head or uncommitted repair changes"
             )
@@ -5038,11 +5153,12 @@ class RemediationCompleter:
             operation_snapshot=snapshot,
             phase=Phase.REMEDIATION_COMPLETE,
         )
-        if delivery.head_sha == reviewed_identity.head_sha:
+        if delivery.head_sha == start_head:
             raise LckStopError(
                 "Remediation Complete did not produce a new head; fresh Review boundary cannot advance"
             )
         self.store.write_review_required(task_number, review_id, delivery.head_sha)
+        self.store.clear_remediation_session(task_number)
         return RemediationCompletionResult(
             task_number=task_number,
             review_id=review_id,
@@ -5086,6 +5202,7 @@ def _build_parser() -> argparse.ArgumentParser:
     remediation_prepare = remediation_commands.add_parser("prepare")
     remediation_prepare.add_argument("task", type=int)
     remediation_prepare.add_argument("--review-id", required=True)
+    remediation_prepare.add_argument("--findings-file", type=Path)
     remediation_complete = remediation_commands.add_parser("complete")
     remediation_complete.add_argument("task", type=int)
     remediation_complete.add_argument("--review-id", required=True)
@@ -5144,7 +5261,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print_json(result.to_dict(), pretty=True)
             return 0
         if args.command == "remediation" and args.remediation_command == "prepare":
-            context = RemediationPreparer(resolver).prepare(args.task, args.review_id)
+            context = RemediationPreparer(resolver).prepare(
+                args.task,
+                args.review_id,
+                findings_file=args.findings_file,
+            )
             print_json(context.to_dict(), pretty=True)
             return 0
         if args.command == "remediation" and args.remediation_command == "complete":

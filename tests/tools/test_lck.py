@@ -2067,6 +2067,130 @@ def test_remediation_prepare_uses_live_head_not_review_record_identity(
     assert "must not be fabricated" in context.to_dict()["acceptance_boundary"]
 
 
+def test_remediation_prepare_accepts_portable_findings_when_local_record_missing(
+    tmp_path: Path,
+) -> None:
+    live_head = "b" * 40
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state(head=live_head)))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    findings = tmp_path / "review-findings.md"
+    findings.write_text("[F1][High] Portable semantic finding.\n", encoding="utf-8")
+
+    context = lck.RemediationPreparer(resolver, store=store).prepare(
+        159,
+        review_id,
+        findings_file=findings,
+    )
+
+    assert context.findings == "[F1][High] Portable semantic finding.\n"
+    assert context.findings_source == "portable-findings-file"
+    assert context.to_dict()["findings_source"] == "portable-findings-file"
+    session = store.read_remediation_session(159)
+    assert session is not None
+    assert session["review_id"] == review_id
+    assert session["start_head_sha"] == live_head
+    assert session["findings_source"] == "portable-findings-file"
+    assert resolver.calls == 1
+
+
+def test_remediation_prepare_missing_local_record_requires_portable_findings(
+    tmp_path: Path,
+) -> None:
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+
+    with pytest.raises(lck.LckStopError, match="provide --findings-file"):
+        lck.RemediationPreparer(resolver, store=store).prepare(159, review_id)
+
+    assert resolver.calls == 0
+
+
+def test_remediation_prepare_local_record_path_remains_primary(
+    tmp_path: Path,
+) -> None:
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    local_findings = "[F1][Medium] Local Codex review finding."
+    store.write_record(
+        159,
+        review_id,
+        {
+            "task_number": 159,
+            "verdict": "FAIL",
+            "identity": _review_identity_value().to_dict(),
+            "findings": local_findings,
+        },
+    )
+    store.write_latest_review(159, review_id, "FAIL")
+    portable = tmp_path / "portable.md"
+    portable.write_text("different portable text", encoding="utf-8")
+
+    context = lck.RemediationPreparer(resolver, store=store).prepare(
+        159, review_id, findings_file=portable
+    )
+
+    assert context.findings == local_findings
+    assert context.findings_source == "local-review-record"
+
+
+def test_remediation_complete_uses_prepared_session_without_review_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start_head = SHA
+    repaired_head = "b" * 40
+    state = _review_state(head=start_head, clean=False)
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": review_id,
+            "start_head_sha": start_head,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "f" * 64,
+            "findings_source": "portable-findings-file",
+            "authority": "test",
+        },
+    )
+
+    def fake_delivery_complete(self: Any, task_number: int, **kwargs: Any) -> Any:
+        snapshot = kwargs["operation_snapshot"]
+        return lck.DeliveryCompletionResult(
+            task_number=task_number,
+            status="READY_FOR_REVIEW",
+            branch=state.target_branch,
+            head_sha=repaired_head,
+            critical_outcome={"status": "valid"},
+            validation={"status": "pass"},
+            checks={"status": "pass"},
+            effects=(),
+            operation_snapshot=snapshot,
+        )
+
+    monkeypatch.setattr(lck.DeliveryCompleter, "complete", fake_delivery_complete)
+
+    result = lck.RemediationCompleter(resolver, store=store).complete(
+        159,
+        review_id,
+        commit_message="repair",
+        summary="repair",
+    )
+
+    assert result.delivery.head_sha == repaired_head
+    assert store.read_remediation_session(159) is None
+    required = store.read_review_required(159)
+    assert required is not None
+    assert required["remediated_head"] == repaired_head
+
+
 def test_remediation_complete_requires_actual_repair_changes(
     tmp_path: Path,
 ) -> None:

@@ -31,7 +31,19 @@ Failed Review ID: <REVIEW_ID>
 
 The failed `review_id` locates semantic findings only. LCK independently reacquires
 the current Task / PR / base / head / branch state; mechanical facts from the Review
-record are not write authorization.
+record are not write authorization. The originating workspace-local Review audit record
+is the default findings source. When intentionally switching clone or Agent runtime and
+that ignored local record is unavailable, the maintainer MAY provide the completed
+Review findings as an explicit semantic-only handoff:
+
+```bash
+uv run --frozen python tools/agent_workflow/lck.py remediation prepare <TASK> \
+  --review-id <FAILED_REVIEW_ID> --findings-file <COMPLETED_REVIEW_FINDINGS>
+```
+
+`--findings-file` never supplies PR/head/base/branch/checks authority and MUST NOT be
+used to synthesize or rewrite findings merely to obtain admission. Existing Codex/local
+record behavior remains the primary path.
 
 The Issue number is the primary key; the current Issue title is canonical.
 
@@ -207,10 +219,12 @@ uv run --frozen python tools/agent_workflow/lck.py remediation prepare <TASK> \
   --review-id <FAILED_REVIEW_ID>
 ```
 
-Proceed only on `READY_FOR_REMEDIATION`. LCK verifies that the record is a failed
-Independent Review, reads its findings as semantic input, reacquires the current OPEN
-non-Draft PR/head/base and Task branch, and selects/restores the current implementation
-workspace.
+Proceed only on `READY_FOR_REMEDIATION`. With the normal local-record path, LCK
+verifies the failed Review audit record and reads its findings. For an explicit
+cross-workspace/runtime handoff where that ignored audit record does not exist,
+`--findings-file` supplies only the already-completed semantic findings. In both cases LCK
+reacquires the current OPEN non-Draft PR/head/base and Task branch and selects/restores
+the current implementation workspace.
 
 Do not pass expected head/base/PR identity. If current live identity is ambiguous,
 diverged, missing, or unsafe, STOP; do not use archived evidence snapshots or

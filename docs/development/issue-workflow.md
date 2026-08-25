@@ -199,9 +199,11 @@ Issue comments（Retrieval v2 comments default-off 仍适用）。
 ## 10. Remediation after failed Review
 
 - Review FAIL → LCK 返回 `STOP_REQUIRED`，不得自动启动修复。
-- Human 显式提供当前 Task 最新 completed FAIL 的 `review_id` 启动 remediation；
-  Review record 中只有 findings 可作为 semantic input，current PR/head/base 必须由
-  LCK live reacquire。
+- Human 显式提供当前 Task completed FAIL 的 `review_id` 启动 remediation；
+  workspace-local Review record 中只有 findings 可作为 semantic input，current PR/head/base
+  必须由 LCK live reacquire。跨 clone / Agent runtime 切换导致该 ignored local record 不可用时，
+  Human 可额外提供该 completed Review 的 `--findings-file`；它仍然只是 semantic input，
+  不能提供任何机械 identity/authorization。
 - Implementation Agent 修复后由 LCK 完成 validation / commit / push / existing
   PR reuse，产生 new head，并在 `READY_FOR_NEW_REVIEW` 再次 STOP。
 - 只能在 repaired head 形成后、独立 provider 会话或 fresh Review 中真实产生的验收

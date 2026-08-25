@@ -219,8 +219,11 @@ uv run --frozen python tools/agent_workflow/lck.py remediation prepare <TASK> \
   --review-id <FAILED_REVIEW_ID>
 ```
 
-LCK 从 failed Review record 读取 **semantic findings only**，同时独立从 live
-Git / GitHub 重新解析：
+LCK 默认从 workspace-local failed Review audit record 读取 **semantic findings only**。
+如果 Human 明确切换 clone / Agent runtime，而该 ignored local record 不存在，可以通过
+`--findings-file <COMPLETED_REVIEW_FINDINGS>` 携带已经完成的 Review findings。该文件不是
+Review authority，也不能携带机械 target；LCK 在两种路径下都独立从 live Git / GitHub
+重新解析：
 
 - current Task；
 - current OPEN PR；
@@ -228,9 +231,10 @@ Git / GitHub 重新解析：
 - current local/remote Task branch；
 - current workspace state。
 
-旧 Review record 里的 SHA / base / PR identity 不具有 admission authority；即使
-当前 head 已变化，机械 target 也以 live state 为准，findings 仅作为待理解的语义
-输入。
+旧 Review record 或 portable findings file 里的任何 SHA / base / PR identity 都不具有
+admission authority；即使当前 head 已变化，机械 target 也以 live state 为准，findings
+仅作为待理解的语义输入。Local record 存在时继续走原有严格校验路径；portable findings
+只在该 local audit record 缺失时启用，不改变正常 Codex 路径。
 
 Implementation Agent 在 LCK 准备的 current Task workspace 上：
 

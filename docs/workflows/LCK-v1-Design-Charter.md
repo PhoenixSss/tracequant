@@ -1149,9 +1149,14 @@ Remediation starts only through explicit Human intent after Review FAIL.
 - current OPEN PR;
 - current PR head/base;
 - current workspace state;
-- the relevant failed Review receipt / findings as historical evidence.
+- the relevant failed Review findings as historical semantic evidence. The normal source is the
+  originating workspace-local Review audit record. When a maintainer intentionally switches clone
+  or Agent runtime and that ignored record is unavailable, the completed findings may be supplied
+  explicitly as a portable semantic-only file.
 
-The fresh snapshot determines whether those findings are still applicable to the current target. Once frozen, Remediation Prepare does not repeatedly refresh live authority.
+The fresh snapshot determines all mechanical eligibility and current target identity. Neither the
+local Review record nor a portable findings file may authorize PR/head/base/branch/check facts. Once
+frozen, Remediation Prepare does not repeatedly refresh live authority.
 
 The Implementation Agent:
 
