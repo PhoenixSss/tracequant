@@ -457,6 +457,7 @@ Delivery Complete     → fresh DeliveryCompleteSnapshot
 Review Prepare        → fresh ReviewPrepareSnapshot
 Review Complete       → fresh ReviewCompleteSnapshot
 Remediation Prepare   → fresh RemediationPrepareSnapshot
+Remediation No Change → fresh RemediationNoChangeSnapshot
 Remediation Complete  → fresh RemediationCompleteSnapshot
 Merge Preflight       → fresh MergeSnapshot
 Closeout              → fresh CloseoutSnapshot
@@ -467,6 +468,18 @@ When semantic Agent work occurs between two LCK entrypoints, the later entrypoin
 
 Operation-owned interruption metadata may survive a crashed process only to identify resources and support deterministic cleanup/recovery. A retry is a new operation and MUST reacquire fresh authority; it MUST NOT resume the prior operation's snapshot as current authority.
 
+A prepared Remediation session MUST have an explicit terminal path even when semantic
+inspection determines that no tree change is required. `remediation no-change` reacquires
+current authority, verifies that the prepared PR/base/head still match and the selected
+workspace is clean and unchanged, writes a no-change receipt, and releases the session. It
+MUST NOT create a commit, push, advance the candidate, set a fresh-review boundary, or treat
+external/future Review acceptance evidence as satisfied. Manually deleting a prepared
+session is not a lifecycle operation.
+While a prepared Remediation session exists, Review Prepare MUST fail closed until that
+session reaches either the changed-candidate terminal (`remediation complete`) or the
+unchanged-candidate terminal (`remediation no-change`). This prevents overlapping semantic
+roles from turning ignored operation-continuity state into a stale cross-invocation lock.
+
 Example conceptual entrypoints remain:
 
 ```text
@@ -475,6 +488,7 @@ lck delivery complete <issue>
 lck review prepare <issue-or-pr>
 lck review complete <review-id>
 lck remediation prepare <issue>
+lck remediation no-change <issue>
 lck remediation complete <issue>
 lck merge preflight <issue-or-pr>
 lck closeout <issue>

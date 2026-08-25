@@ -22,7 +22,7 @@ Migrated lifecycle phases enter through LCK:
 ```text
 tools/agent_workflow/lck.py delivery prepare|complete
 tools/agent_workflow/lck.py review prepare|complete
-tools/agent_workflow/lck.py remediation prepare|complete
+tools/agent_workflow/lck.py remediation prepare|no-change|complete
 ```
 
 The Validation Runner remains current for bounded deterministic validation;
@@ -44,7 +44,7 @@ tools/agent_workflow/workflow_validation.py
 | --- | --- | --- |
 | Initial Delivery | `lck.py delivery prepare|complete` | LCK runs formal Delivery validation |
 | Independent Review | `lck.py review prepare|complete` | LCK runs formal Review validation on the live-resolved head |
-| Explicit Remediation | `lck.py remediation prepare|complete` | LCK reuses migrated Delivery validation/effects |
+| Explicit Remediation | `lck.py remediation prepare|no-change|complete` | LCK reuses migrated Delivery validation/effects; no-change closes an unchanged prepared session |
 | Closeout | `lck.py closeout <TASK>` | LCK closeout gate and effects |
 
 Historical Evidence snapshots may locate audit material, but they must not
@@ -195,6 +195,16 @@ unavailable, `remediation prepare --findings-file <FILE>` may carry the complete
 Review findings across that boundary. This is a semantic-only handoff: it cannot
 supply or override PR/head/base/branch/check/check-policy authority, and the normal
 Codex/local-record path remains unchanged.
+
+A prepared Remediation session is operation-continuity state, not cross-phase
+authority, but it must still reach a formal terminal operation. If semantic
+inspection finds no implementation change is required, `remediation no-change`
+reacquires the current PR/base/head, requires the selected Task workspace to be
+clean and unchanged, writes a local no-change receipt, and releases the session.
+It does not commit, push, create a new head, set `fresh-review-required`, or
+satisfy deferred provider/cross-runtime Review acceptance. While a prepared
+Remediation session remains open, Review Prepare fails closed rather than
+interleaving a new Review with an unfinished implementation role.
 
 ## Failure expansion
 

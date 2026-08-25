@@ -155,9 +155,9 @@ inventory; their aggregate command counts are not added to current LOC.
 
 | Measure | #88 / pre-LCK reference | LCK v1 current shape |
 | --- | --- | --- |
-| Formal lifecycle controller | Skill + Runner + handoff/snapshot paths | `lck.py`: 5,306 LOC |
+| Formal lifecycle controller | Skill + Runner + handoff/snapshot paths | `lck.py` LOC is measured mechanically from the canonical formatted candidate and intentionally not frozen in prose |
 | Task-control support called by LCK | mechanics split across Skill/Runner/helpers | 1,241 LOC: `critical_outcome.py` 204 + `pr_resolve.py` 481 + `project_status.py` 153 + shared `workflow_common.py` 403 |
-| Combined active Task control code | no single deterministic boundary in #88 | 6,550 LOC controller + direct support; reused validation/audit infrastructure excluded |
+| Combined active Task control code | no single deterministic boundary in #88 | current canonical-formatted `lck.py` LOC + 1,241 LOC direct support; reused validation/audit infrastructure excluded |
 | Reused Validation infrastructure | existing fixed Validation Runner | 1,163 LOC: `workflow_validation.py` 344 + `wsl2_validation_runner.py` 819; reused rather than duplicated |
 | Audit-only Evidence implementation | Task Evidence Runner was part of lifecycle control | `workflow_evidence.py` 1,649 LOC retained as read-only audit/shared-query code, not Task authority |
 | Task Skill lifecycle mechanics | direct command/procedure paths | 547 LOC per provider; 1,094 LOC across Codex + Claude; no direct lifecycle writes |
@@ -171,12 +171,13 @@ inventory; their aggregate command counts are not added to current LOC.
 
 The historical #85 static Skill record reports 685 lines before and 547 lines
 after its earlier Runner migration; #88 supplies the operation inventory rather
-than a directly comparable LOC measurement. Current values above were measured
-from this candidate tree and are descriptive evidence, not lifecycle authority.
+than a directly comparable LOC measurement. Volatile Python controller LOC is measured
+only after canonical formatting and is intentionally not frozen in prose, because formatter
+normalization can change line boundaries without changing behavior. Stable helper counts above
+remain descriptive evidence, not lifecycle authority.
 
-The LOC boundary is explicit to avoid understating LCK complexity: the controller
-measurement in the table above is reported separately from the 1,241 lines of support
-it directly calls.
+The LOC boundary is explicit to avoid understating LCK complexity: the controller is
+measured separately from the 1,241 lines of support it directly calls.
 Validation infrastructure is reported separately because it predates LCK and is
 reused; audit-only Evidence code is also reported separately because it cannot
 authorize a Task transition. This comparison demonstrates containment, not a
@@ -246,6 +247,13 @@ MUST NOT block Delivery/Remediation completion needed to create that head.
 continues to fail closed until the required provider-attributed evidence exists. Static
 Skill identity and unit tests do not substitute for the Task's explicit live Dual Agent
 requirement.
+
+A prepared Remediation that finds no implementation defect now terminates through the formal
+`remediation no-change` operation. LCK reacquires the live PR/base/head, requires the selected
+workspace to remain clean and unchanged, writes a no-change receipt, and clears the prepared
+session without commit/push or `fresh-review-required`. This closes the previous gap where a
+correct refusal to manufacture a no-op commit could leave the Task permanently locked to an
+old Remediation session.
 
 The current Task's Squash Merge receipt, mainline activation receipt, and
 Closeout receipt are **post-merge** evidence. They cannot be produced while the

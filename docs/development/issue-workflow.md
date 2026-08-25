@@ -206,10 +206,18 @@ Issue comments（Retrieval v2 comments default-off 仍适用）。
   不能提供任何机械 identity/authorization。
 - Implementation Agent 修复后由 LCK 完成 validation / commit / push / existing
   PR reuse，产生 new head，并在 `READY_FOR_NEW_REVIEW` 再次 STOP。
+- 如果正式进入 Remediation 后确认不存在 implementation repair，且只剩 external/future
+  Review evidence，必须调用 `remediation no-change` 形成 `NO_IMPLEMENTATION_CHANGE`
+  receipt 并释放 prepared session；不得制造空提交，也不得手工删除 session marker。该
+  operation 会 fresh reacquire 当前 PR/base/head，要求工作树 clean 且 candidate 未变化；
+  不 commit/push、不设置 `fresh-review-required`，也不声称 deferred evidence 已满足。
 - 只能在 repaired head 形成后、独立 provider 会话或 fresh Review 中真实产生的验收
   evidence（例如 Task 显式要求的 provider-attributed / cross-provider receipts）不得作为
   `remediation complete` 的循环前置条件；它们保持 pending，并在后续 Independent Review
   acceptance 中继续 fail-closed。`READY_FOR_NEW_REVIEW` 不表示这些 evidence 已满足。
+- prepared Remediation session 未经 `remediation complete` 或 `remediation no-change`
+  正式终结时，新的 Review Prepare 必须 fail closed；不得让 Review 与未终结的
+  implementation session 交错，避免遗留 session 锁死后续 invocation。
 - successful remediation 设置 `fresh-review-required` negative boundary；在新的 Review
   verdict 被接受前不得再次 remediation。该 boundary 不携带 target authorization。
 - 任何新 commit 都需要 **fresh independent re-review**；不得复用旧 verdict。

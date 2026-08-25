@@ -86,6 +86,7 @@ def test_failure_and_ambiguity_handling_has_review_stop_and_local_stale_results(
 def test_delivery_remediation_is_explicit_and_live_for_both_agents() -> None:
     for text in _skill_text("task-delivery-runner"):
         assert "tools/agent_workflow/lck.py remediation prepare" in text
+        assert "tools/agent_workflow/lck.py remediation no-change" in text
         assert "tools/agent_workflow/lck.py remediation complete" in text
         assert "failed `review_id` locates semantic findings only" in text
         assert (

@@ -800,6 +800,34 @@ def test_resolve_open_pr_observes_draft_pr() -> None:
     assert observed["isDraft"] is True
 
 
+def test_review_prepare_rejects_open_remediation_session(
+    tmp_path: Path,
+) -> None:
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state(clean=True)))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": review_id,
+            "start_head_sha": SHA,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "f" * 64,
+            "findings_source": "local-review-record",
+            "authority": "test",
+        },
+    )
+
+    with pytest.raises(lck.LckStopError, match="remediation no-change"):
+        lck.ReviewPreparer(resolver, store=store).prepare(159)
+
+    assert resolver.calls == 0
+
+
 def test_review_prepare_rejects_draft_open_pr(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2189,6 +2217,199 @@ def test_remediation_complete_uses_prepared_session_without_review_record(
     required = store.read_review_required(159)
     assert required is not None
     assert required["remediated_head"] == repaired_head
+
+
+def test_remediation_no_change_closes_prepared_session_without_new_head(
+    tmp_path: Path,
+) -> None:
+    head = SHA
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state(head=head, clean=True)))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": review_id,
+            "start_head_sha": head,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "f" * 64,
+            "findings_source": "local-review-record",
+            "authority": "test",
+        },
+    )
+
+    result = lck.RemediationNoChangeCompleter(resolver, store=store).complete(
+        159,
+        review_id,
+        summary="Only deferred external acceptance evidence remains.",
+    )
+
+    payload = result.to_dict()
+    assert payload["status"] == "NO_IMPLEMENTATION_CHANGE"
+    assert payload["head_sha"] == head
+    assert payload["candidate_changed"] is False
+    assert payload["fresh_review_required"] is False
+    assert payload["session_released"] is True
+    assert payload["replayed"] is False
+    assert store.read_remediation_session(159) is None
+    assert store.read_review_required(159) is None
+    receipt = store.read_remediation_no_change_receipt(159, review_id)
+    assert receipt is not None
+    assert receipt["start_head_sha"] == head
+    assert receipt["candidate_changed"] is False
+    assert resolver.calls == 1
+
+
+def test_remediation_no_change_releases_old_session_for_new_review_prepare(
+    tmp_path: Path,
+) -> None:
+    state = _review_state(clean=True)
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    store = lck.ReviewInvocationStore(tmp_path)
+    old_review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": old_review_id,
+            "start_head_sha": SHA,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "a" * 64,
+            "findings_source": "local-review-record",
+            "authority": "test",
+        },
+    )
+
+    lck.RemediationNoChangeCompleter(resolver, store=store).complete(
+        159, old_review_id, summary="No implementation defect remained."
+    )
+
+    new_review_id = store.new_id()
+    findings = tmp_path / "new-review-findings.md"
+    findings.write_text(
+        "[F1][Blocking] External acceptance evidence.\n", encoding="utf-8"
+    )
+    context = lck.RemediationPreparer(resolver, store=store).prepare(
+        159, new_review_id, findings_file=findings
+    )
+
+    assert context.review_id == new_review_id
+    session = store.read_remediation_session(159)
+    assert session is not None
+    assert session["review_id"] == new_review_id
+    assert session["start_head_sha"] == SHA
+
+
+def test_remediation_no_change_rejects_wrong_review_or_dirty_tree(
+    tmp_path: Path,
+) -> None:
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": review_id,
+            "start_head_sha": SHA,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "b" * 64,
+            "findings_source": "local-review-record",
+            "authority": "test",
+        },
+    )
+    clean_resolver = cast(Any, StaticResolver(tmp_path, _review_state(clean=True)))
+
+    with pytest.raises(lck.LckStopError, match="review id does not match"):
+        lck.RemediationNoChangeCompleter(clean_resolver, store=store).complete(
+            159, store.new_id(), summary="wrong review"
+        )
+
+    dirty_resolver = cast(Any, StaticResolver(tmp_path, _review_state(clean=False)))
+    with pytest.raises(lck.LckStopError, match="clean tracked and staged worktree"):
+        lck.RemediationNoChangeCompleter(dirty_resolver, store=store).complete(
+            159, review_id, summary="no change"
+        )
+
+    assert store.read_remediation_session(159) is not None
+
+
+def test_remediation_no_change_rejects_head_drift(
+    tmp_path: Path,
+) -> None:
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": review_id,
+            "start_head_sha": SHA,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "d" * 64,
+            "findings_source": "local-review-record",
+            "authority": "test",
+        },
+    )
+    moved_head = "b" * 40
+    resolver = cast(
+        Any, StaticResolver(tmp_path, _review_state(head=moved_head, clean=True))
+    )
+
+    with pytest.raises(lck.LckStopError, match="target no longer matches"):
+        lck.RemediationNoChangeCompleter(resolver, store=store).complete(
+            159, review_id, summary="no change"
+        )
+
+    assert store.read_remediation_session(159) is not None
+    assert store.read_remediation_no_change_receipt(159, review_id) is None
+
+
+def test_remediation_no_change_is_idempotent_for_same_unchanged_target(
+    tmp_path: Path,
+) -> None:
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state(clean=True)))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": review_id,
+            "start_head_sha": SHA,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "c" * 64,
+            "findings_source": "local-review-record",
+            "authority": "test",
+        },
+    )
+
+    first = lck.RemediationNoChangeCompleter(resolver, store=store).complete(
+        159, review_id, summary="No implementation change required."
+    )
+    second = lck.RemediationNoChangeCompleter(resolver, store=store).complete(
+        159, review_id, summary="ignored on replay"
+    )
+
+    assert first.to_dict()["replayed"] is False
+    assert second.to_dict()["replayed"] is True
+    assert second.summary == "No implementation change required."
+    assert store.read_remediation_session(159) is None
 
 
 def test_remediation_complete_requires_actual_repair_changes(

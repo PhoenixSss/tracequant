@@ -92,6 +92,7 @@ class Phase(StrEnum):
     REVIEW_PREPARE = "Review Prepare"
     REVIEW_COMPLETE = "Review Complete"
     REMEDIATION_PREPARE = "Remediation Prepare"
+    REMEDIATION_NO_CHANGE = "Remediation No Change"
     REMEDIATION_COMPLETE = "Remediation Complete"
     CLOSEOUT = "Closeout"
 
@@ -1092,6 +1093,7 @@ class PhaseEligibilityResolver:
                 Phase.REVIEW_PREPARE: {"Review", "In Progress"},
                 Phase.REVIEW_COMPLETE: {"Review", "In Progress"},
                 Phase.REMEDIATION_PREPARE: {"Review"},
+                Phase.REMEDIATION_NO_CHANGE: {"Review"},
                 Phase.REMEDIATION_COMPLETE: {"Review"},
                 Phase.CLOSEOUT: {
                     "Inbox",
@@ -1181,7 +1183,11 @@ class PhaseEligibilityResolver:
                 if phase is Phase.REVIEW_PREPARE
                 else ("accept_semantic_review_verdict",)
             )
-        elif phase in {Phase.REMEDIATION_PREPARE, Phase.REMEDIATION_COMPLETE}:
+        elif phase in {
+            Phase.REMEDIATION_PREPARE,
+            Phase.REMEDIATION_NO_CHANGE,
+            Phase.REMEDIATION_COMPLETE,
+        }:
             if state.open_pr is None:
                 reasons.append("no current OPEN PR")
             elif state.open_pr.get("isDraft") is not False:
@@ -1203,17 +1209,21 @@ class PhaseEligibilityResolver:
                 capabilities = ("prepare_task_workspace", "load_review_findings")
             else:
                 if state.local_task_branch is None:
-                    reasons.append("Remediation Complete requires a local Task branch")
+                    reasons.append(f"{phase.value} requires a local Task branch")
                 if state.git.get("branch") != state.target_branch:
                     reasons.append(
-                        "Remediation Complete requires the resolved Task branch selected"
+                        f"{phase.value} requires the resolved Task branch selected"
                     )
                 capabilities = (
-                    "verify_critical_outcome",
-                    "run_formal_validation",
-                    "commit_current_tree",
-                    "ensure_remote_branch",
-                    "reuse_open_pr",
+                    ("close_no_change_remediation",)
+                    if phase is Phase.REMEDIATION_NO_CHANGE
+                    else (
+                        "verify_critical_outcome",
+                        "run_formal_validation",
+                        "commit_current_tree",
+                        "ensure_remote_branch",
+                        "reuse_open_pr",
+                    )
                 )
         else:
             if state.merged is not True:
@@ -2134,6 +2144,17 @@ class ReviewInvocationStore:
     def remediation_session_path(self, task_number: int) -> Path:
         return self.root / "remediation-sessions" / f"task-{task_number}.json"
 
+    def remediation_no_change_receipt_path(
+        self, task_number: int, review_id: str
+    ) -> Path:
+        self._validate_id(review_id)
+        return (
+            self.root
+            / "remediation-receipts"
+            / f"task-{task_number}"
+            / f"{review_id}-no-change.json"
+        )
+
     def review_prepare_inflight_path(self, task_number: int) -> Path:
         return self.root / "review-inflight" / f"task-{task_number}.json"
 
@@ -2387,6 +2408,36 @@ class ReviewInvocationStore:
         except FileNotFoundError:
             pass
 
+    def write_remediation_no_change_receipt(
+        self, task_number: int, review_id: str, payload: Mapping[str, Any]
+    ) -> Path:
+        path = self.remediation_no_change_receipt_path(task_number, review_id)
+        if path.exists():
+            existing = read_json_file(path)
+            if existing != dict(payload):
+                raise LckStopError(
+                    "existing Remediation no-change receipt does not match this completion"
+                )
+            return path
+        atomic_write_json(path, payload)
+        return path
+
+    def read_remediation_no_change_receipt(
+        self, task_number: int, review_id: str
+    ) -> dict[str, Any] | None:
+        path = self.remediation_no_change_receipt_path(task_number, review_id)
+        if not path.exists():
+            return None
+        value = read_json_file(path)
+        if (
+            not isinstance(value, dict)
+            or value.get("task_number") != task_number
+            or value.get("review_id") != review_id
+            or value.get("kind") != "remediation-no-change-receipt"
+        ):
+            raise LckStopError("Remediation no-change receipt is invalid")
+        return value
+
 
 def _identity_from_mapping(value: Mapping[str, Any]) -> ReviewIdentity:
     changed = value.get("changed_files")
@@ -2588,6 +2639,11 @@ class ReviewPreparer:
         self.store = store or ReviewInvocationStore(resolver.repo_root)
 
     def prepare(self, task_number: int) -> ReviewContext:
+        if self.store.read_remediation_session(task_number) is not None:
+            raise LckStopError(
+                "Review Prepare STOP: a prepared Remediation session must be completed "
+                "or closed with remediation no-change first"
+            )
         invocation = self.store.begin_review_prepare(task_number)
         review_root: Path | None = None
 
@@ -5024,7 +5080,7 @@ class RemediationPreparer:
                 "findings_source": findings_source,
                 "authority": (
                     "operation-local continuity only; current mechanical target must be "
-                    "reacquired by Remediation Complete"
+                    "reacquired by the Remediation terminal operation"
                 ),
             },
         )
@@ -5035,6 +5091,211 @@ class RemediationPreparer:
             findings_source=findings_source,
             operation_snapshot=snapshot,
             action=action,
+        )
+
+
+@dataclass(frozen=True)
+class RemediationNoChangeResult:
+    task_number: int
+    review_id: str
+    head_sha: str
+    pr_number: int
+    base_sha: str
+    summary: str
+    operation_snapshot: OperationSnapshot
+    receipt_path: Path
+    replayed: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "operation": "remediation-no-change",
+            "task_number": self.task_number,
+            "review_id": self.review_id,
+            "status": "NO_IMPLEMENTATION_CHANGE",
+            "head_sha": self.head_sha,
+            "pr_number": self.pr_number,
+            "base_sha": self.base_sha,
+            "summary": self.summary,
+            "candidate_changed": False,
+            "fresh_review_required": False,
+            "session_released": True,
+            "replayed": self.replayed,
+            "receipt_path": str(self.receipt_path),
+            "operation_snapshot": self.operation_snapshot.to_dict(),
+            "acceptance_boundary": (
+                "This receipt closes one prepared Remediation session without changing the "
+                "candidate. It records a real no-change implementation-path terminal state, "
+                "but it does not satisfy deferred provider/cross-runtime Review acceptance by itself."
+            ),
+            "human_boundary": (
+                "STOP — continue external acceptance work on the unchanged head; no fresh Review "
+                "is required solely because this no-change session was closed"
+            ),
+        }
+
+
+class RemediationNoChangeCompleter:
+    """Close one prepared Remediation session when semantic repair needs no tree change."""
+
+    def __init__(
+        self,
+        resolver: LiveStateResolver,
+        *,
+        eligibility: PhaseEligibilityResolver | None = None,
+        store: ReviewInvocationStore | None = None,
+    ) -> None:
+        self.resolver = resolver
+        self.snapshots = OperationSnapshotBuilder(resolver)
+        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.store = store or ReviewInvocationStore(resolver.repo_root)
+
+    @staticmethod
+    def _session_identity(
+        session: Mapping[str, Any],
+    ) -> tuple[str, int, str]:
+        head_sha = session.get("start_head_sha")
+        pr_number = session.get("pr_number")
+        base_sha = session.get("base_sha")
+        if (
+            not is_sha(head_sha)
+            or not isinstance(pr_number, int)
+            or isinstance(pr_number, bool)
+            or not is_sha(base_sha)
+        ):
+            raise LckStopError("Remediation session identity is incomplete")
+        return cast(str, head_sha), pr_number, cast(str, base_sha)
+
+    @staticmethod
+    def _verify_current_target(
+        snapshot: OperationSnapshot,
+        *,
+        head_sha: str,
+        pr_number: int,
+        base_sha: str,
+    ) -> None:
+        state = snapshot.state
+        pr = state.open_pr or {}
+        if (
+            pr.get("number") != pr_number
+            or pr.get("headRefOid") != head_sha
+            or pr.get("baseRefOid") != base_sha
+            or state.local_task_head != head_sha
+            or state.remote_task_oid != head_sha
+        ):
+            raise LckStopError(
+                "Remediation No Change target no longer matches the prepared session"
+            )
+        if state.git.get("clean") is not True:
+            raise LckStopError(
+                "Remediation No Change requires a clean tracked and staged worktree"
+            )
+
+    def complete(
+        self,
+        task_number: int,
+        review_id: str,
+        *,
+        summary: str,
+    ) -> RemediationNoChangeResult:
+        if self.store.read_review_required(task_number) is not None:
+            raise LckStopError(
+                "Remediation STOP: a fresh Independent Review is required after the previous remediation"
+            )
+
+        session = self.store.read_remediation_session(task_number)
+        if session is None:
+            prior = self.store.read_remediation_no_change_receipt(
+                task_number, review_id
+            )
+            if prior is None:
+                raise LckStopError(
+                    "Remediation No Change requires a prepared Remediation session"
+                )
+            head_sha, pr_number, base_sha = self._session_identity(prior)
+            snapshot = self.snapshots.acquire(
+                task_number, operation=Phase.REMEDIATION_NO_CHANGE.value
+            )
+            decision = self.eligibility.resolve(
+                snapshot.state, Phase.REMEDIATION_NO_CHANGE
+            )
+            if not decision.eligible:
+                raise LckStopError(
+                    f"Remediation No Change STOP for Task #{task_number}: "
+                    + "; ".join(decision.reasons)
+                )
+            self._verify_current_target(
+                snapshot,
+                head_sha=head_sha,
+                pr_number=pr_number,
+                base_sha=base_sha,
+            )
+            return RemediationNoChangeResult(
+                task_number=task_number,
+                review_id=review_id,
+                head_sha=head_sha,
+                pr_number=pr_number,
+                base_sha=base_sha,
+                summary=str(prior.get("summary") or ""),
+                operation_snapshot=snapshot,
+                receipt_path=self.store.remediation_no_change_receipt_path(
+                    task_number, review_id
+                ),
+                replayed=True,
+            )
+
+        if session.get("review_id") != review_id:
+            raise LckStopError(
+                "Remediation No Change review id does not match the prepared Remediation session"
+            )
+        head_sha, pr_number, base_sha = self._session_identity(session)
+        snapshot = self.snapshots.acquire(
+            task_number, operation=Phase.REMEDIATION_NO_CHANGE.value
+        )
+        decision = self.eligibility.resolve(snapshot.state, Phase.REMEDIATION_NO_CHANGE)
+        if not decision.eligible:
+            raise LckStopError(
+                f"Remediation No Change STOP for Task #{task_number}: "
+                + "; ".join(decision.reasons)
+            )
+        self._verify_current_target(
+            snapshot,
+            head_sha=head_sha,
+            pr_number=pr_number,
+            base_sha=base_sha,
+        )
+
+        receipt = {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "kind": "remediation-no-change-receipt",
+            "task_number": task_number,
+            "review_id": review_id,
+            "start_head_sha": head_sha,
+            "pr_number": pr_number,
+            "base_sha": base_sha,
+            "findings_sha256": session.get("findings_sha256"),
+            "findings_source": session.get("findings_source"),
+            "summary": summary,
+            "candidate_changed": False,
+            "fresh_review_required": False,
+            "authority": (
+                "formal no-change Remediation terminal receipt only; current mechanical "
+                "target was reacquired at completion"
+            ),
+        }
+        receipt_path = self.store.write_remediation_no_change_receipt(
+            task_number, review_id, receipt
+        )
+        self.store.clear_remediation_session(task_number)
+        return RemediationNoChangeResult(
+            task_number=task_number,
+            review_id=review_id,
+            head_sha=head_sha,
+            pr_number=pr_number,
+            base_sha=base_sha,
+            summary=summary,
+            operation_snapshot=snapshot,
+            receipt_path=receipt_path,
         )
 
 
@@ -5203,6 +5464,10 @@ def _build_parser() -> argparse.ArgumentParser:
     remediation_prepare.add_argument("task", type=int)
     remediation_prepare.add_argument("--review-id", required=True)
     remediation_prepare.add_argument("--findings-file", type=Path)
+    remediation_no_change = remediation_commands.add_parser("no-change")
+    remediation_no_change.add_argument("task", type=int)
+    remediation_no_change.add_argument("--review-id", required=True)
+    remediation_no_change.add_argument("--summary", required=True)
     remediation_complete = remediation_commands.add_parser("complete")
     remediation_complete.add_argument("task", type=int)
     remediation_complete.add_argument("--review-id", required=True)
@@ -5267,6 +5532,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 findings_file=args.findings_file,
             )
             print_json(context.to_dict(), pretty=True)
+            return 0
+        if args.command == "remediation" and args.remediation_command == "no-change":
+            result = RemediationNoChangeCompleter(resolver).complete(
+                args.task,
+                args.review_id,
+                summary=args.summary,
+            )
+            print_json(result.to_dict(), pretty=True)
             return 0
         if args.command == "remediation" and args.remediation_command == "complete":
             result = RemediationCompleter(resolver).complete(

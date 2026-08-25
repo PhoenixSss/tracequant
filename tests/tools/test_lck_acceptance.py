@@ -39,6 +39,15 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
         ("remediation", "prepare", "163", "--review-id", "r"),
         (
             "remediation",
+            "no-change",
+            "163",
+            "--review-id",
+            "r",
+            "--summary",
+            "s",
+        ),
+        (
+            "remediation",
             "complete",
             "163",
             "--review-id",
@@ -96,6 +105,8 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     assert "not a Task lifecycle" in policy
     assert "LCK" in policy
     assert ".workflow.local/lck/" in policy
+    assert "remediation prepare|no-change|complete" in policy
+    assert "Review Prepare fails closed" in policy
     assert "Independent Review MUST NOT write source" in policy
     assert ".agents/evidence.local/" in policy
     assert ".agents/validation.local/" in policy
@@ -141,8 +152,8 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     assert "required-check policy" in policy
     assert "exact trusted base commit" in policy
     assert "mutable checkout" in policy
-    core_lines = len((ROOT / "tools/agent_workflow/lck.py").read_text().splitlines())
-    assert f"`lck.py`: {core_lines:,} LOC" in architecture_delta
+    assert "canonical formatted candidate" in architecture_delta
+    assert "intentionally not frozen in prose" in architecture_delta
     assert "remote_main_sha" in lck_source
     assert "local_main_sha" in architecture_delta
     assert "tracking_main_sha" in architecture_delta
@@ -200,4 +211,6 @@ def test_remediation_candidate_creation_is_not_blocked_by_future_review_evidence
     assert "MUST NOT form a circular precondition" in charter
     assert "deferred Review-acceptance item" in delivery_skill
     assert "not** a prerequisite for `remediation complete`" in delivery_skill
+    assert "remediation no-change" in delivery_skill
+    assert "NO_IMPLEMENTATION_CHANGE" in delivery_skill
     assert "Review-acceptance evidence gap" in review_skill

@@ -93,6 +93,7 @@ def test_delivery_runner_uses_lck_for_initial_delivery_and_explicit_remediation(
 
     assert "## Review remediation" in text
     assert "tools/agent_workflow/lck.py remediation prepare" in text
+    assert "tools/agent_workflow/lck.py remediation no-change" in text
     assert "tools/agent_workflow/lck.py remediation complete" in text
     assert "semantic findings" in text
     assert "mechanical facts from the Review" in text
@@ -115,6 +116,7 @@ def test_delivery_lck_contract_is_shared_by_both_skills() -> None:
         "ensure_open_pr",
         "READY_FOR_REVIEW",
         "LCK Remediation Prepare",
+        "LCK Remediation No Change",
         "LCK Remediation Complete",
         "READY_FOR_NEW_REVIEW",
         "The Skill is a semantic procedure",

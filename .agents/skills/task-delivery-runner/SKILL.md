@@ -250,15 +250,40 @@ provider/cross-provider receipts before the repaired head exists. If actual repa
 are ready, continue to LCK Remediation Complete and report the deferred acceptance item as
 pending for the next fresh Review. If **no repair change exists** and the only remaining
 item is external/future Review evidence, do not manufacture a commit merely to advance the
-lifecycle; stop and obtain that evidence for the unchanged head instead.
+lifecycle. Close the prepared Remediation session through the formal no-change terminal
+operation below, then obtain the external evidence for the unchanged head.
 
 The Agent may edit and run targeted development validation. It MUST NOT directly stage
 the final tree, commit, push, create/replace the PR, mutate lifecycle state, or start a
 new Review.
 
-### 3. LCK Remediation Complete
+### 3. LCK Remediation No Change
 
-After the repair is ready:
+When the formal Remediation role was entered but semantic inspection confirms that no
+implementation/config/docs/test repair is required, close that prepared session without
+changing the candidate:
+
+```bash
+uv run --frozen python tools/agent_workflow/lck.py remediation no-change <TASK> \
+  --review-id <FAILED_REVIEW_ID> \
+  --summary "<why no implementation change is required>"
+```
+
+Proceed only on `NO_IMPLEMENTATION_CHANGE`. LCK reacquires the current OPEN PR/head/base,
+requires the selected Task workspace to be clean and still exactly match the prepared
+Remediation target, writes a formal no-change receipt under `.workflow.local/lck/`, and
+releases the prepared Remediation session. It does **not** commit, push, create a new head,
+set `fresh-review-required`, or claim that deferred provider/cross-runtime acceptance is
+satisfied. A retry for the same unchanged target is idempotent and replays the prior
+receipt.
+
+This operation is also the deterministic recovery path for an older prepared session that
+was left open because the Skill correctly refused to manufacture a no-op commit. Do not
+manually delete or edit the session marker.
+
+### 4. LCK Remediation Complete
+
+After an actual repair is ready:
 
 ```bash
 uv run --frozen python tools/agent_workflow/lck.py remediation complete <TASK> \
