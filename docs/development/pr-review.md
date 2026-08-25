@@ -159,8 +159,9 @@ uv run --frozen python tools/agent_workflow/lck.py merge preflight <TASK>
 ```
 
 Merge Preflight 再获取一次 fresh `MergeSnapshot`，独立确认 current Task / PR / head /
-base、accepted Review receipt、仓库声明的 required-check policy 与当前 exact-head
-check results、blockers 和 mergeability。只有它返回：
+base、accepted Review receipt、**exact PR base commit** 中的 required-check policy 与
+当前 exact-head check results、blockers 和 mergeability。当前 checkout 或 PR head
+不能重定义本次 merge 的 required-check authority。只有它返回：
 
 ```text
 READY_FOR_HUMAN_MERGE

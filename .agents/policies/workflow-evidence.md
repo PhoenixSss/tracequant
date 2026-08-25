@@ -211,10 +211,17 @@ never LCK lifecycle authority.
 
 LCK itself does **not** discover its required-check policy from the
 plan/permission-dependent branch-protection endpoint. The repository-controlled
-required-check policy is declared in `pyproject.toml` under
-`[tool.tracequant.lck].required-checks`; GitHub supplies only the live result for
-those named checks on the exact PR head. Missing or malformed repository policy
-fails closed before Delivery/Remediation lifecycle effects.
+required-check policy is derived from the statically named jobs in the canonical
+`.github/workflows/ci.yml`, read from the operation's **exact trusted base commit**
+rather than from the caller's mutable checkout or candidate head. LCK v1 fails
+closed on dynamic job names or matrix jobs instead of guessing a check identity.
+Delivery Complete uses current authoritative `main`; Review / Remediation / Merge
+Preflight use the exact PR base. The snapshot records the policy source SHA and
+contract hash. Candidate-head policy edits are future policy only and cannot
+self-authorize the candidate. GitHub supplies only the live result for the
+base-required names on the exact PR head. Missing, malformed, unavailable, or
+base-mismatched policy fails closed before dependent lifecycle effects; there is
+no working-tree or GitHub-discovery fallback.
 
 Closeout may compute `eligible-under-capability-limited-policy` only for exact
 Task branch cleanup and only under the complete conditions defined by

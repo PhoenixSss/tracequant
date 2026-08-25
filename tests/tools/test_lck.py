@@ -31,24 +31,39 @@ from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
 SHA = "a" * 40
 
 
-def _write_required_checks_config(root: Path) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "pyproject.toml").write_text(
-        '[tool.tracequant.lck]\nrequired-checks = ["quality"]\n',
-        encoding="utf-8",
-    )
+REQUIRED_CHECKS_WORKFLOW_TEXT = """name: CI
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ok
+"""
+
+
+def _write_required_checks_workflow(root: Path) -> None:
+    path = root / ".github" / "workflows" / "ci.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(REQUIRED_CHECKS_WORKFLOW_TEXT, encoding="utf-8")
 
 
 @pytest.fixture(autouse=True)
 def _repository_required_checks_contract(tmp_path: Path) -> None:
-    _write_required_checks_config(tmp_path)
+    _write_required_checks_workflow(tmp_path)
 
 
-def _required_policy(*names: str) -> dict[str, Any]:
+def _required_policy(*names: str, source_sha: str = SHA) -> dict[str, Any]:
     items = list(names)
     return {
-        "configuration": "repository",
-        "source": "pyproject.toml:[tool.tracequant.lck].required-checks",
+        "configuration": "repository-base-ci",
+        "source": f"git:{source_sha}:.github/workflows/ci.yml:jobs",
+        "source_sha": source_sha,
+        "workflow_path": ".github/workflows/ci.yml",
+        "contract_sha256": lck.sha256_json(
+            {"workflow": ".github/workflows/ci.yml", "required-checks": items}
+        ),
         "contexts": {"items": items, "count": len(items), "truncated": False},
     }
 
@@ -117,6 +132,12 @@ class FakeRunner:
                 returncode = 1
             else:
                 stdout = json.dumps(self.open_pr)
+        elif (
+            args[:1] == ["show"]
+            and len(args) == 2
+            and args[1].endswith(":.github/workflows/ci.yml")
+        ):
+            stdout = REQUIRED_CHECKS_WORKFLOW_TEXT
         elif args[:2] == ["gh", "api"] and "required_status_checks" in args[2]:
             stdout = json.dumps({"contexts": ["quality"]})
         elif args[:2] == ["switch", "-c"]:
@@ -1631,7 +1652,8 @@ def test_review_prepare_materializes_missing_pr_head_before_deriving_diff(
     git(producer, "config", "user.name", "TraceQuant Test")
     git(producer, "config", "user.email", "tracequant-test@example.invalid")
     (producer / "tracked.py").write_text("base\n", encoding="utf-8")
-    git(producer, "add", "tracked.py")
+    _write_required_checks_workflow(producer)
+    git(producer, "add", "tracked.py", ".github/workflows/ci.yml")
     git(producer, "commit", "-m", "base")
     git(producer, "branch", "-M", "main")
     git(producer, "push", "origin", "main")
@@ -1645,7 +1667,7 @@ def test_review_prepare_materializes_missing_pr_head_before_deriving_diff(
         text=True,
         encoding="utf-8",
     )
-    _write_required_checks_config(source)
+    _write_required_checks_workflow(source)
 
     git(producer, "checkout", "-b", "task/159-lck-core-live-state-resolution")
     (producer / "tracked.py").write_text("base\nhead\n", encoding="utf-8")

@@ -153,10 +153,16 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
 - PR base = `main`，Squash-only merge policy 由 GitHub Ruleset 定义
   （本文件不重定义）。
 - CI（`.github/workflows/ci.yml`）运行 pytest / ruff / mypy。LCK 所要求的
-  check 名称由仓库内 `pyproject.toml` 的 `[tool.tracequant.lck].required-checks`
-  明确定义；GitHub `statusCheckRollup` 只提供 exact PR head 上这些 check 的
-  live result。GitHub Ruleset 可继续作为平台侧独立强制层，但 plan/permission-
-  dependent Required-Checks discovery API 不作为 LCK lifecycle authority。
+  check 名称由 canonical CI workflow 中的静态 job 定义，并从 **exact trusted
+  base commit** 读取；不能读取调用者当前 checkout、未提交修改或 candidate
+  head 上的未来 workflow policy。LCK v1 对 dynamic job name / matrix job
+  fail closed。Delivery Complete 由当前 authoritative `main` policy 约束；
+  已有 PR 的 Review / Remediation / Merge
+  Preflight 由 exact PR base policy 约束。候选 head 对该配置的修改只在 merge
+  后成为后续 operation 的新 policy，不能降低它自身的验收门禁。GitHub
+  `statusCheckRollup` 只提供 exact PR head 上这些 check 的 live result。
+  GitHub Ruleset 可继续作为平台侧独立强制层，但 plan/permission-dependent
+  Required-Checks discovery API 不作为 LCK lifecycle authority。
 - PR 关联 `Closes #N` 仅当 maintainer 预期 merge 后 close。
 - merge 决策：passing Independent Review for current PR head
   + maintainer manual Squash Merge。

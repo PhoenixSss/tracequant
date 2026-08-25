@@ -75,15 +75,19 @@ full-state refresh:
 1. `DeliveryPreparer` acquires one fresh Delivery Prepare snapshot and prepares the Task
    workspace from that frozen authority.
 2. `DeliveryCompleter` is a new operation. It acquires one fresh Delivery Complete
-   snapshot, reads the current Task Critical Outcome, stages the candidate tree, runs the
-   bounded Critical Outcome verifier and repository formal validation, and commits exactly
-   the validated tree.
+   snapshot, binds the required-check policy to the exact authoritative `main` base commit
+   (never the candidate checkout), reads the current Task Critical Outcome, stages the
+   candidate tree, runs the bounded Critical Outcome verifier and repository formal
+   validation, and commits exactly the validated tree.
 3. `EnsureRemoteBranchEffect` synchronizes only the resolved Task branch without force
    push and verifies the exact remote-ref postcondition; divergence fails closed.
 4. `EnsureOpenPrEffect` reuses or creates exactly one non-Draft OPEN PR from the frozen
    operation identity and verifies only the exact PR postcondition.
-5. `DeliveryChecksGate` evaluates the checks captured for the operation. Pending CI ends
-   the invocation; LCK does not poll waiting for external state to change.
+5. `DeliveryChecksGate` evaluates exact-head GitHub check results against the required
+   names derived from static jobs in `.github/workflows/ci.yml` at that immutable
+   trusted-base commit. A candidate edit to the CI workflow is future policy only.
+   Pending CI ends the
+   invocation; LCK does not poll waiting for external state to change.
 6. Bounded metadata effects use targeted postcondition verification. Delivery Complete
    does not run a final full `LiveStateResolver` refresh; the next lifecycle invocation
    acquires fresh authority before making its own decision.

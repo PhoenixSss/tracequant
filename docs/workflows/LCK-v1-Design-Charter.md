@@ -512,12 +512,20 @@ Local remote-tracking refs such as `refs/remotes/origin/main` MAY be used as dia
 Observation of remote authority SHOULD be read-only when no local materialization is required. A resolver MUST NOT mutate local Git state merely to learn what the remote currently contains.
 
 The **set of checks required by LCK** is repository-controlled workflow policy, not a
-plan/permission-dependent GitHub discovery result. In v1 it is declared in
-`pyproject.toml` under `[tool.tracequant.lck].required-checks`. GitHub remains the
-authority for whether those named checks are present/pending/successful on the exact PR
-head. If the repository policy is missing, malformed, or otherwise unresolved, LCK MUST
-fail closed before Delivery/Remediation lifecycle effects rather than reinterpret the
-unknown policy as an empty required-check set.
+plan/permission-dependent GitHub discovery result. In v1 it is derived from the
+statically named jobs in canonical `.github/workflows/ci.yml`, read from an **exact
+trusted base commit**, never from the caller's current working tree or candidate head.
+LCK v1 MUST fail closed on dynamic job names or matrix jobs rather than guessing the
+GitHub check-run identity. Delivery Complete is governed by current authoritative
+`main`; Review / Remediation / Merge Preflight are governed by the exact PR base commit. A PR
+candidate therefore cannot weaken the checks that govern its own acceptance; a policy
+change in the candidate head becomes effective only after merge and governs later
+operations from the new `main`. GitHub remains the authority for whether those named
+checks are present/pending/successful on the exact PR head. The snapshot records the
+policy source SHA and contract hash. If the base-bound repository policy is missing,
+malformed, unavailable, or mismatched to the operation base, LCK MUST fail closed before
+dependent lifecycle effects rather than reinterpret the unknown policy as an empty
+required-check set or fall back to a mutable checkout.
 
 ### 10.2 Operation Snapshot Isolation
 
@@ -531,7 +539,7 @@ Task identity / contract / contract hash
 local repository identity and relevant local refs
 current authoritative remote refs
 current PR identity / head / base
-repository-controlled required-check policy
+repository-controlled required-check policy bound to the exact trusted base commit
 current GitHub check results bound to the exact PR head
 phase-specific relationship / merge / project facts
 acquisition metadata and source diagnostics
@@ -683,7 +691,7 @@ Historical evidence may be durable but MUST NOT authorize future lifecycle opera
 
 A phase has statically declared capabilities.
 
-Whether a capability can execute now depends on the fresh Operation Snapshot acquired at that operation boundary.
+Whether a capability can execute now depends on the fresh Operation Snapshot acquired at that operation boundary. Static repository policy that governs a candidate MUST come from the trusted predecessor/base identity for that operation, not from mutable working-tree state or from the candidate being authorized.
 
 ### P11 — Bounded Safe Effects
 
@@ -1028,14 +1036,14 @@ The two LCK invocations do not share current authority. Review Prepare records e
 
 ### Review Prepare operation
 
-Before creating a review workspace, running formal validation, or starting semantic review, LCK MUST acquire one complete immutable `ReviewPrepareSnapshot` containing every authoritative fact required to establish the review target, including as applicable:
+Before running formal validation or starting semantic review, LCK MUST acquire one complete immutable `ReviewPrepareSnapshot` containing every authoritative live fact required to establish the review target. If an immutable Git object is not present locally, the standalone Review clone MAY be created/materialized as part of this bounded acquisition stage so deterministic commit-bound facts can be derived without mutating the source repository. The snapshot includes as applicable:
 
 - repository identity;
 - Task identity, state, labels, Task contract, and Task contract hash;
 - authoritative remote main and Task branch identity;
 - the unique current OPEN PR;
 - exact PR head / base / branch identities;
-- repository-controlled required-check policy;
+- repository-controlled required-check policy bound to the exact PR base commit, including source SHA and contract hash;
 - current check results bound to the exact reviewed head;
 - Review-specific relationship / eligibility facts.
 
@@ -1194,7 +1202,7 @@ The snapshot MAY include:
 - current Task contract / relevant Task state;
 - current head;
 - current base;
-- repository-controlled required-check policy and current exact-head check results;
+- repository-controlled required-check policy bound to the exact current PR base commit, plus current exact-head check results;
 - mergeability;
 - the applicable Review receipt / verdict as historical evidence;
 - unresolved blocking conditions.
@@ -1334,7 +1342,7 @@ Retries MUST be classified and MUST preserve Operation Snapshot Isolation.
 |---|---|
 | transient HTTP/network failure during authoritative snapshot acquisition | bounded retry of the same idempotent fact query is allowed **before snapshot freeze** |
 | required authoritative fact still unavailable after bounded acquisition retry | STOP before expensive/effectful work |
-| repository required-check policy is missing / malformed / unresolved | STOP before Delivery/Remediation lifecycle effects; do not use GitHub plan limitations as an implicit empty policy |
+| exact-base canonical-CI required-check policy is missing / malformed / unavailable / dynamic / mismatched | STOP before dependent lifecycle effects; do not use the mutable checkout, candidate head, or GitHub plan limitations as an implicit fallback |
 | required check result is missing or CI / required checks are pending at snapshot acquisition | STOP / WAIT boundary; start a fresh operation later; no in-operation polling loop |
 | targeted Safe Effect postcondition query has a transient HTTP/network failure | bounded retry of that exact postcondition query allowed |
 | targeted Safe Effect postcondition reveals state conflict / unexpected external change | STOP; do not full re-resolve; next lifecycle operation reacquires fresh authority |
@@ -1574,6 +1582,7 @@ Before LCK v1 implementation is considered architecturally complete, the design 
 30. Operation-owned snapshots / guards may identify an interrupted operation and its resources, but any retry or later invocation must acquire fresh authority and cannot reuse the prior snapshot as current authority.
 31. Observation-only remote fact acquisition does not require broad mutation of local Git metadata when a read-only authoritative remote query is sufficient.
 32. Failure reports preserve the exact unavailable / ambiguous fact or failed query instead of collapsing unrelated failures into a generic unresolved-state message.
+33. Required-check policy is read from the exact trusted base commit, records its source SHA and contract hash, and cannot be weakened by the candidate head or by uncommitted/local-checkout changes.
 
 ---
 

@@ -125,11 +125,22 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     assert "check-timeout-seconds" not in lck_source
     assert "required_status_checks" not in lck_source
     assert "gh-required-checks-" not in lck_source
+    assert "_repository_required_checks_at_commit" in lck_source
+    assert '"git", "show", f"{source_sha}:{REQUIRED_CHECKS_WORKFLOW}"' in lck_source
+    assert '"source_sha": source_sha' in lck_source
+    assert '"configuration": "repository-base-ci"' in lck_source
+    assert 'repo_root / "pyproject.toml"' not in lck_source
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "jobs:" in ci
+    assert "quality:" in ci
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert "[tool.tracequant.lck]" in pyproject
-    assert 'required-checks = ["quality"]' in pyproject
+    assert "[tool.tracequant.lck]" not in pyproject
+    assert "required-checks" not in pyproject
+    assert 'repo_root / "pyproject.toml"' not in lck_source
     assert "repository-controlled" in policy
     assert "required-check policy" in policy
+    assert "exact trusted base commit" in policy
+    assert "mutable checkout" in policy
     core_lines = len((ROOT / "tools/agent_workflow/lck.py").read_text().splitlines())
     assert f"`lck.py`: {core_lines:,} LOC" in architecture_delta
     assert "remote_main_sha" in lck_source

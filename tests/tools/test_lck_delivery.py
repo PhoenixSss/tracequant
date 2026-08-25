@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -21,24 +22,39 @@ from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
 SHA = "a" * 40
 
 
-def _write_required_checks_config(root: Path) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "pyproject.toml").write_text(
-        '[tool.tracequant.lck]\nrequired-checks = ["quality"]\n',
-        encoding="utf-8",
-    )
+REQUIRED_CHECKS_WORKFLOW_TEXT = """name: CI
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ok
+"""
+
+
+def _write_required_checks_workflow(root: Path) -> None:
+    path = root / ".github" / "workflows" / "ci.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(REQUIRED_CHECKS_WORKFLOW_TEXT, encoding="utf-8")
 
 
 @pytest.fixture(autouse=True)
 def _repository_required_checks_contract(tmp_path: Path) -> None:
-    _write_required_checks_config(tmp_path)
+    _write_required_checks_workflow(tmp_path)
 
 
-def _required_policy(*names: str) -> dict[str, Any]:
+def _required_policy(*names: str, source_sha: str = SHA) -> dict[str, Any]:
     items = list(names)
     return {
-        "configuration": "repository",
-        "source": "pyproject.toml:[tool.tracequant.lck].required-checks",
+        "configuration": "repository-base-ci",
+        "source": f"git:{source_sha}:.github/workflows/ci.yml:jobs",
+        "source_sha": source_sha,
+        "workflow_path": ".github/workflows/ci.yml",
+        "contract_sha256": lck.sha256_json(
+            {"workflow": ".github/workflows/ci.yml", "required-checks": items}
+        ),
         "contexts": {"items": items, "count": len(items), "truncated": False},
     }
 
@@ -58,7 +74,8 @@ def _repo(tmp_path: Path) -> tuple[Path, Path]:
     _git(repo, "config", "user.name", "Test")
     _git(repo, "config", "user.email", "test@example.invalid")
     (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
-    _git(repo, "add", "seed.txt")
+    _write_required_checks_workflow(repo)
+    _git(repo, "add", "seed.txt", ".github/workflows/ci.yml")
     _git(repo, "commit", "-m", "seed")
     subprocess.run(
         ["git", "init", "--bare", str(origin)], check=True, capture_output=True
@@ -423,6 +440,11 @@ class CompletionRunner:
         elif command[:2] == ("git", "status"):
             returncode = 0
             stdout = ""
+        elif command[:2] == ("git", "show") and command[2].endswith(
+            ":.github/workflows/ci.yml"
+        ):
+            returncode = 0
+            stdout = REQUIRED_CHECKS_WORKFLOW_TEXT
         elif command[:2] == ("gh", "api") and "required_status_checks" in command[2]:
             returncode = 0
             stdout = json.dumps({"contexts": []})
@@ -683,6 +705,16 @@ Verification test: tests/tools/test_lck_delivery.py::test_task_160_critical_outc
 
         if args[:1] == ["fetch"]:
             return self._result(command_id, command)
+        if (
+            args[:1] == ["show"]
+            and len(args) == 2
+            and args[1].endswith(":.github/workflows/ci.yml")
+        ):
+            return self._result(
+                command_id,
+                command,
+                stdout=REQUIRED_CHECKS_WORKFLOW_TEXT,
+            )
         if args == ["branch", "--show-current"]:
             return self._result(command_id, command, stdout=self.branch)
         if args == ["rev-parse", "HEAD"]:
@@ -1127,21 +1159,99 @@ def _checks(*, category: str, state_name: str) -> dict[str, Any]:
     }
 
 
-def test_repository_required_checks_policy_is_repo_controlled(tmp_path: Path) -> None:
-    policy = lck._repository_required_checks(tmp_path)
+def test_repository_required_checks_policy_is_bound_to_exact_base_commit(
+    tmp_path: Path,
+) -> None:
+    repo, _ = _repo(tmp_path)
+    base_sha = _git(repo, "rev-parse", "HEAD")
+    (repo / ".github" / "workflows" / "ci.yml").write_text(
+        "name: CI\njobs:\n  candidate-only:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo candidate\n",
+        encoding="utf-8",
+    )
+    resolver = _resolver_for_repo(repo)
 
-    assert policy["configuration"] == "repository"
-    assert policy["source"] == "pyproject.toml:[tool.tracequant.lck].required-checks"
+    policy = lck._repository_required_checks_at_commit(resolver, base_sha)
+
+    assert policy["configuration"] == "repository-base-ci"
+    assert policy["source_sha"] == base_sha
+    assert policy["source"] == f"git:{base_sha}:.github/workflows/ci.yml:jobs"
     assert policy["contexts"]["items"] == ["quality"]
+    assert policy["workflow_path"] == ".github/workflows/ci.yml"
+    assert policy["contract_sha256"] == lck.sha256_json(
+        {"workflow": ".github/workflows/ci.yml", "required-checks": ["quality"]}
+    )
 
 
-def test_repository_required_checks_policy_missing_fails_closed(tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").unlink()
+def test_required_checks_policy_never_falls_back_to_working_tree(
+    tmp_path: Path,
+) -> None:
+    repo, _ = _repo(tmp_path)
+    _git(repo, "rm", ".github/workflows/ci.yml")
+    _git(repo, "commit", "-m", "remove canonical CI")
+    base_sha = _git(repo, "rev-parse", "HEAD")
+    _write_required_checks_workflow(repo)
+    resolver = _resolver_for_repo(repo)
 
-    with pytest.raises(
-        lck.LckStopError, match="required PR check policy is unavailable"
-    ):
-        lck._repository_required_checks(tmp_path)
+    with pytest.raises(lck.LckStopError, match="unavailable at trusted base"):
+        lck._repository_required_checks_at_commit(resolver, base_sha)
+
+
+def test_review_required_checks_policy_is_governed_by_pr_base_not_candidate_head(
+    tmp_path: Path,
+) -> None:
+    repo, _ = _repo(tmp_path)
+    base_sha = _git(repo, "rev-parse", "HEAD")
+    branch = "task/160-delivery-cutover"
+    _git(repo, "switch", "-c", branch)
+    workflow = repo / ".github" / "workflows" / "ci.yml"
+    workflow.write_text(
+        "name: CI\njobs:\n  self-approved:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo candidate\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", ".github/workflows/ci.yml")
+    _git(repo, "commit", "-m", "candidate attempts to weaken checks")
+    head_sha = _git(repo, "rev-parse", "HEAD")
+
+    original = _live_state(
+        head=head_sha,
+        clean=True,
+        project_status="Review",
+        open_pr={
+            "number": 10,
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefOid": head_sha,
+            "baseRefOid": base_sha,
+        },
+        remote_oid=head_sha,
+    )
+    state = replace(
+        original,
+        git={
+            **original.git,
+            "local_main_sha": base_sha,
+            "origin_main_sha": base_sha,
+            "remote_main_sha": base_sha,
+        },
+    )
+
+    class ExactResolver:
+        repo_root = repo
+        runner = CommandRunner(repo)
+
+        def resolve(self, _task: int) -> lck.LiveState:
+            return state
+
+    snapshot = lck.OperationSnapshotBuilder(cast(Any, ExactResolver())).acquire(
+        160,
+        operation="review-complete",
+        include_required_checks=True,
+    )
+
+    assert snapshot.required_checks is not None
+    assert snapshot.required_checks["source_sha"] == base_sha
+    assert snapshot.required_checks["contexts"]["items"] == ["quality"]
+    assert "self-approved" in _git(repo, "show", f"{head_sha}:.github/workflows/ci.yml")
 
 
 def test_delivery_rejects_unresolved_required_check_policy_before_effects(
@@ -1169,7 +1279,7 @@ def test_delivery_rejects_unresolved_required_check_policy_before_effects(
     pr = StubEffect("ensure_open_pr", "created")
     status = StubEffect("set_review_status", "updated")
 
-    with pytest.raises(lck.LckStopError, match="repository-controlled check contract"):
+    with pytest.raises(lck.LckStopError, match="canonical-CI check contract"):
         lck.DeliveryCompleter(
             cast(Any, resolver),
             formal_validation=cast(Any, StubValidation()),
@@ -1312,7 +1422,7 @@ def test_delivery_checks_gate_rejects_legacy_plan_limited_policy(
         },
     )
 
-    with pytest.raises(lck.LckStopError, match="repository-controlled check contract"):
+    with pytest.raises(lck.LckStopError, match="canonical-CI check contract"):
         lck.DeliveryChecksGate(cast(Any, resolver)).evaluate(snapshot)
     assert resolver.calls == 0
 

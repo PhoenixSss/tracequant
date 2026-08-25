@@ -100,6 +100,16 @@ class RequiredChecksRunner:
         self, argv: list[str] | tuple[str, ...], *, command_id: str, **_kwargs: Any
     ) -> Any:
         command = tuple(str(item) for item in argv)
+        if command[:2] == ("git", "show") and command[2].endswith(
+            ":.github/workflows/ci.yml"
+        ):
+            return SimpleNamespace(
+                returncode=0,
+                stdout="name: CI\njobs:\n  quality:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n",
+                stderr="",
+                command_id=command_id,
+                argv=command,
+            )
         if command[:2] == ("gh", "api") and "required_status_checks" in command[2]:
             return SimpleNamespace(
                 returncode=0,

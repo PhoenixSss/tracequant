@@ -22,9 +22,10 @@ import shutil
 import stat
 import sys
 import tempfile
-import tomllib
 import unicodedata
 import uuid
+
+import yaml
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -71,6 +72,7 @@ from workflow_evidence import (
 
 
 BASE_BRANCH: Final = "main"
+REQUIRED_CHECKS_WORKFLOW: Final = ".github/workflows/ci.yml"
 LCK_SCHEMA_VERSION: Final = 1
 TASK_BRANCH_PATTERN: Final = re.compile(
     r"^(?:task/(?P<slash>\d+)(?:-.+)?|task-(?P<dash>\d+)(?:-.+)?|(?P<legacy>\d+)-.+)$"
@@ -305,10 +307,11 @@ class LiveState:
 class OperationSnapshot:
     """Immutable authoritative inputs for one LCK lifecycle operation.
 
-    ``state`` is acquired exactly once at the operation boundary.  Optional
-    phase-specific facts (currently required-check configuration) are acquired
-    in the same bounded start window.  Downstream helpers consume this object;
-    they do not refresh Git/GitHub authority.
+    ``state`` is acquired exactly once at the operation boundary. Optional
+    phase-specific deterministic facts (currently the exact-base required-check
+    contract) are bound in the same bounded start window, after immutable Git
+    objects are materialized when Review isolation requires it. Downstream
+    helpers consume this object; they do not refresh Git/GitHub authority.
     """
 
     operation: str
@@ -726,49 +729,91 @@ class LiveStateResolver:
         )
 
 
-def _repository_required_checks(repo_root: Path) -> dict[str, Any]:
-    """Load the LCK required-check contract from repository-controlled config.
+def _parse_required_checks_workflow(
+    text: str,
+    *,
+    source_sha: str,
+) -> dict[str, Any]:
+    """Derive required GitHub check contexts from canonical CI at one base commit.
 
-    GitHub check *results* are live authority, but the set of checks that LCK
-    requires is a repository workflow contract.  This deliberately avoids using
-    plan/permission-dependent branch-protection discovery as lifecycle authority.
+    Required-check policy is lifecycle control policy, so a candidate must not be
+    able to weaken the checks that authorize its own transition. LCK therefore
+    reads the canonical CI workflow from the immutable trusted base commit.
+    Only statically named, non-matrix jobs are supported in v1; anything dynamic
+    fails closed rather than guessing the check-run identity.
     """
 
-    config_path = repo_root / "pyproject.toml"
+    if not is_sha(source_sha):
+        raise LckStopError("required PR check policy source SHA is invalid")
     try:
-        parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+        parsed = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
         raise LckStopError(
-            f"required PR check policy is unavailable from {config_path.name}: {exc}"
+            "required PR check policy is malformed at trusted base "
+            f"{source_sha}: {REQUIRED_CHECKS_WORKFLOW}: {exc}"
         ) from exc
-
-    tool = parsed.get("tool")
-    tracequant = tool.get("tracequant") if isinstance(tool, Mapping) else None
-    lck_config = tracequant.get("lck") if isinstance(tracequant, Mapping) else None
-    raw = lck_config.get("required-checks") if isinstance(lck_config, Mapping) else None
-    if not isinstance(raw, list):
+    if not isinstance(parsed, Mapping):
         raise LckStopError(
-            "required PR check policy is unresolved: "
-            "pyproject.toml [tool.tracequant.lck].required-checks must be a list"
+            "required PR check policy is unresolved at trusted base "
+            f"{source_sha}: {REQUIRED_CHECKS_WORKFLOW} must contain a mapping"
+        )
+    jobs = parsed.get("jobs")
+    if not isinstance(jobs, Mapping) or not jobs:
+        raise LckStopError(
+            "required PR check policy is unresolved at trusted base "
+            f"{source_sha}: {REQUIRED_CHECKS_WORKFLOW} must define static jobs"
         )
 
     names: list[str] = []
-    for item in raw:
-        if not isinstance(item, str) or not item.strip():
+    job_bindings: list[dict[str, str]] = []
+    for raw_job_id, raw_job in jobs.items():
+        if not isinstance(raw_job_id, str) or not raw_job_id.strip():
             raise LckStopError(
-                "required PR check policy is invalid: every required check must be "
-                "a non-empty string"
+                "required PR check policy is invalid: CI job id must be a non-empty string"
             )
-        name = item.strip()
-        if name in names:
+        job_id = raw_job_id.strip()
+        if not isinstance(raw_job, Mapping):
             raise LckStopError(
-                f"required PR check policy is invalid: duplicate check {name!r}"
+                f"required PR check policy is invalid: CI job {job_id!r} is malformed"
             )
-        names.append(name)
+        strategy = raw_job.get("strategy")
+        if isinstance(strategy, Mapping) and "matrix" in strategy:
+            raise LckStopError(
+                "required PR check policy is unresolved: matrix CI jobs are not "
+                f"supported by LCK v1 ({job_id!r})"
+            )
+        raw_name = raw_job.get("name")
+        if raw_name is None:
+            check_name = job_id
+        elif isinstance(raw_name, str) and raw_name.strip():
+            check_name = raw_name.strip()
+        else:
+            raise LckStopError(
+                f"required PR check policy is invalid: CI job {job_id!r} has an invalid name"
+            )
+        if "${{" in check_name:
+            raise LckStopError(
+                "required PR check policy is unresolved: dynamic CI job names are not "
+                f"supported by LCK v1 ({job_id!r})"
+            )
+        if check_name in names:
+            raise LckStopError(
+                f"required PR check policy is invalid: duplicate check {check_name!r}"
+            )
+        names.append(check_name)
+        job_bindings.append({"job_id": job_id, "check_name": check_name})
 
+    contract_payload = {
+        "workflow": REQUIRED_CHECKS_WORKFLOW,
+        "required-checks": names,
+    }
     return {
-        "configuration": "repository",
-        "source": "pyproject.toml:[tool.tracequant.lck].required-checks",
+        "configuration": "repository-base-ci",
+        "source": f"git:{source_sha}:{REQUIRED_CHECKS_WORKFLOW}:jobs",
+        "source_sha": source_sha,
+        "workflow_path": REQUIRED_CHECKS_WORKFLOW,
+        "contract_sha256": sha256_json(contract_payload),
+        "jobs": job_bindings,
         "contexts": {
             "items": names,
             "count": len(names),
@@ -777,20 +822,85 @@ def _repository_required_checks(repo_root: Path) -> dict[str, Any]:
     }
 
 
-def _required_check_contract(required: Mapping[str, Any] | None) -> tuple[str, ...]:
-    """Validate and return the repository-controlled required-check set.
+def _repository_required_checks_at_commit(
+    resolver: LiveStateResolver,
+    source_sha: str,
+    *,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    """Read required checks from canonical CI at an exact trusted-base commit.
 
-    Legacy GitHub-discovery states such as ``unknown`` or ``plan-limited-403``
-    are diagnostic evidence only and can never authorize an LCK lifecycle effect.
+    ``repo_root`` may be the source repository or an isolated Review clone.
+    Working-tree files and candidate-head policy are deliberately ignored.
+    """
+
+    if not is_sha(source_sha):
+        raise LckStopError("required PR check policy trusted base is unavailable")
+    result = resolver.runner.run(
+        ["git", "show", f"{source_sha}:{REQUIRED_CHECKS_WORKFLOW}"],
+        command_id="lck-required-check-policy-from-base-ci",
+        cwd=repo_root or resolver.repo_root,
+        env={"GIT_OPTIONAL_LOCKS": "0"},
+    )
+    if result.returncode != 0:
+        detail = (
+            result.stderr.strip()
+            or result.stdout.strip()
+            or f"exit {result.returncode}"
+        )
+        raise LckStopError(
+            "required PR check policy is unavailable at trusted base "
+            f"{source_sha}: {REQUIRED_CHECKS_WORKFLOW}: {detail}"
+        )
+    return _parse_required_checks_workflow(result.stdout, source_sha=source_sha)
+
+
+def _required_checks_policy_source_sha(
+    state: LiveState,
+    operation: str,
+) -> str:
+    """Return the immutable base commit that governs required-check policy.
+
+    Candidate heads cannot authorize their own checks.  Delivery is governed by
+    current authoritative main; operations on an existing PR are governed by the
+    exact PR base commit.
+    """
+
+    if operation == Phase.DELIVERY_COMPLETE.value:
+        source_sha = _authoritative_remote_main_sha(state.git)
+    else:
+        pr = state.open_pr
+        source_sha = _pr_base_sha(pr) if isinstance(pr, Mapping) else None
+    if not is_sha(source_sha):
+        raise LckStopError(
+            f"required PR check policy trusted base is unavailable for {operation}"
+        )
+    return str(source_sha)
+
+
+def _required_check_contract(required: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """Validate and return the exact-base-bound required-check set.
+
+    Legacy GitHub-discovery states and mutable working-tree configuration are
+    diagnostic inputs only and can never authorize an LCK lifecycle effect.
     """
 
     if not isinstance(required, Mapping):
         raise LckStopError("required PR check policy was not acquired")
-    if required.get("configuration") != "repository":
+    if required.get("configuration") != "repository-base-ci":
         raise LckStopError(
             "required PR check policy is unresolved; LCK requires the "
-            "repository-controlled check contract before lifecycle effects"
+            "exact trusted-base canonical-CI check contract before lifecycle effects"
         )
+    source_sha = required.get("source_sha")
+    if not is_sha(source_sha):
+        raise LckStopError("required PR check policy source SHA is malformed")
+    contract_sha256 = required.get("contract_sha256")
+    if (
+        not isinstance(contract_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", contract_sha256) is None
+    ):
+        raise LckStopError("required PR check policy contract hash is malformed")
     contexts = required.get("contexts")
     if not isinstance(contexts, Mapping):
         raise LckStopError("required PR check policy contexts are malformed")
@@ -808,7 +918,36 @@ def _required_check_contract(required: Mapping[str, Any] | None) -> tuple[str, .
                 f"required PR check policy contains duplicate check {item!r}"
             )
         names.append(item)
+    workflow_path = required.get("workflow_path")
+    if workflow_path != REQUIRED_CHECKS_WORKFLOW:
+        raise LckStopError("required PR check policy workflow path is malformed")
+    if (
+        sha256_json({"workflow": REQUIRED_CHECKS_WORKFLOW, "required-checks": names})
+        != contract_sha256
+    ):
+        raise LckStopError("required PR check policy contract hash does not match")
     return tuple(names)
+
+
+def _required_check_contract_for_snapshot(
+    snapshot: OperationSnapshot,
+) -> tuple[str, ...]:
+    """Validate that required-check policy is bound to this snapshot's base."""
+
+    required = snapshot.required_checks
+    names = _required_check_contract(required)
+    required_mapping = cast(Mapping[str, Any], required)
+    expected_sha = _required_checks_policy_source_sha(
+        snapshot.state, snapshot.operation
+    )
+    if required_mapping.get("source_sha") != expected_sha:
+        raise LckStopError(
+            "required PR check policy is not bound to the operation trusted base: "
+            "expected "
+            f"{expected_sha}, got "
+            f"{required_mapping.get('source_sha') or 'unavailable'}"
+        )
+    return names
 
 
 class OperationSnapshotBuilder:
@@ -825,16 +964,46 @@ class OperationSnapshotBuilder:
         include_required_checks: bool = False,
     ) -> OperationSnapshot:
         state = copy.deepcopy(self.resolver.resolve(task_number))
-        required: Mapping[str, Any] | None = None
-        warnings: list[dict[str, Any]] = []
-        if include_required_checks:
-            required = _repository_required_checks(self.resolver.repo_root)
-            _required_check_contract(required)
-        return OperationSnapshot(
+        snapshot = OperationSnapshot(
             operation=operation,
             state=state,
+            required_checks=None,
+            acquisition_warnings=(),
+        )
+        if include_required_checks:
+            snapshot = self.bind_required_checks(snapshot)
+        return snapshot
+
+    def bind_required_checks(
+        self,
+        snapshot: OperationSnapshot,
+        *,
+        repo_root: Path | None = None,
+    ) -> OperationSnapshot:
+        """Bind one snapshot to the policy stored at its immutable trusted base.
+
+        This method never re-resolves Git/GitHub state.  ``repo_root`` is only a
+        repository object source; Review may pass its standalone clone after the
+        exact base/head objects have been materialized there.
+        """
+
+        if snapshot.required_checks is not None:
+            _required_check_contract(snapshot.required_checks)
+            return snapshot
+        source_sha = _required_checks_policy_source_sha(
+            snapshot.state, snapshot.operation
+        )
+        required = _repository_required_checks_at_commit(
+            self.resolver,
+            source_sha,
+            repo_root=repo_root,
+        )
+        _required_check_contract(required)
+        return OperationSnapshot(
+            operation=snapshot.operation,
+            state=snapshot.state,
             required_checks=required,
-            acquisition_warnings=tuple(warnings),
+            acquisition_warnings=snapshot.acquisition_warnings,
         )
 
 
@@ -2417,7 +2586,6 @@ class ReviewPreparer:
             snapshot = self.snapshots.acquire(
                 task_number,
                 operation="review-prepare",
-                include_required_checks=True,
             )
             state = snapshot.state
             decision = self.eligibility.resolve(state, Phase.REVIEW_PREPARE)
@@ -2428,8 +2596,6 @@ class ReviewPreparer:
                 )
             task_contract = _task_contract_from_state(state)
             target = _review_target_refs(state, task_contract)
-            mark("checking-current-pr", target=target.to_dict())
-            checks = self.checks_gate.evaluate(snapshot)
             review_root = self.workspace.path_for(task_number, invocation.operation_id)
             mark(
                 "clone-reserved",
@@ -2444,6 +2610,15 @@ class ReviewPreparer:
                 target=target.to_dict(),
                 review_root=str(review_root),
             )
+            snapshot = self.snapshots.bind_required_checks(
+                snapshot, repo_root=review_root
+            )
+            mark(
+                "checking-current-pr",
+                target=target.to_dict(),
+                required_checks=snapshot.required_checks,
+            )
+            checks = self.checks_gate.evaluate(snapshot)
             identity = _review_identity(
                 self.resolver,
                 state,
@@ -2646,7 +2821,6 @@ class ReviewCompleter:
             completion_snapshot = self.snapshots.acquire(
                 task_number,
                 operation="review-complete",
-                include_required_checks=True,
             )
             state = completion_snapshot.state
             decision = self.eligibility.resolve(state, Phase.REVIEW_COMPLETE)
@@ -2663,6 +2837,9 @@ class ReviewCompleter:
             )
             self.workspace.assert_ready_for_completion(
                 review_root, reviewed_identity.head_sha
+            )
+            completion_snapshot = self.snapshots.bind_required_checks(
+                completion_snapshot, repo_root=review_root
             )
             current_identity = _review_identity(
                 self.resolver,
@@ -3452,6 +3629,7 @@ class DeliveryChecksGate:
         required = snapshot.required_checks
         if not isinstance(required, Mapping):
             raise LckStopError("required PR check configuration was not acquired")
+        _required_check_contract_for_snapshot(snapshot)
         return self._evaluate_pr_checks(pr, required)
 
     def query_exact_pr(
@@ -4407,7 +4585,7 @@ class DeliveryCompleter:
         state = snapshot.state
         task_number = state.task_number
         required_checks = snapshot.required_checks
-        _required_check_contract(required_checks)
+        _required_check_contract_for_snapshot(snapshot)
         required_checks_mapping = cast(Mapping[str, Any], required_checks)
         decision = self.eligibility.resolve(state, phase)
         if not decision.eligible:
