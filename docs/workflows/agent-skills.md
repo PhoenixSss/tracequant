@@ -55,14 +55,17 @@ PR #N 已人工合并，请完成 closeout
 .agents/policies/command-execution.md
 ```
 
-本地 artifacts：
+本地 artifacts 按 ownership 分区：
 
 ```text
-.agents/evidence.local/
-.agents/validation.local/
+.agents/evidence.local/      # historical/Feature-audit Evidence output
+.agents/validation.local/    # ordinary Validation Runner workspace output
+.workflow.local/lck/         # LCK runtime state / preserved Review evidence
 ```
 
-不得提交。
+不得提交。Independent Review 在 source repository 仅写 `.workflow.local/lck/`；
+`.agents/validation.local/` 如被 formal Review validation 使用，只存在于 disposable
+standalone clone 内。
 
 ## Task #88 architecture audit
 
@@ -102,7 +105,9 @@ semantic owner；其历史内容由 Git 历史及 frozen migration / benchmark e
 | `CLAUDE.md` | ACTIVE | Claude-specific thin adapter 与 Skill discovery |
 | `.agents/skills/*-runner/`、`.agents/skills/task-closeout/`、`.agents/skills/feature-completion-audit/` | ACTIVE | Codex executable procedures |
 | `.claude/skills/` current four Skills | ACTIVE | Claude executable procedures |
-| fixed Evidence/Validation Runners、profiles、Rules 与 current tests | ACTIVE | deterministic Git/GitHub facts、identity/fail-closed gates 与 validation |
+| `tools/agent_workflow/wsl2_validation_runner.py`、`workflow_validation.py`、validation profiles 与 current tests | ACTIVE | deterministic validation plans、exit codes 与 bounded diagnostics |
+| `tools/agent_workflow/workflow_evidence.py` | AUDIT-ONLY | Feature audit evidence 与 LCK 使用的 read-only query helpers；不具备 Task lifecycle authority |
+| pre-LCK Task Evidence Runner、Task profiles、Codex Rules、dedicated Runner/Rules tests 与 `self_review.py` binder/test | REMOVED | 仅保留历史 publication / migration provenance；不属于当前 workflow entry point |
 | retired `.agents/skills/task-delivery/`、`.agents/skills/task-pr-review/` | DEAD / ABSENT | Legacy executable Skills 已退役；历史内容由 Git 历史及 frozen evidence 保留 |
 | `docs/workflows/task-skill-runner-migration/` 与 `docs/workflows/benchmarks/` | HISTORICAL EVIDENCE ONLY | frozen migration/benchmark/audit provenance |
 | Claude current Skills 中的 Codex/Claude permission-boundary 说明 | COMPATIBILITY ONLY | cross-agent adapter guidance; retained intentionally while both agents are supported |
@@ -120,12 +125,15 @@ Issue body (business specification)
   -> AGENTS.md (repository invariants and entry resolution)
   -> shared development docs (lifecycle / review semantics)
   -> agent-specific current Skills (executable procedure)
-  -> fixed Evidence / Validation Runners (mechanical facts and checks)
+  -> LCK + Validation Runner (Task lifecycle control and deterministic validation)
+  -> workflow_evidence.py (Feature audit / read-only helpers only)
   -> Git / GitHub Issues, relationships, Projects, PRs and CI (durable state)
 ```
 
-`.agents/evidence.local/` 与 `.agents/validation.local/` 仅保存 Git-ignored
-supporting evidence；它们不是 durable workflow state 或新的 source of truth。
+`.agents/evidence.local/`、`.agents/validation.local/` 与 `.workflow.local/lck/` 都是
+Git-ignored local artifacts，但 ownership 不同：前两者属于历史 Evidence / ordinary
+Validation Runner，后者属于 LCK runtime 与需要跨 temporary Review clone 生命周期保留的
+Review evidence。它们都不是 Git/GitHub authority 或新的 source of truth。
 
 ## 仓库外 Token 消耗分析边界
 

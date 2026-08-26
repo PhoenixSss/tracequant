@@ -1,4 +1,4 @@
-# LCK v1 Current → Target Migration Matrix
+# LCK v1 Final Migration Matrix
 
 This matrix tracks the LCK v1 migration boundary. It normalizes the
 operation inventory from the Task #88 architecture audit against the LCK v1
@@ -7,53 +7,50 @@ Design Charter. `KEEP` means the responsibility remains in its current layer,
 the semantic boundary remains while duplicate mechanics are removed, and
 `REMOVE` means the mechanism is not part of the target flow.
 
-Task #159 established live-state resolution, phase eligibility, and Delivery
-Prepare. Task #160 implements the candidate **Initial Delivery** LCK controller:
-Critical Outcome + formal validation, validated-tree commit, remote
-synchronization, OPEN-PR resolve/create, checks, Project Status `Review`, and
-final `READY_FOR_REVIEW` verification. Task #161 cuts over **Independent Review
-and explicit Remediation**: Review target identity is reacquired live, Review runs
-in an isolated implementation-read-only worktree with invocation-local stale
-guards, Review FAIL returns `STOP_REQUIRED`, and Human-started Remediation reuses
-the Task #160 Delivery effects while requiring the existing OPEN PR. Merge,
-Closeout redesign, and later recovery work remain bounded follow-up work.
+Tasks #164–#167 established the complete LCK v1 controller: live-state
+resolution, Delivery, Independent Review, explicit Remediation, Merge
+Preflight, Closeout, and recovery. Task #163 is the final convergence pass:
+active Task Skills are semantic-only, formal Task phases use LCK exclusively,
+and historical Evidence remains audit-only. See
+`lck-v1-closeout-architecture-delta.md` for the final authority and evidence
+boundary.
 
-| ID | #88 operation | Current owner | LCK v1 target | Task #159 boundary |
+| ID | #88 operation | Pre-LCK owner | LCK v1 target | Final LCK v1 disposition |
 |---|---|---|---|---|
-| O01 | Resolve intent and exact Task | Agent + Skill routing | KEEP | KEEP |
-| O02 | Delivery admission / readiness | Evidence Runner + Skill | MOVE | Live facts reused; full admission remains follow-up |
-| O03 | Ready → In Progress | Skill / project helper | MOVE | Not moved in this Task |
-| O04 | Read leaf spec and Retrieval v2 context | Agent | KEEP | KEEP |
-| O05 | Triggered context expansion | Agent + Human Gate | KEEP | KEEP |
-| O06 | Scoped design and implementation | Agent | KEEP | KEEP |
-| O07 | Targeted validation | Skill + Validation Runner | KEEP | KEEP |
-| O08 | Commit-ready identity | Skill / Git | MOVE | No commit effect here |
-| O09 | CI-equivalent validation | Validation Runner | KEEP | KEEP |
-| O10 | Push validated head | Skill / Agent | MOVE | Candidate implemented; Current Workflow remains authority for #160 pre-cutover delivery |
-| O11 | PR resolve/create | PR helper + Skill | MOVE | Candidate implemented; Current Workflow remains authority for #160 pre-cutover delivery |
-| O12 | Check wait/read and interpretation | Skill + Runner | SIMPLIFY | Candidate gate implemented; Current Workflow remains authority for #160 pre-cutover delivery |
-| O13 | Semantic self-review | Agent + helper | SIMPLIFY | Semantic judgement stays Agent-owned |
-| O14 | Delivery readiness snapshot | Evidence Runner + Skill | MOVE | Snapshot is diagnostic, not LCK authority |
-| O15 | Reviewed object identity lock | Review Skill + Runner | MOVE | LCK live Review target + invocation-local guard |
-| O16 | Complete effective-diff inspection | Review Agent | KEEP | KEEP |
-| O17 | Review correctness / AC / risk judgement | Review Agent | KEEP | KEEP |
-| O18 | Review CI-equivalent validation | Review Skill + Runner | KEEP | LCK runs formal Review validation on exact isolated head |
-| O19 | Review recheck and stability | Runner + Review Skill | SIMPLIFY | `REVIEW_STALE_HEAD` / `REVIEW_STALE_BASE` invocation-local guard only |
-| O20 | Review verdict and handoff | Review Agent + Skill | SIMPLIFY | Review Agent returns PASS/FAIL; LCK records diagnostic result; no mechanical handoff authority |
-| O21 | Remediation admission | Delivery Skill + Runner | MOVE | Explicit `lck remediation prepare`; live mechanics + semantic findings only |
-| O22 | Repair and new head | Agent + Delivery Skill | MOVE | LCK completion reuses Delivery effects and existing PR, then STOP before new Review |
-| O23 | Manual Squash Merge checkpoint | Maintainer | KEEP | KEEP |
-| O24 | Closeout read-only plan | Closeout Skill + Runner | MOVE | Closeout phase eligibility only |
-| O25 | Main sync and post-merge validation | Skill + Runner | MOVE | Out of scope |
-| O26 | Lifecycle metadata convergence | Closeout Skill / GitHub | MOVE | Out of scope |
-| O27 | Exact Task branch cleanup | Closeout Skill | MOVE | Out of scope |
-| O28 | Recovery after valid gate / drift | Skill + Agent | MOVE | Reacquire live facts; no lineage; Review uses only invocation-local stale guards |
-| O29 | Feature child-set / completion mechanics | Feature Audit Skill + Agent | MOVE | Separate Feature audit boundary |
-| O30 | Repeated fact re-query / reformat | Agent / Skill ad hoc | REMOVE | No snapshot authority |
-| O31 | Homogeneous Agent command grouping | Agent orchestration | SIMPLIFY | Optional; never hides failure boundaries |
-| O32 | Context Compiler beyond Retrieval v2 | No current owner | REMOVE | Not justified by the Charter |
+| O01 | Resolve intent and exact Task | Agent + Skill routing | KEEP | Human intent + semantic Skill routing; LCK resolves mechanical identity |
+| O02 | Delivery admission / readiness | Evidence Runner + Skill | MOVE | LCK live-state admission; legacy Task Evidence Runner removed |
+| O03 | Ready → In Progress | Skill / project helper | REMOVE | LCK does not write this transition; Delivery Prepare admits either `Ready` or `In Progress`, and later LCK effects move the Task to `Review` |
+| O04 | Read leaf spec and Retrieval v2 context | Agent | KEEP | Agent semantic responsibility |
+| O05 | Triggered context expansion | Agent + Human Gate | KEEP | Agent/Human semantic responsibility |
+| O06 | Scoped design and implementation | Agent | KEEP | Agent semantic responsibility |
+| O07 | Targeted validation | Skill + Validation Runner | KEEP | Agent-requested development feedback; never lifecycle authority |
+| O08 | Commit-ready identity | Skill / Git | MOVE | LCK binds the validated tree/head before commit |
+| O09 | CI-equivalent validation | Validation Runner | KEEP | Validation Runner called by LCK formal phase gates |
+| O10 | Push validated head | Skill / Agent | MOVE | LCK bounded Delivery/Remediation effect |
+| O11 | PR resolve/create | PR helper + Skill | MOVE | LCK uses deterministic helper internally; Skill supplies no PR authority |
+| O12 | Check wait/read and interpretation | Skill + Runner | SIMPLIFY | LCK mechanical checks gate; semantic interpretation remains Agent-owned |
+| O13 | Semantic self-review | Agent + retired binder | SIMPLIFY | Agent semantic judgement only; durable `self_review.py` binder removed |
+| O14 | Delivery readiness snapshot | Evidence Runner + Skill | REMOVE | No formal cross-phase snapshot; historical evidence is audit-only |
+| O15 | Reviewed object identity lock | Review Skill + Runner | MOVE | LCK live Review target + invocation-local applicability guard |
+| O16 | Complete effective-diff inspection | Review Agent | KEEP | Fresh Review Agent semantic responsibility |
+| O17 | Review correctness / AC / risk judgement | Review Agent | KEEP | Fresh Review Agent semantic responsibility |
+| O18 | Review CI-equivalent validation | Review Skill + Runner | MOVE | LCK runs formal Review validation on exact isolated head |
+| O19 | Review recheck and stability | Runner + Review Skill | SIMPLIFY | Review Complete acquires one fresh snapshot and rejects `REVIEW_STALE_PR/HEAD/BASE/TASK/DIFF`; Merge Preflight independently rechecks the accepted receipt |
+| O20 | Review verdict and handoff | Review Agent + Skill | SIMPLIFY | PASS/FAIL semantic verdict; LCK records bounded result; no mechanical handoff authority |
+| O21 | Remediation admission | Delivery Skill + Runner | MOVE | Human-explicit `lck remediation prepare`; live mechanics + semantic findings only |
+| O22 | Repair and new head | Agent + Delivery Skill | MOVE | Agent repairs; LCK completion owns mechanical effects, then STOP before new Review |
+| O23 | Manual Squash Merge checkpoint | Maintainer | KEEP | Maintainer-only Squash Merge boundary |
+| O24 | Closeout read-only plan | Closeout Skill + Runner | MOVE | LCK closeout live-state eligibility |
+| O25 | Main sync and post-merge validation | Skill + Runner | MOVE | LCK bounded closeout synchronization + validation |
+| O26 | Lifecycle metadata convergence | Closeout Skill / GitHub | MOVE | LCK closeout effects after authoritative merged/closed state |
+| O27 | Exact Task branch cleanup | Closeout Skill | MOVE | LCK identity-proven cleanup effect; cleanup may remain pending |
+| O28 | Recovery after valid gate / drift | Skill + Agent | MOVE | LCK reacquires live facts; no lineage/snapshot recovery authority |
+| O29 | Feature child-set / completion mechanics | Feature Audit Skill + Agent | KEEP | Separate read-only Feature audit boundary; not Task lifecycle authority |
+| O30 | Repeated fact re-query / reformat | Agent / Skill ad hoc | REMOVE | One LCK Task resolver; historical audit queries do not control Task phases |
+| O31 | Homogeneous Agent command grouping | Agent orchestration | SIMPLIFY | Optional Agent ergonomics; never lifecycle authority |
+| O32 | Context Compiler beyond Retrieval v2 | No current owner | REMOVE | Not part of LCK v1 |
 
-## Task #159 Core baseline
+## Historical Task #159 core baseline (non-authoritative)
 
 `tools/agent_workflow/lck.py` provides three deterministic layers:
 
@@ -70,84 +67,100 @@ did not persist cross-phase authority, ignored CLOSED PRs when resolving the act
 PR, and exposed no commit/push/PR mutation. Task #160 intentionally extends only
 the Initial Delivery portion of that boundary.
 
-## Candidate boundary implemented by Task #160 (pre-activation)
+## Active Delivery boundary
 
-The candidate Initial Delivery path uses one LCK-owned sequence after activation:
+The active Initial Delivery path uses explicit operation boundaries rather than repeated
+full-state refresh:
 
-1. `DeliveryPreparer` resolves and prepares the Task workspace.
-2. `DeliveryCompleter` reads the current Task Critical Outcome, stages the candidate
-   tree, runs the bounded Critical Outcome verifier and repository formal validation,
-   and commits exactly the validated tree.
+1. `DeliveryPreparer` acquires one fresh Delivery Prepare snapshot and prepares the Task
+   workspace from that frozen authority.
+2. `DeliveryCompleter` is a new operation. It acquires one fresh Delivery Complete
+   snapshot, binds the required-check policy to the exact authoritative `main` base commit
+   (never the candidate checkout), reads the current Task Critical Outcome, stages the
+   candidate tree, runs the bounded Critical Outcome verifier and repository formal
+   validation, and commits exactly the validated tree.
 3. `EnsureRemoteBranchEffect` synchronizes only the resolved Task branch without force
-   push; divergence fails closed.
-4. `EnsureOpenPrEffect` re-resolves current identity and reuses or creates exactly one
-   non-Draft OPEN PR using the existing deterministic PR helper.
-5. `DeliveryChecksGate` waits boundedly for applicable checks; failed, pending, or
-   unknown checks stop before Project Status moves to `Review`.
-6. Final live verification proves the Task body/base stayed stable within the
-   operation, the final state is the same PR/head observed by the checks gate,
-   applicable checks remain successful, and local HEAD == remote Task branch ==
-   PR head before returning `READY_FOR_REVIEW`.
+   push and verifies the exact remote-ref postcondition; divergence fails closed.
+4. `EnsureOpenPrEffect` reuses or creates exactly one non-Draft OPEN PR from the frozen
+   operation identity and verifies only the exact PR postcondition.
+5. `DeliveryChecksGate` evaluates exact-head GitHub check results against the required
+   names derived from static jobs in `.github/workflows/ci.yml` at that immutable
+   trusted-base commit. A candidate edit to the CI workflow is future policy only.
+   Pending CI ends the
+   invocation; LCK does not poll waiting for external state to change.
+6. Bounded metadata effects use targeted postcondition verification. Delivery Complete
+   does not run a final full `LiveStateResolver` refresh; the next lifecycle invocation
+   acquires fresh authority before making its own decision.
 
-Until the maintainer merge boundary, #160 continues to use the pre-cutover
-Current Workflow for its own Delivery. The LCK path above is candidate behavior
-and is not retroactively treated as #160's lifecycle authority.
+The Task body carries a required `Critical Outcome` contract. Its verification target is
+one bounded `tests/...::test_...` pytest node id; Issue text cannot inject arbitrary shell
+commands. Operation snapshots are immutable within each invocation and never become
+cross-operation authority.
 
-The Task body now carries a required `Critical Outcome` contract. Its verification
-target is one bounded `tests/...::test_...` pytest node id; Issue text cannot inject
-arbitrary shell commands. Operation-local base/body/head guards are ephemeral and are
-reacquired on retry rather than persisted as cross-phase authority.
+The Initial Delivery, Review, Remediation, and Closeout Skills are semantic-only plus LCK
+entrypoint guidance. Historical Evidence operations may remain for audit material, but
+they are not formal lifecycle authorization paths. Merge remains a maintainer-only manual
+Squash Merge boundary.
 
-The Initial Delivery and explicit Remediation sections of `task-delivery-runner` are now
-semantic-only plus LCK entrypoint guidance. The Review Skill likewise receives its
-mechanical target only from LCK. The pre-cutover `review-remediation` Evidence Runner
-entry point may remain for historical compatibility/diagnostics, but it is no longer a
-formal lifecycle authorization path. Merge and closeout remain Human/later-task
-boundaries.
+## Review / Remediation boundary
 
-## Review / Remediation cutover implemented by Task #161
+The active Review path is:
 
-The active path is now:
-
-1. `review prepare <Task>` resolves the current OPEN PR, base/head, current Task
-   Contract, effective diff and checks from live authority; no expected SHA/PR input is
-   accepted.
-2. LCK creates a detached clean worktree for the reviewed head, runs formal Review
-   validation there, then removes implementation write bits before the semantic Agent
-   inspects it.
-3. A random `review_id` locates only the bounded prepare→complete applicability guard.
-   Completion reacquires live facts; a changed head/base produces
-   `REVIEW_STALE_HEAD` / `REVIEW_STALE_BASE` instead of accepting the verdict.
-4. PASS returns `READY_FOR_HUMAN_MERGE`; FAIL returns `STOP_REQUIRED`. Neither path
-   starts another lifecycle phase automatically.
-5. A failed Review record is diagnostic/audit state. Human-started Remediation uses its
+1. `review prepare <Task>` acquires one fresh Review Prepare snapshot containing the
+   current OPEN PR, base/head, current Task Contract, effective diff and checks; no
+   expected SHA/PR input is accepted.
+2. LCK creates a detached standalone temporary clone for the exact reviewed head without
+   registering or mutating source `.git/worktrees`, restores the clone origin to the real
+   remote, runs formal Review validation there, then seals the whole clone read-only before
+   the semantic Agent inspects it. Review Complete deletes the clone directly after recording
+   PASS / FAIL / STALE; interruption recovery owns only the temporary path.
+3. The semantic Review Agent judges only that sealed target.
+4. `review complete <Task> --review-id ...` is a **new LCK operation**. It acquires one
+   fresh Review Complete snapshot and compares current PR/head/base/Task Contract/effective
+   diff with the sealed reviewed identity. Changes return
+   `REVIEW_STALE_PR/HEAD/BASE/TASK/DIFF` and the semantic verdict is not accepted for the
+   current target.
+5. An applicable PASS returns `READY_FOR_MERGE_PREFLIGHT`; an applicable FAIL returns
+   `STOP_REQUIRED`. Neither path starts another write lifecycle phase automatically.
+6. After PASS, the Review Skill runs the separate read-only `merge preflight` operation.
+   Merge Preflight reacquires fresh authority and only then may return
+   `READY_FOR_HUMAN_MERGE` for the maintainer manual Squash Merge boundary.
+7. A failed Review record is diagnostic/audit state. Human-started Remediation uses its
    findings as semantic input, while `remediation prepare` independently reacquires the
    current Task/PR/head/base/workspace.
-6. `remediation complete` requires actual repair changes, reruns Critical Outcome and
+8. `remediation complete` requires actual repair changes, reruns Critical Outcome and
    formal Delivery validation, commits the exact validated tree, synchronizes the Task
-   branch, reuses the existing OPEN PR, waits for current checks, and returns
-   `READY_FOR_NEW_REVIEW` followed by STOP.
+   branch, reuses the existing OPEN PR, evaluates current operation checks, and returns
+   `READY_FOR_NEW_REVIEW` followed by STOP. Evidence that can only be produced by the
+   resulting repaired head or a separate provider/fresh Review remains pending for that
+   later Review acceptance boundary; it does not circularly block Remediation Complete.
 
-This cutover intentionally deletes the former formal dependence on bounded verified
-fact handoff, cross-phase freshness contracts, snapshot-derived Review target authority,
-and generalized drift categories. Historical evidence remains audit-only.
+This cutover intentionally deletes the former formal dependence on bounded verified fact
+handoff, cross-phase freshness contracts, snapshot-derived current authority, repeated
+nested resolution, and generalized drift categories. Historical evidence remains
+audit-only.
 
 ## Mainline activation and rollback procedure
 
-The candidate becomes the Initial Delivery lifecycle authority only after all of the
-following have occurred:
+The Task #163 cleanup is eligible for mainline activation only after all of the following have occurred:
 
 1. an independent Review of the current PR head passes;
 2. the maintainer performs the required Squash Merge;
-3. `main` is synchronized and the post-merge validation confirms the merged
-   LCK controller, provider-neutral Delivery Skill contract, and repository
-   workflow validators are coherent.
+3. `main` is synchronized and post-merge validation confirms the merged LCK
+   controller, provider-neutral Skills, and repository workflow validators.
 
 If activation or post-merge validation fails, the maintainer must stop further
-LCK Initial Delivery activation, record the failure, and revert the candidate
-merge as one controlled change. The pre-cutover Current Workflow remains the
-authority while the revert is validated. The maintainer then synchronizes
-`main`, reruns the relevant post-merge validation, and records the restored
-authority boundary before any later reactivation attempt. A later activation
-requires a new reviewed head and a fresh maintainer merge decision; no Agent or
-Delivery Skill may bypass this rollback boundary.
+activation, record the failure, and revert the candidate merge as one controlled
+change to the last reviewed/merged LCK v1 state. No Legacy Task control path is
+reactivated during rollback. The maintainer then synchronizes `main`, reruns the
+relevant post-merge validation, and records the restored LCK authority boundary.
+A later activation requires a new reviewed head and a fresh maintainer merge
+decision; no Agent or Skill may bypass this rollback boundary.
+
+The controlled rollback boundary is mechanically verified by
+`tests/tools/test_lck_delivery.py::test_lck_rollback_procedure_reverts_candidate_and_requires_fresh_review`.
+That regression creates a squash candidate in an isolated Git repository, executes one
+`git revert` after simulated activation failure, proves the restored main tree is clean
+and equal to the last reviewed state, then proves the old Review identity is rejected
+with `REVIEW_STALE_HEAD` for a fresh activation head. It does not inject a failure into
+the healthy live activation path.

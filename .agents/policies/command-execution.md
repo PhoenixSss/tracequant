@@ -10,18 +10,18 @@ Read the optional ignored `.agents/execution-profile.local.toml` when present.
 It may route only exact documented Runner invocations. Repository Rules and the
 Runner still validate full argv, cwd, repository, profile, and identity.
 
-## Fixed Runner commands
+## Deterministic workflow commands
 
-Normal Runner commands are:
+Normal lifecycle and validation commands are:
 
 ```text
-tools/agent_workflow/wsl2_github_evidence_runner.py <named-profile> <fixed-args>
+uv run --frozen python tools/agent_workflow/lck.py <phase> <operation> <task>
 tools/agent_workflow/wsl2_validation_runner.py <named-profile> <fixed-args>
 ```
 
 Run them from the current repository root on the WSL2 Linux filesystem. Do not
-wrap them in `python`, `bash -c`, `sh -c`, `uv run`, command substitution,
-pipelines, redirection, or a generic shell string.
+wrap them in `bash -c`, `sh -c`, command substitution, pipelines, redirection,
+or a generic shell string.
 
 The local profile may choose:
 
@@ -31,7 +31,7 @@ elevated-first  use the exact approved Runner argv when normal execution is know
 prompt          request approval
 ```
 
-A route is valid only for the exact Runner/profile/cwd contract. It cannot alter
+A route is valid only for the exact LCK/validation contract. It cannot alter
 Task/PR IDs, base/head SHAs, repository, output paths, or profile semantics.
 
 ## Failure classification
@@ -52,21 +52,36 @@ an equivalent direct command chain as fallback.
 
 ## Allowed local writes
 
-Runners may write exact bounded artifacts only under:
+Mutable artifact ownership is explicit; these roots are not interchangeable fallbacks:
 
 ```text
-.agents/evidence.local/
-.agents/validation.local/
+.agents/evidence.local/            # legacy/non-LCK Evidence Runner output
+.agents/validation.local/          # Validation Runner output in a writable execution workspace
+.workflow.local/lck/               # source-repository LCK runtime state and durable Review evidence
+$TMPDIR/tracequant-lck-review-*    # operation-owned standalone Review clones only
 ```
 
-These roots must be Git ignored. A known required write route should be correct
-on the first formal call; do not intentionally run a known-failing sandbox probe
-before an approved exact route.
+Repository-local roots must be Git ignored. During Independent Review, the **source
+repository** may write only under `.workflow.local/lck/`; it MUST NOT write source
+`.agents/evidence.local/`, source `.agents/validation.local/`, the tracked tree, or source
+Git metadata. Formal Review validation may create `.agents/validation.local/` **inside the
+standalone temporary clone** because that directory is part of the disposable validation
+workspace; evidence that must survive clone deletion is copied to
+`.workflow.local/lck/review-validation/` in the source repository before cleanup.
+
+Temporary clones are owned by the Review operation, live only until Review Complete (or
+failed/interrupted Prepare cleanup), and MUST NOT register or mutate source
+`.git/worktrees`. Creating, sealing, or removing the Review clone is expected to work in
+the normal sandbox and is not by itself a reason to elevate the LCK command. A known
+required write route should be correct on the first formal call; do not intentionally run
+a known-failing sandbox probe before an approved exact route.
 
 ## Git and GitHub boundaries
 
-Read-only Runner collection does not authorize writes. The active Skill must
-separately authorize every Git or GitHub mutation.
+LCK live-state collection and validation do not authorize writes by the Agent.
+The active Skill must separately authorize every Git or GitHub mutation; the
+LCK lifecycle command is the only formal mechanism allowed to perform the
+phase-owned effects.
 
 Always require explicit workflow authorization for:
 

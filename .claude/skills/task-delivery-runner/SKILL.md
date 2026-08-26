@@ -31,7 +31,19 @@ Failed Review ID: <REVIEW_ID>
 
 The failed `review_id` locates semantic findings only. LCK independently reacquires
 the current Task / PR / base / head / branch state; mechanical facts from the Review
-record are not write authorization.
+record are not write authorization. The originating workspace-local Review audit record
+is the default findings source. When intentionally switching clone or Agent runtime and
+that ignored local record is unavailable, the maintainer MAY provide the completed
+Review findings as an explicit semantic-only handoff:
+
+```bash
+uv run --frozen python tools/agent_workflow/lck.py remediation prepare <TASK> \
+  --review-id <FAILED_REVIEW_ID> --findings-file <COMPLETED_REVIEW_FINDINGS>
+```
+
+`--findings-file` never supplies PR/head/base/branch/checks authority and MUST NOT be
+used to synthesize or rewrite findings merely to obtain admission. Existing Codex/local
+record behavior remains the primary path.
 
 The Issue number is the primary key; the current Issue title is canonical.
 
@@ -207,29 +219,71 @@ uv run --frozen python tools/agent_workflow/lck.py remediation prepare <TASK> \
   --review-id <FAILED_REVIEW_ID>
 ```
 
-Proceed only on `READY_FOR_REMEDIATION`. LCK verifies that the record is a failed
-Independent Review, reads its findings as semantic input, reacquires the current OPEN
-non-Draft PR/head/base and Task branch, and selects/restores the current implementation
-workspace.
+Proceed only on `READY_FOR_REMEDIATION`. With the normal local-record path, LCK
+verifies the failed Review audit record and reads its findings. For an explicit
+cross-workspace/runtime handoff where that ignored audit record does not exist,
+`--findings-file` supplies only the already-completed semantic findings. In both cases LCK
+reacquires the current OPEN non-Draft PR/head/base and Task branch and selects/restores
+the current implementation workspace.
 
 Do not pass expected head/base/PR identity. If current live identity is ambiguous,
-diverged, missing, or unsafe, STOP; do not use the pre-cutover `review-remediation`
-Evidence Runner as a fallback.
+diverged, missing, or unsafe, STOP; do not use archived evidence snapshots or
+legacy command paths as a fallback.
 
 ### 2. Semantic repair
 
 Read the returned findings, confirm them against the current implementation, implement
-the smallest complete repair, and add regression coverage. If a finding requires a true
-scope/architecture/product decision, stop at Human Gate rather than silently expanding
-the Task.
+the smallest complete repair, and add regression coverage. Classify each finding by the
+boundary at which its evidence can truthfully exist:
+
+- implementation/config/docs/test defects that can be repaired on the current workspace
+  are Remediation work and must be addressed before completion;
+- a requirement whose evidence can only be produced **after the repaired candidate head
+  exists**, or by a **separate provider / fresh Independent Review invocation**, is a
+  deferred Review-acceptance item. It remains unsatisfied, but it is **not** a Human Gate
+  and **not** a prerequisite for `remediation complete`;
+- genuine scope/architecture/product ambiguity still stops at Human Gate rather than being
+  silently expanded.
+
+Do not fabricate deferred evidence and do not ask the maintainer to provide future-head
+provider/cross-provider receipts before the repaired head exists. If actual repair changes
+are ready, continue to LCK Remediation Complete and report the deferred acceptance item as
+pending for the next fresh Review. If **no repair change exists** and the only remaining
+item is external/future Review evidence, do not manufacture a commit merely to advance the
+lifecycle. Close the prepared Remediation session through the formal no-change terminal
+operation below, then obtain the external evidence for the unchanged head.
 
 The Agent may edit and run targeted development validation. It MUST NOT directly stage
 the final tree, commit, push, create/replace the PR, mutate lifecycle state, or start a
 new Review.
 
-### 3. LCK Remediation Complete
+### 3. LCK Remediation No Change
 
-After the repair is ready:
+When the formal Remediation role was entered but semantic inspection confirms that no
+implementation/config/docs/test repair is required, close that prepared session without
+changing the candidate:
+
+```bash
+uv run --frozen python tools/agent_workflow/lck.py remediation no-change <TASK> \
+  --review-id <FAILED_REVIEW_ID> \
+  --summary "<why no implementation change is required>"
+```
+
+Proceed only on `NO_IMPLEMENTATION_CHANGE`. LCK reacquires the current OPEN PR/head/base,
+requires the selected Task workspace to be clean and still exactly match the prepared
+Remediation target, writes a formal no-change receipt under `.workflow.local/lck/`, and
+releases the prepared Remediation session. It does **not** commit, push, create a new head,
+set `fresh-review-required`, or claim that deferred provider/cross-runtime acceptance is
+satisfied. A retry for the same unchanged target is idempotent and replays the prior
+receipt.
+
+This operation is also the deterministic recovery path for an older prepared session that
+was left open because the Skill correctly refused to manufacture a no-op commit. Do not
+manually delete or edit the session marker.
+
+### 4. LCK Remediation Complete
+
+After an actual repair is ready:
 
 ```bash
 uv run --frozen python tools/agent_workflow/lck.py remediation complete <TASK> \
@@ -243,6 +297,13 @@ LCK reuses the Task-2 Delivery effects for Critical Outcome, formal validation, 
 validated-tree commit, remote synchronization, checks, and final local/remote/PR head
 verification. Unlike Initial Delivery, Remediation must reuse existing OPEN PR state; it never
 creates a replacement PR.
+
+`remediation complete` gates the repaired implementation and the mechanics needed to create
+a stable new candidate head. It MUST NOT require provider-attributed implementation receipts,
+fresh cross-provider Review receipts, or other acceptance evidence that can only be
+truthfully produced by a separate session after that new head exists. Those requirements
+remain pending and MUST still block the later Independent Review PASS when the Task requires
+them. `READY_FOR_NEW_REVIEW` means only that the repaired head is ready to be reviewed.
 
 A successful result is:
 

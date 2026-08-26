@@ -39,11 +39,12 @@ uv run --frozen python tools/agent_workflow/lck.py review prepare <TASK>
 
 Proceed only on `READY_FOR_SEMANTIC_REVIEW`. Use the returned `review_id`, current
 Task Contract, current review target, validation/check state, and `review_root`.
-The `review_root` is a detached, clean, implementation-read-only worktree for the
-live-resolved head.
+The `review_root` is a detached, clean, implementation-read-only standalone temporary
+clone for the live-resolved head. The source tracked tree and source Git metadata remain
+read-only; only ignored LCK operation/evidence state may be written outside the clone.
 
-If LCK returns STOP or stale, do not fall back to Evidence Runner snapshots, expected
-SHAs, direct `gh` selection, or a Delivery handoff.
+If LCK returns STOP or stale, do not fall back to archived evidence snapshots,
+expected SHAs, direct `gh` selection, or a Delivery handoff.
 
 ## 2. Semantic Review
 
@@ -66,9 +67,16 @@ applicable. Delivery conclusions, old Review verdicts, and old remediation ratio
 not evidence.
 
 Findings use Blocking, High, Medium, Low, Nit. Blocking/High/Medium defects or unmet
-Task requirements produce FAIL.
+Task requirements produce FAIL. When the unmet requirement is provider-attributed,
+cross-provider, or otherwise can only be truthfully evidenced by a separate/fresh Review of
+the candidate head, report it explicitly as a **Review-acceptance evidence gap**. Do not
+word such a finding as a requirement to block the earlier Delivery/Remediation completion
+that creates the head being reviewed, and never suggest fabricating the receipt.
 
-## 3. Complete the same Review invocation
+## 3. Complete Review with a fresh applicability snapshot
+
+`review complete` is a new LCK operation. Submit the semantic verdict for the sealed
+Review Prepare target:
 
 PASS:
 
@@ -79,7 +87,7 @@ uv run --frozen python tools/agent_workflow/lck.py review complete <TASK> \
 ```
 
 FAIL: write the complete blocking findings to an ignored or temporary file outside the
-read-only implementation worktree, then:
+read-only standalone Review clone, then:
 
 ```bash
 uv run --frozen python tools/agent_workflow/lck.py review complete <TASK> \
@@ -88,20 +96,49 @@ uv run --frozen python tools/agent_workflow/lck.py review complete <TASK> \
   --findings-file <FINDINGS_FILE>
 ```
 
-LCK re-resolves the current target before accepting the verdict. A head/base change
-returns `REVIEW_STALE_HEAD` / `REVIEW_STALE_BASE`; stale Review output is not PASS and
-requires a new fresh Review invocation.
+Review Complete acquires current authority exactly once and compares it with the sealed
+Review Prepare target before accepting either verdict. A changed target returns an
+explicit stale result such as `REVIEW_STALE_HEAD`, `REVIEW_STALE_BASE`,
+`REVIEW_STALE_TASK`, or `REVIEW_STALE_DIFF`. A stale semantic verdict is not accepted as
+the current Review result; start a fresh Review Prepare for the new target.
 
-## 4. Report
+Current applicable PR checks must also still pass. Review Complete itself performs no
+nested/full-state refresh after its operation snapshot is frozen.
 
-On PASS, report `通过，可以人工合并` / `READY_FOR_HUMAN_MERGE`, the reviewed live head/base/diff, AC coverage,
-validation/checks, limitations, and that the workflow stopped at the maintainer manual
-Squash Merge boundary.
+A valid PASS returns `READY_FOR_MERGE_PREFLIGHT`, not direct merge readiness. FAIL returns
+`STOP_REQUIRED` and stops; do not start Remediation automatically.
+
+## 4. PASS-only merge preflight
+
+Only after Review Complete returns `READY_FOR_MERGE_PREFLIGHT`, run the next read-only LCK
+operation:
+
+```bash
+uv run --frozen python tools/agent_workflow/lck.py merge preflight <TASK>
+```
+
+Merge Preflight acquires a new fresh snapshot and independently verifies the accepted
+Review receipt against the current Task / PR / head / base, current required checks,
+blockers, and mergeability. It is intentionally a separate freshness boundary because
+state may change again after Review Complete.
+
+If Merge Preflight returns `READY_FOR_HUMAN_MERGE`, stop at the maintainer manual Squash
+Merge boundary. LCK and the Review Agent never merge.
+
+## 5. Report
+
+On PASS, report `通过，可以人工合并` only after Merge Preflight returns
+`READY_FOR_HUMAN_MERGE`. Include the reviewed head/base/diff, Review Complete
+applicability result, merge-preflight result, AC coverage, validation/checks, and any
+limitations.
+
+If Review Complete returns a stale result, report that the semantic verdict was not
+accepted for the current target and that a fresh Independent Review is required.
 
 On FAIL, report `不通过，需要修复`, the findings and evidence, the returned
 `STOP_REQUIRED`, and the failed `review_id` that the maintainer may explicitly use for
-Remediation while it remains the latest completed Review. Do not emit an automatic
-Delivery prompt and do not start Remediation.
+Remediation while it remains the latest completed Review. Do not run Merge Preflight,
+Do not emit an automatic Delivery prompt, and do not start Remediation.
 
 Independent Review never modifies implementation, submits a GitHub Review, merges,
 closes the Task, performs Closeout, or assesses Feature completion.

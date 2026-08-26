@@ -113,9 +113,10 @@ intent 无法可靠解析时：**不要猜**。回退到 explicit Skill-name fal
 
 ## 6. Delivery semantics
 
-Workflow-owned `uv` processes use `.workflow.local/uv-cache`. This is local
-runtime state and the directory is Git-ignored; an explicit `UV_CACHE_DIR`
-override remains supported.
+The project-level `uv.toml` directs canonical `uv` commands to
+`.workflow.local/uv-cache`. This is local runtime state and the directory is
+Git-ignored; an explicit `UV_CACHE_DIR` override remains supported. Workflow
+subprocesses continue to receive the same path through `build_workflow_env()`.
 
 - Task `Critical Outcome` 是正式 Delivery gate：LCK 从当前 Task body 读取结构化
   contract，使用固定 pytest verifier 执行真实 supported path。缺失、malformed、unsafe
@@ -151,8 +152,17 @@ override remains supported.
 
 - PR base = `main`，Squash-only merge policy 由 GitHub Ruleset 定义
   （本文件不重定义）。
-- CI（`.github/workflows/ci.yml`）运行 pytest / ruff / mypy；required checks
-  由 Ruleset 强制。
+- CI（`.github/workflows/ci.yml`）运行 pytest / ruff / mypy。LCK 所要求的
+  check 名称由 canonical CI workflow 中的静态 job 定义，并从 **exact trusted
+  base commit** 读取；不能读取调用者当前 checkout、未提交修改或 candidate
+  head 上的未来 workflow policy。LCK v1 对 dynamic job name / matrix job
+  fail closed。Delivery Complete 由当前 authoritative `main` policy 约束；
+  已有 PR 的 Review / Remediation / Merge
+  Preflight 由 exact PR base policy 约束。候选 head 对该配置的修改只在 merge
+  后成为后续 operation 的新 policy，不能降低它自身的验收门禁。GitHub
+  `statusCheckRollup` 只提供 exact PR head 上这些 check 的 live result。
+  GitHub Ruleset 可继续作为平台侧独立强制层，但 plan/permission-dependent
+  Required-Checks discovery API 不作为 LCK lifecycle authority。
 - PR 关联 `Closes #N` 仅当 maintainer 预期 merge 后 close。
 - merge 决策：passing Independent Review for current PR head
   + maintainer manual Squash Merge。
@@ -165,7 +175,7 @@ override remains supported.
 shared semantics 由 `docs/development/pr-review.md` 权威定义：
 fresh session、strict read-only、head lock、independent judgement、
 no Delivery mechanical authority inheritance、LCK live target resolution、
-invocation-local stale guard、PASS / FAIL、new head → fresh re-review。
+Review Prepare/Complete operation-boundary stale guard、PASS / FAIL、new head → fresh re-review。
 
 本文件只声明其在 lifecycle 中的位置：Review 在 CI checks 通过后、
 maintainer merge 前执行；Review FAIL 必须先 STOP，只有 Human 显式发起后
@@ -189,11 +199,25 @@ Issue comments（Retrieval v2 comments default-off 仍适用）。
 ## 10. Remediation after failed Review
 
 - Review FAIL → LCK 返回 `STOP_REQUIRED`，不得自动启动修复。
-- Human 显式提供当前 Task 最新 completed FAIL 的 `review_id` 启动 remediation；
-  Review record 中只有 findings 可作为 semantic input，current PR/head/base 必须由
-  LCK live reacquire。
+- Human 显式提供当前 Task completed FAIL 的 `review_id` 启动 remediation；
+  workspace-local Review record 中只有 findings 可作为 semantic input，current PR/head/base
+  必须由 LCK live reacquire。跨 clone / Agent runtime 切换导致该 ignored local record 不可用时，
+  Human 可额外提供该 completed Review 的 `--findings-file`；它仍然只是 semantic input，
+  不能提供任何机械 identity/authorization。
 - Implementation Agent 修复后由 LCK 完成 validation / commit / push / existing
   PR reuse，产生 new head，并在 `READY_FOR_NEW_REVIEW` 再次 STOP。
+- 如果正式进入 Remediation 后确认不存在 implementation repair，且只剩 external/future
+  Review evidence，必须调用 `remediation no-change` 形成 `NO_IMPLEMENTATION_CHANGE`
+  receipt 并释放 prepared session；不得制造空提交，也不得手工删除 session marker。该
+  operation 会 fresh reacquire 当前 PR/base/head，要求工作树 clean 且 candidate 未变化；
+  不 commit/push、不设置 `fresh-review-required`，也不声称 deferred evidence 已满足。
+- 只能在 repaired head 形成后、独立 provider 会话或 fresh Review 中真实产生的验收
+  evidence（例如 Task 显式要求的 provider-attributed / cross-provider receipts）不得作为
+  `remediation complete` 的循环前置条件；它们保持 pending，并在后续 Independent Review
+  acceptance 中继续 fail-closed。`READY_FOR_NEW_REVIEW` 不表示这些 evidence 已满足。
+- prepared Remediation session 未经 `remediation complete` 或 `remediation no-change`
+  正式终结时，新的 Review Prepare 必须 fail closed；不得让 Review 与未终结的
+  implementation session 交错，避免遗留 session 锁死后续 invocation。
 - successful remediation 设置 `fresh-review-required` negative boundary；在新的 Review
   verdict 被接受前不得再次 remediation。该 boundary 不携带 target authorization。
 - 任何新 commit 都需要 **fresh independent re-review**；不得复用旧 verdict。

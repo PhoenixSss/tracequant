@@ -92,7 +92,6 @@ these prompts for the documented Runner invocations, pre-authorize in
 {
   "permissions": {
     "allow": [
-      "Bash(tools/agent_workflow/wsl2_github_evidence_runner.py *)",
       "Bash(tools/agent_workflow/wsl2_validation_runner.py *)"
     ]
   }

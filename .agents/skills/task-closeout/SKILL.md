@@ -53,12 +53,11 @@ current Review PASS, blockers, and mergeability. It returns
 READY_FOR_HUMAN_MERGE; it has no automatic merge path. The maintainer must
 perform the manual Squash Merge.
 
-closeout-readonly and workflow-closeout remain bounded validation/evidence
-interfaces where the repository runtime requires them; they are not a
-substitute for LCK live-state resolution or write authority. The historical
-eligible-under-capability-limited-policy state remains a reported limitation,
-not permission to broaden cleanup. The compatibility interfaces are backed by
-wsl2_github_evidence_runner.py, wsl2_validation_runner.py, and recheck.
+LCK is the only Task lifecycle control authority. The historical Evidence
+snapshot and closeout interfaces are audit material only; they are not a
+substitute for LCK live-state resolution, phase eligibility, or write
+authority. The historical eligible-under-capability-limited-policy state
+remains a reported limitation, not permission to broaden cleanup.
 
 ## LCK closeout contract
 

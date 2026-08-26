@@ -12,6 +12,8 @@ branch/PR identity is workflow authority.
 from __future__ import annotations
 
 import argparse
+import copy
+import fcntl
 import hashlib
 import json
 import os
@@ -20,9 +22,10 @@ import shutil
 import stat
 import sys
 import tempfile
-import time
 import unicodedata
 import uuid
+
+import yaml
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -53,20 +56,23 @@ from workflow_common import (
     print_json,
     read_json_file,
     read_json_text,
-    sha256_json,
+    safe_text,
+    sha256_json,  # noqa: F401
+    stderr_tail,
 )
 from workflow_evidence import (
+    _find_project_status,
     _git_snapshot,
-    _issue_view,
+    _issue_view_with_contract,
     _normalize_checks,
     _relationship_snapshot,
     _formal_blockers_gate,
-    _required_checks,
     _repository_slug,
 )
 
 
 BASE_BRANCH: Final = "main"
+REQUIRED_CHECKS_WORKFLOW: Final = ".github/workflows/ci.yml"
 LCK_SCHEMA_VERSION: Final = 1
 TASK_BRANCH_PATTERN: Final = re.compile(
     r"^(?:task/(?P<slash>\d+)(?:-.+)?|task-(?P<dash>\d+)(?:-.+)?|(?P<legacy>\d+)-.+)$"
@@ -84,7 +90,9 @@ class Phase(StrEnum):
     DELIVERY_PREPARE = "Delivery Prepare"
     DELIVERY_COMPLETE = "Delivery Complete"
     REVIEW_PREPARE = "Review Prepare"
+    REVIEW_COMPLETE = "Review Complete"
     REMEDIATION_PREPARE = "Remediation Prepare"
+    REMEDIATION_NO_CHANGE = "Remediation No Change"
     REMEDIATION_COMPLETE = "Remediation Complete"
     CLOSEOUT = "Closeout"
 
@@ -99,7 +107,7 @@ class LckStopError(WorkflowToolError):
 
 
 class ReviewStaleError(LckStopError):
-    """The live PR target changed during one bounded Review invocation."""
+    """The reviewed target is no longer current at a later operation boundary."""
 
     def __init__(self, code: str, detail: str) -> None:
         self.code = code
@@ -154,15 +162,24 @@ def _is_clean_current_main(git: Mapping[str, Any]) -> bool:
     """Return whether a new Task branch can safely be based on current main."""
     head_sha = git.get("head_sha")
     local_main_sha = git.get("local_main_sha")
-    origin_main_sha = git.get("origin_main_sha")
+    remote_main_sha = _authoritative_remote_main_sha(git)
     return (
         git.get("branch") == BASE_BRANCH
         and git.get("clean") is True
         and is_sha(head_sha)
         and is_sha(local_main_sha)
-        and is_sha(origin_main_sha)
-        and head_sha == local_main_sha == origin_main_sha
+        and is_sha(remote_main_sha)
+        and head_sha == local_main_sha == remote_main_sha
     )
+
+
+def _authoritative_remote_main_sha(git: Mapping[str, Any]) -> str | None:
+    """Return remote main authority, with a test/legacy input compatibility fallback."""
+    remote_main_sha = git.get("remote_main_sha")
+    if isinstance(remote_main_sha, str):
+        return remote_main_sha
+    legacy_sha = git.get("origin_main_sha")
+    return legacy_sha if isinstance(legacy_sha, str) else None
 
 
 def _remote_refs(stdout: str) -> dict[str, str]:
@@ -224,6 +241,7 @@ class LiveState:
     stop_reasons: tuple[str, ...] = ()
     warnings: tuple[Mapping[str, Any], ...] = ()
     merged_pr: Mapping[str, Any] | None = None
+    task_contract: Mapping[str, Any] | None = None
 
     @property
     def project_status(self) -> str | None:
@@ -252,6 +270,19 @@ class LiveState:
                     "task_number": self.task_number,
                     "repository": self.repository,
                     "issue": self.issue,
+                    "task_contract": (
+                        {
+                            "number": self.task_contract.get("number"),
+                            "title": self.task_contract.get("title"),
+                            "url": self.task_contract.get("url"),
+                            "body_sha256": self.task_contract.get("body_sha256"),
+                            "critical_outcome": self.task_contract.get(
+                                "critical_outcome"
+                            ),
+                        }
+                        if isinstance(self.task_contract, Mapping)
+                        else None
+                    ),
                     "relationships": self.relationships,
                     "git": self.git,
                     "target_branch": self.target_branch,
@@ -271,6 +302,32 @@ class LiveState:
                 }
             ),
         )
+
+
+@dataclass(frozen=True)
+class OperationSnapshot:
+    """Immutable authoritative inputs for one LCK lifecycle operation.
+
+    ``state`` is acquired exactly once at the operation boundary. Optional
+    phase-specific deterministic facts (currently the exact-base required-check
+    contract) are bound in the same bounded start window, after immutable Git
+    objects are materialized when Review isolation requires it. Downstream
+    helpers consume this object; they do not refresh Git/GitHub authority.
+    """
+
+    operation: str
+    state: LiveState
+    required_checks: Mapping[str, Any] | None = None
+    acquisition_warnings: tuple[Mapping[str, Any], ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "operation": self.operation,
+            "state": self.state.to_dict(),
+            "required_checks": _jsonable(self.required_checks),
+            "acquisition_warnings": _jsonable(self.acquisition_warnings),
+        }
 
 
 class LiveStateResolver:
@@ -489,25 +546,32 @@ class LiveStateResolver:
         reasons: list[str] = []
         repository = _repository_slug(self.runner, self.repository, warnings)
         issue: Mapping[str, Any] | None = None
+        task_contract: Mapping[str, Any] | None = None
         relationships: Mapping[str, Any] = {"available": False}
         if repository is not None:
-            issue = _issue_view(self.runner, repository, task_number, warnings)
+            issue, task_contract = _issue_view_with_contract(
+                self.runner,
+                repository,
+                task_number,
+                warnings,
+            )
             relationships = _relationship_snapshot(
                 self.runner, repository, task_number, warnings
             )
         else:
             reasons.append("repository identity unavailable")
 
-        git_warning_count = len(warnings)
-        git = _git_snapshot(self.runner, warnings)
-        if len(warnings) > git_warning_count:
-            reasons.append("local Git snapshot contains unavailable facts")
-        if git.get("origin_fetch") != "pass":
-            reasons.append("current origin/main facts are unavailable")
-        if not is_sha(git.get("local_main_sha")) or not is_sha(
-            git.get("origin_main_sha")
-        ):
-            reasons.append("current main identity is unavailable")
+        git = _git_snapshot(self.runner, warnings, read_only_local_refs=True)
+        if not isinstance(git.get("branch"), str) or not git.get("branch"):
+            reasons.append("current local branch is unavailable")
+        if not is_sha(git.get("head_sha")):
+            reasons.append("current local HEAD is unavailable")
+        if not is_sha(git.get("local_main_sha")):
+            reasons.append("local main ref unavailable")
+        if not is_sha(_authoritative_remote_main_sha(git)):
+            reasons.append("remote main query failed")
+        if git.get("clean") not in {True, False}:
+            reasons.append("current worktree cleanliness is unavailable")
         if issue is None:
             reasons.append("Task metadata unavailable")
         if relationships.get("available") is not True:
@@ -646,6 +710,7 @@ class LiveStateResolver:
             task_number=task_number,
             repository=repository,
             issue=issue,
+            task_contract=task_contract,
             relationships=relationships,
             git=git,
             target_branch=target_branch,
@@ -665,55 +730,305 @@ class LiveStateResolver:
         )
 
 
-def _live_task_contract(
-    resolver: LiveStateResolver, task_number: int
+def _parse_required_checks_workflow(
+    text: str,
+    *,
+    source_sha: str,
 ) -> dict[str, Any]:
-    """Read the current Task body directly from GitHub for semantic consumers."""
-    state = resolver.resolve(task_number)
-    if state.status is not ResolutionStatus.RESOLVED or state.repository is None:
-        raise LckStopError("cannot read Task Contract from unresolved live state")
-    result = resolver.runner.run(
-        [
-            "gh",
-            "issue",
-            "view",
-            str(task_number),
-            "--repo",
-            state.repository,
-            "--json",
-            "number,title,body,state,url",
-        ],
-        command_id="lck-task-contract-live",
-    )
-    if result.returncode != 0 or not result.stdout.strip():
+    """Derive required GitHub check contexts from canonical CI at one base commit.
+
+    Required-check policy is lifecycle control policy, so a candidate must not be
+    able to weaken the checks that authorize its own transition. LCK therefore
+    reads the canonical CI workflow from the immutable trusted base commit.
+    Only statically named, non-matrix jobs are supported in v1; anything dynamic
+    fails closed rather than guessing the check-run identity.
+    """
+
+    if not is_sha(source_sha):
+        raise LckStopError("required PR check policy source SHA is invalid")
+    try:
+        parsed = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
         raise LckStopError(
-            "current Task Contract is unavailable: "
-            + (result.stderr.strip() or f"exit {result.returncode}")
+            "required PR check policy is malformed at trusted base "
+            f"{source_sha}: {REQUIRED_CHECKS_WORKFLOW}: {exc}"
+        ) from exc
+    if not isinstance(parsed, Mapping):
+        raise LckStopError(
+            "required PR check policy is unresolved at trusted base "
+            f"{source_sha}: {REQUIRED_CHECKS_WORKFLOW} must contain a mapping"
         )
-    value = read_json_text(result.stdout, field="lck-task-contract-live")
-    if not isinstance(value, Mapping):
-        raise LckStopError("current Task Contract result is not an object")
-    body = value.get("body")
-    if not isinstance(body, str):
-        raise LckStopError("current Task Contract body is unavailable")
-    body_sha256 = sha256_json({"body": body})
-    live_issue = state.issue
-    if (
-        not isinstance(live_issue, Mapping)
-        or live_issue.get("body_sha256") != body_sha256
-        or value.get("number") != task_number
-        or value.get("title") != live_issue.get("title")
-        or str(value.get("state", "")).upper() != "OPEN"
-    ):
-        raise LckStopError("Task Contract changed while being acquired")
-    return {
-        "number": task_number,
-        "title": value.get("title"),
-        "url": value.get("url"),
-        "body": body,
-        "body_sha256": body_sha256,
-        "critical_outcome": live_issue.get("critical_outcome"),
+    jobs = parsed.get("jobs")
+    if not isinstance(jobs, Mapping) or not jobs:
+        raise LckStopError(
+            "required PR check policy is unresolved at trusted base "
+            f"{source_sha}: {REQUIRED_CHECKS_WORKFLOW} must define static jobs"
+        )
+
+    names: list[str] = []
+    job_bindings: list[dict[str, str]] = []
+    for raw_job_id, raw_job in jobs.items():
+        if not isinstance(raw_job_id, str) or not raw_job_id.strip():
+            raise LckStopError(
+                "required PR check policy is invalid: CI job id must be a non-empty string"
+            )
+        job_id = raw_job_id.strip()
+        if not isinstance(raw_job, Mapping):
+            raise LckStopError(
+                f"required PR check policy is invalid: CI job {job_id!r} is malformed"
+            )
+        strategy = raw_job.get("strategy")
+        if isinstance(strategy, Mapping) and "matrix" in strategy:
+            raise LckStopError(
+                "required PR check policy is unresolved: matrix CI jobs are not "
+                f"supported by LCK v1 ({job_id!r})"
+            )
+        raw_name = raw_job.get("name")
+        if raw_name is None:
+            check_name = job_id
+        elif isinstance(raw_name, str) and raw_name.strip():
+            check_name = raw_name.strip()
+        else:
+            raise LckStopError(
+                f"required PR check policy is invalid: CI job {job_id!r} has an invalid name"
+            )
+        if "${{" in check_name:
+            raise LckStopError(
+                "required PR check policy is unresolved: dynamic CI job names are not "
+                f"supported by LCK v1 ({job_id!r})"
+            )
+        if check_name in names:
+            raise LckStopError(
+                f"required PR check policy is invalid: duplicate check {check_name!r}"
+            )
+        names.append(check_name)
+        job_bindings.append({"job_id": job_id, "check_name": check_name})
+
+    contract_payload = {
+        "workflow": REQUIRED_CHECKS_WORKFLOW,
+        "required-checks": names,
     }
+    return {
+        "configuration": "repository-base-ci",
+        "source": f"git:{source_sha}:{REQUIRED_CHECKS_WORKFLOW}:jobs",
+        "source_sha": source_sha,
+        "workflow_path": REQUIRED_CHECKS_WORKFLOW,
+        "contract_sha256": sha256_json(contract_payload),
+        "jobs": job_bindings,
+        "contexts": {
+            "items": names,
+            "count": len(names),
+            "truncated": False,
+        },
+    }
+
+
+def _repository_required_checks_at_commit(
+    resolver: LiveStateResolver,
+    source_sha: str,
+    *,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    """Read required checks from canonical CI at an exact trusted-base commit.
+
+    ``repo_root`` may be the source repository or an isolated Review clone.
+    Working-tree files and candidate-head policy are deliberately ignored.
+    """
+
+    if not is_sha(source_sha):
+        raise LckStopError("required PR check policy trusted base is unavailable")
+    result = resolver.runner.run(
+        ["git", "show", f"{source_sha}:{REQUIRED_CHECKS_WORKFLOW}"],
+        command_id="lck-required-check-policy-from-base-ci",
+        cwd=repo_root or resolver.repo_root,
+        env={"GIT_OPTIONAL_LOCKS": "0"},
+    )
+    if result.returncode != 0:
+        detail = (
+            result.stderr.strip()
+            or result.stdout.strip()
+            or f"exit {result.returncode}"
+        )
+        raise LckStopError(
+            "required PR check policy is unavailable at trusted base "
+            f"{source_sha}: {REQUIRED_CHECKS_WORKFLOW}: {detail}"
+        )
+    return _parse_required_checks_workflow(result.stdout, source_sha=source_sha)
+
+
+def _required_checks_policy_source_sha(
+    state: LiveState,
+    operation: str,
+) -> str:
+    """Return the immutable base commit that governs required-check policy.
+
+    Candidate heads cannot authorize their own checks.  Delivery is governed by
+    current authoritative main; operations on an existing PR are governed by the
+    exact PR base commit.
+    """
+
+    if operation == Phase.DELIVERY_COMPLETE.value:
+        source_sha = _authoritative_remote_main_sha(state.git)
+    else:
+        pr = state.open_pr
+        source_sha = _pr_base_sha(pr) if isinstance(pr, Mapping) else None
+    if not is_sha(source_sha):
+        raise LckStopError(
+            f"required PR check policy trusted base is unavailable for {operation}"
+        )
+    return str(source_sha)
+
+
+def _required_check_contract(required: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """Validate and return the exact-base-bound required-check set.
+
+    Legacy GitHub-discovery states and mutable working-tree configuration are
+    diagnostic inputs only and can never authorize an LCK lifecycle effect.
+    """
+
+    if not isinstance(required, Mapping):
+        raise LckStopError("required PR check policy was not acquired")
+    if required.get("configuration") != "repository-base-ci":
+        raise LckStopError(
+            "required PR check policy is unresolved; LCK requires the "
+            "exact trusted-base canonical-CI check contract before lifecycle effects"
+        )
+    source_sha = required.get("source_sha")
+    if not is_sha(source_sha):
+        raise LckStopError("required PR check policy source SHA is malformed")
+    contract_sha256 = required.get("contract_sha256")
+    if (
+        not isinstance(contract_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", contract_sha256) is None
+    ):
+        raise LckStopError("required PR check policy contract hash is malformed")
+    contexts = required.get("contexts")
+    if not isinstance(contexts, Mapping):
+        raise LckStopError("required PR check policy contexts are malformed")
+    items = contexts.get("items")
+    if not isinstance(items, list):
+        raise LckStopError("required PR check policy items are malformed")
+    names: list[str] = []
+    for item in items:
+        if not isinstance(item, str) or not item:
+            raise LckStopError(
+                "required PR check policy contains an invalid check name"
+            )
+        if item in names:
+            raise LckStopError(
+                f"required PR check policy contains duplicate check {item!r}"
+            )
+        names.append(item)
+    workflow_path = required.get("workflow_path")
+    if workflow_path != REQUIRED_CHECKS_WORKFLOW:
+        raise LckStopError("required PR check policy workflow path is malformed")
+    if (
+        sha256_json({"workflow": REQUIRED_CHECKS_WORKFLOW, "required-checks": names})
+        != contract_sha256
+    ):
+        raise LckStopError("required PR check policy contract hash does not match")
+    return tuple(names)
+
+
+def _required_check_contract_for_snapshot(
+    snapshot: OperationSnapshot,
+) -> tuple[str, ...]:
+    """Validate that required-check policy is bound to this snapshot's base."""
+
+    required = snapshot.required_checks
+    names = _required_check_contract(required)
+    required_mapping = cast(Mapping[str, Any], required)
+    expected_sha = _required_checks_policy_source_sha(
+        snapshot.state, snapshot.operation
+    )
+    if required_mapping.get("source_sha") != expected_sha:
+        raise LckStopError(
+            "required PR check policy is not bound to the operation trusted base: "
+            "expected "
+            f"{expected_sha}, got "
+            f"{required_mapping.get('source_sha') or 'unavailable'}"
+        )
+    return names
+
+
+class OperationSnapshotBuilder:
+    """Acquire one phase-specific authoritative snapshot at operation entry."""
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+
+    def acquire(
+        self,
+        task_number: int,
+        *,
+        operation: str,
+        include_required_checks: bool = False,
+    ) -> OperationSnapshot:
+        state = copy.deepcopy(self.resolver.resolve(task_number))
+        snapshot = OperationSnapshot(
+            operation=operation,
+            state=state,
+            required_checks=None,
+            acquisition_warnings=(),
+        )
+        if include_required_checks:
+            snapshot = self.bind_required_checks(snapshot)
+        return snapshot
+
+    def bind_required_checks(
+        self,
+        snapshot: OperationSnapshot,
+        *,
+        repo_root: Path | None = None,
+    ) -> OperationSnapshot:
+        """Bind one snapshot to the policy stored at its immutable trusted base.
+
+        This method never re-resolves Git/GitHub state.  ``repo_root`` is only a
+        repository object source; Review may pass its standalone clone after the
+        exact base/head objects have been materialized there.
+        """
+
+        if snapshot.required_checks is not None:
+            _required_check_contract(snapshot.required_checks)
+            return snapshot
+        source_sha = _required_checks_policy_source_sha(
+            snapshot.state, snapshot.operation
+        )
+        required = _repository_required_checks_at_commit(
+            self.resolver,
+            source_sha,
+            repo_root=repo_root,
+        )
+        _required_check_contract(required)
+        return OperationSnapshot(
+            operation=snapshot.operation,
+            state=snapshot.state,
+            required_checks=required,
+            acquisition_warnings=snapshot.acquisition_warnings,
+        )
+
+
+def _task_contract_from_state(state: LiveState) -> dict[str, Any]:
+    """Return the Task contract captured by the operation-start live snapshot."""
+    if state.status is not ResolutionStatus.RESOLVED:
+        raise LckStopError("cannot read Task Contract from unresolved live state")
+    value = state.task_contract
+    if not isinstance(value, Mapping):
+        raise LckStopError("current Task Contract is unavailable in operation snapshot")
+    body = value.get("body")
+    body_sha256 = value.get("body_sha256")
+    if not isinstance(body, str) or not isinstance(body_sha256, str):
+        raise LckStopError("current Task Contract body is unavailable")
+    issue = state.issue
+    if (
+        not isinstance(issue, Mapping)
+        or issue.get("body_sha256") != body_sha256
+        or value.get("number") != state.task_number
+        or value.get("title") != issue.get("title")
+        or str(issue.get("state", "")).upper() != "OPEN"
+    ):
+        raise LckStopError("Task Contract is inconsistent inside operation snapshot")
+    return dict(value)
 
 
 @dataclass(frozen=True)
@@ -776,7 +1091,9 @@ class PhaseEligibilityResolver:
                 # partial invocation.
                 Phase.DELIVERY_COMPLETE: {"Ready", "In Progress", "Review"},
                 Phase.REVIEW_PREPARE: {"Review", "In Progress"},
+                Phase.REVIEW_COMPLETE: {"Review", "In Progress"},
                 Phase.REMEDIATION_PREPARE: {"Review"},
+                Phase.REMEDIATION_NO_CHANGE: {"Review"},
                 Phase.REMEDIATION_COMPLETE: {"Review"},
                 Phase.CLOSEOUT: {
                     "Inbox",
@@ -854,15 +1171,23 @@ class PhaseEligibilityResolver:
                 "ensure_open_pr",
                 "set_review_status",
             )
-        elif phase is Phase.REVIEW_PREPARE:
+        elif phase in {Phase.REVIEW_PREPARE, Phase.REVIEW_COMPLETE}:
             if state.open_pr is None:
                 reasons.append("no current OPEN PR")
             elif state.open_pr.get("isDraft") is not False:
-                reasons.append("Review Prepare requires a non-Draft OPEN PR")
+                reasons.append(f"{phase.value} requires a non-Draft OPEN PR")
             if state.project_status not in {"Review", "In Progress"}:
-                reasons.append("Task is not eligible for Review Prepare")
-            capabilities = ("prepare_read_only_review_context",)
-        elif phase in {Phase.REMEDIATION_PREPARE, Phase.REMEDIATION_COMPLETE}:
+                reasons.append(f"Task is not eligible for {phase.value}")
+            capabilities = (
+                ("prepare_read_only_review_context",)
+                if phase is Phase.REVIEW_PREPARE
+                else ("accept_semantic_review_verdict",)
+            )
+        elif phase in {
+            Phase.REMEDIATION_PREPARE,
+            Phase.REMEDIATION_NO_CHANGE,
+            Phase.REMEDIATION_COMPLETE,
+        }:
             if state.open_pr is None:
                 reasons.append("no current OPEN PR")
             elif state.open_pr.get("isDraft") is not False:
@@ -873,8 +1198,8 @@ class PhaseEligibilityResolver:
             if not is_sha(pr_head):
                 reasons.append("current OPEN PR head OID is unavailable")
             pr_base = state.open_pr.get("baseRefOid") if state.open_pr else None
-            origin_main = state.git.get("origin_main_sha")
-            if not is_sha(pr_base) or not is_sha(origin_main) or pr_base != origin_main:
+            remote_main = _authoritative_remote_main_sha(state.git)
+            if not is_sha(pr_base) or not is_sha(remote_main) or pr_base != remote_main:
                 reasons.append("current OPEN PR base must match current origin/main")
             if state.remote_task_oid != pr_head:
                 reasons.append("remote Task branch must match current OPEN PR head")
@@ -884,17 +1209,21 @@ class PhaseEligibilityResolver:
                 capabilities = ("prepare_task_workspace", "load_review_findings")
             else:
                 if state.local_task_branch is None:
-                    reasons.append("Remediation Complete requires a local Task branch")
+                    reasons.append(f"{phase.value} requires a local Task branch")
                 if state.git.get("branch") != state.target_branch:
                     reasons.append(
-                        "Remediation Complete requires the resolved Task branch selected"
+                        f"{phase.value} requires the resolved Task branch selected"
                     )
                 capabilities = (
-                    "verify_critical_outcome",
-                    "run_formal_validation",
-                    "commit_current_tree",
-                    "ensure_remote_branch",
-                    "reuse_open_pr",
+                    ("close_no_change_remediation",)
+                    if phase is Phase.REMEDIATION_NO_CHANGE
+                    else (
+                        "verify_critical_outcome",
+                        "run_formal_validation",
+                        "commit_current_tree",
+                        "ensure_remote_branch",
+                        "reuse_open_pr",
+                    )
                 )
         else:
             if state.merged is not True:
@@ -917,8 +1246,12 @@ class DeliveryContext:
     branch: str
     base_sha: str | None
     action: str
-    state: LiveState
+    operation_snapshot: OperationSnapshot
     eligibility: PhaseDecision
+
+    @property
+    def state(self) -> LiveState:
+        return self.operation_snapshot.state
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -929,7 +1262,7 @@ class DeliveryContext:
             "branch": self.branch,
             "base_sha": self.base_sha,
             "action": self.action,
-            "state": self.state.to_dict(),
+            "operation_snapshot": self.operation_snapshot.to_dict(),
             "eligibility": self.eligibility.to_dict(),
         }
 
@@ -944,6 +1277,7 @@ class DeliveryPreparer:
         eligibility: PhaseEligibilityResolver | None = None,
     ) -> None:
         self.resolver = resolver
+        self.snapshots = OperationSnapshotBuilder(resolver)
         self.eligibility = eligibility or PhaseEligibilityResolver()
 
     def _run_git(self, args: Sequence[str], command_id: str) -> None:
@@ -957,8 +1291,33 @@ class DeliveryPreparer:
                 f"{result.stderr.strip() or result.stdout.strip()}"
             )
 
+    def _verify_workspace(self, branch: str, expected_head: str | None) -> None:
+        current = self.resolver.runner.run(
+            ["git", "branch", "--show-current"],
+            command_id="lck-delivery-prepare-post-branch",
+        )
+        head = self.resolver.runner.run(
+            ["git", "rev-parse", "HEAD"],
+            command_id="lck-delivery-prepare-post-head",
+        )
+        if (
+            current.returncode != 0
+            or current.stdout.strip() != branch
+            or head.returncode != 0
+            or not is_sha(head.stdout.strip())
+            or (expected_head is not None and head.stdout.strip() != expected_head)
+        ):
+            raise LckStopError(
+                "workspace postcondition failed: selected branch/head is not the "
+                "operation snapshot target"
+            )
+
     def prepare(self, task_number: int) -> DeliveryContext:
-        state = self.resolver.resolve(task_number)
+        snapshot = self.snapshots.acquire(
+            task_number,
+            operation=Phase.DELIVERY_PREPARE.value,
+        )
+        state = snapshot.state
         decision = self.eligibility.resolve(state, Phase.DELIVERY_PREPARE)
         if not decision.eligible:
             raise LckStopError(
@@ -1006,33 +1365,22 @@ class DeliveryPreparer:
             )
             action = "created-from-main"
 
-        final_state = self.resolver.resolve(task_number)
-        if (
-            final_state.status is not ResolutionStatus.RESOLVED
-            or final_state.git.get("branch") != branch
-        ):
-            raise LckStopError(
-                "workspace postcondition failed: current live branch is not the "
-                "resolved Task branch"
-            )
-        final_decision = self.eligibility.resolve(final_state, Phase.DELIVERY_PREPARE)
-        if not final_decision.eligible:
-            raise LckStopError(
-                "workspace postcondition is no longer eligible: "
-                + "; ".join(final_decision.reasons)
-            )
+        expected_head = (
+            state.local_task_head
+            if local_exists
+            else state.remote_task_oid
+            if state.remote_task_branch is not None
+            else base_sha
+        )
+        self._verify_workspace(branch, expected_head)
         return DeliveryContext(
             task_number=task_number,
-            repository=final_state.repository,
+            repository=state.repository,
             branch=branch,
-            base_sha=(
-                final_state.git.get("local_main_sha")
-                if isinstance(final_state.git.get("local_main_sha"), str)
-                else None
-            ),
+            base_sha=base_sha if isinstance(base_sha, str) else None,
             action=action,
-            state=final_state,
-            eligibility=final_decision,
+            operation_snapshot=snapshot,
+            eligibility=decision,
         )
 
 
@@ -1104,6 +1452,26 @@ class FormalValidationGate:
 
 
 @dataclass(frozen=True)
+class ReviewTargetRefs:
+    """Authoritative Review target facts acquired before repository materialization."""
+
+    task_number: int
+    pr_number: int
+    base_sha: str
+    head_sha: str
+    task_body_sha256: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "task_number": self.task_number,
+            "pr_number": self.pr_number,
+            "base_sha": self.base_sha,
+            "head_sha": self.head_sha,
+            "task_body_sha256": self.task_body_sha256,
+        }
+
+
+@dataclass(frozen=True)
 class ReviewIdentity:
     task_number: int
     pr_number: int
@@ -1127,12 +1495,11 @@ class ReviewIdentity:
         }
 
 
-def _review_identity(
-    resolver: LiveStateResolver,
+def _review_target_refs(
     state: LiveState,
     task_contract: Mapping[str, Any],
-) -> ReviewIdentity:
-    """Bind one Review invocation to the live PR object without cross-phase input."""
+) -> ReviewTargetRefs:
+    """Extract immutable Git/GitHub identities without requiring local Git objects."""
     pr = state.open_pr
     if not isinstance(pr, Mapping):
         raise LckStopError("Review target has no current OPEN PR")
@@ -1146,10 +1513,34 @@ def _review_identity(
         raise LckStopError("Review target base/head identity is unavailable")
     if not isinstance(task_body_sha256, str) or not task_body_sha256:
         raise LckStopError("Review target Task Contract identity is unavailable")
+    return ReviewTargetRefs(
+        task_number=state.task_number,
+        pr_number=pr_number,
+        base_sha=str(base_sha),
+        head_sha=str(head_sha),
+        task_body_sha256=task_body_sha256,
+    )
 
+
+def _review_identity(
+    resolver: LiveStateResolver,
+    state: LiveState,
+    task_contract: Mapping[str, Any],
+    *,
+    repo_root: Path,
+) -> ReviewIdentity:
+    """Derive the effective diff from frozen refs inside a materialized repository.
+
+    GitHub supplies the authoritative PR/base/head/Task identities.  Merge-base,
+    effective diff, and changed-file inventory are derived facts and therefore
+    must be computed only after those exact commits exist in the isolated Review
+    clone.  The source repository is not required to contain the current PR head.
+    """
+    target = _review_target_refs(state, task_contract)
     merge_base = resolver.runner.run(
-        ["git", "merge-base", str(base_sha), str(head_sha)],
+        ["git", "merge-base", target.base_sha, target.head_sha],
         command_id="lck-review-merge-base",
+        cwd=repo_root,
     )
     if merge_base.returncode != 0 or not is_sha(merge_base.stdout.strip()):
         raise LckStopError("Review effective-diff merge base is unavailable")
@@ -1161,9 +1552,10 @@ def _review_identity(
             "--full-index",
             "--no-ext-diff",
             "--no-textconv",
-            f"{base_sha}...{head_sha}",
+            f"{target.base_sha}...{target.head_sha}",
         ],
         command_id="lck-review-effective-diff",
+        cwd=repo_root,
     )
     if diff.returncode != 0:
         raise LckStopError(
@@ -1171,18 +1563,19 @@ def _review_identity(
             + (diff.stderr.strip() or f"exit {diff.returncode}")
         )
     names = resolver.runner.run(
-        ["git", "diff", "--name-only", f"{base_sha}...{head_sha}"],
+        ["git", "diff", "--name-only", f"{target.base_sha}...{target.head_sha}"],
         command_id="lck-review-changed-files",
+        cwd=repo_root,
     )
     if names.returncode != 0:
         raise LckStopError("Review changed-file inventory is unavailable")
     changed_files = tuple(line for line in names.stdout.splitlines() if line)
     return ReviewIdentity(
-        task_number=state.task_number,
-        pr_number=pr_number,
-        base_sha=str(base_sha),
-        head_sha=str(head_sha),
-        task_body_sha256=task_body_sha256,
+        task_number=target.task_number,
+        pr_number=target.pr_number,
+        base_sha=target.base_sha,
+        head_sha=target.head_sha,
+        task_body_sha256=target.task_body_sha256,
         merge_base_sha=merge_base.stdout.strip(),
         effective_diff_sha256=hashlib.sha256(
             diff.stdout.encode("utf-8", errors="replace")
@@ -1192,13 +1585,18 @@ def _review_identity(
 
 
 class ReviewValidationGate:
-    """Run current Review validation inside the isolated reviewed worktree."""
+    """Run current Review validation inside the isolated reviewed clone."""
 
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.resolver = resolver
 
     def _persist_validation_artifacts(
-        self, review_root: Path, payload: dict[str, Any]
+        self,
+        review_root: Path,
+        payload: dict[str, Any],
+        *,
+        base_sha: str,
+        head_sha: str,
     ) -> dict[str, Any]:
         raw_output_dir = payload.get("output_dir")
         if not isinstance(raw_output_dir, str) or not raw_output_dir:
@@ -1216,7 +1614,7 @@ class ReviewValidationGate:
             source.relative_to(review_root)
         except ValueError as exc:
             raise LckStopError(
-                "formal Review validation output escaped the Review worktree"
+                "formal Review validation output escaped the Review clone"
             ) from exc
         if not source.is_dir():
             raise LckStopError(
@@ -1224,7 +1622,7 @@ class ReviewValidationGate:
             )
 
         durable_root = (
-            self.resolver.repo_root / ".agents" / "validation.local"
+            self.resolver.repo_root / ".workflow.local" / "lck" / "review-validation"
         ).resolve()
         durable_root.mkdir(parents=True, exist_ok=True)
         destination = durable_root / f"lck-review-{uuid.uuid4().hex}"
@@ -1241,6 +1639,9 @@ class ReviewValidationGate:
         ).as_posix()
         preserved = dict(payload)
         preserved["output_dir"] = durable_relative
+        preserved["evidence_path"] = durable_relative
+        preserved["validated_base_sha"] = base_sha
+        preserved["validated_head_sha"] = head_sha
         commands = preserved.get("commands")
         if isinstance(commands, list):
             for command in commands:
@@ -1257,11 +1658,60 @@ class ReviewValidationGate:
                         "formal Review validation log path escaped its output directory"
                     ) from exc
                 command["log_path"] = (Path(durable_relative) / log_relative).as_posix()
+        evidence_file = (
+            Path(durable_relative) / "lck-review-validation-result.json"
+        ).as_posix()
+        preserved["evidence_file"] = evidence_file
+        atomic_write_json(destination / "lck-review-validation-result.json", preserved)
         return preserved
 
-    def run(self, review_root: Path, base_sha: str) -> dict[str, Any]:
+    def _persist_unstructured_failure(
+        self,
+        result: Any,
+        *,
+        base_sha: str,
+        head_sha: str,
+    ) -> dict[str, Any]:
+        durable_root = (
+            self.resolver.repo_root / ".workflow.local" / "lck" / "review-validation"
+        ).resolve()
+        durable_root.mkdir(parents=True, exist_ok=True)
+        destination = durable_root / f"lck-review-{uuid.uuid4().hex}"
+        destination.mkdir()
+        durable_relative = destination.relative_to(
+            self.resolver.repo_root.resolve()
+        ).as_posix()
+        diagnostic = stderr_tail(result.stderr or result.stdout, limit=2000)
+        payload: dict[str, Any] = {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "operation": "workflow-validation",
+            "phase": "review",
+            "status": "fail",
+            "base_sha": base_sha,
+            "validated_base_sha": base_sha,
+            "validated_head_sha": head_sha,
+            "commands": [
+                {
+                    "command_id": result.command_id,
+                    "status": "fail",
+                    "exit_code": result.returncode,
+                    "diagnostic": diagnostic,
+                }
+            ],
+            "output_dir": durable_relative,
+            "evidence_path": durable_relative,
+        }
+        payload["evidence_file"] = (
+            Path(durable_relative) / "lck-review-validation-result.json"
+        ).as_posix()
+        atomic_write_json(destination / "lck-review-validation-result.json", payload)
+        return payload
+
+    def run(self, review_root: Path, base_sha: str, head_sha: str) -> dict[str, Any]:
         if not is_sha(base_sha):
             raise LckStopError("formal Review validation base SHA is unavailable")
+        if not is_sha(head_sha):
+            raise LckStopError("formal Review validation head SHA is unavailable")
         tool = review_root / "tools" / "agent_workflow" / "workflow_validation.py"
         if not tool.is_file():
             raise LckStopError("reviewed head does not contain workflow_validation.py")
@@ -1284,148 +1734,297 @@ class ReviewValidationGate:
             validation=True,
         )
         if not result.stdout.strip():
-            raise LckStopError(
-                "formal Review validation produced no structured result: "
-                + (result.stderr.strip() or f"exit {result.returncode}")
+            return self._persist_unstructured_failure(
+                result, base_sha=base_sha, head_sha=head_sha
             )
-        payload = read_json_text(result.stdout, field="lck-formal-review-validation")
-        if not isinstance(payload, dict):
-            raise LckStopError("formal Review validation result is not an object")
-        if result.returncode != 0 or payload.get("status") != "pass":
-            raise LckStopError(
-                "formal Review validation failed: "
-                + str(payload.get("status") or result.returncode)
+        try:
+            parsed = read_json_text(result.stdout, field="lck-formal-review-validation")
+        except WorkflowToolError:
+            return self._persist_unstructured_failure(
+                result, base_sha=base_sha, head_sha=head_sha
             )
-        return self._persist_validation_artifacts(review_root, payload)
+        if not isinstance(parsed, dict):
+            return self._persist_unstructured_failure(
+                result, base_sha=base_sha, head_sha=head_sha
+            )
+        payload = dict(parsed)
+        if result.returncode != 0 and payload.get("status") == "pass":
+            payload["status"] = "fail"
+        try:
+            return self._persist_validation_artifacts(
+                review_root,
+                payload,
+                base_sha=base_sha,
+                head_sha=head_sha,
+            )
+        except LckStopError:
+            if payload.get("status") != "fail" and result.returncode == 0:
+                raise
+            return self._persist_unstructured_failure(
+                result, base_sha=base_sha, head_sha=head_sha
+            )
 
 
 class ReviewWorkspaceManager:
-    """Create and later remove one isolated, implementation-read-only worktree."""
+    """Own one standalone temporary clone for an Independent Review session.
+
+    Review is read-only with respect to the source repository.  The reviewed
+    workspace is therefore a self-contained temporary clone rather than a Git
+    worktree registered in the source repository.  All Review Git metadata writes
+    stay inside the temporary clone; durable validation evidence is copied only
+    to the ignored LCK local evidence root before clone cleanup.
+    """
+
+    OWNER_FILE: Final = "lck-review-owner.json"
 
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.resolver = resolver
 
     @staticmethod
-    def _validated_worktree_path(path: Path) -> Path:
+    def _validated_workspace_path(path: Path) -> Path:
         resolved = path.resolve(strict=False)
         temp_root = Path(tempfile.gettempdir()).resolve()
         try:
             relative = resolved.relative_to(temp_root)
         except ValueError as exc:
             raise LckStopError(
-                "Review worktree cleanup path is outside the temporary root"
+                "Review workspace cleanup path is outside the temporary root"
             ) from exc
         if len(relative.parts) != 1 or not resolved.name.startswith(
             "tracequant-lck-review-"
         ):
-            raise LckStopError("Review worktree cleanup path is not LCK-owned")
+            raise LckStopError("Review workspace cleanup path is not LCK-owned")
         return resolved
 
-    def _assert_registered_worktree(self, path: Path) -> None:
-        result = self.resolver.runner.run(
-            ["git", "worktree", "list", "--porcelain"],
-            command_id="lck-review-worktree-verify",
+    def path_for(self, task_number: int, operation_id: str) -> Path:
+        """Return an uncreated, operation-owned temporary clone path."""
+        return self._validated_workspace_path(
+            Path(tempfile.gettempdir())
+            / f"tracequant-lck-review-{task_number}-{operation_id}"
         )
-        if result.returncode != 0:
+
+    def _source_remote_url(self) -> str:
+        result = self.resolver.runner.run(
+            ["git", "remote", "get-url", "origin"],
+            command_id="lck-review-source-origin",
+        )
+        remote_url = result.stdout.strip()
+        if result.returncode != 0 or not remote_url:
             raise LckStopError(
-                "cannot verify isolated Review worktree ownership: "
-                + (result.stderr.strip() or result.stdout.strip())
+                "cannot resolve source repository origin for isolated Review clone: "
+                + (
+                    result.stderr.strip()
+                    or result.stdout.strip()
+                    or "origin unavailable"
+                )
             )
-        registered = {
-            Path(line.removeprefix("worktree ").strip()).resolve()
-            for line in result.stdout.splitlines()
-            if line.startswith("worktree ") and line.removeprefix("worktree ").strip()
-        }
-        if path not in registered:
+        return remote_url
+
+    @classmethod
+    def _owner_path(cls, path: Path) -> Path:
+        return path / ".git" / cls.OWNER_FILE
+
+    def _write_owner(
+        self,
+        path: Path,
+        *,
+        task_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> None:
+        atomic_write_json(
+            self._owner_path(path),
+            {
+                "schema_version": LCK_SCHEMA_VERSION,
+                "kind": "lck-review-standalone-clone",
+                "task_number": task_number,
+                "review_root": str(path),
+                "source_repo": str(self.resolver.repo_root),
+                "expected_base_sha": base_sha,
+                "expected_head_sha": head_sha,
+                "authority": "operation-owned temporary Review workspace only",
+            },
+        )
+
+    def _assert_owned_clone(
+        self,
+        path: Path,
+        *,
+        expected_head_sha: str | None = None,
+    ) -> Mapping[str, Any]:
+        path = self._validated_workspace_path(path)
+        if not path.is_dir() or not (path / ".git").is_dir():
+            raise LckStopError("isolated Review clone is unavailable")
+        owner_path = self._owner_path(path)
+        try:
+            value = read_json_file(owner_path)
+        except WorkflowToolError as exc:
             raise LckStopError(
-                "Review worktree cleanup path is not a registered LCK worktree"
+                "isolated Review clone ownership marker is unavailable"
+            ) from exc
+        if not isinstance(value, Mapping):
+            raise LckStopError("isolated Review clone ownership marker is invalid")
+        if value.get("kind") != "lck-review-standalone-clone":
+            raise LckStopError("isolated Review clone ownership marker is invalid")
+        if value.get("review_root") != str(path):
+            raise LckStopError("isolated Review clone ownership path does not match")
+        if value.get("source_repo") != str(self.resolver.repo_root):
+            raise LckStopError("isolated Review clone belongs to another repository")
+        if (
+            expected_head_sha is not None
+            and value.get("expected_head_sha") != expected_head_sha
+        ):
+            raise LckStopError("isolated Review clone expected HEAD does not match")
+        return value
+
+    def _ensure_commit(self, path: Path, sha: str, *, label: str) -> None:
+        available = self.resolver.runner.run(
+            ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+            command_id=f"lck-review-clone-{label}-available",
+            cwd=path,
+        )
+        if available.returncode == 0:
+            return
+        fetched = self.resolver.runner.run(
+            ["git", "fetch", "--no-tags", "origin", sha],
+            command_id=f"lck-review-clone-fetch-{label}",
+            cwd=path,
+            retries=1,
+        )
+        if fetched.returncode != 0:
+            raise LckStopError(
+                f"cannot materialize reviewed {label} commit in temporary clone: "
+                + (
+                    fetched.stderr.strip()
+                    or fetched.stdout.strip()
+                    or f"exit {fetched.returncode}"
+                )
+            )
+        verified = self.resolver.runner.run(
+            ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+            command_id=f"lck-review-clone-{label}-verified",
+            cwd=path,
+        )
+        if verified.returncode != 0:
+            raise LckStopError(
+                f"temporary Review clone does not contain expected {label} commit"
             )
 
-    def create(self, task_number: int, head_sha: str) -> Path:
-        path = Path(
-            tempfile.mkdtemp(prefix=f"tracequant-lck-review-{task_number}-")
-        ).resolve()
-        # mkdtemp creates the path, while git worktree requires an absent target.
-        path.rmdir()
-        result = self.resolver.runner.run(
-            ["git", "worktree", "add", "--detach", str(path), head_sha],
-            command_id="lck-review-worktree-add",
+    def create(
+        self,
+        task_number: int,
+        base_sha: str,
+        head_sha: str,
+        path: Path | None = None,
+    ) -> Path:
+        path = self.path_for(task_number, uuid.uuid4().hex) if path is None else path
+        path = self._validated_workspace_path(path)
+        if path.exists():
+            raise LckStopError("isolated Review clone path is already occupied")
+        remote_url = self._source_remote_url()
+        clone = self.resolver.runner.run(
+            [
+                "git",
+                "clone",
+                "--no-checkout",
+                "--no-hardlinks",
+                str(self.resolver.repo_root),
+                str(path),
+            ],
+            command_id="lck-review-clone-create",
         )
-        if result.returncode != 0:
+        if clone.returncode != 0:
             shutil.rmtree(path, ignore_errors=True)
             raise LckStopError(
-                "cannot create isolated Review worktree: "
-                + (result.stderr.strip() or result.stdout.strip())
+                "cannot create isolated Review clone: "
+                + (
+                    clone.stderr.strip()
+                    or clone.stdout.strip()
+                    or f"exit {clone.returncode}"
+                )
             )
-        status = self.resolver.runner.run(
-            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            command_id="lck-review-worktree-clean",
-            cwd=path,
-        )
-        head = self.resolver.runner.run(
-            ["git", "rev-parse", "HEAD"],
-            command_id="lck-review-worktree-head",
-            cwd=path,
-        )
-        if (
-            status.returncode != 0
-            or status.stdout.strip()
-            or head.stdout.strip() != head_sha
-        ):
-            self.remove(path)
-            raise LckStopError("isolated Review worktree postcondition failed")
+        try:
+            self._write_owner(
+                path,
+                task_number=task_number,
+                base_sha=base_sha,
+                head_sha=head_sha,
+            )
+            set_origin = self.resolver.runner.run(
+                ["git", "remote", "set-url", "origin", remote_url],
+                command_id="lck-review-clone-set-origin",
+                cwd=path,
+            )
+            if set_origin.returncode != 0:
+                raise LckStopError(
+                    "cannot restore authoritative origin in isolated Review clone: "
+                    + (set_origin.stderr.strip() or set_origin.stdout.strip())
+                )
+            self._ensure_commit(path, base_sha, label="base")
+            self._ensure_commit(path, head_sha, label="head")
+            checkout = self.resolver.runner.run(
+                ["git", "checkout", "--detach", head_sha],
+                command_id="lck-review-clone-checkout",
+                cwd=path,
+            )
+            if checkout.returncode != 0:
+                raise LckStopError(
+                    "cannot checkout exact reviewed HEAD in isolated Review clone: "
+                    + (checkout.stderr.strip() or checkout.stdout.strip())
+                )
+            self._assert_clean_exact(path, head_sha)
+        except BaseException:
+            self._make_removable(path)
+            shutil.rmtree(path, ignore_errors=True)
+            raise
         return path
 
     def _assert_clean_exact(self, path: Path, expected_head_sha: str) -> None:
         if not path.is_dir():
-            raise LckStopError("isolated Review worktree is unavailable")
+            raise LckStopError("isolated Review clone is unavailable")
         status = self.resolver.runner.run(
             ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            command_id="lck-review-worktree-post-validation-clean",
+            command_id="lck-review-clone-clean",
             cwd=path,
+            env={"GIT_OPTIONAL_LOCKS": "0"},
         )
         head = self.resolver.runner.run(
             ["git", "rev-parse", "HEAD"],
-            command_id="lck-review-worktree-post-validation-head",
+            command_id="lck-review-clone-head",
             cwd=path,
+            env={"GIT_OPTIONAL_LOCKS": "0"},
         )
         if status.returncode != 0 or head.returncode != 0:
-            raise LckStopError(
-                "cannot verify isolated Review worktree after validation"
-            )
+            raise LckStopError("cannot verify isolated Review clone")
         if status.stdout.strip():
-            raise LckStopError("formal Review validation changed the isolated worktree")
+            raise LckStopError("formal Review validation changed the isolated clone")
         if head.stdout.strip() != expected_head_sha:
-            raise LckStopError(
-                "isolated Review worktree HEAD changed during validation"
-            )
+            raise LckStopError("isolated Review clone HEAD changed during validation")
 
     @staticmethod
     def _assert_read_only(path: Path) -> None:
         for root, dirs, files in os.walk(path, topdown=True, followlinks=False):
             root_path = Path(root)
             if root_path.stat().st_mode & 0o222:
-                raise LckStopError("isolated Review worktree is not read-only")
+                raise LckStopError("isolated Review clone is not read-only")
             for name in (*dirs, *files):
                 target = root_path / name
                 if not target.is_symlink() and target.stat().st_mode & 0o222:
-                    raise LckStopError("isolated Review worktree is not read-only")
+                    raise LckStopError("isolated Review clone is not read-only")
 
     def seal_for_review(self, path: Path, expected_head_sha: str) -> None:
-        """Verify exact contents, seal files, and preserve clean Git status."""
-        path = self._validated_worktree_path(path)
-        self._assert_registered_worktree(path)
+        """Verify exact contents, seal the independent clone, and keep it clean."""
+        path = self._validated_workspace_path(path)
+        self._assert_owned_clone(path, expected_head_sha=expected_head_sha)
         self._assert_clean_exact(path, expected_head_sha)
         self.seal_read_only(path)
         self._assert_clean_exact(path, expected_head_sha)
         self._assert_read_only(path)
 
     def assert_ready_for_completion(self, path: Path, expected_head_sha: str) -> None:
-        """Fail closed unless the prepared Review context is still intact."""
-        path = self._validated_worktree_path(path)
-        if not path.is_dir():
-            raise LckStopError("prepared Review worktree is unavailable")
-        self._assert_registered_worktree(path)
+        """Fail closed unless the prepared standalone Review clone is intact."""
+        path = self._validated_workspace_path(path)
+        self._assert_owned_clone(path, expected_head_sha=expected_head_sha)
         self._assert_clean_exact(path, expected_head_sha)
         self._assert_read_only(path)
 
@@ -1466,25 +2065,51 @@ class ReviewWorkspaceManager:
                     os.chmod(target, 0o644)
 
     def remove(self, path: Path) -> None:
-        path = self._validated_worktree_path(path)
-        self._assert_registered_worktree(path)
+        path = self._validated_workspace_path(path)
+        if not path.exists():
+            return
+        self._assert_owned_clone(path)
         self._make_removable(path)
-        result = self.resolver.runner.run(
-            ["git", "worktree", "remove", "--force", str(path)],
-            command_id="lck-review-worktree-remove",
-        )
-        if result.returncode != 0:
-            shutil.rmtree(path, ignore_errors=True)
-            if path.exists():
-                raise LckStopError(
-                    "failed to remove isolated Review worktree directory"
-                )
-            prune = self.resolver.runner.run(
-                ["git", "worktree", "prune"],
-                command_id="lck-review-worktree-prune",
-            )
-            if prune.returncode != 0:
-                raise LckStopError("failed to remove isolated Review worktree")
+        shutil.rmtree(path, ignore_errors=True)
+        if path.exists():
+            raise LckStopError("failed to remove isolated Review clone directory")
+
+    def remove_recovered(self, path: Path) -> None:
+        """Remove a marker-owned clone, including an interrupted partial clone."""
+        path = self._validated_workspace_path(path)
+        if not path.exists():
+            return
+        self._make_removable(path)
+        shutil.rmtree(path, ignore_errors=True)
+        if path.exists():
+            raise LckStopError("failed to remove recovered Review clone directory")
+
+
+@dataclass
+class ReviewPrepareInvocation:
+    """Own one operation-local Review Prepare marker until it finishes."""
+
+    path: Path
+    operation_id: str
+    _lock_fd: int
+    recovered: Mapping[str, Any] | None = None
+
+    def update(self, payload: Mapping[str, Any]) -> None:
+        atomic_write_json(self.path, payload)
+
+    def release_lock(self) -> None:
+        """Release the process lock while retaining durable handoff state."""
+        if self._lock_fd < 0:
+            return
+        fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+        os.close(self._lock_fd)
+        self._lock_fd = -1
+
+    def finish(self) -> None:
+        try:
+            self.path.unlink()
+        finally:
+            self.release_lock()
 
 
 class ReviewInvocationStore:
@@ -1515,6 +2140,152 @@ class ReviewInvocationStore:
 
     def review_required_path(self, task_number: int) -> Path:
         return self.root / "review-state" / f"task-{task_number}-required.json"
+
+    def remediation_session_path(self, task_number: int) -> Path:
+        return self.root / "remediation-sessions" / f"task-{task_number}.json"
+
+    def remediation_no_change_receipt_path(
+        self, task_number: int, review_id: str
+    ) -> Path:
+        self._validate_id(review_id)
+        return (
+            self.root
+            / "remediation-receipts"
+            / f"task-{task_number}"
+            / f"{review_id}-no-change.json"
+        )
+
+    def review_prepare_inflight_path(self, task_number: int) -> Path:
+        return self.root / "review-inflight" / f"task-{task_number}.json"
+
+    def review_prepare_lock_path(self, task_number: int) -> Path:
+        return self.root / "review-inflight" / f"task-{task_number}.lock"
+
+    @staticmethod
+    def _pid_is_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def begin_review_prepare(self, task_number: int) -> ReviewPrepareInvocation:
+        """Claim one Task-local Review Prepare operation before side effects."""
+        path = self.review_prepare_inflight_path(task_number)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.review_prepare_lock_path(task_number)
+        lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                try:
+                    active = read_json_file(path)
+                except WorkflowToolError:
+                    active = {}
+                operation_id = (
+                    active.get("operation_id") if isinstance(active, Mapping) else None
+                )
+                state = active.get("state") if isinstance(active, Mapping) else None
+                raise LckStopError(
+                    f"Review Prepare already in flight for Task #{task_number}"
+                    + (
+                        f" (operation {operation_id}, state {state})"
+                        if operation_id
+                        else ""
+                    )
+                ) from exc
+
+            existing: Mapping[str, Any] | None = None
+            if path.exists():
+                parsed = read_json_file(path)
+                if not isinstance(parsed, Mapping):
+                    raise LckStopError("Review Prepare in-flight state is invalid")
+                if parsed.get("task_number") != task_number:
+                    raise LckStopError(
+                        "Review Prepare in-flight Task identity is invalid"
+                    )
+                owner_pid = parsed.get("pid")
+                if (
+                    not isinstance(owner_pid, int)
+                    or isinstance(owner_pid, bool)
+                    or owner_pid <= 0
+                ):
+                    raise LckStopError(
+                        "Review Prepare in-flight owner identity is invalid"
+                    )
+                if self._pid_is_alive(owner_pid):
+                    raise LckStopError(
+                        f"Review Prepare already in flight for Task #{task_number}"
+                    )
+                if parsed.get("state") == "handed-off":
+                    review_id = parsed.get("review_id")
+                    review_root = parsed.get("review_root")
+                    guard_exists = (
+                        isinstance(review_id, str)
+                        and self.guard_path(review_id).exists()
+                    )
+                    root_exists = (
+                        isinstance(review_root, str) and Path(review_root).exists()
+                    )
+                    if guard_exists and root_exists:
+                        raise LckStopError(
+                            "Review Prepare handoff is still owned by the prior "
+                            f"operation (review {review_id})"
+                        )
+                existing = dict(parsed)
+
+            operation_id = self.new_id()
+            payload: dict[str, Any] = {
+                "schema_version": LCK_SCHEMA_VERSION,
+                "kind": "review-prepare-in-flight",
+                "operation_id": operation_id,
+                "task_number": task_number,
+                "pid": os.getpid(),
+                "state": "starting",
+                "review_root": None,
+                "authority": "operation-local in-flight protection only",
+            }
+            if existing is not None:
+                payload["recovered_from"] = existing.get("operation_id")
+                payload["previous_review_root"] = existing.get("review_root")
+            invocation = ReviewPrepareInvocation(
+                path=path,
+                operation_id=operation_id,
+                _lock_fd=lock_fd,
+                recovered=existing,
+            )
+            invocation.update(payload)
+            return invocation
+        except BaseException:
+            os.close(lock_fd)
+            raise
+
+    def release_review_prepare(self, task_number: int, review_id: str) -> None:
+        """Release a successful Prepare handoff after Review cleanup."""
+        path = self.review_prepare_inflight_path(task_number)
+        if not path.exists():
+            return
+        lock_path = self.review_prepare_lock_path(task_number)
+        lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            if not path.exists():
+                return
+            value = read_json_file(path)
+            if not isinstance(value, Mapping):
+                raise LckStopError("Review Prepare in-flight state is invalid")
+            owner_review_id = value.get("review_id")
+            if owner_review_id != review_id:
+                raise LckStopError(
+                    "Review Prepare handoff belongs to a different Review invocation"
+                )
+            path.unlink()
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
 
     def write_guard(self, review_id: str, payload: Mapping[str, Any]) -> None:
         atomic_write_json(self.guard_path(review_id), payload)
@@ -1602,6 +2373,71 @@ class ReviewInvocationStore:
         except FileNotFoundError:
             pass
 
+    def write_remediation_session(
+        self, task_number: int, payload: Mapping[str, Any]
+    ) -> Path:
+        path = self.remediation_session_path(task_number)
+        existing: Mapping[str, Any] | None = None
+        if path.exists():
+            value = read_json_file(path)
+            if not isinstance(value, Mapping):
+                raise LckStopError("Remediation session state is invalid")
+            existing = value
+        if existing is not None and (
+            existing.get("review_id") != payload.get("review_id")
+            or existing.get("start_head_sha") != payload.get("start_head_sha")
+        ):
+            raise LckStopError(
+                "another Remediation session is already prepared for this Task"
+            )
+        atomic_write_json(path, payload)
+        return path
+
+    def read_remediation_session(self, task_number: int) -> dict[str, Any] | None:
+        path = self.remediation_session_path(task_number)
+        if not path.exists():
+            return None
+        value = read_json_file(path)
+        if not isinstance(value, dict) or value.get("task_number") != task_number:
+            raise LckStopError("Remediation session state is invalid")
+        return value
+
+    def clear_remediation_session(self, task_number: int) -> None:
+        try:
+            self.remediation_session_path(task_number).unlink()
+        except FileNotFoundError:
+            pass
+
+    def write_remediation_no_change_receipt(
+        self, task_number: int, review_id: str, payload: Mapping[str, Any]
+    ) -> Path:
+        path = self.remediation_no_change_receipt_path(task_number, review_id)
+        if path.exists():
+            existing = read_json_file(path)
+            if existing != dict(payload):
+                raise LckStopError(
+                    "existing Remediation no-change receipt does not match this completion"
+                )
+            return path
+        atomic_write_json(path, payload)
+        return path
+
+    def read_remediation_no_change_receipt(
+        self, task_number: int, review_id: str
+    ) -> dict[str, Any] | None:
+        path = self.remediation_no_change_receipt_path(task_number, review_id)
+        if not path.exists():
+            return None
+        value = read_json_file(path)
+        if (
+            not isinstance(value, dict)
+            or value.get("task_number") != task_number
+            or value.get("review_id") != review_id
+            or value.get("kind") != "remediation-no-change-receipt"
+        ):
+            raise LckStopError("Remediation no-change receipt is invalid")
+        return value
+
 
 def _identity_from_mapping(value: Mapping[str, Any]) -> ReviewIdentity:
     changed = value.get("changed_files")
@@ -1641,8 +2477,52 @@ def _identity_from_mapping(value: Mapping[str, Any]) -> ReviewIdentity:
     )
 
 
+def _assert_review_target_facts_applicable(
+    reviewed: ReviewIdentity,
+    state: LiveState,
+    task_contract: Mapping[str, Any],
+) -> None:
+    """Reject obvious stale Review identity before computing the current diff.
+
+    This ordering matters when another actor pushed a new head that is visible on
+    GitHub but whose Git object is not materialized locally.  Head/base/Task
+    staleness must still produce the precise REVIEW_STALE_* result without a
+    fetch or a failed local diff probe.
+    """
+    pr = state.open_pr
+    if not isinstance(pr, Mapping):
+        raise ReviewStaleError(
+            "REVIEW_STALE_PR",
+            f"reviewed PR #{reviewed.pr_number} is no longer the unique current OPEN PR",
+        )
+    current_number = pr.get("number")
+    if current_number != reviewed.pr_number:
+        raise ReviewStaleError(
+            "REVIEW_STALE_PR",
+            f"OPEN PR changed from #{reviewed.pr_number} to #{current_number}",
+        )
+    current_head = _pr_head_sha(pr)
+    if current_head != reviewed.head_sha:
+        raise ReviewStaleError(
+            "REVIEW_STALE_HEAD",
+            f"PR head changed from {reviewed.head_sha} to {current_head or 'unavailable'}",
+        )
+    current_base = _pr_base_sha(pr)
+    if current_base != reviewed.base_sha:
+        raise ReviewStaleError(
+            "REVIEW_STALE_BASE",
+            f"PR base changed from {reviewed.base_sha} to {current_base or 'unavailable'}",
+        )
+    current_task = task_contract.get("body_sha256")
+    if current_task != reviewed.task_body_sha256:
+        raise ReviewStaleError(
+            "REVIEW_STALE_TASK",
+            "Task Contract changed since Review Prepare",
+        )
+
+
 def _assert_review_applicable(start: ReviewIdentity, current: ReviewIdentity) -> None:
-    """Apply only invocation-local stale guards; this is not a drift framework."""
+    """Compare exact reviewed/current identities after basic target facts match."""
     if current.pr_number != start.pr_number:
         raise ReviewStaleError(
             "REVIEW_STALE_PR",
@@ -1707,6 +2587,36 @@ class ReviewContext:
         }
 
 
+def _review_validation_failure(payload: Mapping[str, Any]) -> str:
+    failed_command: Mapping[str, Any] | None = None
+    commands = payload.get("commands")
+    if isinstance(commands, list):
+        failed_command = next(
+            (
+                item
+                for item in commands
+                if isinstance(item, Mapping) and item.get("status") == "fail"
+            ),
+            None,
+        )
+    evidence = payload.get("evidence_path") or payload.get("output_dir")
+    detail = [f"formal Review validation failed: {payload.get('status', 'fail')}"]
+    if failed_command is not None:
+        command_id = failed_command.get("command_id", "unknown")
+        exit_code = failed_command.get("exit_code", "unknown")
+        diagnostic = safe_text(failed_command.get("diagnostic"), limit=1200)
+        detail.append(f"failed command {command_id} (exit {exit_code})")
+        if diagnostic:
+            detail.append(f"diagnostic: {diagnostic}")
+    base_sha = payload.get("validated_base_sha")
+    head_sha = payload.get("validated_head_sha")
+    if is_sha(base_sha) and is_sha(head_sha):
+        detail.append(f"validated base {base_sha}, head {head_sha}")
+    if isinstance(evidence, str) and evidence:
+        detail.append(f"evidence: {evidence}")
+    return "; ".join(detail)
+
+
 class ReviewPreparer:
     """Resolve a fresh review target and construct one bounded read-only context."""
 
@@ -1721,71 +2631,166 @@ class ReviewPreparer:
         store: ReviewInvocationStore | None = None,
     ) -> None:
         self.resolver = resolver
+        self.snapshots = OperationSnapshotBuilder(resolver)
         self.eligibility = eligibility or PhaseEligibilityResolver()
         self.validation = validation or ReviewValidationGate(resolver)
-        self.checks_gate = checks_gate or DeliveryChecksGate(
-            resolver, timeout_seconds=0.0, poll_seconds=0.0
-        )
+        self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.workspace = workspace or ReviewWorkspaceManager(resolver)
         self.store = store or ReviewInvocationStore(resolver.repo_root)
 
     def prepare(self, task_number: int) -> ReviewContext:
-        state = self.resolver.resolve(task_number)
-        decision = self.eligibility.resolve(state, Phase.REVIEW_PREPARE)
-        if not decision.eligible:
+        if self.store.read_remediation_session(task_number) is not None:
             raise LckStopError(
-                f"Review Prepare STOP for Task #{task_number}: "
-                + "; ".join(decision.reasons)
+                "Review Prepare STOP: a prepared Remediation session must be completed "
+                "or closed with remediation no-change first"
             )
-        task_contract = _live_task_contract(self.resolver, task_number)
-        identity = _review_identity(self.resolver, state, task_contract)
-        self.checks_gate.run(task_number)
-        review_root = self.workspace.create(task_number, identity.head_sha)
-        try:
-            validation = self.validation.run(review_root, identity.base_sha)
-            final_state = self.resolver.resolve(task_number)
-            final_contract = _live_task_contract(self.resolver, task_number)
-            final_decision = self.eligibility.resolve(final_state, Phase.REVIEW_PREPARE)
-            if not final_decision.eligible:
-                raise LckStopError(
-                    "Review Prepare post-validation STOP: "
-                    + "; ".join(final_decision.reasons)
-                )
-            final_identity = _review_identity(
-                self.resolver, final_state, final_contract
-            )
-            _assert_review_applicable(identity, final_identity)
-            final_checks = self.checks_gate.run(task_number)
-            self.workspace.seal_for_review(review_root, identity.head_sha)
-        except BaseException:
-            self.workspace.remove(review_root)
-            raise
+        invocation = self.store.begin_review_prepare(task_number)
+        review_root: Path | None = None
 
-        review_id = self.store.new_id()
-        guard = {
-            "schema_version": LCK_SCHEMA_VERSION,
-            "kind": "review-invocation-guard",
-            "review_id": review_id,
-            "task_number": task_number,
-            "identity": identity.to_dict(),
-            "review_root": str(review_root),
-            "validation": validation,
-            "checks": final_checks,
-            "authority": "ephemeral applicability guard only",
-        }
+        def mark(state: str, **fields: Any) -> None:
+            payload: dict[str, Any] = {
+                "schema_version": LCK_SCHEMA_VERSION,
+                "kind": "review-prepare-in-flight",
+                "operation_id": invocation.operation_id,
+                "task_number": task_number,
+                "pid": os.getpid(),
+                "state": state,
+                "review_root": str(review_root) if review_root else None,
+                "authority": "operation-local in-flight protection only",
+            }
+            payload.update(fields)
+            invocation.update(payload)
+
         try:
+            recovered = invocation.recovered
+            if recovered is not None:
+                previous_root = recovered.get("review_root")
+                if previous_root is not None:
+                    if not isinstance(previous_root, str) or not previous_root:
+                        raise LckStopError(
+                            "stale Review Prepare has an invalid isolated clone path"
+                        )
+                    previous_path = Path(previous_root)
+                    if previous_path.exists():
+                        self.workspace.remove_recovered(previous_path)
+                previous_review_id = recovered.get("review_id")
+                if isinstance(previous_review_id, str):
+                    self.store.delete_guard(previous_review_id)
+            mark("resolving-live-state")
+            snapshot = self.snapshots.acquire(
+                task_number,
+                operation="review-prepare",
+            )
+            state = snapshot.state
+            decision = self.eligibility.resolve(state, Phase.REVIEW_PREPARE)
+            if not decision.eligible:
+                raise LckStopError(
+                    f"Review Prepare STOP for Task #{task_number}: "
+                    + "; ".join(decision.reasons)
+                )
+            task_contract = _task_contract_from_state(state)
+            target = _review_target_refs(state, task_contract)
+            review_root = self.workspace.path_for(task_number, invocation.operation_id)
+            mark(
+                "clone-reserved",
+                target=target.to_dict(),
+                review_root=str(review_root),
+            )
+            self.workspace.create(
+                task_number, target.base_sha, target.head_sha, review_root
+            )
+            mark(
+                "clone-created",
+                target=target.to_dict(),
+                review_root=str(review_root),
+            )
+            snapshot = self.snapshots.bind_required_checks(
+                snapshot, repo_root=review_root
+            )
+            mark(
+                "checking-current-pr",
+                target=target.to_dict(),
+                required_checks=snapshot.required_checks,
+            )
+            checks = self.checks_gate.evaluate(snapshot)
+            identity = _review_identity(
+                self.resolver,
+                state,
+                task_contract,
+                repo_root=review_root,
+            )
+            mark(
+                "review-target-derived",
+                identity=identity.to_dict(),
+                review_root=str(review_root),
+            )
+            mark("formal-validation", identity=identity.to_dict())
+            validation = self.validation.run(
+                review_root, identity.base_sha, identity.head_sha
+            )
+            mark(
+                "validation-persisted",
+                identity=identity.to_dict(),
+                validation=validation,
+            )
+            if validation.get("status") != "pass":
+                raise LckStopError(_review_validation_failure(validation))
+            mark(
+                "sealing-review-context",
+                identity=identity.to_dict(),
+                validation=validation,
+                checks=checks,
+            )
+            self.workspace.seal_for_review(review_root, identity.head_sha)
+            review_id = self.store.new_id()
+            guard = {
+                "schema_version": LCK_SCHEMA_VERSION,
+                "kind": "review-invocation-guard",
+                "review_id": review_id,
+                "task_number": task_number,
+                "identity": identity.to_dict(),
+                "review_root": str(review_root),
+                "validation": validation,
+                "checks": checks,
+                "snapshot": snapshot.to_dict(),
+                "authority": (
+                    "sealed Review Prepare target; historical identity for Review Complete "
+                    "applicability comparison, never current authority"
+                ),
+            }
             self.store.write_guard(review_id, guard)
-        except BaseException:
-            self.workspace.remove(review_root)
+            mark(
+                "handed-off",
+                identity=identity.to_dict(),
+                validation=validation,
+                checks=checks,
+                review_id=review_id,
+            )
+            context = ReviewContext(
+                review_id=review_id,
+                task_contract=task_contract,
+                identity=identity,
+                checks=checks,
+                validation=validation,
+                review_root=review_root,
+            )
+            invocation.release_lock()
+        except BaseException as exc:
+            cleanup_error: BaseException | None = None
+            try:
+                mark("failed", error=safe_text(str(exc), limit=1200))
+            except BaseException:
+                pass
+            if review_root is not None and review_root.exists():
+                try:
+                    self.workspace.remove(review_root)
+                except BaseException as remove_exc:
+                    cleanup_error = remove_exc
+            if cleanup_error is not None:
+                raise cleanup_error from exc
+            invocation.finish()
             raise
-        return ReviewContext(
-            review_id=review_id,
-            task_contract=task_contract,
-            identity=identity,
-            checks=final_checks,
-            validation=validation,
-            review_root=review_root,
-        )
+        return context
 
 
 @dataclass(frozen=True)
@@ -1799,7 +2804,7 @@ class ReviewCompletionResult:
 
     def to_dict(self) -> dict[str, Any]:
         human_boundary = (
-            "Maintainer manual merge decision"
+            "STOP; run deterministic Merge Preflight before any manual merge"
             if self.verdict == "PASS"
             else "STOP; Human must explicitly choose remediation, redesign, or abandon"
         )
@@ -1818,24 +2823,31 @@ class ReviewCompletionResult:
 
 
 class ReviewCompleter:
-    """Accept one semantic verdict only while the invocation target is still live."""
+    """Accept a semantic verdict only if a fresh completion snapshot still applies.
+
+    ``review prepare`` and ``review complete`` are separate LCK operations.
+    Prepare seals the exact target that the semantic reviewer inspected. Complete
+    acquires one fresh, phase-specific authoritative snapshot, compares it with
+    that sealed target, and accepts the verdict only when the PR, base, head,
+    Task Contract, and effective diff are still identical. Downstream helpers do
+    not reacquire authority inside the Review Complete operation.
+    """
 
     def __init__(
         self,
         resolver: LiveStateResolver,
         *,
         eligibility: PhaseEligibilityResolver | None = None,
+        checks_gate: DeliveryChecksGate | None = None,
         store: ReviewInvocationStore | None = None,
         workspace: ReviewWorkspaceManager | None = None,
-        checks_gate: DeliveryChecksGate | None = None,
     ) -> None:
         self.resolver = resolver
+        self.snapshots = OperationSnapshotBuilder(resolver)
         self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.workspace = workspace or ReviewWorkspaceManager(resolver)
-        self.checks_gate = checks_gate or DeliveryChecksGate(
-            resolver, timeout_seconds=0.0, poll_seconds=0.0
-        )
 
     @staticmethod
     def _read_findings(path: Path | None, verdict: str) -> str:
@@ -1869,12 +2881,13 @@ class ReviewCompleter:
         raw_identity = guard.get("identity")
         if not isinstance(raw_identity, Mapping):
             raise LckStopError("Review invocation guard has no identity")
-        start = _identity_from_mapping(raw_identity)
+        reviewed_identity = _identity_from_mapping(raw_identity)
         review_root_value = guard.get("review_root")
         if not isinstance(review_root_value, str) or not review_root_value:
             raise LckStopError("Review invocation guard has no review root")
         review_root = Path(review_root_value)
 
+        completion_terminal = False
         try:
             validation = guard.get("validation")
             if (
@@ -1884,55 +2897,53 @@ class ReviewCompleter:
                 raise LckStopError(
                     "Review invocation has no successful formal validation"
                 )
-            if start.task_number != task_number:
+            if reviewed_identity.task_number != task_number:
                 raise LckStopError(
                     "Review invocation identity does not belong to this Task"
                 )
-            self.workspace.assert_ready_for_completion(review_root, start.head_sha)
-            state = self.resolver.resolve(task_number)
-            task_contract = _live_task_contract(self.resolver, task_number)
-            if state.open_pr is None:
-                raise ReviewStaleError(
-                    "REVIEW_STALE_PR", "the reviewed OPEN PR no longer exists"
-                )
-            current = _review_identity(self.resolver, state, task_contract)
-            _assert_review_applicable(start, current)
-            decision = self.eligibility.resolve(state, Phase.REVIEW_PREPARE)
+            prepared_checks = guard.get("checks")
+            if (
+                not isinstance(prepared_checks, Mapping)
+                or prepared_checks.get("status") != "pass"
+            ):
+                raise LckStopError("Review invocation has no successful PR check gate")
+            prepared_snapshot = guard.get("snapshot")
+            if not isinstance(prepared_snapshot, Mapping):
+                raise LckStopError("Review invocation has no sealed operation snapshot")
+            if prepared_snapshot.get("operation") != "review-prepare":
+                raise LckStopError("Review invocation snapshot has the wrong operation")
+
+            completion_snapshot = self.snapshots.acquire(
+                task_number,
+                operation="review-complete",
+            )
+            state = completion_snapshot.state
+            decision = self.eligibility.resolve(state, Phase.REVIEW_COMPLETE)
             if not decision.eligible:
                 raise LckStopError(
                     f"Review Complete STOP for Task #{task_number}: "
                     + "; ".join(decision.reasons)
                 )
-            checks: Mapping[str, Any] = guard.get("checks", {})
-            if verdict == "PASS":
-                checks = self.checks_gate.run(task_number)
-            # The checks gate re-resolves the live PR while it waits. Reacquire
-            # the complete applicability identity after that gate so a head,
-            # base, Task Contract, or effective-diff change cannot publish a
-            # verdict for the sealed Review worktree.
-            final_state = self.resolver.resolve(task_number)
-            final_contract = _live_task_contract(self.resolver, task_number)
-            if final_state.open_pr is None:
-                raise ReviewStaleError(
-                    "REVIEW_STALE_PR", "the reviewed OPEN PR no longer exists"
-                )
-            final_identity = _review_identity(
-                self.resolver, final_state, final_contract
+            current_contract = _task_contract_from_state(state)
+            _assert_review_target_facts_applicable(
+                reviewed_identity,
+                state,
+                current_contract,
             )
-            _assert_review_applicable(start, final_identity)
-            final_decision = self.eligibility.resolve(final_state, Phase.REVIEW_PREPARE)
-            if not final_decision.eligible:
-                raise LckStopError(
-                    f"Review Complete STOP for Task #{task_number}: "
-                    + "; ".join(final_decision.reasons)
-                )
-            if verdict == "PASS" and not DeliveryChecksGate._checks_postcondition(
-                final_state, checks
-            ):
-                raise LckStopError(
-                    "Review Complete STOP: current PR checks are no longer passing"
-                )
-            current = final_identity
+            self.workspace.assert_ready_for_completion(
+                review_root, reviewed_identity.head_sha
+            )
+            completion_snapshot = self.snapshots.bind_required_checks(
+                completion_snapshot, repo_root=review_root
+            )
+            current_identity = _review_identity(
+                self.resolver,
+                state,
+                current_contract,
+                repo_root=review_root,
+            )
+            _assert_review_applicable(reviewed_identity, current_identity)
+            completion_checks = self.checks_gate.evaluate(completion_snapshot)
             record = {
                 "schema_version": LCK_SCHEMA_VERSION,
                 "kind": "independent-review-record",
@@ -1940,34 +2951,57 @@ class ReviewCompleter:
                 "task_number": task_number,
                 "verdict": verdict,
                 "status": (
-                    "READY_FOR_HUMAN_MERGE" if verdict == "PASS" else "STOP_REQUIRED"
+                    "READY_FOR_MERGE_PREFLIGHT"
+                    if verdict == "PASS"
+                    else "STOP_REQUIRED"
                 ),
-                "identity": current.to_dict(),
+                "identity": reviewed_identity.to_dict(),
                 "findings": findings,
                 "findings_sha256": hashlib.sha256(findings.encode("utf-8")).hexdigest(),
-                "validation": guard.get("validation"),
-                "checks": checks,
+                "validation": validation,
+                "checks": dict(prepared_checks),
+                "completion_checks": completion_checks,
+                "review_snapshot": dict(prepared_snapshot),
+                "completion_snapshot": completion_snapshot.to_dict(),
                 "authority_note": (
-                    "record is diagnostic/audit evidence; later lifecycle mechanics "
-                    "must reacquire live Git/GitHub state"
+                    "Review Prepare target and fresh Review Complete snapshot matched; "
+                    "this record is audit evidence, while Merge Preflight must reacquire "
+                    "current Git/GitHub authority before human merge"
                 ),
             }
             record_path = self.store.write_record(task_number, review_id, record)
             self.store.write_latest_review(task_number, review_id, verdict)
-            # A successfully accepted fresh Review is the only operation that
-            # releases the post-remediation "new Review required" boundary.
             self.store.clear_review_required(task_number)
+            completion_terminal = True
             return ReviewCompletionResult(
                 review_id=review_id,
                 task_number=task_number,
                 verdict=verdict,
                 status=cast(str, record["status"]),
-                identity=current,
+                identity=reviewed_identity,
                 record_path=record_path,
             )
+        except ReviewStaleError:
+            # Stale is a formal terminal outcome for this prepared target.  It
+            # cannot be retried safely with the old target, so a fresh Prepare
+            # must reclaim this operation-owned state.
+            completion_terminal = True
+            raise
         finally:
-            self.workspace.remove(review_root)
-            self.store.delete_guard(review_id)
+            if completion_terminal:
+                cleanup_error: BaseException | None = None
+                try:
+                    self.workspace.remove(review_root)
+                except BaseException as exc:
+                    cleanup_error = exc
+                if cleanup_error is None:
+                    self.store.delete_guard(review_id)
+                    self.store.release_review_prepare(task_number, review_id)
+                else:
+                    raise cleanup_error
+            # Otherwise preserve the guard, sealed clone, and Prepare marker
+            # for a retry when live-state resolution, validation, checks, or
+            # persistence fails before a terminal result is recorded.
 
 
 class CommitCurrentTreeEffect:
@@ -2293,15 +3327,20 @@ class EnsureRemoteBranchEffect:
 
 
 class EnsureOpenPrEffect:
-    """Resolve or create exactly one non-Draft OPEN PR from live identity."""
+    """Ensure one OPEN PR using only operation-snapshot authority.
+
+    The PR helper may query/create the exact PR as the bounded effect itself,
+    but it never re-runs lifecycle resolution.
+    """
 
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.resolver = resolver
 
     def execute(
         self,
-        task_number: int,
+        state: LiveState,
         *,
+        head_sha: str,
         summary: str,
         risks: str,
         critical_outcome: Mapping[str, Any],
@@ -2309,46 +3348,34 @@ class EnsureOpenPrEffect:
         expected_base_sha: str,
         expected_body_sha256: str,
     ) -> EffectReceipt:
-        state = self.resolver.resolve(task_number)
-        if state.status is not ResolutionStatus.RESOLVED:
-            raise LckStopError(
-                "cannot ensure OPEN PR from unresolved live state: "
-                + "; ".join(state.stop_reasons)
-            )
         repository = state.repository
-        head = state.local_task_head
-        remote = state.remote_task_oid
-        base = state.git.get("origin_main_sha")
+        base = _authoritative_remote_main_sha(state.git)
         issue = state.issue
         if (
             not isinstance(repository, str)
-            or not is_sha(head)
-            or remote != head
+            or not is_sha(head_sha)
             or not is_sha(base)
             or not isinstance(issue, Mapping)
         ):
-            raise LckStopError("OPEN PR preconditions are incomplete")
+            raise LckStopError("OPEN PR snapshot preconditions are incomplete")
         if state.merged is not False:
             raise LckStopError(
                 "OPEN PR precondition failed: Task merge state is unavailable "
                 "or already merged"
             )
-        if (
-            state.local_task_branch != state.target_branch
-            or state.git.get("branch") != state.target_branch
-        ):
-            raise LckStopError(
-                "OPEN PR precondition failed: resolved Task branch is not selected"
-            )
+        if state.target_branch == BASE_BRANCH:
+            raise LckStopError("OPEN PR precondition failed: Task branch is invalid")
         if base != expected_base_sha:
-            raise LckStopError("OPEN PR precondition failed: origin/main changed")
+            raise LckStopError("OPEN PR precondition failed: snapshot base mismatch")
         if issue.get("body_sha256") != expected_body_sha256:
-            raise LckStopError("OPEN PR precondition failed: Task body changed")
+            raise LckStopError(
+                "OPEN PR precondition failed: snapshot Task body mismatch"
+            )
         title = issue.get("title")
         if not isinstance(title, str) or not title.strip():
             raise LckStopError("Task title is unavailable for PR creation")
         body = (
-            f"Closes #{task_number}\n\n"
+            f"Closes #{state.task_number}\n\n"
             "## Summary\n"
             f"{summary.strip()}\n\n"
             "## Validation\n"
@@ -2369,12 +3396,18 @@ class EnsureOpenPrEffect:
                     BASE_BRANCH,
                     title,
                     body_file,
-                    head,
-                    str(base),
+                    head_sha,
+                    expected_base_sha,
                     warnings,
                 )
             except PrResolveError as exc:
                 raise LckStopError(str(exc)) from exc
+        if (
+            result.get("head_sha") != head_sha
+            or result.get("base_sha") != expected_base_sha
+            or not isinstance(result.get("number"), int)
+        ):
+            raise LckStopError("OPEN PR postcondition returned an unexpected identity")
         return EffectReceipt(
             effect="ensure_open_pr",
             action=str(result.get("action")),
@@ -2389,15 +3422,20 @@ class EnsureOpenPrEffect:
 
 
 class ReuseExistingOpenPrEffect:
-    """Verify the pushed repair is attached to the already-existing OPEN PR."""
+    """Verify the pushed repair is attached to the snapshot's existing OPEN PR."""
+
+    PR_IDENTITY_FIELDS: Final = (
+        "number,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid"
+    )
 
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.resolver = resolver
 
     def execute(
         self,
-        task_number: int,
+        state: LiveState,
         *,
+        head_sha: str,
         summary: str,
         risks: str,
         critical_outcome: Mapping[str, Any],
@@ -2406,30 +3444,57 @@ class ReuseExistingOpenPrEffect:
         expected_body_sha256: str,
     ) -> EffectReceipt:
         del summary, risks, critical_outcome, validation
-        state = self.resolver.resolve(task_number)
-        if state.status is not ResolutionStatus.RESOLVED:
-            raise LckStopError("cannot reuse OPEN PR from unresolved live state")
         pr = state.open_pr
         issue = state.issue
-        if not isinstance(pr, Mapping) or pr.get("isDraft") is not False:
+        repository = state.repository
+        if (
+            not isinstance(pr, Mapping)
+            or pr.get("isDraft") is not False
+            or not isinstance(repository, str)
+        ):
             raise LckStopError("Remediation requires the existing non-Draft OPEN PR")
-        if state.git.get("origin_main_sha") != expected_base_sha:
+        if _authoritative_remote_main_sha(state.git) != expected_base_sha:
             raise LckStopError(
-                "Remediation PR precondition failed: origin/main changed"
+                "Remediation PR precondition failed: snapshot base mismatch"
             )
         if (
             not isinstance(issue, Mapping)
             or issue.get("body_sha256") != expected_body_sha256
         ):
-            raise LckStopError("Remediation PR precondition failed: Task body changed")
-        head = state.local_task_head
+            raise LckStopError(
+                "Remediation PR precondition failed: snapshot Task body mismatch"
+            )
+        pr_number = pr.get("number")
+        if not isinstance(pr_number, int) or isinstance(pr_number, bool):
+            raise LckStopError("Remediation PR number is unavailable")
+        result = self.resolver.runner.run(
+            [
+                "gh",
+                "pr",
+                "view",
+                str(pr_number),
+                "--repo",
+                repository,
+                "--json",
+                self.PR_IDENTITY_FIELDS,
+            ],
+            command_id="lck-remediation-pr-postcondition",
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            raise LckStopError("Remediation PR postcondition cannot be queried")
+        current = read_json_text(
+            result.stdout, field="lck-remediation-pr-postcondition"
+        )
+        if not isinstance(current, Mapping):
+            raise LckStopError("Remediation PR postcondition is malformed")
         if (
-            not is_sha(head)
-            or state.remote_task_oid != head
-            or pr.get("headRefOid") != head
-            or pr.get("baseRefOid") != expected_base_sha
-            or pr.get("headRefName") != state.target_branch
-            or pr.get("baseRefName") != BASE_BRANCH
+            current.get("number") != pr_number
+            or str(current.get("state", "")).upper() != "OPEN"
+            or current.get("isDraft") is not False
+            or current.get("headRefOid") != head_sha
+            or current.get("baseRefOid") != expected_base_sha
+            or current.get("headRefName") != state.target_branch
+            or current.get("baseRefName") != BASE_BRANCH
         ):
             raise LckStopError(
                 "Remediation PR postcondition failed: existing PR is not on the pushed head"
@@ -2438,48 +3503,75 @@ class ReuseExistingOpenPrEffect:
             effect="reuse_open_pr",
             action="reused-current-open-pr",
             details={
-                "number": pr.get("number"),
-                "url": pr.get("url"),
-                "head_sha": head,
+                "number": pr_number,
+                "url": current.get("url"),
+                "head_sha": head_sha,
                 "base_sha": expected_base_sha,
             },
         )
 
 
 class SetReviewStatusEffect:
+    """Move the Task to Review and verify only that metadata effect."""
+
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.resolver = resolver
 
+    def _query_project_status(self, repository: str, task_number: int) -> str | None:
+        result = self.resolver.runner.run(
+            [
+                "gh",
+                "issue",
+                "view",
+                str(task_number),
+                "--repo",
+                repository,
+                "--json",
+                "projectItems",
+            ],
+            command_id="lck-review-status-postcondition",
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        value = read_json_text(result.stdout, field="lck-review-status-postcondition")
+        if not isinstance(value, Mapping):
+            return None
+        return _find_project_status(value.get("projectItems"))
+
     def execute(
         self,
-        task_number: int,
+        state: LiveState,
         *,
         expected_pr: Mapping[str, Any] | None = None,
         checks_result: Mapping[str, Any] | None = None,
     ) -> EffectReceipt:
-        state = self.resolver.resolve(task_number)
-        if state.status is not ResolutionStatus.RESOLVED or state.repository is None:
-            raise LckStopError("cannot set Review status from unresolved live state")
-        if state.open_pr is None:
+        if state.repository is None:
+            raise LckStopError("cannot set Review status without repository identity")
+        if expected_pr is None or checks_result is None:
             raise LckStopError(
-                "Project Status may move to Review only after OPEN PR exists"
+                "Project Status Review requires the exact checks-gated PR receipt"
             )
-        if expected_pr is not None:
-            current_pr = DeliveryChecksGate._pr_identity(state)
-            expected_identity = {
-                "number": expected_pr.get("number"),
-                "head_sha": expected_pr.get("head_sha"),
-                "base_sha": expected_pr.get("base_sha"),
+        gated_pr = checks_result.get("pr")
+        expected_identity = {
+            "number": expected_pr.get("number"),
+            "head_sha": expected_pr.get("head_sha"),
+            "base_sha": expected_pr.get("base_sha"),
+        }
+        if (
+            not isinstance(gated_pr, Mapping)
+            or {
+                "number": gated_pr.get("number"),
+                "head_sha": gated_pr.get("head_sha"),
+                "base_sha": gated_pr.get("base_sha"),
             }
-            if current_pr != expected_identity:
-                raise LckStopError(
-                    "Project Status precondition failed: checks-gated PR identity changed"
-                )
-        if checks_result is not None and not DeliveryChecksGate._checks_postcondition(
-            state, checks_result
+            != expected_identity
         ):
             raise LckStopError(
-                "Project Status precondition failed: PR checks are no longer passing"
+                "Project Status precondition failed: checks receipt PR identity mismatch"
+            )
+        if checks_result.get("status") != "pass":
+            raise LckStopError(
+                "Project Status precondition failed: PR checks are not passing"
             )
         if state.project_status == "Review":
             return EffectReceipt(
@@ -2493,80 +3585,60 @@ class SetReviewStatusEffect:
         set_project_status_with_runner(
             self.resolver.runner,
             state.repository,
-            task_number,
+            state.task_number,
             value="Review",
         )
+        observed = self._query_project_status(state.repository, state.task_number)
+        if observed == "Review":
+            return EffectReceipt(
+                effect="set_review_status",
+                action="updated",
+                details={"status": "Review"},
+            )
+
         try:
-            final = self.resolver.resolve(task_number)
-            if final.project_status != "Review":
-                raise LckStopError(
-                    "Project Status postcondition failed: expected Review"
-                )
-            if expected_pr is not None and DeliveryChecksGate._pr_identity(final) != {
-                "number": expected_pr.get("number"),
-                "head_sha": expected_pr.get("head_sha"),
-                "base_sha": expected_pr.get("base_sha"),
-            }:
-                raise LckStopError(
-                    "Project Status postcondition failed: checks-gated PR identity changed"
-                )
-            if (
-                checks_result is not None
-                and not DeliveryChecksGate._checks_postcondition(final, checks_result)
-            ):
-                raise LckStopError(
-                    "Project Status postcondition failed: check/lifecycle state is not aligned"
-                )
-        except LckStopError as exc:
-            try:
-                set_project_status_with_runner(
-                    self.resolver.runner,
-                    state.repository,
-                    task_number,
-                    value=previous_status,
-                )
-                restored = self.resolver.resolve(task_number)
-            except Exception as restore_exc:
-                raise LckStopError(
-                    "Project Status postcondition failed and compensation could not "
-                    f"restore {previous_status!r}"
-                ) from restore_exc
-            if restored.project_status != previous_status:
-                raise LckStopError(
-                    "Project Status postcondition failed and compensation did not "
-                    f"restore {previous_status!r}"
-                )
+            set_project_status_with_runner(
+                self.resolver.runner,
+                state.repository,
+                state.task_number,
+                value=previous_status,
+            )
+        except Exception as restore_exc:
             raise LckStopError(
-                f"{exc}; restored Project Status to {previous_status!r}"
-            ) from exc
-        return EffectReceipt(
-            effect="set_review_status", action="updated", details={"status": "Review"}
+                "Project Status postcondition failed and compensation could not "
+                f"restore {previous_status!r}"
+            ) from restore_exc
+        restored = self._query_project_status(state.repository, state.task_number)
+        if restored != previous_status:
+            raise LckStopError(
+                "Project Status postcondition failed and compensation did not "
+                f"restore {previous_status!r}"
+            )
+        raise LckStopError(
+            "Project Status postcondition failed; restored Project Status to "
+            f"{previous_status!r}"
         )
 
 
 class DeliveryChecksGate:
-    """Wait boundedly for applicable PR checks using current GitHub facts."""
+    """Evaluate PR checks from one operation snapshot or one exact PR query.
 
-    def __init__(
-        self,
-        resolver: LiveStateResolver,
-        *,
-        timeout_seconds: float = 600.0,
-        poll_seconds: float = 5.0,
-    ) -> None:
-        self.resolver = resolver
-        self.timeout_seconds = max(0.0, timeout_seconds)
-        self.poll_seconds = max(0.0, poll_seconds)
+    This gate never resolves lifecycle state and never polls.  If checks are
+    pending, the current operation stops and a later lifecycle invocation
+    acquires a fresh snapshot.
+    """
+
+    PR_FIELDS: Final = (
+        "number,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,"
+        "statusCheckRollup,mergeable,url"
+    )
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.runner = resolver.runner
 
     @staticmethod
     def _required_names(required: Mapping[str, Any]) -> set[str]:
-        contexts = required.get("contexts")
-        if not isinstance(contexts, Mapping):
-            return set()
-        items = contexts.get("items")
-        if not isinstance(items, list):
-            return set()
-        return {str(item) for item in items if isinstance(item, str) and item}
+        return set(_required_check_contract(required))
 
     @staticmethod
     def _observed_categories(checks: Mapping[str, Any]) -> dict[str, str]:
@@ -2587,10 +3659,7 @@ class DeliveryChecksGate:
         return values
 
     @staticmethod
-    def _pr_identity(state: LiveState) -> dict[str, Any]:
-        pr = state.open_pr
-        if not isinstance(pr, Mapping):
-            return {}
+    def _pr_identity_from_pr(pr: Mapping[str, Any]) -> dict[str, Any]:
         return {
             "number": pr.get("number"),
             "head_sha": pr.get("headRefOid"),
@@ -2598,135 +3667,141 @@ class DeliveryChecksGate:
         }
 
     @staticmethod
+    def _pr_identity(state: LiveState) -> dict[str, Any]:
+        pr = state.open_pr
+        if not isinstance(pr, Mapping):
+            return {}
+        return DeliveryChecksGate._pr_identity_from_pr(pr)
+
+    @classmethod
+    def _evaluate_pr_checks(
+        cls,
+        pr: Mapping[str, Any],
+        required: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        checks = _normalize_checks(pr.get("statusCheckRollup"))
+        required_names = cls._required_names(required)
+        config = required.get("configuration")
+        observed = cls._observed_categories(checks)
+        try:
+            failed = int(checks.get("failed", 0) or 0)
+            unknown = int(checks.get("skipped_or_unknown", 0) or 0)
+            pending = int(checks.get("pending", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise LckStopError("PR check summary is malformed") from exc
+
+        if failed > 0 or unknown > 0:
+            raise LckStopError("PR checks failed, cancelled, skipped, or unknown")
+        if pending > 0:
+            raise LckStopError(
+                "PR checks are pending; start a new lifecycle operation after CI completes"
+            )
+
+        if required_names:
+            failed_required = {
+                name
+                for name in required_names
+                if observed.get(name) not in {None, "success"}
+            }
+            if failed_required:
+                raise LckStopError(
+                    "required PR checks are not successful: "
+                    + ", ".join(sorted(failed_required))
+                )
+            missing = required_names - set(observed)
+            if missing:
+                raise LckStopError(
+                    "required PR checks are not present: " + ", ".join(sorted(missing))
+                )
+
+        return {
+            "status": "pass",
+            "configuration": config,
+            "required": sorted(required_names),
+            "pr": cls._pr_identity_from_pr(pr),
+            "checks": checks,
+        }
+
+    def evaluate(self, snapshot: OperationSnapshot) -> dict[str, Any]:
+        state = snapshot.state
+        if state.status is not ResolutionStatus.RESOLVED:
+            raise LckStopError(
+                "cannot evaluate checks from unresolved operation snapshot: "
+                + "; ".join(state.stop_reasons)
+            )
+        pr = state.open_pr
+        if not isinstance(pr, Mapping):
+            raise LckStopError("PR checks require one OPEN PR in operation snapshot")
+        required = snapshot.required_checks
+        if not isinstance(required, Mapping):
+            raise LckStopError("required PR check configuration was not acquired")
+        _required_check_contract_for_snapshot(snapshot)
+        return self._evaluate_pr_checks(pr, required)
+
+    def query_exact_pr(
+        self,
+        repository: str,
+        pr_number: int,
+        *,
+        expected_head_sha: str,
+        expected_base_sha: str,
+        required_checks: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Targeted post-effect query for a PR created/updated by this operation."""
+        result = self.runner.run(
+            [
+                "gh",
+                "pr",
+                "view",
+                str(pr_number),
+                "--repo",
+                repository,
+                "--json",
+                self.PR_FIELDS,
+            ],
+            command_id="lck-checks-exact-pr",
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            raise LckStopError(
+                "cannot query the exact PR after the PR effect: "
+                + (result.stderr.strip() or f"exit {result.returncode}")
+            )
+        value = read_json_text(result.stdout, field="lck-checks-exact-pr")
+        if not isinstance(value, Mapping):
+            raise LckStopError("exact PR check query returned a non-object")
+        if (
+            value.get("number") != pr_number
+            or str(value.get("state", "")).upper() != "OPEN"
+            or value.get("isDraft") is not False
+            or value.get("headRefOid") != expected_head_sha
+            or value.get("baseRefOid") != expected_base_sha
+        ):
+            raise LckStopError("exact PR identity changed after the PR effect")
+        return self._evaluate_pr_checks(value, required_checks)
+
+    @staticmethod
     def _checks_postcondition(
         state: LiveState,
         checks_result: Mapping[str, Any],
     ) -> bool:
-        """Require the latest live PR checks to match the completed gate."""
+        """Compare a snapshot PR/check fact to a previously completed check gate."""
         if checks_result.get("status") != "pass":
             return False
         current_pr = state.open_pr
         gated_pr = checks_result.get("pr")
         if not isinstance(current_pr, Mapping) or not isinstance(gated_pr, Mapping):
             return False
-        if (
-            gated_pr.get("number") != current_pr.get("number")
-            or gated_pr.get("head_sha") != current_pr.get("headRefOid")
-            or gated_pr.get("base_sha") != current_pr.get("baseRefOid")
-        ):
+        if DeliveryChecksGate._pr_identity_from_pr(current_pr) != {
+            "number": gated_pr.get("number"),
+            "head_sha": gated_pr.get("head_sha"),
+            "base_sha": gated_pr.get("base_sha"),
+        }:
             return False
-        checks = state.checks
-        try:
-            failed = int(checks.get("failed", 0) or 0)
-            pending = int(checks.get("pending", 0) or 0)
-            unknown = int(checks.get("skipped_or_unknown", 0) or 0)
-            count = int(checks.get("count", 0) or 0)
-        except (TypeError, ValueError):
+        current_checks = _normalize_checks(current_pr.get("statusCheckRollup"))
+        expected_checks = checks_result.get("checks")
+        if not isinstance(expected_checks, Mapping):
             return False
-        if failed > 0 or pending > 0 or unknown > 0:
-            return False
-
-        required = checks_result.get("required")
-        required_names = (
-            {item for item in required if isinstance(item, str) and item}
-            if isinstance(required, list)
-            else set()
-        )
-        if required_names:
-            observed = DeliveryChecksGate._observed_categories(checks)
-            return all(observed.get(name) == "success" for name in required_names)
-
-        configuration = checks_result.get("configuration")
-        if configuration in {"configured-empty", "not-configured"}:
-            return count == 0 or checks.get("all_success") is True
-        return count > 0 and checks.get("all_success") is True
-
-    def run(self, task_number: int) -> dict[str, Any]:
-        state = self.resolver.resolve(task_number)
-        if state.status is not ResolutionStatus.RESOLVED or state.repository is None:
-            raise LckStopError("cannot evaluate checks from unresolved live state")
-        warnings: list[dict[str, Any]] = []
-        required = _required_checks(
-            self.resolver.runner,
-            state.repository,
-            BASE_BRANCH,
-            warnings,
-        )
-        required_names = self._required_names(required)
-        config = required.get("configuration")
-        deadline = time.monotonic() + self.timeout_seconds
-
-        while True:
-            current = self.resolver.resolve(task_number)
-            if (
-                current.status is not ResolutionStatus.RESOLVED
-                or current.open_pr is None
-            ):
-                raise LckStopError("PR identity changed while waiting for checks")
-            checks = current.checks
-            observed = self._observed_categories(checks)
-            failed = int(checks.get("failed", 0) or 0)
-            unknown = int(checks.get("skipped_or_unknown", 0) or 0)
-            pending = int(checks.get("pending", 0) or 0)
-
-            if failed > 0 or unknown > 0:
-                raise LckStopError("PR checks failed, cancelled, skipped, or unknown")
-
-            if pending == 0:
-                if required_names:
-                    failed_required = {
-                        name
-                        for name in required_names
-                        if observed.get(name) not in {None, "success", "pending"}
-                    }
-                    if failed_required:
-                        raise LckStopError(
-                            "required PR checks failed: "
-                            + ", ".join(sorted(failed_required))
-                        )
-                    if all(observed.get(name) == "success" for name in required_names):
-                        return {
-                            "status": "pass",
-                            "configuration": config,
-                            "required": sorted(required_names),
-                            "observed": checks,
-                            "pr": self._pr_identity(current),
-                            "warnings": warnings,
-                        }
-                elif config in {"configured-empty", "not-configured"}:
-                    if checks.get("count") == 0 or checks.get("all_success") is True:
-                        return {
-                            "status": "pass",
-                            "configuration": config,
-                            "required": [],
-                            "observed": checks,
-                            "pr": self._pr_identity(current),
-                            "warnings": warnings,
-                        }
-                elif checks.get("count", 0) > 0 and checks.get("all_success") is True:
-                    # GitHub can hide branch-protection configuration behind a plan
-                    # boundary. Successful observed checks are preserved as a
-                    # capability-limited fact instead of being upgraded to proof of
-                    # required-check configuration.
-                    return {
-                        "status": "pass",
-                        "configuration": config,
-                        "required": [],
-                        "observed": checks,
-                        "pr": self._pr_identity(current),
-                        "warnings": warnings,
-                        "limitation": "required-check configuration unavailable",
-                    }
-
-            if time.monotonic() >= deadline:
-                detail = (
-                    f"required={sorted(required_names)}, observed={sorted(observed)}, "
-                    f"pending={pending}, configuration={config}"
-                )
-                raise LckStopError(
-                    "timed out waiting for successful PR checks: " + detail
-                )
-            time.sleep(self.poll_seconds)
+        return current_checks == expected_checks
 
 
 class ReviewPassGate:
@@ -2755,30 +3830,32 @@ class ReviewPassGate:
             record.get("task_number") != task_number
             or record.get("review_id") != review_id
             or record.get("verdict") != "PASS"
-            or record.get("status") != "READY_FOR_HUMAN_MERGE"
+            or record.get("status") != "READY_FOR_MERGE_PREFLIGHT"
         ):
             raise LckStopError("latest Independent Review PASS record is invalid")
         raw_identity = record.get("identity")
         if not isinstance(raw_identity, Mapping):
             raise LckStopError("Independent Review PASS has no identity")
         recorded = _identity_from_mapping(raw_identity)
-        issue = state.issue
-        body_sha256 = issue.get("body_sha256") if isinstance(issue, Mapping) else None
-        if not isinstance(body_sha256, str):
-            raise LckStopError("current Task body identity is unavailable")
-        current = _review_identity(
-            self.resolver,
-            state,
-            {"body_sha256": body_sha256},
-        )
+        current_contract = _task_contract_from_state(state)
         try:
-            _assert_review_applicable(recorded, current)
+            _assert_review_target_facts_applicable(
+                recorded,
+                state,
+                current_contract,
+            )
         except ReviewStaleError as exc:
             raise LckStopError(f"Review PASS is stale: {exc}") from exc
+
+        # Git commit objects are content-addressed. Once current PR/base/head and
+        # Task Contract identity still match the accepted Review receipt, the
+        # recorded merge-base/effective-diff identity remains mechanically bound
+        # to those same commits. Merge Preflight therefore needs no source-repo
+        # object materialization or duplicate local diff probe.
         return {
             "status": "pass",
             "review_id": review_id,
-            "identity": current.to_dict(),
+            "identity": recorded.to_dict(),
             "recorded_identity": recorded.to_dict(),
         }
 
@@ -2823,13 +3900,17 @@ class MergePreflight:
         checks_gate: DeliveryChecksGate | None = None,
     ) -> None:
         self.resolver = resolver
+        self.snapshots = OperationSnapshotBuilder(resolver)
         self.review_gate = review_gate or ReviewPassGate(resolver)
-        self.checks_gate = checks_gate or DeliveryChecksGate(
-            resolver, timeout_seconds=0.0, poll_seconds=0.0
-        )
+        self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
 
     def run(self, task_number: int) -> MergePreflightResult:
-        state = self.resolver.resolve(task_number)
+        snapshot = self.snapshots.acquire(
+            task_number,
+            operation="merge-preflight",
+            include_required_checks=True,
+        )
+        state = snapshot.state
         if state.status is not ResolutionStatus.RESOLVED:
             raise LckStopError("Merge Preflight STOP: " + "; ".join(state.stop_reasons))
         pr = state.open_pr
@@ -2867,46 +3948,13 @@ class MergePreflight:
                 + str(blockers.get("detail") or blockers.get("status"))
             )
         review = self.review_gate.run(task_number, state)
-        checks = self.checks_gate.run(task_number)
+        checks = self.checks_gate.evaluate(snapshot)
         if checks.get("limitation"):
             raise LckStopError(
                 "Merge Preflight cannot prove required checks: "
                 + str(checks["limitation"])
             )
-        current = self.resolver.resolve(task_number)
-        current_pr = current.open_pr
-        if (
-            current.status is not ResolutionStatus.RESOLVED
-            or not isinstance(current_pr, Mapping)
-            or current.target_branch != state.target_branch
-            or current.project_status != "Review"
-            or current_pr.get("isDraft") is not False
-            or str(current_pr.get("state", "")).upper() != "OPEN"
-            or current_pr.get("baseRefName") != BASE_BRANCH
-            or current_pr.get("headRefName") != current.target_branch
-            or _pr_head_sha(current_pr) != head_sha
-            or _pr_base_sha(current_pr) != base_sha
-            or current.remote_task_oid != head_sha
-            or (
-                current.local_task_head is not None
-                and current.local_task_head != head_sha
-            )
-        ):
-            raise LckStopError(
-                "Merge Preflight PR identity changed while evaluating merge gates"
-            )
-        blockers = _formal_blockers_gate(current.relationships)
-        if blockers.get("status") != "pass":
-            raise LckStopError(
-                "Merge Preflight unresolved blockers changed while evaluating gates: "
-                + str(blockers.get("detail") or blockers.get("status"))
-            )
-        review = self.review_gate.run(task_number, current)
-        if not DeliveryChecksGate._checks_postcondition(current, checks):
-            raise LckStopError(
-                "Merge Preflight checks changed or are no longer passing"
-            )
-        mergeability_value = current_pr.get("mergeable")
+        mergeability_value = pr.get("mergeable")
         mergeability = str(mergeability_value or "").upper()
         if mergeability not in {"MERGEABLE", "TRUE"}:
             raise LckStopError(
@@ -2916,7 +3964,7 @@ class MergePreflight:
         return MergePreflightResult(
             task_number=task_number,
             status="READY_FOR_HUMAN_MERGE",
-            pr=current_pr,
+            pr=pr,
             review=review,
             checks=checks,
             blockers=blockers,
@@ -3049,6 +4097,43 @@ class CloseoutMetadataEffect:
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.resolver = resolver
 
+    def _query_metadata(
+        self, repository: str, task_number: int
+    ) -> tuple[str | None, str | None, set[str]]:
+        result = self.resolver.runner.run(
+            [
+                "gh",
+                "issue",
+                "view",
+                str(task_number),
+                "--repo",
+                repository,
+                "--json",
+                "state,labels,projectItems",
+            ],
+            command_id="lck-closeout-metadata-postcondition",
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return None, None, set()
+        value = read_json_text(
+            result.stdout, field="lck-closeout-metadata-postcondition"
+        )
+        if not isinstance(value, Mapping):
+            return None, None, set()
+        raw_labels = value.get("labels")
+        labels: set[str] = set()
+        if isinstance(raw_labels, list):
+            for item in raw_labels:
+                if isinstance(item, Mapping) and isinstance(item.get("name"), str):
+                    labels.add(str(item["name"]))
+                elif isinstance(item, str):
+                    labels.add(item)
+        return (
+            safe_text(value.get("state")),
+            _find_project_status(value.get("projectItems")),
+            labels,
+        )
+
     def execute(self, state: LiveState) -> EffectReceipt:
         if state.issue_state != "CLOSED":
             return _pending_receipt(
@@ -3104,11 +4189,14 @@ class CloseoutMetadataEffect:
                 reason="Project Status convergence failed",
                 details={"actions": actions},
             )
-        final = self.resolver.resolve(state.task_number)
+        final_state, final_project_status, final_labels = self._query_metadata(
+            state.repository, state.task_number
+        )
         if (
-            final.project_status != "Done"
-            or "codex:ready" not in _label_names(final.issue)
-            or "codex:blocked" in _label_names(final.issue)
+            str(final_state or "").upper() != "CLOSED"
+            or final_project_status != "Done"
+            or "codex:ready" not in final_labels
+            or "codex:blocked" in final_labels
         ):
             return _pending_receipt(
                 "converge_task_metadata",
@@ -3139,13 +4227,22 @@ class CleanupTaskRefsEffect:
         branch = state.target_branch
         if branch == BASE_BRANCH or not _branch_matches_task(branch, state.task_number):
             raise LckStopError("Cleanup target is not the verified Task branch")
-        worktree_branches = state.git.get("worktree_branches")
-        worktree_items = (
-            worktree_branches.get("items")
-            if isinstance(worktree_branches, Mapping)
-            else []
+        worktrees = self.resolver.runner.run(
+            ["git", "worktree", "list", "--porcelain"],
+            command_id="lck-closeout-worktree-precondition",
         )
-        if isinstance(worktree_items, list) and branch in worktree_items:
+        if worktrees.returncode != 0:
+            return _pending_receipt(
+                "cleanup_task_refs",
+                "pending",
+                reason="current worktree ownership cannot be verified",
+            )
+        worktree_branches = {
+            line.removeprefix("branch refs/heads/")
+            for line in worktrees.stdout.splitlines()
+            if line.startswith("branch refs/heads/")
+        }
+        if branch in worktree_branches:
             return _pending_receipt(
                 "cleanup_task_refs",
                 "pending",
@@ -3267,7 +4364,7 @@ class CloseoutResult:
     business_delivery: str
     cleanup: str
     effects: tuple[EffectReceipt, ...]
-    final_state: LiveState
+    operation_snapshot: OperationSnapshot
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -3278,7 +4375,7 @@ class CloseoutResult:
             "business_delivery": self.business_delivery,
             "cleanup": self.cleanup,
             "effects": [item.to_dict() for item in self.effects],
-            "final_state": self.final_state.to_dict(),
+            "operation_snapshot": self.operation_snapshot.to_dict(),
             "automatic_merge": False,
             "manual_issue_close": False,
         }
@@ -3298,6 +4395,7 @@ class CloseoutCompleter:
         review_store: ReviewInvocationStore | None = None,
     ) -> None:
         self.resolver = resolver
+        self.snapshots = OperationSnapshotBuilder(resolver)
         self.eligibility = eligibility or PhaseEligibilityResolver()
         self.main_effect = main_effect or MainSynchronizationEffect(resolver)
         self.metadata_effect = metadata_effect or CloseoutMetadataEffect(resolver)
@@ -3388,7 +4486,7 @@ class CloseoutCompleter:
             record.get("task_number") != state.task_number
             or record.get("review_id") != review_id
             or record.get("verdict") != "PASS"
-            or record.get("status") != "READY_FOR_HUMAN_MERGE"
+            or record.get("status") != "READY_FOR_MERGE_PREFLIGHT"
         ):
             raise LckStopError("Closeout STOP: latest Review PASS record is invalid")
         raw_identity = record.get("identity")
@@ -3406,7 +4504,8 @@ class CloseoutCompleter:
             )
 
     def complete(self, task_number: int) -> CloseoutResult:
-        state = self.resolver.resolve(task_number)
+        snapshot = self.snapshots.acquire(task_number, operation="closeout")
+        state = snapshot.state
         decision = self.eligibility.resolve(state, Phase.CLOSEOUT)
         if not decision.eligible:
             raise LckStopError(
@@ -3420,14 +4519,12 @@ class CloseoutCompleter:
         main = self.main_effect.execute(state, merge_sha=merge_sha)
         effects.append(main)
 
-        current = self.resolver.resolve(task_number)
-        metadata = self.metadata_effect.execute(current)
+        metadata = self.metadata_effect.execute(state)
         effects.append(metadata)
 
-        current = self.resolver.resolve(task_number)
         if main.action in {"synchronized", "already-synced"}:
             cleanup = self.cleanup_effect.execute(
-                current,
+                state,
                 expected_head_sha=expected_head,
                 merge_sha=merge_sha,
             )
@@ -3438,22 +4535,10 @@ class CloseoutCompleter:
                 reason="main synchronization is incomplete",
             )
         effects.append(cleanup)
-        final = self.resolver.resolve(task_number)
-        if final.status is not ResolutionStatus.RESOLVED:
-            raise LckStopError(
-                "Closeout STOP: final live state is unresolved: "
-                + "; ".join(final.stop_reasons)
-            )
-        if final.merged is not True or final.open_pr is not None:
-            raise LckStopError(
-                "Closeout STOP: final merged PR state changed or an OPEN PR exists"
-            )
         cleanup_complete = (
             main.action in {"synchronized", "already-synced"}
             and metadata.action in {"updated", "already-converged"}
             and cleanup.action in {"cleaned", "already-clean"}
-            and final.local_task_branch is None
-            and final.remote_task_branch is None
         )
         return CloseoutResult(
             task_number=task_number,
@@ -3461,7 +4546,7 @@ class CloseoutCompleter:
             business_delivery="COMPLETE",
             cleanup="COMPLETE" if cleanup_complete else "PENDING",
             effects=tuple(effects),
-            final_state=final,
+            operation_snapshot=snapshot,
         )
 
 
@@ -3475,7 +4560,7 @@ class DeliveryCompletionResult:
     validation: Mapping[str, Any]
     checks: Mapping[str, Any]
     effects: tuple[EffectReceipt, ...]
-    final_state: LiveState
+    operation_snapshot: OperationSnapshot
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -3489,13 +4574,19 @@ class DeliveryCompletionResult:
             "validation": _jsonable(self.validation),
             "checks": _jsonable(self.checks),
             "effects": [item.to_dict() for item in self.effects],
-            "final_state": self.final_state.to_dict(),
+            "operation_snapshot": self.operation_snapshot.to_dict(),
             "human_boundary": "Independent Review must be started separately",
         }
 
 
 class DeliveryCompleter:
-    """Complete initial Delivery using bounded LCK-owned lifecycle effects."""
+    """Complete Delivery from one immutable operation-start snapshot.
+
+    Lifecycle authority is acquired once.  Local/remote/PR/metadata mutations
+    then prove only their own exact postconditions.  If asynchronous PR checks
+    are pending, the operation stops after the durable commit/push/PR effects;
+    a later invocation acquires a fresh snapshot and continues idempotently.
+    """
 
     def __init__(
         self,
@@ -3505,12 +4596,13 @@ class DeliveryCompleter:
         formal_validation: FormalValidationGate | None = None,
         commit_effect: CommitCurrentTreeEffect | None = None,
         remote_effect: EnsureRemoteBranchEffect | None = None,
-        pr_effect: EnsureOpenPrEffect | None = None,
+        pr_effect: EnsureOpenPrEffect | ReuseExistingOpenPrEffect | None = None,
         status_effect: SetReviewStatusEffect | None = None,
         checks_gate: DeliveryChecksGate | None = None,
         require_existing_open_pr: bool = False,
     ) -> None:
         self.resolver = resolver
+        self.snapshots = OperationSnapshotBuilder(resolver)
         self.eligibility = eligibility or PhaseEligibilityResolver()
         self.formal_validation = formal_validation or FormalValidationGate(resolver)
         self.commit_effect = commit_effect or CommitCurrentTreeEffect(resolver)
@@ -3522,9 +4614,11 @@ class DeliveryCompleter:
 
     def _run_critical_outcome(self, state: LiveState) -> dict[str, Any]:
         issue = state.issue
-        snapshot = issue.get("critical_outcome") if isinstance(issue, Mapping) else None
+        contract_snapshot = (
+            issue.get("critical_outcome") if isinstance(issue, Mapping) else None
+        )
         try:
-            contract = contract_from_snapshot(snapshot)
+            contract = contract_from_snapshot(contract_snapshot)
             result = verify_critical_outcome(
                 self.resolver.repo_root,
                 self.resolver.runner,
@@ -3549,141 +4643,89 @@ class DeliveryCompleter:
             return True
         if result.returncode == 0:
             return False
-        raise LckStopError("unable to verify Task diff against current origin/main")
+        raise LckStopError("unable to verify Task diff against operation base")
 
-    def _operation_guard(
-        self,
-        task_number: int,
-        *,
-        base_sha: str,
-        body_sha256: str,
-        branch: str,
-        head_sha: str | None = None,
-        expected_pr_base_sha: str | None = None,
-    ) -> LiveState:
-        """Reacquire the facts that must stay stable within this invocation."""
-        state = self.resolver.resolve(task_number)
-        decision = self.eligibility.resolve(state, Phase.DELIVERY_COMPLETE)
-        if not decision.eligible:
-            raise LckStopError(
-                "Delivery operation guard stopped: " + "; ".join(decision.reasons)
-            )
-        issue = state.issue
-        if state.git.get("origin_main_sha") != base_sha:
-            raise LckStopError("Delivery operation guard stopped: origin/main changed")
-        if not isinstance(issue, Mapping) or issue.get("body_sha256") != body_sha256:
-            raise LckStopError("Delivery operation guard stopped: Task body changed")
-        if state.target_branch != branch:
-            raise LckStopError(
-                "Delivery operation guard stopped: Task branch identity changed"
-            )
-        if expected_pr_base_sha is not None:
-            pr = state.open_pr
-            if (
-                not isinstance(pr, Mapping)
-                or pr.get("baseRefOid") != expected_pr_base_sha
-            ):
-                raise LckStopError(
-                    "Delivery operation guard stopped: existing OPEN PR base changed"
-                )
-        if head_sha is not None and state.local_task_head != head_sha:
-            raise LckStopError(
-                "Delivery operation guard stopped: local Task head changed"
-            )
-        return state
-
-    @staticmethod
-    def _checks_postcondition(
-        state: LiveState,
-        checks_result: Mapping[str, Any],
-    ) -> bool:
-        return DeliveryChecksGate._checks_postcondition(state, checks_result)
-
-    def _final_verify(
-        self,
-        state: LiveState,
-        head: str,
-        *,
-        base_sha: str,
-        body_sha256: str,
-        branch: str,
-        checks_result: Mapping[str, Any],
-    ) -> LiveState:
-        if state.status is not ResolutionStatus.RESOLVED:
-            raise LckStopError(
-                "Delivery final verification unresolved: "
-                + "; ".join(state.stop_reasons)
-            )
-        issue = state.issue
-        pr_head = state.open_pr.get("headRefOid") if state.open_pr else None
-        pr_base = state.open_pr.get("baseRefOid") if state.open_pr else None
-        if not (
-            state.target_branch == branch
-            and state.git.get("branch") == branch
-            and state.git.get("clean") is True
-            and state.git.get("origin_main_sha") == base_sha
-            and isinstance(issue, Mapping)
-            and issue.get("body_sha256") == body_sha256
-            and state.local_task_head == head
-            and state.remote_task_oid == head
-            and pr_head == head
-            and pr_base == base_sha
-            and state.open_pr is not None
-            and state.open_pr.get("isDraft") is False
-            and state.project_status == "Review"
-            and self._checks_postcondition(state, checks_result)
+    def _verify_local_completion(self, branch: str, head_sha: str) -> None:
+        branch_result = self.resolver.runner.run(
+            ["git", "branch", "--show-current"],
+            command_id="lck-delivery-final-branch",
+        )
+        head_result = self.resolver.runner.run(
+            ["git", "rev-parse", "HEAD"],
+            command_id="lck-delivery-final-head",
+        )
+        status = self.resolver.runner.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            command_id="lck-delivery-final-status",
+        )
+        if (
+            branch_result.returncode != 0
+            or branch_result.stdout.strip() != branch
+            or head_result.returncode != 0
+            or head_result.stdout.strip() != head_sha
+            or status.returncode != 0
+            or status.stdout.strip()
         ):
             raise LckStopError(
-                "Delivery final verification failed: Task/base/local/remote/PR/check/lifecycle "
-                "state is not aligned"
+                "Delivery local postcondition failed: branch/head/worktree is not "
+                "the validated operation result"
             )
-        return state
 
-    def complete(
+    @staticmethod
+    def _receipt_pr_identity(receipt: EffectReceipt) -> dict[str, Any]:
+        return {
+            "number": receipt.details.get("number"),
+            "head_sha": receipt.details.get("head_sha"),
+            "base_sha": receipt.details.get("base_sha"),
+        }
+
+    def _complete_from_snapshot(
         self,
-        task_number: int,
+        snapshot: OperationSnapshot,
         *,
+        phase: Phase,
         commit_message: str,
         summary: str,
-        risks: str = "",
+        risks: str,
     ) -> DeliveryCompletionResult:
-        if not summary.strip():
-            raise LckStopError("Delivery summary must be non-empty")
-        state = self.resolver.resolve(task_number)
-        decision = self.eligibility.resolve(state, Phase.DELIVERY_COMPLETE)
+        state = snapshot.state
+        task_number = state.task_number
+        required_checks = snapshot.required_checks
+        _required_check_contract_for_snapshot(snapshot)
+        required_checks_mapping = cast(Mapping[str, Any], required_checks)
+        decision = self.eligibility.resolve(state, phase)
         if not decision.eligible:
             raise LckStopError(
-                f"Delivery Complete STOP for Task #{task_number}: "
+                f"{phase.value} STOP for Task #{task_number}: "
                 + "; ".join(decision.reasons)
             )
-        base_sha = state.git.get("origin_main_sha")
+        base_sha = _authoritative_remote_main_sha(state.git)
         if not is_sha(base_sha):
-            raise LckStopError("current origin/main identity is unavailable")
+            raise LckStopError("current remote main identity is unavailable")
         issue = state.issue
         body_sha256 = issue.get("body_sha256") if isinstance(issue, Mapping) else None
         if not isinstance(body_sha256, str) or not body_sha256:
             raise LckStopError("current Task body identity is unavailable")
         branch = state.target_branch
-        expected_pr_base_sha = base_sha if self.require_existing_open_pr else None
-
-        if expected_pr_base_sha is not None:
-            self._operation_guard(
-                task_number,
-                base_sha=base_sha,
-                body_sha256=body_sha256,
-                branch=branch,
-                head_sha=state.local_task_head,
-                expected_pr_base_sha=expected_pr_base_sha,
-            )
+        if self.require_existing_open_pr:
+            pr = state.open_pr
+            if (
+                not isinstance(pr, Mapping)
+                or pr.get("isDraft") is not False
+                or pr.get("baseRefOid") != base_sha
+                or pr.get("headRefName") != branch
+            ):
+                raise LckStopError(
+                    "Remediation requires the snapshot's existing OPEN PR on the "
+                    "resolved Task branch/base"
+                )
 
         effects: list[EffectReceipt] = []
         if state.git.get("clean") is True:
             if not self._has_task_diff(base_sha):
                 raise LckStopError(
-                    "Delivery Complete found no Task diff against origin/main"
+                    "Delivery Complete found no Task diff against operation base"
                 )
-            # Stateless recovery path: re-run all gates on the existing clean head
-            # instead of trusting a receipt from a previous interrupted invocation.
             validated_tree = self.commit_effect.current_head_tree()
             critical = self._run_critical_outcome(state)
             validation = self.formal_validation.run(base_sha)
@@ -3706,14 +4748,6 @@ class DeliveryCompleter:
             validated_tree = self.commit_effect.stage_candidate_tree()
             critical = self._run_critical_outcome(state)
             validation = self.formal_validation.run(base_sha)
-            self._operation_guard(
-                task_number,
-                base_sha=base_sha,
-                body_sha256=body_sha256,
-                branch=branch,
-                head_sha=state.local_task_head,
-                expected_pr_base_sha=expected_pr_base_sha,
-            )
             self.commit_effect.verify_tree_unchanged(
                 validated_tree,
                 expected_head_sha=state.local_task_head,
@@ -3728,87 +4762,100 @@ class DeliveryCompleter:
             if not is_sha(head):
                 raise LckStopError("commit receipt did not contain a valid head SHA")
 
-        self._operation_guard(
-            task_number,
-            base_sha=base_sha,
-            body_sha256=body_sha256,
-            branch=branch,
+        remote = self.remote_effect.execute(branch, expected_head_sha=str(head))
+        effects.append(remote)
+        if remote.details.get("remote_oid") != head:
+            raise LckStopError("remote branch effect did not prove the validated head")
+
+        pr_receipt = self.pr_effect.execute(
+            state,
             head_sha=str(head),
-            expected_pr_base_sha=expected_pr_base_sha,
+            summary=summary,
+            risks=risks,
+            critical_outcome=critical,
+            validation=validation,
+            expected_base_sha=base_sha,
+            expected_body_sha256=body_sha256,
         )
-        effects.append(
-            self.remote_effect.execute(
-                branch,
+        effects.append(pr_receipt)
+        pr_identity = self._receipt_pr_identity(pr_receipt)
+        pr_number = pr_identity.get("number")
+        if (
+            not isinstance(pr_number, int)
+            or pr_identity.get("head_sha") != head
+            or pr_identity.get("base_sha") != base_sha
+        ):
+            raise LckStopError("PR effect did not prove the validated head/base")
+
+        snapshot_pr = state.open_pr
+        if (
+            isinstance(snapshot_pr, Mapping)
+            and snapshot_pr.get("number") == pr_number
+            and snapshot_pr.get("headRefOid") == head
+            and snapshot_pr.get("baseRefOid") == base_sha
+        ):
+            checks = self.checks_gate.evaluate(snapshot)
+        else:
+            if not isinstance(state.repository, str):
+                raise LckStopError("repository identity is unavailable for PR checks")
+            checks = self.checks_gate.query_exact_pr(
+                state.repository,
+                pr_number,
                 expected_head_sha=str(head),
-            )
-        )
-        self._operation_guard(
-            task_number,
-            base_sha=base_sha,
-            body_sha256=body_sha256,
-            branch=branch,
-            head_sha=str(head),
-            expected_pr_base_sha=expected_pr_base_sha,
-        )
-        effects.append(
-            self.pr_effect.execute(
-                task_number,
-                summary=summary,
-                risks=risks,
-                critical_outcome=critical,
-                validation=validation,
                 expected_base_sha=base_sha,
-                expected_body_sha256=body_sha256,
+                required_checks=required_checks_mapping,
             )
-        )
-        self._operation_guard(
-            task_number,
-            base_sha=base_sha,
-            body_sha256=body_sha256,
-            branch=branch,
-            head_sha=str(head),
-            expected_pr_base_sha=expected_pr_base_sha,
-        )
-        checks = self.checks_gate.run(task_number)
-        self._operation_guard(
-            task_number,
-            base_sha=base_sha,
-            body_sha256=body_sha256,
-            branch=branch,
-            head_sha=str(head),
-            expected_pr_base_sha=expected_pr_base_sha,
-        )
+
         checks_pr = checks.get("pr")
         if not isinstance(checks_pr, Mapping):
             raise LckStopError("checks result did not contain PR identity")
-        effects.append(
-            self.status_effect.execute(
-                task_number,
-                expected_pr=checks_pr,
-                checks_result=checks,
-            )
-        )
-        # The status effect may race with GitHub check transitions. Reacquire
-        # one final live state after the effect and verify that exact state.
-        final_state = self.resolver.resolve(task_number)
-        final_state = self._final_verify(
-            final_state,
-            str(head),
-            base_sha=base_sha,
-            body_sha256=body_sha256,
-            branch=branch,
+        status_receipt = self.status_effect.execute(
+            state,
+            expected_pr=checks_pr,
             checks_result=checks,
         )
+        effects.append(status_receipt)
+        if status_receipt.action not in {"updated", "already-review"}:
+            raise LckStopError("Project Status effect did not reach Review")
+
+        self._verify_local_completion(branch, str(head))
         return DeliveryCompletionResult(
             task_number=task_number,
             status="READY_FOR_REVIEW",
-            branch=final_state.target_branch,
+            branch=branch,
             head_sha=str(head),
             critical_outcome=critical,
             validation=validation,
             checks=checks,
             effects=tuple(effects),
-            final_state=final_state,
+            operation_snapshot=snapshot,
+        )
+
+    def complete(
+        self,
+        task_number: int,
+        *,
+        commit_message: str,
+        summary: str,
+        risks: str = "",
+        operation_snapshot: OperationSnapshot | None = None,
+        phase: Phase = Phase.DELIVERY_COMPLETE,
+    ) -> DeliveryCompletionResult:
+        if not summary.strip():
+            raise LckStopError("Delivery summary must be non-empty")
+        snapshot = operation_snapshot or self.snapshots.acquire(
+            task_number,
+            operation=phase.value,
+            include_required_checks=True,
+        )
+        if snapshot.state.task_number != task_number:
+            raise LckStopError("operation snapshot belongs to another Task")
+        return self._complete_from_snapshot(
+            snapshot,
+            phase=phase,
+            commit_message=commit_message,
+            summary=summary,
+            risks=risks,
         )
 
 
@@ -3817,8 +4864,13 @@ class RemediationContext:
     task_number: int
     review_id: str
     findings: str
-    state: LiveState
+    findings_source: str
+    operation_snapshot: OperationSnapshot
     action: str
+
+    @property
+    def state(self) -> LiveState:
+        return self.operation_snapshot.state
 
     def to_dict(self) -> dict[str, Any]:
         pr = self.state.open_pr or {}
@@ -3830,6 +4882,8 @@ class RemediationContext:
             "review_id": self.review_id,
             "action": self.action,
             "findings": self.findings,
+            "findings_source": self.findings_source,
+            "operation_snapshot": self.operation_snapshot.to_dict(),
             "live_target": {
                 "pr_number": pr.get("number"),
                 "base_sha": pr.get("baseRefOid"),
@@ -3841,7 +4895,17 @@ class RemediationContext:
                     else None
                 ),
             },
-            "mechanical_authority": "current live state; Review record supplies findings only",
+            "mechanical_authority": (
+                "operation snapshot acquired at Remediation entry; Review findings are semantic "
+                "input only, whether loaded from the local audit record or an explicitly supplied "
+                "portable findings file"
+            ),
+            "acceptance_boundary": (
+                "Requirements whose evidence can only be truthfully produced after the repaired "
+                "candidate head exists, or by a separate provider/fresh Review invocation, do not "
+                "block Remediation Complete. They remain unsatisfied Review-acceptance requirements "
+                "and must not be fabricated or treated as satisfied by remediation."
+            ),
         }
 
 
@@ -3872,11 +4936,37 @@ def _failed_review_record(
     return record
 
 
-def _failed_review_findings(
-    store: ReviewInvocationStore, task_number: int, review_id: str
-) -> str:
-    record = _failed_review_record(store, task_number, review_id)
-    return cast(str, record["findings"])
+def _read_portable_review_findings(path: Path) -> str:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise LckStopError(f"cannot read portable Review findings file: {exc}") from exc
+    if not text.strip():
+        raise LckStopError("portable Review findings file is empty")
+    return text
+
+
+def _remediation_findings(
+    store: ReviewInvocationStore,
+    task_number: int,
+    review_id: str,
+    *,
+    findings_file: Path | None = None,
+) -> tuple[str, str]:
+    # Constructing the path validates the caller-provided review id even when the
+    # originating workspace-local audit record is unavailable.
+    record_path = store.record_path(task_number, review_id)
+    if record_path.exists():
+        record = _failed_review_record(store, task_number, review_id)
+        return cast(str, record["findings"]), "local-review-record"
+    if findings_file is None:
+        raise LckStopError(
+            "failed Review audit record is unavailable in this workspace; "
+            "for an explicit cross-workspace/provider Remediation handoff, provide "
+            "--findings-file with the completed Review findings. The file is semantic "
+            "input only; LCK still reacquires all mechanical authority from live state."
+        )
+    return _read_portable_review_findings(findings_file), "portable-findings-file"
 
 
 class RemediationPreparer:
@@ -3890,6 +4980,7 @@ class RemediationPreparer:
         store: ReviewInvocationStore | None = None,
     ) -> None:
         self.resolver = resolver
+        self.snapshots = OperationSnapshotBuilder(resolver)
         self.eligibility = eligibility or PhaseEligibilityResolver()
         self.store = store or ReviewInvocationStore(resolver.repo_root)
 
@@ -3901,14 +4992,49 @@ class RemediationPreparer:
                 f"{result.stderr.strip() or result.stdout.strip()}"
             )
 
-    def prepare(self, task_number: int, review_id: str) -> RemediationContext:
+    def _verify_local_review_head(self, branch: str, expected_head: str) -> None:
+        current = self.resolver.runner.run(
+            ["git", "branch", "--show-current"],
+            command_id="lck-remediation-post-branch",
+        )
+        head = self.resolver.runner.run(
+            ["git", "rev-parse", "HEAD"],
+            command_id="lck-remediation-post-head",
+        )
+        if (
+            current.returncode != 0
+            or current.stdout.strip() != branch
+            or head.returncode != 0
+            or head.stdout.strip() != expected_head
+        ):
+            raise LckStopError(
+                "Remediation Prepare postcondition failed: workspace is not on "
+                "the operation snapshot PR head"
+            )
+
+    def prepare(
+        self,
+        task_number: int,
+        review_id: str,
+        *,
+        findings_file: Path | None = None,
+    ) -> RemediationContext:
         required = self.store.read_review_required(task_number)
         if required is not None:
             raise LckStopError(
                 "Remediation STOP: a fresh Independent Review is required after the previous remediation"
             )
-        findings = _failed_review_findings(self.store, task_number, review_id)
-        state = self.resolver.resolve(task_number)
+        findings, findings_source = _remediation_findings(
+            self.store,
+            task_number,
+            review_id,
+            findings_file=findings_file,
+        )
+        snapshot = self.snapshots.acquire(
+            task_number,
+            operation=Phase.REMEDIATION_PREPARE.value,
+        )
+        state = snapshot.state
         decision = self.eligibility.resolve(state, Phase.REMEDIATION_PREPARE)
         if not decision.eligible:
             raise LckStopError(
@@ -3944,24 +5070,244 @@ class RemediationPreparer:
         elif not clean:
             action = "resumed-dirty-remediation"
 
-        final = self.resolver.resolve(task_number)
-        final_decision = self.eligibility.resolve(final, Phase.REMEDIATION_PREPARE)
-        pr_head = final.open_pr.get("headRefOid") if final.open_pr else None
-        if (
-            not final_decision.eligible
-            or final.git.get("branch") != branch
-            or final.local_task_head != pr_head
-            or final.remote_task_oid != pr_head
-        ):
-            raise LckStopError(
-                "Remediation Prepare postcondition failed: workspace is not on current PR head"
-            )
+        pr_head = state.open_pr.get("headRefOid") if state.open_pr else None
+        if not is_sha(pr_head):
+            raise LckStopError("Remediation Prepare PR head is unavailable")
+        self._verify_local_review_head(branch, pr_head)
+        pr_number = state.open_pr.get("number") if state.open_pr else None
+        pr_base = state.open_pr.get("baseRefOid") if state.open_pr else None
+        if not isinstance(pr_number, int) or not is_sha(pr_base):
+            raise LckStopError("Remediation Prepare PR identity is unavailable")
+        self.store.write_remediation_session(
+            task_number,
+            {
+                "schema_version": LCK_SCHEMA_VERSION,
+                "kind": "remediation-session",
+                "task_number": task_number,
+                "review_id": review_id,
+                "start_head_sha": pr_head,
+                "pr_number": pr_number,
+                "base_sha": pr_base,
+                "findings_sha256": hashlib.sha256(findings.encode("utf-8")).hexdigest(),
+                "findings_source": findings_source,
+                "authority": (
+                    "operation-local continuity only; current mechanical target must be "
+                    "reacquired by the Remediation terminal operation"
+                ),
+            },
+        )
         return RemediationContext(
             task_number=task_number,
             review_id=review_id,
             findings=findings,
-            state=final,
+            findings_source=findings_source,
+            operation_snapshot=snapshot,
             action=action,
+        )
+
+
+@dataclass(frozen=True)
+class RemediationNoChangeResult:
+    task_number: int
+    review_id: str
+    head_sha: str
+    pr_number: int
+    base_sha: str
+    summary: str
+    operation_snapshot: OperationSnapshot
+    receipt_path: Path
+    replayed: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "operation": "remediation-no-change",
+            "task_number": self.task_number,
+            "review_id": self.review_id,
+            "status": "NO_IMPLEMENTATION_CHANGE",
+            "head_sha": self.head_sha,
+            "pr_number": self.pr_number,
+            "base_sha": self.base_sha,
+            "summary": self.summary,
+            "candidate_changed": False,
+            "fresh_review_required": False,
+            "session_released": True,
+            "replayed": self.replayed,
+            "receipt_path": str(self.receipt_path),
+            "operation_snapshot": self.operation_snapshot.to_dict(),
+            "acceptance_boundary": (
+                "This receipt closes one prepared Remediation session without changing the "
+                "candidate. It records a real no-change implementation-path terminal state, "
+                "but it does not satisfy deferred provider/cross-runtime Review acceptance by itself."
+            ),
+            "human_boundary": (
+                "STOP — continue external acceptance work on the unchanged head; no fresh Review "
+                "is required solely because this no-change session was closed"
+            ),
+        }
+
+
+class RemediationNoChangeCompleter:
+    """Close one prepared Remediation session when semantic repair needs no tree change."""
+
+    def __init__(
+        self,
+        resolver: LiveStateResolver,
+        *,
+        eligibility: PhaseEligibilityResolver | None = None,
+        store: ReviewInvocationStore | None = None,
+    ) -> None:
+        self.resolver = resolver
+        self.snapshots = OperationSnapshotBuilder(resolver)
+        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.store = store or ReviewInvocationStore(resolver.repo_root)
+
+    @staticmethod
+    def _session_identity(
+        session: Mapping[str, Any],
+    ) -> tuple[str, int, str]:
+        head_sha = session.get("start_head_sha")
+        pr_number = session.get("pr_number")
+        base_sha = session.get("base_sha")
+        if (
+            not is_sha(head_sha)
+            or not isinstance(pr_number, int)
+            or isinstance(pr_number, bool)
+            or not is_sha(base_sha)
+        ):
+            raise LckStopError("Remediation session identity is incomplete")
+        return cast(str, head_sha), pr_number, cast(str, base_sha)
+
+    @staticmethod
+    def _verify_current_target(
+        snapshot: OperationSnapshot,
+        *,
+        head_sha: str,
+        pr_number: int,
+        base_sha: str,
+    ) -> None:
+        state = snapshot.state
+        pr = state.open_pr or {}
+        if (
+            pr.get("number") != pr_number
+            or pr.get("headRefOid") != head_sha
+            or pr.get("baseRefOid") != base_sha
+            or state.local_task_head != head_sha
+            or state.remote_task_oid != head_sha
+        ):
+            raise LckStopError(
+                "Remediation No Change target no longer matches the prepared session"
+            )
+        if state.git.get("clean") is not True:
+            raise LckStopError(
+                "Remediation No Change requires a clean tracked and staged worktree"
+            )
+
+    def complete(
+        self,
+        task_number: int,
+        review_id: str,
+        *,
+        summary: str,
+    ) -> RemediationNoChangeResult:
+        if self.store.read_review_required(task_number) is not None:
+            raise LckStopError(
+                "Remediation STOP: a fresh Independent Review is required after the previous remediation"
+            )
+
+        session = self.store.read_remediation_session(task_number)
+        if session is None:
+            prior = self.store.read_remediation_no_change_receipt(
+                task_number, review_id
+            )
+            if prior is None:
+                raise LckStopError(
+                    "Remediation No Change requires a prepared Remediation session"
+                )
+            head_sha, pr_number, base_sha = self._session_identity(prior)
+            snapshot = self.snapshots.acquire(
+                task_number, operation=Phase.REMEDIATION_NO_CHANGE.value
+            )
+            decision = self.eligibility.resolve(
+                snapshot.state, Phase.REMEDIATION_NO_CHANGE
+            )
+            if not decision.eligible:
+                raise LckStopError(
+                    f"Remediation No Change STOP for Task #{task_number}: "
+                    + "; ".join(decision.reasons)
+                )
+            self._verify_current_target(
+                snapshot,
+                head_sha=head_sha,
+                pr_number=pr_number,
+                base_sha=base_sha,
+            )
+            return RemediationNoChangeResult(
+                task_number=task_number,
+                review_id=review_id,
+                head_sha=head_sha,
+                pr_number=pr_number,
+                base_sha=base_sha,
+                summary=str(prior.get("summary") or ""),
+                operation_snapshot=snapshot,
+                receipt_path=self.store.remediation_no_change_receipt_path(
+                    task_number, review_id
+                ),
+                replayed=True,
+            )
+
+        if session.get("review_id") != review_id:
+            raise LckStopError(
+                "Remediation No Change review id does not match the prepared Remediation session"
+            )
+        head_sha, pr_number, base_sha = self._session_identity(session)
+        snapshot = self.snapshots.acquire(
+            task_number, operation=Phase.REMEDIATION_NO_CHANGE.value
+        )
+        decision = self.eligibility.resolve(snapshot.state, Phase.REMEDIATION_NO_CHANGE)
+        if not decision.eligible:
+            raise LckStopError(
+                f"Remediation No Change STOP for Task #{task_number}: "
+                + "; ".join(decision.reasons)
+            )
+        self._verify_current_target(
+            snapshot,
+            head_sha=head_sha,
+            pr_number=pr_number,
+            base_sha=base_sha,
+        )
+
+        receipt = {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "kind": "remediation-no-change-receipt",
+            "task_number": task_number,
+            "review_id": review_id,
+            "start_head_sha": head_sha,
+            "pr_number": pr_number,
+            "base_sha": base_sha,
+            "findings_sha256": session.get("findings_sha256"),
+            "findings_source": session.get("findings_source"),
+            "summary": summary,
+            "candidate_changed": False,
+            "fresh_review_required": False,
+            "authority": (
+                "formal no-change Remediation terminal receipt only; current mechanical "
+                "target was reacquired at completion"
+            ),
+        }
+        receipt_path = self.store.write_remediation_no_change_receipt(
+            task_number, review_id, receipt
+        )
+        self.store.clear_remediation_session(task_number)
+        return RemediationNoChangeResult(
+            task_number=task_number,
+            review_id=review_id,
+            head_sha=head_sha,
+            pr_number=pr_number,
+            base_sha=base_sha,
+            summary=summary,
+            operation_snapshot=snapshot,
+            receipt_path=receipt_path,
         )
 
 
@@ -3984,9 +5330,14 @@ class RemediationCompletionResult:
             "validation": payload["validation"],
             "checks": payload["checks"],
             "effects": payload["effects"],
-            "final_state": payload["final_state"],
+            "operation_snapshot": payload["operation_snapshot"],
             "human_boundary": (
                 "STOP — a new Independent Review must be started explicitly in a fresh invocation"
+            ),
+            "deferred_review_acceptance": (
+                "Any requirement whose evidence depends on this new head or on a separate provider/"
+                "fresh Review remains pending for the next Independent Review. READY_FOR_NEW_REVIEW "
+                "does not claim that such evidence is satisfied."
             ),
             "automatic_review": False,
         }
@@ -4004,6 +5355,7 @@ class RemediationCompleter:
         checks_gate: DeliveryChecksGate | None = None,
     ) -> None:
         self.resolver = resolver
+        self.snapshots = OperationSnapshotBuilder(resolver)
         self.eligibility = eligibility or PhaseEligibilityResolver()
         self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
@@ -4021,21 +5373,39 @@ class RemediationCompleter:
             raise LckStopError(
                 "Remediation STOP: a fresh Independent Review is required after the previous remediation"
             )
-        record = _failed_review_record(self.store, task_number, review_id)
-        reviewed_identity = _identity_from_mapping(
-            cast(Mapping[str, Any], record["identity"])
+        session = self.store.read_remediation_session(task_number)
+        start_head: str | None = None
+        if session is not None:
+            if session.get("review_id") != review_id:
+                raise LckStopError(
+                    "Remediation Complete review id does not match the prepared Remediation session"
+                )
+            candidate = session.get("start_head_sha")
+            if not is_sha(candidate):
+                raise LckStopError("Remediation session start head is unavailable")
+            start_head = cast(str, candidate)
+        else:
+            # Backward-compatible path for an already-prepared Codex workspace from
+            # before remediation sessions were introduced. Existing local Review
+            # records retain their previous behavior.
+            record = _failed_review_record(self.store, task_number, review_id)
+            reviewed_identity = _identity_from_mapping(
+                cast(Mapping[str, Any], record["identity"])
+            )
+            start_head = reviewed_identity.head_sha
+        snapshot = self.snapshots.acquire(
+            task_number,
+            operation=Phase.REMEDIATION_COMPLETE.value,
+            include_required_checks=True,
         )
-        state = self.resolver.resolve(task_number)
+        state = snapshot.state
         decision = self.eligibility.resolve(state, Phase.REMEDIATION_COMPLETE)
         if not decision.eligible:
             raise LckStopError(
                 f"Remediation Complete STOP for Task #{task_number}: "
                 + "; ".join(decision.reasons)
             )
-        if (
-            state.git.get("clean") is True
-            and state.local_task_head == reviewed_identity.head_sha
-        ):
+        if state.git.get("clean") is True and state.local_task_head == start_head:
             raise LckStopError(
                 "Remediation Complete requires a repaired head or uncommitted repair changes"
             )
@@ -4053,12 +5423,15 @@ class RemediationCompleter:
             commit_message=commit_message,
             summary=summary,
             risks=risks,
+            operation_snapshot=snapshot,
+            phase=Phase.REMEDIATION_COMPLETE,
         )
-        if delivery.head_sha == reviewed_identity.head_sha:
+        if delivery.head_sha == start_head:
             raise LckStopError(
                 "Remediation Complete did not produce a new head; fresh Review boundary cannot advance"
             )
         self.store.write_review_required(task_number, review_id, delivery.head_sha)
+        self.store.clear_remediation_session(task_number)
         return RemediationCompletionResult(
             task_number=task_number,
             review_id=review_id,
@@ -4084,7 +5457,6 @@ def _build_parser() -> argparse.ArgumentParser:
     complete.add_argument("--commit-message", required=True)
     complete.add_argument("--summary", required=True)
     complete.add_argument("--risks", default="")
-    complete.add_argument("--check-timeout-seconds", type=float, default=600.0)
 
     review = commands.add_parser("review")
     review_commands = review.add_subparsers(dest="review_command", required=True)
@@ -4103,15 +5475,17 @@ def _build_parser() -> argparse.ArgumentParser:
     remediation_prepare = remediation_commands.add_parser("prepare")
     remediation_prepare.add_argument("task", type=int)
     remediation_prepare.add_argument("--review-id", required=True)
+    remediation_prepare.add_argument("--findings-file", type=Path)
+    remediation_no_change = remediation_commands.add_parser("no-change")
+    remediation_no_change.add_argument("task", type=int)
+    remediation_no_change.add_argument("--review-id", required=True)
+    remediation_no_change.add_argument("--summary", required=True)
     remediation_complete = remediation_commands.add_parser("complete")
     remediation_complete.add_argument("task", type=int)
     remediation_complete.add_argument("--review-id", required=True)
     remediation_complete.add_argument("--commit-message", required=True)
     remediation_complete.add_argument("--summary", required=True)
     remediation_complete.add_argument("--risks", default="")
-    remediation_complete.add_argument(
-        "--check-timeout-seconds", type=float, default=600.0
-    )
 
     merge = commands.add_parser("merge")
     merge_commands = merge.add_subparsers(dest="merge_command", required=True)
@@ -4142,12 +5516,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print_json(context.to_dict(), pretty=True)
             return 0
         if args.command == "delivery" and args.delivery_command == "complete":
-            result = DeliveryCompleter(
-                resolver,
-                checks_gate=DeliveryChecksGate(
-                    resolver, timeout_seconds=args.check_timeout_seconds
-                ),
-            ).complete(
+            result = DeliveryCompleter(resolver).complete(
                 args.task,
                 commit_message=args.commit_message,
                 summary=args.summary,
@@ -4169,16 +5538,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             print_json(result.to_dict(), pretty=True)
             return 0
         if args.command == "remediation" and args.remediation_command == "prepare":
-            context = RemediationPreparer(resolver).prepare(args.task, args.review_id)
+            context = RemediationPreparer(resolver).prepare(
+                args.task,
+                args.review_id,
+                findings_file=args.findings_file,
+            )
             print_json(context.to_dict(), pretty=True)
             return 0
+        if args.command == "remediation" and args.remediation_command == "no-change":
+            result = RemediationNoChangeCompleter(resolver).complete(
+                args.task,
+                args.review_id,
+                summary=args.summary,
+            )
+            print_json(result.to_dict(), pretty=True)
+            return 0
         if args.command == "remediation" and args.remediation_command == "complete":
-            result = RemediationCompleter(
-                resolver,
-                checks_gate=DeliveryChecksGate(
-                    resolver, timeout_seconds=args.check_timeout_seconds
-                ),
-            ).complete(
+            result = RemediationCompleter(resolver).complete(
                 args.task,
                 args.review_id,
                 commit_message=args.commit_message,

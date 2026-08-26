@@ -95,13 +95,47 @@ def _state(
     )
 
 
+class RequiredChecksRunner:
+    def run(
+        self, argv: list[str] | tuple[str, ...], *, command_id: str, **_kwargs: Any
+    ) -> Any:
+        command = tuple(str(item) for item in argv)
+        if command[:2] == ("git", "show") and command[2].endswith(
+            ":.github/workflows/ci.yml"
+        ):
+            return SimpleNamespace(
+                returncode=0,
+                stdout="name: CI\njobs:\n  quality:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n",
+                stderr="",
+                command_id=command_id,
+                argv=command,
+            )
+        if command[:2] == ("gh", "api") and "required_status_checks" in command[2]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"contexts": []}),
+                stderr="",
+                command_id=command_id,
+                argv=command,
+            )
+        return SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="unsupported",
+            command_id=command_id,
+            argv=command,
+        )
+
+
 class StaticResolver:
     def __init__(self, state: lck.LiveState) -> None:
         self.repo_root = Path.cwd()
         self.state = state
-        self.runner = cast(Any, object())
+        self.runner = cast(Any, RequiredChecksRunner())
+        self.calls = 0
 
     def resolve(self, _task_number: int) -> lck.LiveState:
+        self.calls += 1
         return self.state
 
 
@@ -110,7 +144,7 @@ class SequenceResolver:
         self.repo_root = Path.cwd()
         self.states = states
         self.index = 0
-        self.runner = cast(Any, object())
+        self.runner = cast(Any, RequiredChecksRunner())
 
     def resolve(self, _task_number: int) -> lck.LiveState:
         state = self.states[min(self.index, len(self.states) - 1)]
@@ -125,7 +159,7 @@ class StaticReviewStore:
             "task_number": 162,
             "review_id": "review",
             "verdict": "PASS",
-            "status": "READY_FOR_HUMAN_MERGE",
+            "status": "READY_FOR_MERGE_PREFLIGHT",
             "identity": {
                 "task_number": 162,
                 "pr_number": 262,
@@ -306,7 +340,7 @@ def test_merge_preflight_has_manual_merge_boundary() -> None:
             return {"status": "pass", "review_id": "review"}
 
     class Checks:
-        def run(self, _task: int) -> dict[str, Any]:
+        def evaluate(self, _snapshot: lck.OperationSnapshot) -> dict[str, Any]:
             return {
                 "status": "pass",
                 "configuration": "not-configured",
@@ -325,7 +359,7 @@ def test_merge_preflight_has_manual_merge_boundary() -> None:
     assert result.to_dict()["automatic_merge"] is False
 
 
-def test_merge_preflight_rechecks_project_status_after_checks() -> None:
+def test_merge_preflight_uses_one_fresh_transition_snapshot() -> None:
     pr = {
         "number": 262,
         "state": "OPEN",
@@ -342,6 +376,7 @@ def test_merge_preflight_rechecks_project_status_after_checks() -> None:
         "state": "OPEN",
         "labels": {"items": ["type:task", "codex:ready"]},
         "project_status": "Review",
+        "body_sha256": "d" * 64,
     }
     state = lck.LiveState(
         task_number=162,
@@ -376,7 +411,7 @@ def test_merge_preflight_rechecks_project_status_after_checks() -> None:
             return {"status": "pass", "review_id": "review"}
 
     class Checks:
-        def run(self, _task: int) -> dict[str, Any]:
+        def evaluate(self, _snapshot: lck.OperationSnapshot) -> dict[str, Any]:
             return {
                 "status": "pass",
                 "configuration": "not-configured",
@@ -385,12 +420,15 @@ def test_merge_preflight_rechecks_project_status_after_checks() -> None:
                 "pr": {"number": 262, "head_sha": SHA, "base_sha": SHA},
             }
 
-    with pytest.raises(lck.LckStopError, match="PR identity changed"):
-        lck.MergePreflight(
-            cast(Any, SequenceResolver(state, changed)),
-            review_gate=cast(Any, Review()),
-            checks_gate=cast(Any, Checks()),
-        ).run(162)
+    resolver = SequenceResolver(state, changed)
+    result = lck.MergePreflight(
+        cast(Any, resolver),
+        review_gate=cast(Any, Review()),
+        checks_gate=cast(Any, Checks()),
+    ).run(162)
+
+    assert result.status == "READY_FOR_HUMAN_MERGE"
+    assert resolver.index == 1
 
 
 def test_closeout_requires_reviewed_head_identity() -> None:
@@ -446,32 +484,34 @@ def test_cleanup_rechecks_tip_before_non_force_remote_deletion() -> None:
     assert all("force" not in item for item in delete_call)
 
 
-def test_cleanup_stops_when_final_live_state_is_unresolved() -> None:
+def test_closeout_does_not_full_resolve_after_effects() -> None:
     state = _state()
     unresolved = replace(
         state,
         status=lck.ResolutionStatus.STOP,
         stop_reasons=("ambiguous recovery",),
     )
-    resolver = SequenceResolver(state, state, state, unresolved)
+    resolver = SequenceResolver(state, unresolved)
 
-    with pytest.raises(lck.LckStopError, match="final live state is unresolved"):
-        lck.CloseoutCompleter(
-            cast(Any, resolver),
-            main_effect=cast(
-                Any,
-                FixedEffect(_receipt("synchronize_main", "synchronized")),
-            ),
-            metadata_effect=cast(
-                Any,
-                FixedEffect(_receipt("converge_task_metadata", "already-converged")),
-            ),
-            cleanup_effect=cast(
-                Any,
-                FixedEffect(_receipt("cleanup_task_refs", "already-clean")),
-            ),
-            review_store=cast(Any, StaticReviewStore()),
-        ).complete(162)
+    result = lck.CloseoutCompleter(
+        cast(Any, resolver),
+        main_effect=cast(
+            Any,
+            FixedEffect(_receipt("synchronize_main", "synchronized")),
+        ),
+        metadata_effect=cast(
+            Any,
+            FixedEffect(_receipt("converge_task_metadata", "already-converged")),
+        ),
+        cleanup_effect=cast(
+            Any,
+            FixedEffect(_receipt("cleanup_task_refs", "already-clean")),
+        ),
+        review_store=cast(Any, StaticReviewStore()),
+    ).complete(162)
+
+    assert result.business_delivery == "COMPLETE"
+    assert resolver.index == 1
 
 
 def test_resolver_recovers_deleted_noncanonical_branch_from_closing_pr(
@@ -519,7 +559,21 @@ def test_resolver_recovers_deleted_noncanonical_branch_from_closing_pr(
         Path.cwd(), runner=cast(Any, runner), repository=repository
     )
 
-    monkeypatch.setattr(lck, "_issue_view", lambda *_args: issue)
+    monkeypatch.setattr(
+        lck,
+        "_issue_view_with_contract",
+        lambda *_args: (
+            issue,
+            {
+                "number": 162,
+                "title": issue.get("title"),
+                "url": issue.get("url"),
+                "body": "Task Contract",
+                "body_sha256": issue.get("body_sha256", "d" * 64),
+                "critical_outcome": issue.get("critical_outcome"),
+            },
+        ),
+    )
     monkeypatch.setattr(
         lck,
         "_relationship_snapshot",
@@ -531,7 +585,7 @@ def test_resolver_recovers_deleted_noncanonical_branch_from_closing_pr(
     monkeypatch.setattr(
         lck,
         "_git_snapshot",
-        lambda *_args: {
+        lambda *_args, **_kwargs: {
             "origin_fetch": "pass",
             "branch": "main",
             "head_sha": MERGE_SHA,

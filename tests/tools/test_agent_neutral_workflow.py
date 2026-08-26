@@ -86,6 +86,7 @@ def test_failure_and_ambiguity_handling_has_review_stop_and_local_stale_results(
 def test_delivery_remediation_is_explicit_and_live_for_both_agents() -> None:
     for text in _skill_text("task-delivery-runner"):
         assert "tools/agent_workflow/lck.py remediation prepare" in text
+        assert "tools/agent_workflow/lck.py remediation no-change" in text
         assert "tools/agent_workflow/lck.py remediation complete" in text
         assert "failed `review_id` locates semantic findings only" in text
         assert (
@@ -93,7 +94,9 @@ def test_delivery_remediation_is_explicit_and_live_for_both_agents() -> None:
             in text
         )
         assert "READY_FOR_NEW_REVIEW" in text
-        assert "review-remediation`\nEvidence Runner as a fallback" in text
+        assert (
+            "archived evidence snapshots or\nlegacy command paths as a fallback" in text
+        )
         assert "bounded mechanical handoff" in text
         assert "MUST NOT accept" in text
 
@@ -111,9 +114,10 @@ def test_pr_review_doc_owns_lck_review_semantics() -> None:
         "fresh",
         "read-only",
         "LCK live target resolution",
-        "current effective diff",
+        "effective diff",
+        "temporary clone",
         "current Task Contract",
-        "invocation-local stale guard",
+        "fresh `ReviewCompleteSnapshot`",
         "REVIEW_STALE_HEAD",
         "REVIEW_STALE_BASE",
         "Verdict semantics",
@@ -125,7 +129,7 @@ def test_pr_review_doc_owns_lck_review_semantics() -> None:
 
 def test_pr_review_doc_has_binary_pass_fail_stop_contract() -> None:
     text = PR_REVIEW.read_text(encoding="utf-8")
-    assert "PASS / `通过，可以人工合并`" in text
+    assert "READY_FOR_MERGE_PREFLIGHT" in text
     assert "FAIL / `不通过，需要修复`" in text
     assert "READY_FOR_HUMAN_MERGE" in text
     assert "STOP_REQUIRED" in text
@@ -139,10 +143,9 @@ def test_pr_review_doc_removes_cross_phase_mechanical_handoff_authority() -> Non
     text = PR_REVIEW.read_text(encoding="utf-8")
     assert "Delivery 输出、旧 snapshot、expected SHA" in text
     assert "不能授权后续 Review / Remediation" in text
-    assert "generic drift graph" in text
-    assert "跨阶段\nfreshness contract" in text
-    assert "snapshot lineage" in text
-    assert "diagnostic Review record" in text
+    assert "不是 Review Complete 的当前" in text
+    assert "fresh Git / GitHub facts" in text
+    assert "audit / diagnostic record" in text
     assert "不是当前机械授权" in text
     assert "semantic findings only" in text
 
@@ -155,6 +158,8 @@ def test_review_skills_share_binary_lck_contract() -> None:
         assert "tools/agent_workflow/lck.py review prepare" in text
         assert "tools/agent_workflow/lck.py review complete" in text
         assert "READY_FOR_SEMANTIC_REVIEW" in text
+        assert "READY_FOR_MERGE_PREFLIGHT" in text
+        assert "tools/agent_workflow/lck.py merge preflight" in text
         assert "READY_FOR_HUMAN_MERGE" in text
         assert "STOP_REQUIRED" in text
         assert "REVIEW_STALE_HEAD" in text
@@ -216,12 +221,13 @@ def test_skill_path_audit_covers_both_roots_and_shared_docs() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     value = json.loads(result.stdout)
     assert value["status"] == "pass"
-    assert value["schema_version"] == 5
+    assert value["schema_version"] == 6
     assert set(value["claude_skills"]) == set(value["active_skills"])
     for entry in (*value["active_skills"].values(), *value["claude_skills"].values()):
         assert entry["missing_shared_doc_refs"] == []
         assert entry["direct_command_paths"] == []
         assert entry["evolution_traces"] == []
+        assert entry["legacy_control_paths"] == []
     assert value["shared_docs"] == {"issue-workflow": True, "pr-review": True}
     assert value["totals"]["shared_doc_ref_violations"] == 0
     assert value["totals"]["shared_doc_existence_violations"] == 0

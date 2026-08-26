@@ -93,11 +93,15 @@ def test_delivery_runner_uses_lck_for_initial_delivery_and_explicit_remediation(
 
     assert "## Review remediation" in text
     assert "tools/agent_workflow/lck.py remediation prepare" in text
+    assert "tools/agent_workflow/lck.py remediation no-change" in text
     assert "tools/agent_workflow/lck.py remediation complete" in text
     assert "semantic findings" in text
     assert "mechanical facts from the Review" in text
     assert "reuse existing OPEN PR" in text
     assert "READY_FOR_NEW_REVIEW" in text
+    assert "deferred Review-acceptance item" in text
+    assert "not** a prerequisite for `remediation complete`" in text
+    assert "provider-attributed implementation receipts" in text
     assert "MUST NOT start\nIndependent Review automatically" in text
 
 
@@ -112,6 +116,7 @@ def test_delivery_lck_contract_is_shared_by_both_skills() -> None:
         "ensure_open_pr",
         "READY_FOR_REVIEW",
         "LCK Remediation Prepare",
+        "LCK Remediation No Change",
         "LCK Remediation Complete",
         "READY_FOR_NEW_REVIEW",
         "The Skill is a semantic procedure",
@@ -138,6 +143,10 @@ def test_review_runner_is_fresh_read_only_lck_review() -> None:
         "tools/agent_workflow/lck.py review complete",
         "REVIEW_STALE_HEAD",
         "REVIEW_STALE_BASE",
+        "REVIEW_STALE_TASK",
+        "REVIEW_STALE_DIFF",
+        "READY_FOR_MERGE_PREFLIGHT",
+        "tools/agent_workflow/lck.py merge preflight",
         "READY_FOR_HUMAN_MERGE",
         "STOP_REQUIRED",
         "通过，可以人工合并",
@@ -165,7 +174,7 @@ def test_review_runner_does_not_restore_pre_cutover_authority() -> None:
         assert forbidden not in text
     assert "Delivery handoff" in text
     assert "MUST NOT pass PR/base/head/checks/snapshot" in text
-    assert "do not fall back to Evidence Runner snapshots" in text
+    assert "do not fall back to archived evidence snapshots" in text
 
 
 def test_review_fail_stops_and_never_auto_starts_remediation() -> None:
@@ -192,8 +201,10 @@ def test_review_skill_keeps_semantic_coverage_without_mechanical_handoff_matrix(
 def test_closeout_and_feature_audit_keep_manual_gates() -> None:
     closeout = ACTIVE_SKILLS["task-closeout"].read_text(encoding="utf-8")
     audit = ACTIVE_SKILLS["feature-completion-audit"].read_text(encoding="utf-8")
-    assert "closeout-readonly" in closeout
-    assert "workflow-closeout" in closeout
+    assert "tools/agent_workflow/lck.py merge preflight" in closeout
+    assert "tools/agent_workflow/lck.py closeout" in closeout
+    assert "Business Delivery" in closeout
+    assert "Cleanup" in closeout
     assert "This Skill never merges" in closeout
     assert "cleanup-only" in closeout
     assert "eligible-under-capability-limited-policy" in closeout
@@ -234,7 +245,7 @@ def test_path_audit_reports_only_clean_current_skills() -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     value = json.loads(result.stdout)
-    assert value["schema_version"] == 5
+    assert value["schema_version"] == 6
     assert value["status"] == "pass"
     assert value["totals"]["direct_command_path_count"] == 0
     assert value["totals"]["evolution_trace_count"] == 0

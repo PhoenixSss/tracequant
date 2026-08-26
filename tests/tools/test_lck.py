@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any, cast
 
@@ -28,6 +29,43 @@ from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
 
 
 SHA = "a" * 40
+
+
+REQUIRED_CHECKS_WORKFLOW_TEXT = """name: CI
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ok
+"""
+
+
+def _write_required_checks_workflow(root: Path) -> None:
+    path = root / ".github" / "workflows" / "ci.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(REQUIRED_CHECKS_WORKFLOW_TEXT, encoding="utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _repository_required_checks_contract(tmp_path: Path) -> None:
+    _write_required_checks_workflow(tmp_path)
+
+
+def _required_policy(*names: str, source_sha: str = SHA) -> dict[str, Any]:
+    items = list(names)
+    return {
+        "configuration": "repository-base-ci",
+        "source": f"git:{source_sha}:.github/workflows/ci.yml:jobs",
+        "source_sha": source_sha,
+        "workflow_path": ".github/workflows/ci.yml",
+        "contract_sha256": lck.sha256_json(
+            {"workflow": ".github/workflows/ci.yml", "required-checks": items}
+        ),
+        "contexts": {"items": items, "count": len(items), "truncated": False},
+    }
 
 
 class FakeRunner:
@@ -72,6 +110,10 @@ class FakeRunner:
                 f"{oid}\trefs/heads/{branch}"
                 for branch, oid in sorted(self.remote_branches.items())
             )
+        elif args == ["branch", "--show-current"]:
+            stdout = self.branch
+        elif args == ["rev-parse", "HEAD"]:
+            stdout = self.head_sha
         elif args[:2] == ["rev-parse", "refs/heads/main"]:
             stdout = self.local_main_sha
         elif args[:1] == ["rev-parse"] and len(args) == 2:
@@ -90,14 +132,27 @@ class FakeRunner:
                 returncode = 1
             else:
                 stdout = json.dumps(self.open_pr)
+        elif (
+            args[:1] == ["show"]
+            and len(args) == 2
+            and args[1].endswith(":.github/workflows/ci.yml")
+        ):
+            stdout = REQUIRED_CHECKS_WORKFLOW_TEXT
+        elif args[:2] == ["gh", "api"] and "required_status_checks" in args[2]:
+            stdout = json.dumps({"contexts": ["quality"]})
         elif args[:2] == ["switch", "-c"]:
             branch = args[2]
             self.local_branches.add(branch)
             self.branch = branch
+            if len(args) >= 5 and args[3] == "--track":
+                remote = args[4].removeprefix("origin/")
+                self.head_sha = self.remote_branches.get(remote, self.head_sha)
         elif args[:2] == ["switch", "--track"]:
             branch = args[3]
             self.local_branches.add(branch)
             self.branch = branch
+            remote = args[2].removeprefix("origin/")
+            self.head_sha = self.remote_branches.get(remote, self.head_sha)
         elif args[:1] == ["switch"]:
             branch = args[1]
             if branch not in self.local_branches:
@@ -116,9 +171,11 @@ class FakeRunner:
 
 
 def _issue() -> dict[str, Any]:
+    body = "Task Contract"
     return {
         "number": 159,
         "title": "[Task] 建立 LCK Core 与 Live State Resolution",
+        "body_sha256": lck.sha256_json({"body": body}),
         "state": "OPEN",
         "labels": {"items": ["type:task", "codex:ready"]},
         "project_status": "Ready",
@@ -131,6 +188,19 @@ def _issue() -> dict[str, Any]:
                 "verification_test": "tests/tools/test_lck.py::test_canonical_branch_is_derived_from_current_issue_title",
             },
         },
+    }
+
+
+def _task_contract(issue: dict[str, Any] | None = None) -> dict[str, Any]:
+    value = issue or _issue()
+    body = "Task Contract"
+    return {
+        "number": value.get("number", 159),
+        "title": value.get("title"),
+        "url": value.get("url"),
+        "body": body,
+        "body_sha256": value.get("body_sha256") or lck.sha256_json({"body": body}),
+        "critical_outcome": value.get("critical_outcome"),
     }
 
 
@@ -153,8 +223,10 @@ def _git_snapshot(fake: FakeRunner) -> dict[str, Any]:
         "branch": fake.branch,
         "head_sha": fake.head_sha,
         "local_main_sha": fake.local_main_sha,
+        "tracking_main_sha": fake.origin_main_sha,
+        "remote_main_sha": fake.origin_main_sha,
         "origin_main_sha": fake.origin_main_sha,
-        "origin_fetch": "pass",
+        "remote_main_query": "pass",
         "clean": fake.clean,
         "status_entries": 0 if fake.clean else 1,
         "worktree_branches": {"items": [fake.branch], "count": 1, "truncated": False},
@@ -171,13 +243,22 @@ def _install_facts(
     history: list[dict[str, Any]] | None = None,
 ) -> None:
     monkeypatch.setattr(lck, "_repository_slug", lambda *_args: "owner/repo")
-    monkeypatch.setattr(lck, "_issue_view", lambda *_args: issue or _issue())
+    issue_value = issue or _issue()
+    monkeypatch.setattr(
+        lck,
+        "_issue_view_with_contract",
+        lambda *_args: (issue_value, _task_contract(issue_value)),
+    )
     monkeypatch.setattr(
         lck,
         "_relationship_snapshot",
         lambda *_args: relationships if relationships is not None else _relationships(),
     )
-    monkeypatch.setattr(lck, "_git_snapshot", lambda *_args: _git_snapshot(fake))
+    monkeypatch.setattr(
+        lck,
+        "_git_snapshot",
+        lambda *_args, **_kwargs: _git_snapshot(fake),
+    )
     monkeypatch.setattr(lck, "resolve_open_pr", lambda *_args: open_pr)
     monkeypatch.setattr(
         lck, "list_matching_prs", lambda *_args, **_kwargs: history or []
@@ -275,9 +356,17 @@ def test_live_state_resolver_reads_non_empty_pr_checks(
         open_pr=open_pr,
     )
     monkeypatch.setattr(lck, "_repository_slug", lambda *_args: "owner/repo")
-    monkeypatch.setattr(lck, "_issue_view", lambda *_args: _issue())
+    monkeypatch.setattr(
+        lck,
+        "_issue_view_with_contract",
+        lambda *_args: (_issue(), _task_contract()),
+    )
     monkeypatch.setattr(lck, "_relationship_snapshot", lambda *_args: _relationships())
-    monkeypatch.setattr(lck, "_git_snapshot", lambda *_args: _git_snapshot(fake))
+    monkeypatch.setattr(
+        lck,
+        "_git_snapshot",
+        lambda *_args, **_kwargs: _git_snapshot(fake),
+    )
 
     state = _resolver(fake).resolve(159)
 
@@ -290,6 +379,82 @@ def test_live_state_resolver_reads_non_empty_pr_checks(
     assert len(view_commands) == 1
     fields = view_commands[0][view_commands[0].index("--json") + 1].split(",")
     assert "statusCheckRollup" in fields
+
+
+def test_lck_live_snapshot_overrides_legacy_read_only_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRunner(branch="main")
+    _install_facts(monkeypatch, fake)
+    monkeypatch.setenv("WORKFLOW_EVIDENCE_READ_ONLY", "1")
+    observed: dict[str, Any] = {}
+
+    def live_snapshot(*_args: Any, **kwargs: Any) -> dict[str, Any]:
+        observed.update(kwargs)
+        return _git_snapshot(fake)
+
+    monkeypatch.setattr(lck, "_git_snapshot", live_snapshot)
+    _resolver(fake).resolve(159)
+
+    assert observed == {"read_only_local_refs": True}
+
+
+def test_live_git_snapshot_separates_remote_main_from_tracking_cache() -> None:
+    class ReadOnlyGitRunner:
+        def __init__(self) -> None:
+            self.commands: list[tuple[str, ...]] = []
+
+        def run(
+            self,
+            argv: list[str] | tuple[str, ...],
+            *,
+            command_id: str,
+            **_: Any,
+        ) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            self.commands.append(command)
+            outputs = {
+                ("git", "branch", "--show-current"): "task/159-live",
+                ("git", "rev-parse", "HEAD"): SHA,
+                ("git", "rev-parse", "refs/heads/main"): SHA,
+                ("git", "rev-parse", "refs/remotes/origin/main"): "b" * 40,
+                (
+                    "git",
+                    "ls-remote",
+                    "origin",
+                    "refs/heads/main",
+                ): f"{SHA}\trefs/heads/main",
+                (
+                    "git",
+                    "status",
+                    "--short",
+                    "--untracked-files=all",
+                ): "",
+                ("git", "diff", "--cached", "--name-only"): "",
+                ("git", "diff", "--name-only"): "",
+                ("git", "worktree", "list", "--porcelain"): "worktree /repo\n",
+            }
+            if command == ("git", "fetch", "--prune", "origin"):
+                return CommandResult(command_id, command, 1, "", "fetch forbidden")
+            return CommandResult(
+                command_id,
+                command,
+                0 if command in outputs else 1,
+                outputs.get(command, ""),
+                "" if command in outputs else "unsupported",
+            )
+
+    runner = ReadOnlyGitRunner()
+    warnings: list[dict[str, Any]] = []
+    snapshot = lck._git_snapshot(cast(Any, runner), warnings, read_only_local_refs=True)
+
+    assert snapshot["local_main_sha"] == SHA
+    assert snapshot["tracking_main_sha"] == "b" * 40
+    assert snapshot["remote_main_sha"] == SHA
+    assert snapshot["tracking_main_stale"] is True
+    assert not any(
+        command[1:4] == ("fetch", "--prune", "origin") for command in runner.commands
+    )
 
 
 def test_ambiguous_open_pr_stops_phase_resolution(
@@ -371,7 +536,7 @@ def test_open_pr_head_mismatch_stops_before_workspace_write(
     assert not any(command[:2] == ("git", "switch") for command in fake.commands)
 
 
-def test_git_snapshot_warning_stops_before_workspace_write(
+def test_optional_git_snapshot_warning_does_not_stop_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = FakeRunner(branch="main")
@@ -380,6 +545,7 @@ def test_git_snapshot_warning_stops_before_workspace_write(
     def unavailable_git_snapshot(
         _runner: Any,
         warnings: list[dict[str, Any]],
+        **_kwargs: Any,
     ) -> dict[str, Any]:
         warnings.append(
             {
@@ -392,7 +558,31 @@ def test_git_snapshot_warning_stops_before_workspace_write(
 
     monkeypatch.setattr(lck, "_git_snapshot", unavailable_git_snapshot)
 
-    with pytest.raises(lck.LckStopError, match="local Git snapshot"):
+    state = _resolver(fake).resolve(159)
+
+    assert state.status is lck.ResolutionStatus.RESOLVED
+
+
+def test_remote_main_query_failure_stops_before_workspace_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRunner(branch="main")
+    _install_facts(monkeypatch, fake)
+
+    def unavailable_remote_main(
+        _runner: Any,
+        _warnings: list[dict[str, Any]],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        value = _git_snapshot(fake)
+        value["remote_main_sha"] = None
+        value["remote_main_query"] = "unknown"
+        value.pop("origin_main_sha", None)
+        return value
+
+    monkeypatch.setattr(lck, "_git_snapshot", unavailable_remote_main)
+
+    with pytest.raises(lck.LckStopError, match="remote main query failed"):
         lck.DeliveryPreparer(_resolver(fake)).prepare(159)
 
     assert fake.branch == "main"
@@ -608,6 +798,34 @@ def test_resolve_open_pr_observes_draft_pr() -> None:
 
     assert observed is not None
     assert observed["isDraft"] is True
+
+
+def test_review_prepare_rejects_open_remediation_session(
+    tmp_path: Path,
+) -> None:
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state(clean=True)))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": review_id,
+            "start_head_sha": SHA,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "f" * 64,
+            "findings_source": "local-review-record",
+            "authority": "test",
+        },
+    )
+
+    with pytest.raises(lck.LckStopError, match="remediation no-change"):
+        lck.ReviewPreparer(resolver, store=store).prepare(159)
+
+    assert resolver.calls == 0
 
 
 def test_review_prepare_rejects_draft_open_pr(
@@ -902,6 +1120,14 @@ def _review_state(
             "all_success": True,
         },
         cleanup={},
+        task_contract={
+            "number": 159,
+            "title": issue["title"],
+            "url": issue.get("url"),
+            "body": "Task Contract",
+            "body_sha256": "d" * 64,
+            "critical_outcome": issue.get("critical_outcome"),
+        },
     )
 
 
@@ -922,9 +1148,37 @@ class StaticResolver:
     def __init__(self, repo_root: Path, state: lck.LiveState) -> None:
         self.repo_root = repo_root
         self.state = state
-        self.runner = cast(Any, FakeRunner())
+        branch = str(state.git.get("branch") or "main")
+        head_sha = str(state.git.get("head_sha") or state.local_task_head or SHA)
+        local_branches = {state.local_task_branch} if state.local_task_branch else set()
+        remote_branches = (
+            {state.remote_task_branch: str(state.remote_task_oid)}
+            if state.remote_task_branch and state.remote_task_oid
+            else {}
+        )
+        self.runner = cast(
+            Any,
+            FakeRunner(
+                branch=branch,
+                local_branches=local_branches,
+                remote_branches=remote_branches,
+                clean=state.git.get("clean") is True,
+                head_sha=head_sha,
+                local_main_sha=str(state.git.get("local_main_sha") or SHA),
+                origin_main_sha=str(
+                    state.git.get("remote_main_sha")
+                    or state.git.get("origin_main_sha")
+                    or SHA
+                ),
+                open_pr=dict(state.open_pr)
+                if isinstance(state.open_pr, dict)
+                else None,
+            ),
+        )
+        self.calls = 0
 
     def resolve(self, _task_number: int) -> lck.LiveState:
+        self.calls += 1
         return self.state
 
 
@@ -975,9 +1229,19 @@ class FakeReviewWorkspace:
         self.ready_checked: list[Path] = []
         self.removed: list[Path] = []
 
-    def create(self, _task: int, _head: str) -> Path:
-        self.root.mkdir(parents=True, exist_ok=True)
+    def path_for(self, _task: int, _operation_id: str) -> Path:
         return self.root
+
+    def create(
+        self,
+        _task: int,
+        _base: str,
+        _head: str,
+        path: Path | None = None,
+    ) -> Path:
+        root = path or self.root
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
     def seal_read_only(self, path: Path) -> None:
         self.sealed.append(path)
@@ -991,22 +1255,57 @@ class FakeReviewWorkspace:
     def remove(self, path: Path) -> None:
         self.removed.append(path)
 
+    def remove_recovered(self, path: Path) -> None:
+        self.remove(path)
+
 
 class FakeReviewChecks:
     def __init__(self) -> None:
         self.calls = 0
 
-    def run(self, _task: int) -> dict[str, Any]:
+    def evaluate(self, snapshot: lck.OperationSnapshot) -> dict[str, Any]:
         self.calls += 1
+        pr = snapshot.state.open_pr or {}
         return {
             "status": "pass",
-            "pr": {"number": 200, "head_sha": SHA, "base_sha": SHA},
+            "pr": {
+                "number": pr.get("number", 200),
+                "head_sha": pr.get("headRefOid", SHA),
+                "base_sha": pr.get("baseRefOid", SHA),
+            },
+            "checks": snapshot.state.checks,
         }
 
 
 class FakeReviewValidation:
-    def run(self, _root: Path, _base: str) -> dict[str, Any]:
+    def run(self, _root: Path, _base: str, _head: str) -> dict[str, Any]:
         return {"status": "pass", "phase": "review"}
+
+
+def _review_guard(
+    identity: lck.ReviewIdentity,
+    *,
+    review_root: Path | str = "review-root",
+) -> dict[str, Any]:
+    return {
+        "task_number": 159,
+        "identity": identity.to_dict(),
+        "review_root": str(review_root),
+        "checks": {
+            "status": "pass",
+            "pr": {
+                "number": identity.pr_number,
+                "head_sha": identity.head_sha,
+                "base_sha": identity.base_sha,
+            },
+        },
+        "validation": {"status": "pass"},
+        "snapshot": {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "operation": "review-prepare",
+            "state": {"task_number": identity.task_number},
+        },
+    }
 
 
 def test_review_prepare_builds_context_only_from_live_resolution(
@@ -1016,17 +1315,7 @@ def test_review_prepare_builds_context_only_from_live_resolution(
     state = _review_state()
     resolver = cast(Any, StaticResolver(tmp_path, state))
     identity = _review_identity_value()
-    monkeypatch.setattr(
-        lck,
-        "_live_task_contract",
-        lambda *_args: {
-            "number": 159,
-            "title": _issue()["title"],
-            "body": "Task Contract",
-            "body_sha256": "d" * 64,
-        },
-    )
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
     workspace = FakeReviewWorkspace(tmp_path / "review-root")
     checks = FakeReviewChecks()
     store = lck.ReviewInvocationStore(tmp_path)
@@ -1047,118 +1336,135 @@ def test_review_prepare_builds_context_only_from_live_resolution(
     assert value["mechanical_authority"].startswith("live Git/GitHub")
     assert workspace.sealed == [tmp_path / "review-root"]
     assert store.guard_path(context.review_id).is_file()
-    assert checks.calls == 2
+    inflight = json.loads(
+        store.review_prepare_inflight_path(159).read_text(encoding="utf-8")
+    )
+    assert inflight["state"] == "handed-off"
+    assert inflight["review_id"] == context.review_id
+    assert checks.calls == 1
 
 
-def test_review_prepare_rechecks_eligibility_after_validation(
+def test_review_prepare_freezes_authority_before_validation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = _review_state()
     resolver = cast(Any, StaticResolver(tmp_path, state))
     identity = _review_identity_value()
-    monkeypatch.setattr(
-        lck,
-        "_live_task_contract",
-        lambda *_args: {"number": 159, "body_sha256": "d" * 64},
-    )
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
 
     class DraftingValidation(FakeReviewValidation):
-        def run(self, _root: Path, _base: str) -> dict[str, Any]:
+        def run(self, _root: Path, _base: str, _head: str) -> dict[str, Any]:
             assert state.open_pr is not None
             state.open_pr["isDraft"] = True
-            return super().run(_root, _base)
+            return super().run(_root, _base, _head)
 
     workspace = FakeReviewWorkspace(tmp_path / "review-root")
-    with pytest.raises(lck.LckStopError, match="post-validation STOP"):
-        lck.ReviewPreparer(
-            resolver,
-            validation=cast(Any, DraftingValidation()),
-            checks_gate=cast(Any, FakeReviewChecks()),
-            workspace=cast(Any, workspace),
-            store=lck.ReviewInvocationStore(tmp_path),
-        ).prepare(159)
+    context = lck.ReviewPreparer(
+        resolver,
+        validation=cast(Any, DraftingValidation()),
+        checks_gate=cast(Any, FakeReviewChecks()),
+        workspace=cast(Any, workspace),
+        store=lck.ReviewInvocationStore(tmp_path),
+    ).prepare(159)
 
-    assert workspace.removed == [tmp_path / "review-root"]
+    assert context.identity == identity
+    assert workspace.sealed == [tmp_path / "review-root"]
 
 
-def test_review_complete_head_change_is_review_stale_head(
+def test_review_complete_acquires_one_fresh_snapshot_and_accepts_unchanged_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    start = _review_identity_value()
-    current = _review_identity_value(head="b" * 40)
-    state = _review_state(head="b" * 40)
-    resolver = cast(Any, StaticResolver(tmp_path, state))
+    identity = _review_identity_value()
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
     store = lck.ReviewInvocationStore(tmp_path)
     review_id = store.new_id()
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
     store.write_guard(
         review_id,
-        {
-            "task_number": 159,
-            "identity": start.to_dict(),
-            "review_root": str(tmp_path / "review-root"),
-            "checks": {"status": "pass"},
-            "validation": {"status": "pass"},
-        },
+        _review_guard(identity, review_root=review_root),
     )
-    monkeypatch.setattr(
-        lck,
-        "_live_task_contract",
-        lambda *_args: {"body_sha256": "d" * 64},
+    workspace = FakeReviewWorkspace(review_root)
+
+    result = lck.ReviewCompleter(
+        resolver,
+        checks_gate=cast(Any, FakeReviewChecks()),
+        store=store,
+        workspace=cast(Any, workspace),
+    ).complete(159, review_id, verdict="PASS")
+
+    assert result.status == "READY_FOR_MERGE_PREFLIGHT"
+    assert result.identity == identity
+    assert resolver.calls == 1
+    record = store.read_record(159, review_id)
+    assert record["review_snapshot"]["operation"] == "review-prepare"
+    assert record["completion_snapshot"]["operation"] == "review-complete"
+    assert "fresh Review Complete snapshot matched" in record["authority_note"]
+    assert workspace.ready_checked == [review_root]
+    assert workspace.removed == [review_root]
+
+
+def test_review_complete_can_retry_after_transient_live_resolution_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = _review_identity_value()
+    state = _review_state()
+
+    class FlakyResolver(StaticResolver):
+        def resolve(self, task_number: int) -> lck.LiveState:
+            self.calls += 1
+            if self.calls == 1:
+                raise lck.LckStopError("transient live-state resolution failure")
+            return self.state
+
+    resolver = cast(Any, FlakyResolver(tmp_path, state))
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    store.write_guard(review_id, _review_guard(identity, review_root=review_root))
+    store.review_prepare_inflight_path(159).parent.mkdir(parents=True, exist_ok=True)
+    store.review_prepare_inflight_path(159).write_text(
+        json.dumps(
+            {
+                "task_number": 159,
+                "operation_id": store.new_id(),
+                "pid": 1,
+                "state": "handed-off",
+                "review_id": review_id,
+                "review_root": str(review_root),
+            }
+        ),
+        encoding="utf-8",
     )
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: current)
-    workspace = FakeReviewWorkspace(tmp_path / "review-root")
+    workspace = FakeReviewWorkspace(review_root)
+    completer = lck.ReviewCompleter(
+        resolver,
+        checks_gate=cast(Any, FakeReviewChecks()),
+        store=store,
+        workspace=cast(Any, workspace),
+    )
 
-    with pytest.raises(lck.ReviewStaleError) as exc_info:
-        lck.ReviewCompleter(
-            resolver,
-            store=store,
-            workspace=cast(Any, workspace),
-            checks_gate=cast(Any, FakeReviewChecks()),
-        ).complete(159, review_id, verdict="PASS")
+    with pytest.raises(lck.LckStopError, match="transient live-state resolution"):
+        completer.complete(159, review_id, verdict="PASS")
 
-    assert exc_info.value.code == "REVIEW_STALE_HEAD"
-    assert workspace.removed == [tmp_path / "review-root"]
+    assert resolver.calls == 1
+    assert workspace.removed == []
+    assert store.guard_path(review_id).is_file()
+    assert store.review_prepare_inflight_path(159).is_file()
+
+    result = completer.complete(159, review_id, verdict="PASS")
+
+    assert result.status == "READY_FOR_MERGE_PREFLIGHT"
+    assert resolver.calls == 2
+    assert workspace.removed == [review_root]
     assert not store.guard_path(review_id).exists()
-
-
-def test_review_complete_base_change_is_review_stale_base(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    start = _review_identity_value()
-    current = _review_identity_value(base="b" * 40)
-    state = _review_state(base="b" * 40)
-    resolver = cast(Any, StaticResolver(tmp_path, state))
-    store = lck.ReviewInvocationStore(tmp_path)
-    review_id = store.new_id()
-    store.write_guard(
-        review_id,
-        {
-            "task_number": 159,
-            "identity": start.to_dict(),
-            "review_root": str(tmp_path / "review-root"),
-            "checks": {"status": "pass"},
-            "validation": {"status": "pass"},
-        },
-    )
-    monkeypatch.setattr(
-        lck,
-        "_live_task_contract",
-        lambda *_args: {"body_sha256": "d" * 64},
-    )
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: current)
-
-    with pytest.raises(lck.ReviewStaleError) as exc_info:
-        lck.ReviewCompleter(
-            resolver,
-            store=store,
-            workspace=cast(Any, FakeReviewWorkspace(tmp_path / "review-root")),
-        ).complete(159, review_id, verdict="PASS")
-
-    assert exc_info.value.code == "REVIEW_STALE_BASE"
+    assert not store.review_prepare_inflight_path(159).exists()
 
 
 def test_review_fail_returns_stop_required_without_starting_remediation(
@@ -1166,216 +1472,183 @@ def test_review_fail_returns_stop_required_without_starting_remediation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     identity = _review_identity_value()
-    state = _review_state()
-    resolver = cast(Any, StaticResolver(tmp_path, state))
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
     store = lck.ReviewInvocationStore(tmp_path)
     review_id = store.new_id()
-    store.write_guard(
-        review_id,
-        {
-            "task_number": 159,
-            "identity": identity.to_dict(),
-            "review_root": str(tmp_path / "review-root"),
-            "checks": {"status": "pass"},
-            "validation": {"status": "pass"},
-        },
-    )
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    store.write_guard(review_id, _review_guard(identity, review_root=review_root))
     findings = tmp_path / "findings.md"
     findings.write_text("[F1][Medium] Repair this behavior.\n", encoding="utf-8")
-    monkeypatch.setattr(
-        lck,
-        "_live_task_contract",
-        lambda *_args: {"body_sha256": "d" * 64},
-    )
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
-    checks = FakeReviewChecks()
 
     result = lck.ReviewCompleter(
         resolver,
+        checks_gate=cast(Any, FakeReviewChecks()),
         store=store,
-        workspace=cast(Any, FakeReviewWorkspace(tmp_path / "review-root")),
-        checks_gate=cast(Any, checks),
+        workspace=cast(Any, FakeReviewWorkspace(review_root)),
     ).complete(159, review_id, verdict="FAIL", findings_file=findings)
 
     assert result.status == "STOP_REQUIRED"
     assert result.to_dict()["automatic_remediation"] is False
-    assert checks.calls == 0
+    assert resolver.calls == 1
     record = store.read_record(159, review_id)
     assert record["findings"].startswith("[F1][Medium]")
-    assert record["authority_note"].startswith("record is diagnostic")
+    assert "fresh Review Complete snapshot matched" in record["authority_note"]
 
 
-def test_review_pass_stops_at_human_merge_boundary(
+def test_review_pass_stops_at_merge_preflight_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     identity = _review_identity_value()
     resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
     store = lck.ReviewInvocationStore(tmp_path)
     review_id = store.new_id()
-    store.write_guard(
-        review_id,
-        {
-            "task_number": 159,
-            "identity": identity.to_dict(),
-            "review_root": str(tmp_path / "review-root"),
-            "checks": {"status": "pass"},
-            "validation": {"status": "pass"},
-        },
-    )
-    monkeypatch.setattr(
-        lck,
-        "_live_task_contract",
-        lambda *_args: {"body_sha256": "d" * 64},
-    )
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
-    checks = FakeReviewChecks()
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    store.write_guard(review_id, _review_guard(identity, review_root=review_root))
 
     result = lck.ReviewCompleter(
         resolver,
+        checks_gate=cast(Any, FakeReviewChecks()),
         store=store,
-        workspace=cast(Any, FakeReviewWorkspace(tmp_path / "review-root")),
-        checks_gate=cast(Any, checks),
+        workspace=cast(Any, FakeReviewWorkspace(review_root)),
     ).complete(159, review_id, verdict="PASS")
 
-    assert result.status == "READY_FOR_HUMAN_MERGE"
-    assert "manual merge" in result.to_dict()["human_boundary"]
-    assert checks.calls == 1
+    assert result.status == "READY_FOR_MERGE_PREFLIGHT"
+    assert "Merge Preflight" in result.to_dict()["human_boundary"]
+    assert resolver.calls == 1
 
 
-def test_review_complete_rechecks_identity_after_pass_checks_gate(
+@pytest.mark.parametrize(
+    ("code", "current_identity"),
+    [
+        (
+            "REVIEW_STALE_PR",
+            lck.ReviewIdentity(
+                task_number=159,
+                pr_number=201,
+                base_sha=SHA,
+                head_sha=SHA,
+                task_body_sha256="d" * 64,
+                merge_base_sha=SHA,
+                effective_diff_sha256="e" * 64,
+                changed_files=("tools/agent_workflow/lck.py",),
+            ),
+        ),
+        ("REVIEW_STALE_HEAD", _review_identity_value(head="b" * 40)),
+        ("REVIEW_STALE_BASE", _review_identity_value(base="b" * 40)),
+        (
+            "REVIEW_STALE_TASK",
+            lck.ReviewIdentity(
+                task_number=159,
+                pr_number=200,
+                base_sha=SHA,
+                head_sha=SHA,
+                task_body_sha256="f" * 64,
+                merge_base_sha=SHA,
+                effective_diff_sha256="e" * 64,
+                changed_files=("tools/agent_workflow/lck.py",),
+            ),
+        ),
+        (
+            "REVIEW_STALE_DIFF",
+            lck.ReviewIdentity(
+                task_number=159,
+                pr_number=200,
+                base_sha=SHA,
+                head_sha=SHA,
+                task_body_sha256="d" * 64,
+                merge_base_sha=SHA,
+                effective_diff_sha256="f" * 64,
+                changed_files=("tools/agent_workflow/lck.py",),
+            ),
+        ),
+    ],
+)
+def test_review_complete_rejects_stale_target_from_one_fresh_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    code: str,
+    current_identity: lck.ReviewIdentity,
 ) -> None:
-    start = _review_identity_value()
-    current = _review_identity_value(head="b" * 40)
-    state = _review_state()
-    resolver = cast(Any, StaticResolver(tmp_path, state))
+    reviewed = _review_identity_value()
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    monkeypatch.setattr(
+        lck, "_review_identity", lambda *_args, **_kwargs: current_identity
+    )
     store = lck.ReviewInvocationStore(tmp_path)
     review_id = store.new_id()
-    store.write_guard(
-        review_id,
-        {
-            "task_number": 159,
-            "identity": start.to_dict(),
-            "review_root": str(tmp_path / "review-root"),
-            "checks": {"status": "pass"},
-            "validation": {"status": "pass"},
-        },
-    )
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    store.write_guard(review_id, _review_guard(reviewed, review_root=review_root))
 
-    monkeypatch.setattr(
-        lck,
-        "_live_task_contract",
-        lambda *_args: {"body_sha256": "d" * 64},
-    )
-    identities = iter((start, current))
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: next(identities))
-
-    class AdvancingChecks(FakeReviewChecks):
-        def run(self, _task: int) -> dict[str, Any]:
-            assert state.open_pr is not None
-            state.open_pr["headRefOid"] = "b" * 40
-            return super().run(_task)
-
-    with pytest.raises(lck.ReviewStaleError) as exc_info:
+    with pytest.raises(lck.ReviewStaleError, match=code):
         lck.ReviewCompleter(
             resolver,
+            checks_gate=cast(Any, FakeReviewChecks()),
             store=store,
-            workspace=cast(Any, FakeReviewWorkspace(tmp_path / "review-root")),
-            checks_gate=cast(Any, AdvancingChecks()),
+            workspace=cast(Any, FakeReviewWorkspace(review_root)),
         ).complete(159, review_id, verdict="PASS")
 
-    assert exc_info.value.code == "REVIEW_STALE_HEAD"
-
-
-def test_review_complete_rejects_checks_drift_after_pass_checks_gate(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    state = _review_state()
-    resolver = cast(Any, StaticResolver(tmp_path, state))
-    store = lck.ReviewInvocationStore(tmp_path)
-    review_id = store.new_id()
-    identity = _review_identity_value()
-    store.write_guard(
-        review_id,
-        {
-            "task_number": 159,
-            "identity": identity.to_dict(),
-            "review_root": str(tmp_path / "review-root"),
-            "checks": {"status": "pass"},
-            "validation": {"status": "pass"},
-        },
-    )
-    monkeypatch.setattr(
-        lck,
-        "_live_task_contract",
-        lambda *_args: {"body_sha256": "d" * 64},
-    )
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
-
-    class ChecksDriftAfterGate(FakeReviewChecks):
-        def run(self, _task: int) -> dict[str, Any]:
-            result = {
-                "status": "pass",
-                "pr": {"number": 200, "head_sha": SHA, "base_sha": SHA},
-            }
-            state.checks["failed"] = 1
-            state.checks["all_success"] = False
-            return result
-
-    with pytest.raises(lck.LckStopError, match="current PR checks"):
-        lck.ReviewCompleter(
-            resolver,
-            store=store,
-            workspace=cast(Any, FakeReviewWorkspace(tmp_path / "review-root")),
-            checks_gate=cast(Any, ChecksDriftAfterGate()),
-        ).complete(159, review_id, verdict="PASS")
-
+    assert resolver.calls == 1
+    assert store.read_latest_review(159) is None
     assert not store.record_path(159, review_id).exists()
 
 
-def test_review_complete_rechecks_current_review_eligibility(
+def test_review_complete_reports_changed_remote_head_before_local_diff_probe(
+    tmp_path: Path,
+) -> None:
+    reviewed = _review_identity_value()
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state(head="b" * 40)))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    store.write_guard(review_id, _review_guard(reviewed, review_root=review_root))
+
+    with pytest.raises(lck.ReviewStaleError, match="REVIEW_STALE_HEAD"):
+        lck.ReviewCompleter(
+            resolver,
+            checks_gate=cast(Any, FakeReviewChecks()),
+            store=store,
+            workspace=cast(Any, FakeReviewWorkspace(review_root)),
+        ).complete(159, review_id, verdict="PASS")
+
+    assert resolver.calls == 1
+    assert not any("merge-base" in command for command in resolver.runner.commands)
+    assert not any("diff" in command for command in resolver.runner.commands)
+
+
+def test_review_complete_revalidates_current_checks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    state = _review_state()
-    assert state.open_pr is not None
-    state.open_pr["isDraft"] = True
-    resolver = cast(Any, StaticResolver(tmp_path, state))
+    identity = _review_identity_value()
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
     store = lck.ReviewInvocationStore(tmp_path)
     review_id = store.new_id()
-    store.write_guard(
-        review_id,
-        {
-            "task_number": 159,
-            "identity": _review_identity_value().to_dict(),
-            "review_root": str(tmp_path / "review-root"),
-            "checks": {"status": "pass"},
-            "validation": {"status": "pass"},
-        },
-    )
-    monkeypatch.setattr(
-        lck,
-        "_live_task_contract",
-        lambda *_args: {"body_sha256": "d" * 64},
-    )
-    monkeypatch.setattr(
-        lck, "_review_identity", lambda *_args: _review_identity_value()
-    )
-    workspace = FakeReviewWorkspace(tmp_path / "review-root")
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    store.write_guard(review_id, _review_guard(identity, review_root=review_root))
 
-    with pytest.raises(lck.LckStopError, match="Review Complete STOP"):
+    class CurrentChecksFail:
+        def evaluate(self, _snapshot: lck.OperationSnapshot) -> dict[str, Any]:
+            raise lck.LckStopError("PR checks are pending")
+
+    with pytest.raises(lck.LckStopError, match="PR checks are pending"):
         lck.ReviewCompleter(
             resolver,
+            checks_gate=cast(Any, CurrentChecksFail()),
             store=store,
-            workspace=cast(Any, workspace),
-            checks_gate=cast(Any, FakeReviewChecks()),
+            workspace=cast(Any, FakeReviewWorkspace(review_root)),
         ).complete(159, review_id, verdict="PASS")
 
-    assert workspace.removed == [tmp_path / "review-root"]
-    assert not store.guard_path(review_id).exists()
+    assert resolver.calls == 1
+    assert store.read_latest_review(159) is None
 
 
 def test_review_workspace_seal_removes_write_bits(tmp_path: Path) -> None:
@@ -1401,35 +1674,141 @@ def test_review_workspace_seal_removes_write_bits(tmp_path: Path) -> None:
 def test_review_workspace_seal_preserves_clean_status_and_rejects_mutation(
     tmp_path: Path,
 ) -> None:
-    with tempfile.TemporaryDirectory(prefix="tracequant-lck-review-test-") as raw:
+    with tempfile.TemporaryDirectory(prefix="tracequant-lck-review-") as raw:
         root = Path(raw)
+        (root / ".git").mkdir()
         (root / "tracked.py").write_text("print('review')\n", encoding="utf-8")
         resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
         runner = FakeWorkspaceRunner(root)
         resolver.runner = runner
         manager = lck.ReviewWorkspaceManager(resolver)
+        manager._write_owner(
+            root,
+            task_number=159,
+            base_sha=SHA,
+            head_sha=SHA,
+        )
 
         manager.seal_for_review(root, SHA)
 
-        assert not any(
-            command[:3] == ("git", "config", "--worktree")
-            for command in runner.commands
-        )
         assert root.stat().st_mode & 0o222 == 0
         assert (root / "tracked.py").stat().st_mode & 0o222 == 0
         manager.assert_ready_for_completion(root, SHA)
 
         runner.status_output = " M tracked.py\n"
-        with pytest.raises(lck.LckStopError, match="changed the isolated worktree"):
+        with pytest.raises(lck.LckStopError, match="changed the isolated clone"):
             manager.assert_ready_for_completion(root, SHA)
         manager._make_removable(root)
 
 
-def test_review_workspace_seal_real_git_multi_worktree_without_worktree_config(
+def test_review_prepare_materializes_missing_pr_head_before_deriving_diff(
+    tmp_path: Path,
+) -> None:
+    """A fresh remote PR head need not already exist in the source object store."""
+    if shutil.which("git") is None:
+        pytest.skip("git is required for Review clone integration test")
+
+    remote = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "init", "--bare", str(remote)],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    producer = tmp_path / "producer"
+    subprocess.run(
+        ["git", "clone", str(remote), str(producer)],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    def git(
+        cwd: Path, *args: str, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            check=check,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+    git(producer, "config", "user.name", "TraceQuant Test")
+    git(producer, "config", "user.email", "tracequant-test@example.invalid")
+    (producer / "tracked.py").write_text("base\n", encoding="utf-8")
+    _write_required_checks_workflow(producer)
+    git(producer, "add", "tracked.py", ".github/workflows/ci.yml")
+    git(producer, "commit", "-m", "base")
+    git(producer, "branch", "-M", "main")
+    git(producer, "push", "origin", "main")
+    base_sha = git(producer, "rev-parse", "HEAD").stdout.strip()
+
+    source = tmp_path / "source"
+    subprocess.run(
+        ["git", "clone", "--branch", "main", str(remote), str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    _write_required_checks_workflow(source)
+
+    git(producer, "checkout", "-b", "task/159-lck-core-live-state-resolution")
+    (producer / "tracked.py").write_text("base\nhead\n", encoding="utf-8")
+    git(producer, "add", "tracked.py")
+    git(producer, "commit", "-m", "head")
+    git(producer, "push", "origin", "HEAD")
+    head_sha = git(producer, "rev-parse", "HEAD").stdout.strip()
+
+    missing = git(source, "cat-file", "-e", f"{head_sha}^{{commit}}", check=False)
+    assert missing.returncode != 0
+
+    state = _review_state(head=head_sha, base=base_sha)
+    resolver = cast(Any, StaticResolver(source, state))
+    resolver.runner = CommandRunner(source)
+    store = lck.ReviewInvocationStore(source)
+    workspace = lck.ReviewWorkspaceManager(resolver)
+
+    context = lck.ReviewPreparer(
+        resolver,
+        validation=cast(Any, FakeReviewValidation()),
+        checks_gate=cast(Any, FakeReviewChecks()),
+        workspace=workspace,
+        store=store,
+    ).prepare(159)
+
+    try:
+        assert context.identity.base_sha == base_sha
+        assert context.identity.head_sha == head_sha
+        assert context.identity.merge_base_sha == base_sha
+        assert context.identity.changed_files == ("tracked.py",)
+        assert (
+            git(
+                source, "cat-file", "-e", f"{head_sha}^{{commit}}", check=False
+            ).returncode
+            != 0
+        )
+        assert (
+            git(
+                context.review_root, "cat-file", "-e", f"{head_sha}^{{commit}}"
+            ).returncode
+            == 0
+        )
+    finally:
+        workspace.remove(context.review_root)
+        store.delete_guard(context.review_id)
+        store.release_review_prepare(159, context.review_id)
+
+
+def test_review_workspace_uses_standalone_clone_without_source_git_mutation(
     tmp_path: Path,
 ) -> None:
     if shutil.which("git") is None:
-        pytest.skip("git is required for Review worktree integration test")
+        pytest.skip("git is required for Review clone integration test")
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1447,6 +1826,7 @@ def test_review_workspace_seal_real_git_multi_worktree_without_worktree_config(
     git("init")
     git("config", "user.name", "TraceQuant Test")
     git("config", "user.email", "tracequant-test@example.invalid")
+    git("remote", "add", "origin", "https://example.invalid/tracequant.git")
     tracked = repo / "tracked.py"
     tracked.write_text("print('review')\n", encoding="utf-8")
     executable = repo / "tool.py"
@@ -1456,56 +1836,56 @@ def test_review_workspace_seal_real_git_multi_worktree_without_worktree_config(
     git("commit", "-m", "initial")
     head_sha = git("rev-parse", "HEAD").stdout.strip()
 
-    unset = subprocess.run(
-        ["git", "config", "--unset-all", "extensions.worktreeConfig"],
-        cwd=repo,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    assert unset.returncode in {0, 5}
+    source_worktrees_before = git("worktree", "list", "--porcelain").stdout
+    source_head_before = git("rev-parse", "HEAD").stdout.strip()
+    source_status_before = git("status", "--porcelain=v1").stdout
+    source_git_modes_before = {
+        path.relative_to(repo / ".git"): path.stat().st_mode
+        for path in (repo / ".git").rglob("*")
+        if not path.is_symlink()
+    }
+    source_object = repo / ".git" / "objects" / head_sha[:2] / head_sha[2:]
+    assert source_object.is_file()
 
     resolver = cast(Any, StaticResolver(repo, _review_state()))
     resolver.runner = CommandRunner(repo)
     manager = lck.ReviewWorkspaceManager(resolver)
-    review_root = manager.create(159, head_sha)
-    worktrees = git("worktree", "list", "--porcelain").stdout
-    assert worktrees.count("worktree ") == 2
-    config_before_seal = (repo / ".git" / "config").read_text(encoding="utf-8")
+    review_root = manager.create(159, head_sha, head_sha)
 
     try:
-        manager.seal_for_review(review_root, head_sha)
-
-        assert (repo / ".git" / "config").read_text(
-            encoding="utf-8"
-        ) == config_before_seal
-        status = git(
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-            cwd=review_root,
-        )
-        assert status.stdout.strip() == ""
         assert git("rev-parse", "HEAD", cwd=review_root).stdout.strip() == head_sha
+        assert git("branch", "--show-current", cwd=review_root).stdout.strip() == ""
+        assert git("status", "--porcelain=v1", cwd=review_root).stdout.strip() == ""
+        assert (
+            git("remote", "get-url", "origin", cwd=review_root).stdout.strip()
+            == "https://example.invalid/tracequant.git"
+        )
+        clone_object = review_root / ".git" / "objects" / head_sha[:2] / head_sha[2:]
+        assert clone_object.is_file()
+        assert clone_object.stat().st_ino != source_object.stat().st_ino
+
+        manager.seal_for_review(review_root, head_sha)
+        manager.assert_ready_for_completion(review_root, head_sha)
         assert review_root.stat().st_mode & 0o222 == 0
         assert (review_root / "tracked.py").stat().st_mode & 0o222 == 0
         sealed_executable = review_root / "tool.py"
         assert sealed_executable.stat().st_mode & 0o222 == 0
         assert sealed_executable.stat().st_mode & 0o111 != 0
 
-        configured = subprocess.run(
-            ["git", "config", "--get", "extensions.worktreeConfig"],
-            cwd=repo,
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
-        assert configured.returncode == 1
-        assert configured.stdout.strip() == ""
+        assert git("rev-parse", "HEAD").stdout.strip() == source_head_before
+        assert git("status", "--porcelain=v1").stdout == source_status_before
+        assert git("worktree", "list", "--porcelain").stdout == source_worktrees_before
+        source_git_modes_after = {
+            path.relative_to(repo / ".git"): path.stat().st_mode
+            for path in (repo / ".git").rglob("*")
+            if not path.is_symlink()
+        }
+        assert source_git_modes_after == source_git_modes_before
     finally:
         manager.remove(review_root)
+
+    assert not review_root.exists()
+    assert git("worktree", "list", "--porcelain").stdout == source_worktrees_before
 
 
 def test_review_workspace_remove_rejects_unvalidated_path(tmp_path: Path) -> None:
@@ -1513,14 +1893,33 @@ def test_review_workspace_remove_rejects_unvalidated_path(tmp_path: Path) -> Non
     manager = lck.ReviewWorkspaceManager(resolver)
 
     with pytest.raises(lck.LckStopError, match="cleanup path"):
-        manager.remove(tmp_path / "not-an-lck-worktree")
+        manager.remove(tmp_path / "not-an-lck-workspace")
 
 
-def test_review_validation_artifacts_are_preserved_outside_review_worktree(
+def test_review_workspace_recovered_partial_clone_cleanup_is_path_local(
+    tmp_path: Path,
+) -> None:
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    manager = lck.ReviewWorkspaceManager(resolver)
+    review_root = manager.path_for(159, uuid.uuid4().hex)
+    review_root.mkdir()
+    partial_git = review_root / ".git"
+    partial_git.mkdir()
+    (partial_git / "partial").write_text("interrupted clone\n", encoding="utf-8")
+    manager.seal_read_only(review_root)
+
+    manager.remove_recovered(review_root)
+
+    assert not review_root.exists()
+
+
+def test_review_validation_artifacts_are_preserved_outside_review_clone(
     tmp_path: Path,
 ) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
+    source_agents = repo_root / ".agents"
+    source_agents.mkdir()
     review_root = tmp_path / "review-root"
     tool = review_root / "tools" / "agent_workflow" / "workflow_validation.py"
     tool.parent.mkdir(parents=True)
@@ -1551,13 +1950,175 @@ def test_review_validation_artifacts_are_preserved_outside_review_worktree(
 
     resolver = cast(Any, StaticResolver(repo_root, _review_state()))
     resolver.runner = ValidationRunner()
-    validation = lck.ReviewValidationGate(resolver).run(review_root, SHA)
+    validation = lck.ReviewValidationGate(resolver).run(review_root, SHA, SHA)
 
     durable_output = repo_root / validation["output_dir"]
     durable_log = repo_root / validation["commands"][0]["log_path"]
-    assert validation["output_dir"].startswith(".agents/validation.local/lck-review-")
+    assert validation["output_dir"].startswith(
+        ".workflow.local/lck/review-validation/lck-review-"
+    )
+    assert validation["evidence_path"] == validation["output_dir"]
+    assert validation["validated_base_sha"] == SHA
+    assert validation["validated_head_sha"] == SHA
     assert durable_output.is_dir()
     assert durable_log.read_text(encoding="utf-8") == "pass\n"
+    evidence_file = repo_root / validation["evidence_file"]
+    evidence = json.loads(evidence_file.read_text(encoding="utf-8"))
+    assert evidence["validated_base_sha"] == SHA
+    assert evidence["commands"][0]["status"] == "pass"
+    assert not (source_agents / "validation.local").exists()
+
+
+def test_review_validation_failure_is_persisted_before_prepare_stops(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    review_root = tmp_path / "review-root"
+    tool = review_root / "tools" / "agent_workflow" / "workflow_validation.py"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("# validation stub\n", encoding="utf-8")
+    output_dir = review_root / ".agents" / "validation.local" / "run"
+    output_dir.mkdir(parents=True)
+    (output_dir / "ruff-check.log").write_text("format mismatch\n", encoding="utf-8")
+
+    class ValidationRunner:
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            payload = {
+                "status": "fail",
+                "output_dir": ".agents/validation.local/run",
+                "commands": [
+                    {
+                        "command_id": "ruff-check",
+                        "status": "fail",
+                        "exit_code": 1,
+                        "diagnostic": "format mismatch",
+                        "log_path": ".agents/validation.local/run/ruff-check.log",
+                    }
+                ],
+            }
+            return CommandResult(
+                command_id=command_id,
+                argv=tuple(str(item) for item in argv),
+                returncode=1,
+                stdout=json.dumps(payload),
+                stderr="",
+            )
+
+    resolver = cast(Any, StaticResolver(repo_root, _review_state()))
+    resolver.runner = ValidationRunner()
+    validation = lck.ReviewValidationGate(resolver).run(review_root, SHA, "b" * 40)
+
+    assert validation["status"] == "fail"
+    assert validation["validated_base_sha"] == SHA
+    assert validation["validated_head_sha"] == "b" * 40
+    assert validation["commands"][0]["command_id"] == "ruff-check"
+    assert validation["commands"][0]["exit_code"] == 1
+    evidence = repo_root / validation["evidence_path"]
+    assert evidence.is_dir()
+    assert (evidence / "ruff-check.log").read_text(encoding="utf-8") == (
+        "format mismatch\n"
+    )
+    stored = json.loads(
+        (repo_root / validation["evidence_file"]).read_text(encoding="utf-8")
+    )
+    assert stored["commands"][0]["command_id"] == "ruff-check"
+    assert stored["commands"][0]["exit_code"] == 1
+    assert stored["commands"][0]["diagnostic"] == "format mismatch"
+    assert stored["validated_head_sha"] == "b" * 40
+
+
+def test_review_prepare_claims_operation_before_validation_and_has_no_review_id_on_fail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _review_state()
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    identity = _review_identity_value()
+    store = lck.ReviewInvocationStore(tmp_path)
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
+
+    class FailingValidation:
+        def run(self, _root: Path, base: str, head: str) -> dict[str, Any]:
+            assert store.review_prepare_inflight_path(159).is_file()
+            return {
+                "status": "fail",
+                "validated_base_sha": base,
+                "validated_head_sha": head,
+                "commands": [
+                    {
+                        "command_id": "ruff-check",
+                        "status": "fail",
+                        "exit_code": 1,
+                        "diagnostic": "format mismatch",
+                    }
+                ],
+                "evidence_path": ".workflow.local/lck/review-validation/lck-review-failure",
+            }
+
+    workspace = FakeReviewWorkspace(tmp_path / "review-root")
+    with pytest.raises(
+        lck.LckStopError,
+        match="failed command ruff-check.*evidence",
+    ) as exc_info:
+        lck.ReviewPreparer(
+            resolver,
+            validation=cast(Any, FailingValidation()),
+            checks_gate=cast(Any, FakeReviewChecks()),
+            workspace=cast(Any, workspace),
+            store=store,
+        ).prepare(159)
+
+    assert "validated base" in str(exc_info.value)
+    assert workspace.removed == [tmp_path / "review-root"]
+    assert not (store.root / "review-invocations").exists()
+    assert not store.review_prepare_inflight_path(159).exists()
+
+
+def test_review_prepare_inflight_guard_blocks_second_operation(tmp_path: Path) -> None:
+    store = lck.ReviewInvocationStore(tmp_path)
+    first = store.begin_review_prepare(159)
+    try:
+        with pytest.raises(lck.LckStopError, match="already in flight"):
+            store.begin_review_prepare(159)
+    finally:
+        first.finish()
+
+    assert not store.review_prepare_inflight_path(159).exists()
+
+
+def test_review_prepare_handoff_keeps_explicit_ownership_until_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    review_root = tmp_path / "tracequant-lck-review-159-handoff"
+    review_root.mkdir()
+    store.write_guard(review_id, {"review_id": review_id})
+    store.review_prepare_inflight_path(159).parent.mkdir(parents=True, exist_ok=True)
+    store.review_prepare_inflight_path(159).write_text(
+        json.dumps(
+            {
+                "task_number": 159,
+                "pid": 1,
+                "operation_id": store.new_id(),
+                "state": "handed-off",
+                "review_id": review_id,
+                "review_root": str(review_root),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        lck.ReviewInvocationStore,
+        "_pid_is_alive",
+        staticmethod(lambda _pid: False),
+    )
+
+    with pytest.raises(lck.LckStopError, match="handoff is still owned"):
+        store.begin_review_prepare(159)
+
+    assert store.review_prepare_inflight_path(159).is_file()
 
 
 def test_remediation_prepare_uses_live_head_not_review_record_identity(
@@ -1584,7 +2145,331 @@ def test_remediation_prepare_uses_live_head_not_review_record_identity(
 
     assert context.to_dict()["live_target"]["head_sha"] == live_head
     assert context.findings == "[F1][Medium] Semantic repair input."
-    assert "current live state" in context.to_dict()["mechanical_authority"]
+    assert (
+        "operation snapshot acquired at Remediation entry"
+        in context.to_dict()["mechanical_authority"]
+    )
+    assert (
+        "do not block Remediation Complete" in context.to_dict()["acceptance_boundary"]
+    )
+    assert "must not be fabricated" in context.to_dict()["acceptance_boundary"]
+
+
+def test_remediation_prepare_accepts_portable_findings_when_local_record_missing(
+    tmp_path: Path,
+) -> None:
+    live_head = "b" * 40
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state(head=live_head)))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    findings = tmp_path / "review-findings.md"
+    findings.write_text("[F1][High] Portable semantic finding.\n", encoding="utf-8")
+
+    context = lck.RemediationPreparer(resolver, store=store).prepare(
+        159,
+        review_id,
+        findings_file=findings,
+    )
+
+    assert context.findings == "[F1][High] Portable semantic finding.\n"
+    assert context.findings_source == "portable-findings-file"
+    assert context.to_dict()["findings_source"] == "portable-findings-file"
+    session = store.read_remediation_session(159)
+    assert session is not None
+    assert session["review_id"] == review_id
+    assert session["start_head_sha"] == live_head
+    assert session["findings_source"] == "portable-findings-file"
+    assert resolver.calls == 1
+
+
+def test_remediation_prepare_missing_local_record_requires_portable_findings(
+    tmp_path: Path,
+) -> None:
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+
+    with pytest.raises(lck.LckStopError, match="provide --findings-file"):
+        lck.RemediationPreparer(resolver, store=store).prepare(159, review_id)
+
+    assert resolver.calls == 0
+
+
+def test_remediation_prepare_local_record_path_remains_primary(
+    tmp_path: Path,
+) -> None:
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    local_findings = "[F1][Medium] Local Codex review finding."
+    store.write_record(
+        159,
+        review_id,
+        {
+            "task_number": 159,
+            "verdict": "FAIL",
+            "identity": _review_identity_value().to_dict(),
+            "findings": local_findings,
+        },
+    )
+    store.write_latest_review(159, review_id, "FAIL")
+    portable = tmp_path / "portable.md"
+    portable.write_text("different portable text", encoding="utf-8")
+
+    context = lck.RemediationPreparer(resolver, store=store).prepare(
+        159, review_id, findings_file=portable
+    )
+
+    assert context.findings == local_findings
+    assert context.findings_source == "local-review-record"
+
+
+def test_remediation_complete_uses_prepared_session_without_review_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start_head = SHA
+    repaired_head = "b" * 40
+    state = _review_state(head=start_head, clean=False)
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": review_id,
+            "start_head_sha": start_head,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "f" * 64,
+            "findings_source": "portable-findings-file",
+            "authority": "test",
+        },
+    )
+
+    def fake_delivery_complete(self: Any, task_number: int, **kwargs: Any) -> Any:
+        snapshot = kwargs["operation_snapshot"]
+        return lck.DeliveryCompletionResult(
+            task_number=task_number,
+            status="READY_FOR_REVIEW",
+            branch=state.target_branch,
+            head_sha=repaired_head,
+            critical_outcome={"status": "valid"},
+            validation={"status": "pass"},
+            checks={"status": "pass"},
+            effects=(),
+            operation_snapshot=snapshot,
+        )
+
+    monkeypatch.setattr(lck.DeliveryCompleter, "complete", fake_delivery_complete)
+
+    result = lck.RemediationCompleter(resolver, store=store).complete(
+        159,
+        review_id,
+        commit_message="repair",
+        summary="repair",
+    )
+
+    assert result.delivery.head_sha == repaired_head
+    assert store.read_remediation_session(159) is None
+    required = store.read_review_required(159)
+    assert required is not None
+    assert required["remediated_head"] == repaired_head
+
+
+def test_remediation_no_change_closes_prepared_session_without_new_head(
+    tmp_path: Path,
+) -> None:
+    head = SHA
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state(head=head, clean=True)))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": review_id,
+            "start_head_sha": head,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "f" * 64,
+            "findings_source": "local-review-record",
+            "authority": "test",
+        },
+    )
+
+    result = lck.RemediationNoChangeCompleter(resolver, store=store).complete(
+        159,
+        review_id,
+        summary="Only deferred external acceptance evidence remains.",
+    )
+
+    payload = result.to_dict()
+    assert payload["status"] == "NO_IMPLEMENTATION_CHANGE"
+    assert payload["head_sha"] == head
+    assert payload["candidate_changed"] is False
+    assert payload["fresh_review_required"] is False
+    assert payload["session_released"] is True
+    assert payload["replayed"] is False
+    assert store.read_remediation_session(159) is None
+    assert store.read_review_required(159) is None
+    receipt = store.read_remediation_no_change_receipt(159, review_id)
+    assert receipt is not None
+    assert receipt["start_head_sha"] == head
+    assert receipt["candidate_changed"] is False
+    assert resolver.calls == 1
+
+
+def test_remediation_no_change_releases_old_session_for_new_review_prepare(
+    tmp_path: Path,
+) -> None:
+    state = _review_state(clean=True)
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    store = lck.ReviewInvocationStore(tmp_path)
+    old_review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": old_review_id,
+            "start_head_sha": SHA,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "a" * 64,
+            "findings_source": "local-review-record",
+            "authority": "test",
+        },
+    )
+
+    lck.RemediationNoChangeCompleter(resolver, store=store).complete(
+        159, old_review_id, summary="No implementation defect remained."
+    )
+
+    new_review_id = store.new_id()
+    findings = tmp_path / "new-review-findings.md"
+    findings.write_text(
+        "[F1][Blocking] External acceptance evidence.\n", encoding="utf-8"
+    )
+    context = lck.RemediationPreparer(resolver, store=store).prepare(
+        159, new_review_id, findings_file=findings
+    )
+
+    assert context.review_id == new_review_id
+    session = store.read_remediation_session(159)
+    assert session is not None
+    assert session["review_id"] == new_review_id
+    assert session["start_head_sha"] == SHA
+
+
+def test_remediation_no_change_rejects_wrong_review_or_dirty_tree(
+    tmp_path: Path,
+) -> None:
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": review_id,
+            "start_head_sha": SHA,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "b" * 64,
+            "findings_source": "local-review-record",
+            "authority": "test",
+        },
+    )
+    clean_resolver = cast(Any, StaticResolver(tmp_path, _review_state(clean=True)))
+
+    with pytest.raises(lck.LckStopError, match="review id does not match"):
+        lck.RemediationNoChangeCompleter(clean_resolver, store=store).complete(
+            159, store.new_id(), summary="wrong review"
+        )
+
+    dirty_resolver = cast(Any, StaticResolver(tmp_path, _review_state(clean=False)))
+    with pytest.raises(lck.LckStopError, match="clean tracked and staged worktree"):
+        lck.RemediationNoChangeCompleter(dirty_resolver, store=store).complete(
+            159, review_id, summary="no change"
+        )
+
+    assert store.read_remediation_session(159) is not None
+
+
+def test_remediation_no_change_rejects_head_drift(
+    tmp_path: Path,
+) -> None:
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": review_id,
+            "start_head_sha": SHA,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "d" * 64,
+            "findings_source": "local-review-record",
+            "authority": "test",
+        },
+    )
+    moved_head = "b" * 40
+    resolver = cast(
+        Any, StaticResolver(tmp_path, _review_state(head=moved_head, clean=True))
+    )
+
+    with pytest.raises(lck.LckStopError, match="target no longer matches"):
+        lck.RemediationNoChangeCompleter(resolver, store=store).complete(
+            159, review_id, summary="no change"
+        )
+
+    assert store.read_remediation_session(159) is not None
+    assert store.read_remediation_no_change_receipt(159, review_id) is None
+
+
+def test_remediation_no_change_is_idempotent_for_same_unchanged_target(
+    tmp_path: Path,
+) -> None:
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state(clean=True)))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": review_id,
+            "start_head_sha": SHA,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "c" * 64,
+            "findings_source": "local-review-record",
+            "authority": "test",
+        },
+    )
+
+    first = lck.RemediationNoChangeCompleter(resolver, store=store).complete(
+        159, review_id, summary="No implementation change required."
+    )
+    second = lck.RemediationNoChangeCompleter(resolver, store=store).complete(
+        159, review_id, summary="ignored on replay"
+    )
+
+    assert first.to_dict()["replayed"] is False
+    assert second.to_dict()["replayed"] is True
+    assert second.summary == "No implementation change required."
+    assert store.read_remediation_session(159) is None
 
 
 def test_remediation_complete_requires_actual_repair_changes(
@@ -1621,7 +2506,8 @@ def test_reuse_existing_open_pr_never_creates_a_replacement(tmp_path: Path) -> N
     resolver = cast(Any, StaticResolver(tmp_path, state))
 
     receipt = lck.ReuseExistingOpenPrEffect(resolver).execute(
-        159,
+        state,
+        head_sha=SHA,
         summary="ignored",
         risks="ignored",
         critical_outcome={"status": "valid"},
@@ -1632,7 +2518,9 @@ def test_reuse_existing_open_pr_never_creates_a_replacement(tmp_path: Path) -> N
 
     assert receipt.effect == "reuse_open_pr"
     assert receipt.action == "reused-current-open-pr"
-    assert resolver.runner.commands == []
+    assert any(
+        command[:3] == ("gh", "pr", "view") for command in resolver.runner.commands
+    )
 
 
 def test_remediation_requires_latest_failed_review(tmp_path: Path) -> None:
@@ -1689,27 +2577,19 @@ def test_accepted_fresh_review_releases_post_remediation_boundary(
     old_review_id = store.new_id()
     store.write_review_required(159, old_review_id, "b" * 40)
     review_id = store.new_id()
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
     store.write_guard(
         review_id,
-        {
-            "task_number": 159,
-            "identity": identity.to_dict(),
-            "review_root": str(tmp_path / "review-root"),
-            "checks": {"status": "pass"},
-            "validation": {"status": "pass"},
-        },
+        _review_guard(identity, review_root=review_root),
     )
     findings = tmp_path / "findings-new.md"
     findings.write_text("[F2][Medium] New review finding.\n", encoding="utf-8")
-    monkeypatch.setattr(
-        lck,
-        "_live_task_contract",
-        lambda *_args: {"body_sha256": "d" * 64},
-    )
-    monkeypatch.setattr(lck, "_review_identity", lambda *_args: identity)
 
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
     result = lck.ReviewCompleter(
         resolver,
+        checks_gate=cast(Any, FakeReviewChecks()),
         store=store,
         workspace=cast(Any, FakeReviewWorkspace(tmp_path / "review-root")),
     ).complete(159, review_id, verdict="FAIL", findings_file=findings)
@@ -1752,7 +2632,11 @@ def test_remediation_complete_can_resume_committed_new_head_and_requires_re_revi
         validation={"status": "pass"},
         checks={"status": "pass"},
         effects=(),
-        final_state=state,
+        operation_snapshot=lck.OperationSnapshot(
+            operation=lck.Phase.REMEDIATION_COMPLETE.value,
+            state=state,
+            required_checks=_required_policy("quality"),
+        ),
     )
 
     class FakeDeliveryCompleter:
@@ -1772,6 +2656,10 @@ def test_remediation_complete_can_resume_committed_new_head_and_requires_re_revi
     )
 
     assert result.to_dict()["status"] == "READY_FOR_NEW_REVIEW"
+    assert (
+        "remains pending for the next Independent Review"
+        in result.to_dict()["deferred_review_acceptance"]
+    )
     assert result.to_dict()["automatic_review"] is False
     required = store.read_review_required(159)
     assert required is not None
