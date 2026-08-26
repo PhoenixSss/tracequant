@@ -1407,6 +1407,66 @@ def test_review_complete_acquires_one_fresh_snapshot_and_accepts_unchanged_targe
     assert workspace.removed == [review_root]
 
 
+def test_review_complete_can_retry_after_transient_live_resolution_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = _review_identity_value()
+    state = _review_state()
+
+    class FlakyResolver(StaticResolver):
+        def resolve(self, task_number: int) -> lck.LiveState:
+            self.calls += 1
+            if self.calls == 1:
+                raise lck.LckStopError("transient live-state resolution failure")
+            return self.state
+
+    resolver = cast(Any, FlakyResolver(tmp_path, state))
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    store.write_guard(review_id, _review_guard(identity, review_root=review_root))
+    store.review_prepare_inflight_path(159).parent.mkdir(parents=True, exist_ok=True)
+    store.review_prepare_inflight_path(159).write_text(
+        json.dumps(
+            {
+                "task_number": 159,
+                "operation_id": store.new_id(),
+                "pid": 1,
+                "state": "handed-off",
+                "review_id": review_id,
+                "review_root": str(review_root),
+            }
+        ),
+        encoding="utf-8",
+    )
+    workspace = FakeReviewWorkspace(review_root)
+    completer = lck.ReviewCompleter(
+        resolver,
+        checks_gate=cast(Any, FakeReviewChecks()),
+        store=store,
+        workspace=cast(Any, workspace),
+    )
+
+    with pytest.raises(lck.LckStopError, match="transient live-state resolution"):
+        completer.complete(159, review_id, verdict="PASS")
+
+    assert resolver.calls == 1
+    assert workspace.removed == []
+    assert store.guard_path(review_id).is_file()
+    assert store.review_prepare_inflight_path(159).is_file()
+
+    result = completer.complete(159, review_id, verdict="PASS")
+
+    assert result.status == "READY_FOR_MERGE_PREFLIGHT"
+    assert resolver.calls == 2
+    assert workspace.removed == [review_root]
+    assert not store.guard_path(review_id).exists()
+    assert not store.review_prepare_inflight_path(159).exists()
+
+
 def test_review_fail_returns_stop_required_without_starting_remediation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

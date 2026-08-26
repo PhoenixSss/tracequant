@@ -1236,7 +1236,7 @@ current PR head != reviewed head
 → STOP and require fresh Review
 
 current Task contract hash != reviewed Task contract hash
-→ REVIEW_STALE_CONTRACT
+→ REVIEW_STALE_TASK
 → STOP and require fresh Review
 
 current relevant base != reviewed base

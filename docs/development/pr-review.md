@@ -78,8 +78,10 @@ LCK 在系统临时目录创建 reviewed head 的 detached standalone clone；�
 使用独立 Git metadata/object storage，origin 恢复为真实 remote；LCK 先在 exact head 上运行
 正式 Review validation；需要跨 clone 生命周期保留的 validation evidence 复制到 ignored
 `.workflow.local/lck/`，再将整个 temporary Review clone 封为 read-only。Review Complete
-持久化 PASS / FAIL / STALE 结果后直接删除该 clone；异常中断只需按 operation-owned path
-回收临时目录，不需要 `git worktree remove/prune`。
+成功持久化 PASS / FAIL，或以需要重新 Prepare 的 stale terminal outcome 结束后，才直接删除该
+clone；如果 Review Complete 在 terminal result 持久化前因 transient/infrastructure failure
+退出，必须保留 guard、clone 和 prepare marker，使同一 `review_id` 可安全重试。异常中断只需
+按 operation-owned path 回收临时目录，不需要 `git worktree remove/prune`。
 
 Reviewer 只从 `review_root`、当前 Task Contract 和必要的 current GitHub context
 建立新的 semantic context。不得把 Delivery self-review、旧 Review verdict、旧

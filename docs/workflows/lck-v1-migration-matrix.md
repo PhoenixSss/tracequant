@@ -19,7 +19,7 @@ boundary.
 |---|---|---|---|---|
 | O01 | Resolve intent and exact Task | Agent + Skill routing | KEEP | Human intent + semantic Skill routing; LCK resolves mechanical identity |
 | O02 | Delivery admission / readiness | Evidence Runner + Skill | MOVE | LCK live-state admission; legacy Task Evidence Runner removed |
-| O03 | Ready → In Progress | Skill / project helper | MOVE | LCK phase-owned Project status effect |
+| O03 | Ready → In Progress | Skill / project helper | REMOVE | LCK does not write this transition; Delivery Prepare admits either `Ready` or `In Progress`, and later LCK effects move the Task to `Review` |
 | O04 | Read leaf spec and Retrieval v2 context | Agent | KEEP | Agent semantic responsibility |
 | O05 | Triggered context expansion | Agent + Human Gate | KEEP | Agent/Human semantic responsibility |
 | O06 | Scoped design and implementation | Agent | KEEP | Agent semantic responsibility |

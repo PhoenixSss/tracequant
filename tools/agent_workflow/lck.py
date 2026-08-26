@@ -2887,6 +2887,7 @@ class ReviewCompleter:
             raise LckStopError("Review invocation guard has no review root")
         review_root = Path(review_root_value)
 
+        completion_terminal = False
         try:
             validation = guard.get("validation")
             if (
@@ -2971,6 +2972,7 @@ class ReviewCompleter:
             record_path = self.store.write_record(task_number, review_id, record)
             self.store.write_latest_review(task_number, review_id, verdict)
             self.store.clear_review_required(task_number)
+            completion_terminal = True
             return ReviewCompletionResult(
                 review_id=review_id,
                 task_number=task_number,
@@ -2979,17 +2981,27 @@ class ReviewCompleter:
                 identity=reviewed_identity,
                 record_path=record_path,
             )
+        except ReviewStaleError:
+            # Stale is a formal terminal outcome for this prepared target.  It
+            # cannot be retried safely with the old target, so a fresh Prepare
+            # must reclaim this operation-owned state.
+            completion_terminal = True
+            raise
         finally:
-            cleanup_error: BaseException | None = None
-            try:
-                self.workspace.remove(review_root)
-            except BaseException as exc:
-                cleanup_error = exc
-            if cleanup_error is None:
-                self.store.delete_guard(review_id)
-                self.store.release_review_prepare(task_number, review_id)
-            else:
-                raise cleanup_error
+            if completion_terminal:
+                cleanup_error: BaseException | None = None
+                try:
+                    self.workspace.remove(review_root)
+                except BaseException as exc:
+                    cleanup_error = exc
+                if cleanup_error is None:
+                    self.store.delete_guard(review_id)
+                    self.store.release_review_prepare(task_number, review_id)
+                else:
+                    raise cleanup_error
+            # Otherwise preserve the guard, sealed clone, and Prepare marker
+            # for a retry when live-state resolution, validation, checks, or
+            # persistence fails before a terminal result is recorded.
 
 
 class CommitCurrentTreeEffect:
