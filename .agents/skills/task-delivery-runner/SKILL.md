@@ -161,6 +161,26 @@ Read the current Task body and implement the smallest complete change that
 satisfies Objective, Requirements, Critical Outcome, Acceptance Criteria, and
 explicit scope boundaries.
 
+#### Development validation boundary
+
+Normal implementation validation is development feedback, not Delivery
+authorization. Before LCK Delivery Complete, choose the smallest check that
+matches the changed surface: a named targeted profile, a focused pytest node,
+or a scoped static check. Rerun the relevant target after a change when useful.
+
+For a normal Task, do not proactively run a full `current-ci-equivalent`, full
+`workflow-delivery`, or equivalent full-repository validation before LCK
+Delivery Complete merely as a precaution or to "confirm" the candidate. The
+formal full Delivery validation is intentionally reserved for LCK Delivery
+Complete.
+
+A broader or full validation run is allowed only for a concrete diagnostic
+reason, such as a targeted failure indicating a cross-module regression, a
+change that spans global infrastructure, or an explicit maintainer request.
+Record and treat that run as diagnostic information only: it does not replace
+LCK's Critical Outcome verifier or formal validation, authorize commit/push/PR
+effects, or advance lifecycle state.
+
 During implementation, use a matching targeted Validation profile when useful:
 
 ```bash
@@ -169,7 +189,10 @@ tools/agent_workflow/wsl2_validation_runner.py targeted:workflow-tests
 ```
 
 Targeted validation is development feedback only. Do not treat it as final
-Delivery authorization and do not weaken tests to obtain a pass.
+Delivery authorization and do not weaken tests to obtain a pass. Any full
+validation performed for diagnosis remains non-authoritative; LCK Delivery
+Complete must still run its own Critical Outcome and formal Delivery validation
+and bind the exact validated tree before commit.
 
 Before completion, inspect the complete workspace diff semantically. Remove or
 repair unrelated, generated, secret-bearing, or prohibited changes. The

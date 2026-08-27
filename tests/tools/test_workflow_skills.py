@@ -218,6 +218,37 @@ def test_delivery_runner_uses_lck_for_initial_delivery_and_explicit_remediation(
     assert "MUST NOT start\nIndependent Review automatically" in text
 
 
+def test_delivery_skill_reserves_full_validation_for_lck_complete() -> None:
+    for path in (
+        ROOT / ".agents/skills/task-delivery-runner/SKILL.md",
+        ROOT / ".claude/skills/task-delivery-runner/SKILL.md",
+    ):
+        text = path.read_text(encoding="utf-8")
+        implementation = " ".join(
+            text.split("### 2. Semantic implementation", 1)[1]
+            .split("### 3. LCK Delivery Complete", 1)[0]
+            .split()
+        )
+        completion = " ".join(text.split("### 3. LCK Delivery Complete", 1)[1].split())
+
+        assert "Development validation boundary" in implementation
+        assert "development feedback, not Delivery authorization" in implementation
+        assert "smallest check that" in implementation
+        assert "current-ci-equivalent" in implementation
+        assert "workflow-delivery" in implementation
+        assert "merely as a precaution" in implementation
+        assert "concrete diagnostic" in implementation
+        assert "explicit maintainer request" in implementation
+        assert "does not replace" in implementation
+        assert "Critical Outcome verifier" in implementation
+        assert "Critical Outcome and formal Delivery validation" in implementation
+        assert "authorize commit/push/PR effects" in implementation
+
+        assert "run formal Delivery validation" in completion
+        assert "prove validated staged tree is unchanged" in completion
+        assert "commit_current_tree" in completion
+
+
 def test_delivery_lck_contract_is_shared_by_both_skills() -> None:
     agent, claude = _dual_skill("task-delivery-runner")
     assert _without_route_contract(agent) == claude
