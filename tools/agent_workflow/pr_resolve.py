@@ -160,6 +160,7 @@ def list_matching_prs(
     limit: int = 100,
     include_checks: bool = True,
     include_mergeability: bool = True,
+    include_history_details: bool,
 ) -> list[dict[str, Any]]:
     """Read matching PRs for live-state consumers without any side effect."""
     if state not in {"open", "closed", "merged", "all"}:
@@ -182,10 +183,21 @@ def list_matching_prs(
             "--limit",
             str(limit),
             "--json",
-            _pr_fields(
-                include_checks=include_checks,
-                include_mergeability=include_mergeability,
-                include_history_details=True,
+            (
+                _pr_fields(
+                    include_checks=include_checks,
+                    include_mergeability=include_mergeability,
+                    include_history_details=True,
+                )
+                if include_history_details
+                else ",".join(
+                    (
+                        "number",
+                        "state",
+                        *(("statusCheckRollup",) if include_checks else ()),
+                        *(("mergeable",) if include_mergeability else ()),
+                    )
+                )
             ),
         ],
         command_id="gh-pr-list-live-state-history",

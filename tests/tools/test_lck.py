@@ -21,6 +21,7 @@ if AGENT_WORKFLOW not in sys.path:
 import lck  # type: ignore[import-not-found]  # noqa: E402
 from pr_resolve import (  # type: ignore[import-not-found]
     PrResolveError,
+    list_matching_prs,
     resolve_open_pr,
 )  # noqa: E402
 from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
@@ -1133,6 +1134,51 @@ def _review_state(
     )
 
 
+def test_closeout_cleanup_keeps_exact_worktree_safety_precondition(
+    tmp_path: Path,
+) -> None:
+    state = _review_state()
+
+    class WorktreeInUseRunner:
+        def __init__(self) -> None:
+            self.commands: list[tuple[str, ...]] = []
+
+        def run(
+            self,
+            argv: list[str] | tuple[str, ...],
+            *,
+            command_id: str,
+            **_: Any,
+        ) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            self.commands.append(command)
+            assert command_id == "lck-closeout-worktree-precondition"
+            assert command == ("git", "worktree", "list", "--porcelain")
+            return CommandResult(
+                command_id,
+                command,
+                0,
+                f"worktree /tmp/task\nbranch refs/heads/{state.target_branch}\n",
+                "",
+            )
+
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    runner = WorktreeInUseRunner()
+    resolver.runner = runner
+
+    receipt = lck.CleanupTaskRefsEffect(resolver).execute(
+        state,
+        expected_head_sha=SHA,
+        merge_sha="b" * 40,
+    )
+
+    assert receipt.action == "pending"
+    assert (
+        receipt.details["reason"] == "verified Task branch is still used by a worktree"
+    )
+    assert runner.commands == [("git", "worktree", "list", "--porcelain")]
+
+
 def _review_identity_value(*, head: str = SHA, base: str = SHA) -> lck.ReviewIdentity:
     return lck.ReviewIdentity(
         task_number=159,
@@ -1581,20 +1627,28 @@ def test_review_complete_acquires_only_review_complete_fact_profile(
             "Delivery Prepare",
             {
                 "issue": (False, False, True),
-                "git": {"read_only_local_refs": True},
+                "git": {
+                    "read_only_local_refs": True,
+                    "include_workspace_inventory": False,
+                },
                 "branches": (True, True),
                 "pr": (False, False, False),
                 "history": {
                     "include_checks": False,
                     "include_mergeability": False,
+                    "include_history_details": False,
                 },
                 "included": {
                     "task_contract",
                     "git",
-                    "workspace_inventory",
                     "pr_history",
                 },
-                "excluded": {"comments", "issue_closure", "checks"},
+                "excluded": {
+                    "comments",
+                    "issue_closure",
+                    "workspace_inventory",
+                    "checks",
+                },
             },
         ),
         (
@@ -1610,6 +1664,7 @@ def test_review_complete_acquires_only_review_complete_fact_profile(
                 "history": {
                     "include_checks": False,
                     "include_mergeability": False,
+                    "include_history_details": False,
                 },
                 "included": {"task_contract", "git", "checks", "pr_history"},
                 "excluded": {"comments", "issue_closure", "workspace_inventory"},
@@ -1668,20 +1723,28 @@ def test_review_complete_acquires_only_review_complete_fact_profile(
             "closeout",
             {
                 "issue": (False, True, False),
-                "git": {"read_only_local_refs": True},
+                "git": {
+                    "read_only_local_refs": True,
+                    "include_workspace_inventory": False,
+                },
                 "branches": (True, True),
                 "pr": (False, False, False),
                 "history": {
                     "include_checks": False,
                     "include_mergeability": False,
+                    "include_history_details": True,
                 },
                 "included": {
                     "issue_closure",
                     "git",
-                    "workspace_inventory",
                     "pr_history",
                 },
-                "excluded": {"comments", "task_contract", "checks"},
+                "excluded": {
+                    "comments",
+                    "task_contract",
+                    "workspace_inventory",
+                    "checks",
+                },
             },
         ),
     ],
@@ -1719,6 +1782,12 @@ def test_authoritative_operation_resolver_queries_only_its_fact_profile(
     def git_query(*_args: Any, **kwargs: Any) -> dict[str, Any]:
         if expected["git"] is None:
             pytest.fail(f"{operation} queried source workspace Git facts")
+        if operation in {"Delivery Prepare", "closeout"} and (
+            kwargs.get("include_workspace_inventory") is not False
+        ):
+            pytest.fail(
+                f"{operation} queried forbidden staged/changed/worktree inventory"
+            )
         observations["git"].append(kwargs)
         return _git_snapshot(FakeRunner(branch=branch))
 
@@ -1773,8 +1842,8 @@ def test_authoritative_operation_resolver_queries_only_its_fact_profile(
     [
         (
             "Delivery Prepare",
-            {"task_contract", "git", "workspace_inventory", "pr_history"},
-            {"comments", "issue_closure", "checks"},
+            {"task_contract", "git", "pr_history"},
+            {"comments", "issue_closure", "workspace_inventory", "checks"},
         ),
         (
             "Delivery Complete",
@@ -1808,8 +1877,8 @@ def test_authoritative_operation_resolver_queries_only_its_fact_profile(
         ),
         (
             "closeout",
-            {"issue_closure", "git", "workspace_inventory", "pr_history"},
-            {"comments", "task_contract", "checks"},
+            {"issue_closure", "git", "pr_history"},
+            {"comments", "task_contract", "workspace_inventory", "checks"},
         ),
     ],
 )
@@ -1822,6 +1891,60 @@ def test_authoritative_operations_bind_stable_fact_profiles(
 
     assert included <= facts
     assert excluded.isdisjoint(facts)
+
+
+def test_delivery_history_query_requests_only_merged_detection_fields() -> None:
+    fake = FakeRunner()
+
+    assert (
+        list_matching_prs(
+            cast(Any, fake),
+            "owner/repo",
+            "task/159-lck-core-live-state-resolution",
+            "main",
+            [],
+            include_checks=False,
+            include_mergeability=False,
+            include_history_details=False,
+        )
+        == []
+    )
+
+    command = fake.commands[-1]
+    assert command[command.index("--json") + 1] == "number,state"
+
+
+def test_closeout_history_query_retains_required_identity_details() -> None:
+    fake = FakeRunner()
+
+    assert (
+        list_matching_prs(
+            cast(Any, fake),
+            "owner/repo",
+            "task/159-lck-core-live-state-resolution",
+            "main",
+            [],
+            include_checks=False,
+            include_mergeability=False,
+            include_history_details=True,
+        )
+        == []
+    )
+
+    command = fake.commands[-1]
+    fields = set(command[command.index("--json") + 1].split(","))
+    assert {
+        "number",
+        "state",
+        "baseRefName",
+        "baseRefOid",
+        "headRefName",
+        "headRefOid",
+        "mergeCommit",
+        "mergedAt",
+        "closingIssuesReferences",
+    } <= fields
+    assert {"statusCheckRollup", "mergeable"}.isdisjoint(fields)
 
 
 def test_review_complete_can_retry_after_transient_live_resolution_failure(

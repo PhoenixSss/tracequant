@@ -117,6 +117,7 @@ class FactProfile:
     include_remote_task_branches: bool = True
     include_open_pr: bool = True
     include_pr_history: bool = False
+    include_pr_history_details: bool = False
     include_checks: bool = False
     include_mergeability: bool = False
 
@@ -151,6 +152,7 @@ _DIAGNOSTIC_FACT_PROFILE: Final = FactProfile(
     include_remote_task_branches=True,
     include_open_pr=True,
     include_pr_history=True,
+    include_pr_history_details=True,
     include_checks=True,
     include_mergeability=True,
 )
@@ -158,7 +160,6 @@ _DIAGNOSTIC_FACT_PROFILE: Final = FactProfile(
 _OPERATION_FACT_PROFILES: Final = {
     "delivery-prepare": FactProfile(
         name="delivery-prepare",
-        include_workspace_inventory=True,
         include_pr_history=True,
     ),
     "delivery-complete": FactProfile(
@@ -195,8 +196,8 @@ _OPERATION_FACT_PROFILES: Final = {
         name="closeout",
         include_issue_closure=True,
         include_task_contract=False,
-        include_workspace_inventory=True,
         include_pr_history=True,
+        include_pr_history_details=True,
     ),
 }
 
@@ -823,6 +824,7 @@ class LiveStateResolver:
                         target_branch,
                         BASE_BRANCH,
                         warnings,
+                        include_history_details=True,
                     )
                 else:
                     history = list_matching_prs(
@@ -833,6 +835,7 @@ class LiveStateResolver:
                         warnings,
                         include_checks=False,
                         include_mergeability=False,
+                        include_history_details=profile.include_pr_history_details,
                     )
                 if not history and recovered_pr is not None:
                     history = [dict(recovered_pr)]
