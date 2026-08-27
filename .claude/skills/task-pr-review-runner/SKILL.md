@@ -10,20 +10,6 @@ being reviewed. Shared semantics are owned by `docs/development/pr-review.md` an
 lifecycle placement by `docs/development/issue-workflow.md`.
 Read applicable `AGENTS.md` and `.agents/policies/command-execution.md`; Review has no direct Git/GitHub write authority.
 
-## Execution route contract
-
-`review prepare`, `review complete`, and `merge preflight` (including the
-`merge-preflight` compatibility alias) use `sandbox-first`. These operations
-keep the source repository read-only; Review's temporary clone and ignored LCK
-runtime state remain operation-owned exceptions defined by the policy. This
-classification is selected from the exact LCK invocation before it starts.
-
-The route only selects the execution context for a command already authorized
-by this Skill and LCK. It never grants GitHub, lifecycle, merge, or write
-authority, and Review must not be rerouted through a generic elevated `uv`,
-`python`, `git`, or `gh` rule. Preserve the policy's exact-context retry rules
-for a genuine `sandbox-denied` or `credential-isolated` result.
-
 ## Invocation
 
 ```text

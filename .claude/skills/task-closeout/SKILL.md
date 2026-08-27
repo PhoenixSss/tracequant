@@ -59,16 +59,6 @@ substitute for LCK live-state resolution, phase eligibility, or write
 authority. The historical eligible-under-capability-limited-policy state
 remains a reported limitation, not permission to broaden cleanup.
 
-## Execution route contract
-
-`closeout` uses `elevated-first` because its already-authorized effects may
-write Git metadata and GitHub lifecycle state. `merge preflight` remains
-`sandbox-first` because it is a source-repository read-only gate and never
-merges. Select these routes from the exact LCK invocation before execution;
-never apply an elevated route to generic `uv`, `python`, `git`, or `gh`
-commands. The route changes execution context only and does not grant merge,
-Issue, Project, label, branch, or cleanup authority.
-
 ## LCK closeout contract
 
 LCK resolves the current state on every invocation and fail-closes on

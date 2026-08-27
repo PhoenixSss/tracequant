@@ -22,6 +22,25 @@ from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
 SHA = "a" * 40
 
 
+def _without_route_contract(text: str) -> str:
+    """Remove the Codex-only `## Execution route contract` section.
+
+    The sandbox route (sandbox-first / elevated-first) is a Codex
+    execution-profile concept; Claude Code permissions come from
+    `.claude/settings.json`, so the Claude Skills deliberately omit it.
+    """
+    marker = "## Execution route contract"
+    start = text.find(marker)
+    assert start != -1
+    ends = [
+        index
+        for probe in ("\n## ", "\nIt must contain")
+        if (index := text.find(probe, start)) != -1
+    ]
+    assert ends
+    return text[:start] + text[min(ends) + 1 :]
+
+
 REQUIRED_CHECKS_WORKFLOW_TEXT = """name: CI
 on:
   pull_request:
@@ -961,7 +980,7 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
     claude_skill = (root / ".claude/skills/task-delivery-runner/SKILL.md").read_text(
         encoding="utf-8"
     )
-    assert agent_skill == claude_skill
+    assert _without_route_contract(agent_skill) == claude_skill
     assert "lck.py delivery prepare" in agent_skill
     assert "lck.py delivery complete" in agent_skill
     initial_section = agent_skill.split("## Review remediation", 1)[0]

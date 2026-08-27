@@ -26,6 +26,25 @@ def _skill_text(name: str) -> tuple[str, str]:
     )
 
 
+def _without_route_contract(text: str) -> str:
+    """Remove the Codex-only `## Execution route contract` section.
+
+    The sandbox route (sandbox-first / elevated-first) is a Codex
+    execution-profile concept; Claude Code permissions come from
+    `.claude/settings.json`, so the Claude Skills deliberately omit it.
+    """
+    marker = "## Execution route contract"
+    start = text.find(marker)
+    assert start != -1
+    ends = [
+        index
+        for probe in ("\n## ", "\nIt must contain")
+        if (index := text.find(probe, start)) != -1
+    ]
+    assert ends
+    return text[:start] + text[min(ends) + 1 :]
+
+
 def test_shared_semantic_owner_docs_exist() -> None:
     assert ISSUE_WORKFLOW.is_file()
     assert PR_REVIEW.is_file()
@@ -152,7 +171,7 @@ def test_pr_review_doc_removes_cross_phase_mechanical_handoff_authority() -> Non
 
 def test_review_skills_share_binary_lck_contract() -> None:
     codex, claude = _skill_text("task-pr-review-runner")
-    assert codex == claude
+    assert _without_route_contract(codex) == claude
     for text in (codex, claude):
         assert "docs/development/pr-review.md" in text
         assert "tools/agent_workflow/lck.py review prepare" in text

@@ -32,6 +32,29 @@ def _dual_skill(name: str) -> tuple[str, str]:
     )
 
 
+# The sandbox execution-route contract (sandbox-first / elevated-first) is a
+# Codex execution-profile concept. Claude Code permissions are governed by
+# `.claude/settings.json`, so the Claude Skills deliberately omit the
+# Codex-only `## Execution route contract` section; the dual Skills stay
+# mirrored modulo that single section.
+
+
+def _without_route_contract(text: str) -> str:
+    """Return ``text`` with the Codex-only execution route contract removed."""
+    marker = "## Execution route contract"
+    start = text.find(marker)
+    assert start != -1
+    # The section ends at the next heading, or at the `Critical Outcome`
+    # paragraph that follows it in the delivery Skill.
+    ends = [
+        index
+        for probe in ("\n## ", "\nIt must contain")
+        if (index := text.find(probe, start)) != -1
+    ]
+    assert ends
+    return text[:start] + text[min(ends) + 1 :]
+
+
 def test_current_runner_skills_use_one_mechanical_path() -> None:
     forbidden = (
         "python tools/agent_workflow/workflow_evidence.py",
@@ -154,14 +177,19 @@ def test_lck_git_write_operations_use_deterministic_controlled_execution_routes(
     ):
         assert retry_rule in policy
 
+    # The route contract is a Codex execution-profile concept; the Codex
+    # Skills document it while the Claude Skills deliberately omit it (Claude
+    # Code permissions come from `.claude/settings.json`). The Skills stay
+    # mirrored modulo that single Codex-only section.
     for name in (
         "task-delivery-runner",
         "task-pr-review-runner",
         "task-closeout",
     ):
         codex, claude = _dual_skill(name)
-        assert codex == claude
         assert "## Execution route contract" in codex
+        assert "## Execution route contract" not in claude
+        assert _without_route_contract(codex) == claude
 
 
 def test_delivery_runner_uses_lck_for_initial_delivery_and_explicit_remediation() -> (
@@ -192,7 +220,7 @@ def test_delivery_runner_uses_lck_for_initial_delivery_and_explicit_remediation(
 
 def test_delivery_lck_contract_is_shared_by_both_skills() -> None:
     agent, claude = _dual_skill("task-delivery-runner")
-    assert agent == claude
+    assert _without_route_contract(agent) == claude
     for phrase in (
         "LCK Delivery Prepare",
         "LCK Delivery Complete",
@@ -214,7 +242,7 @@ def test_delivery_lck_contract_is_shared_by_both_skills() -> None:
 
 def test_review_runner_is_fresh_read_only_lck_review() -> None:
     agent, claude = _dual_skill("task-pr-review-runner")
-    assert agent == claude
+    assert _without_route_contract(agent) == claude
     text = agent
     for phrase in (
         "fresh session",

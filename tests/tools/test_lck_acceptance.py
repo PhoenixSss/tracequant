@@ -23,6 +23,25 @@ def _skill(name: str, root: str = ".agents") -> str:
     return (ROOT / root / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
 
 
+def _without_route_contract(text: str) -> str:
+    """Remove the Codex-only `## Execution route contract` section.
+
+    The sandbox route (sandbox-first / elevated-first) is a Codex
+    execution-profile concept; Claude Code permissions come from
+    `.claude/settings.json`, so the Claude Skills deliberately omit it.
+    """
+    marker = "## Execution route contract"
+    start = text.find(marker)
+    assert start != -1
+    ends = [
+        index
+        for probe in ("\n## ", "\nIt must contain")
+        if (index := text.find(probe, start)) != -1
+    ]
+    assert ends
+    return text[:start] + text[min(ends) + 1 :]
+
+
 def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> None:
     """Guard the LCK v1 architecture contract named by Issue #163.
 
@@ -82,7 +101,7 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     for name in TASK_SKILLS:
         codex = _skill(name)
         claude = _skill(name, ".claude")
-        assert codex == claude
+        assert _without_route_contract(codex) == claude
         for forbidden in (
             "git add",
             "git commit",
