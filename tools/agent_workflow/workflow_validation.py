@@ -17,6 +17,7 @@ from typing import Any, Final
 from workflow_common import (
     MAX_LOG_BYTES,
     CommandRunner,
+    ProgressReporter,
     WorkflowToolError,
     is_sha,
     print_json,
@@ -228,16 +229,25 @@ def _run_validation(
 
     results: list[dict[str, Any]] = []
     overall = True
+    progress = ProgressReporter("workflow-validation")
+    progress.started("validation")
     for command in plan:
         started = time.monotonic()
+        stage = f"command:{command.command_id}"
+        progress.running(stage, command_id=command.command_id)
         result = runner.run(
             command.argv,
             command_id=command.command_id,
             validation=True,
+            progress=lambda: progress.heartbeat(stage, command_id=command.command_id),
         )
         duration_ms = max(0, round((time.monotonic() - started) * 1000))
         status = "pass" if result.returncode == 0 else "fail"
         overall = overall and result.returncode == 0
+        if result.returncode == 0:
+            progress.completed(stage)
+        else:
+            progress.failed(stage)
         log_text = _sanitize_log(
             f"$ {' '.join(command.argv)}\n\n[stdout]\n{result.stdout}\n\n[stderr]\n{result.stderr}",
             repo_root,
@@ -263,6 +273,11 @@ def _run_validation(
                 limit=2000,
             )
         results.append(entry)
+
+    if overall:
+        progress.completed("validation")
+    else:
+        progress.failed("validation")
 
     output: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,

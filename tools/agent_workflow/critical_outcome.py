@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
-from workflow_common import CommandRunner, safe_text
+from workflow_common import CommandRunner, ProgressReporter, safe_text
 
 _SECTION_HEADING: Final = re.compile(r"^###\s+Critical Outcome\s*$", re.IGNORECASE)
 _NEXT_HEADING: Final = re.compile(r"^#{1,6}\s+")
@@ -167,6 +167,8 @@ def verify_critical_outcome(
     repo_root: Path,
     runner: CommandRunner,
     contract: CriticalOutcomeContract,
+    *,
+    progress: ProgressReporter | None = None,
 ) -> CriticalOutcomeResult:
     """Run the bounded Task-specific Critical Outcome verifier."""
     file_part = contract.verification_test.split("::", 1)[0]
@@ -182,18 +184,31 @@ def verify_critical_outcome(
             f"Critical Outcome verification test does not exist: {file_part}"
         )
 
-    result = runner.run(
-        [
-            "uv",
-            "run",
-            "--frozen",
-            "pytest",
-            "-q",
-            contract.verification_test,
-        ],
-        command_id="lck-critical-outcome",
-        validation=True,
-    )
+    reporter = progress or ProgressReporter("critical-outcome")
+    reporter.started("critical-outcome")
+    try:
+        result = runner.run(
+            [
+                "uv",
+                "run",
+                "--frozen",
+                "pytest",
+                "-q",
+                contract.verification_test,
+            ],
+            command_id="lck-critical-outcome",
+            validation=True,
+            progress=lambda: reporter.heartbeat(
+                "critical-outcome", command_id="lck-critical-outcome"
+            ),
+        )
+    except BaseException:
+        reporter.failed("critical-outcome")
+        raise
+    if result.returncode != 0:
+        reporter.failed("critical-outcome")
+    else:
+        reporter.completed("critical-outcome")
     combined = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     summary = safe_text(combined[-1], limit=240) if combined else None
     return CriticalOutcomeResult(

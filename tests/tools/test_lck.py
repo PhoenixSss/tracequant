@@ -1344,6 +1344,51 @@ def test_review_prepare_builds_context_only_from_live_resolution(
     assert checks.calls == 1
 
 
+def test_review_prepare_emits_bounded_progress_without_changing_final_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state = _review_state()
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    identity = _review_identity_value()
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
+    store = lck.ReviewInvocationStore(tmp_path)
+    context = lck.ReviewPreparer(
+        resolver,
+        validation=cast(Any, FakeReviewValidation()),
+        checks_gate=cast(Any, FakeReviewChecks()),
+        workspace=cast(Any, FakeReviewWorkspace(tmp_path / "review-root")),
+        store=store,
+    ).prepare(159)
+
+    lck.print_json(context.to_dict())
+    captured = capsys.readouterr()
+    final_result = json.loads(captured.out)
+    progress = [json.loads(line) for line in captured.err.splitlines() if line.strip()]
+
+    assert final_result == context.to_dict()
+    assert progress
+    assert progress[0]["event"] == "started"
+    assert any(item["event"] == "completed" for item in progress)
+    assert {item["operation"] for item in progress} == {"review-prepare"}
+    assert {item["stage"] for item in progress} >= {
+        "initializing",
+        "formal-validation",
+        "handoff",
+    }
+    assert all(
+        item["kind"] == "workflow-progress"
+        and item["authority"] == "non-authoritative observability only"
+        for item in progress
+    )
+    assert all("Task Contract" not in line for line in captured.err.splitlines())
+    assert all(
+        "snapshot" not in line and "diff" not in line
+        for line in captured.err.splitlines()
+    )
+
+
 def test_review_prepare_freezes_authority_before_validation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -137,6 +137,39 @@ def test_success_output_is_compact_and_logs_are_ignored(tmp_path: Path) -> None:
         assert command["log_path"].startswith(".agents/validation.local/")
 
 
+def test_progress_is_bounded_stderr_and_does_not_change_final_result(
+    tmp_path: Path,
+) -> None:
+    repo = _write_repo(tmp_path)
+    bin_dir = _write_fake_tools(tmp_path)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+
+    result = _run(repo, env, "--phase", "delivery")
+
+    assert result.returncode == 0, result.stderr
+    final_result = json.loads(result.stdout)
+    progress = [json.loads(line) for line in result.stderr.splitlines() if line.strip()]
+    assert final_result["status"] == "pass"
+    assert progress[0] == {
+        "authority": "non-authoritative observability only",
+        "event": "started",
+        "kind": "workflow-progress",
+        "operation": "workflow-validation",
+        "schema_version": 1,
+        "stage": "validation",
+    }
+    assert progress[-1]["event"] == "completed"
+    assert progress[-1]["stage"] == "validation"
+    assert all(len(line.encode("utf-8")) < 512 for line in result.stderr.splitlines())
+    assert all(
+        "commands" not in line
+        and "output_dir" not in line
+        and "Task Contract" not in line
+        for line in result.stderr.splitlines()
+    )
+
+
 def test_failure_has_bounded_diagnostic_and_nonzero_exit(tmp_path: Path) -> None:
     repo = _write_repo(tmp_path)
     bin_dir = _write_fake_tools(tmp_path)

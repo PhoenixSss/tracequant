@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,8 @@ ROOT = Path(__file__).parents[2]
 if AGENT_WORKFLOW not in sys.path:
     sys.path.insert(0, AGENT_WORKFLOW)
 
-from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
+import workflow_common  # type: ignore[import-not-found]  # noqa: E402
+from workflow_common import (  # noqa: E402
     CommandRunner,
     build_workflow_env,
     command_warning,
@@ -109,6 +111,41 @@ def test_command_runner_times_out_and_reports_bounded_diagnostic(
     assert warning["timed_out"] is True
     assert warning["timeout_seconds"] == 0.2
     assert "timed out after 0.2 seconds" in warning["error"]
+
+
+def test_command_runner_returns_immediately_when_process_finishes_before_heartbeat(
+    tmp_path: Path,
+) -> None:
+    started = time.monotonic()
+    result = CommandRunner(tmp_path).run(
+        [sys.executable, "-c", "print('finished')"],
+        command_id="test-early-finish",
+        timeout_seconds=1.0,
+        progress=lambda: pytest.fail("early completion must not wait for heartbeat"),
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "finished"
+    assert time.monotonic() - started < 0.8
+
+
+def test_command_runner_emits_low_frequency_heartbeat_without_changing_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workflow_common, "PROGRESS_HEARTBEAT_INTERVAL_SECONDS", 0.02)
+    heartbeats: list[int] = []
+
+    result = CommandRunner(tmp_path).run(
+        [sys.executable, "-c", "import time; time.sleep(0.07); print('finished')"],
+        command_id="test-heartbeat",
+        timeout_seconds=1.0,
+        progress=lambda: heartbeats.append(1),
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "finished"
+    assert heartbeats
 
 
 def test_command_runner_retries_only_when_requested(tmp_path: Path) -> None:

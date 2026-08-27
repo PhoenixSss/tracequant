@@ -10,8 +10,10 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
+import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -25,6 +27,7 @@ NETWORK_COMMAND_TIMEOUT_SECONDS: Final = 60.0
 VALIDATION_COMMAND_TIMEOUT_SECONDS: Final = 1200.0
 PROCESS_TERM_GRACE_SECONDS: Final = 2.0
 RETRY_DELAY_SECONDS: Final = 0.5
+PROGRESS_HEARTBEAT_INTERVAL_SECONDS: Final = 30.0
 TIMEOUT_EXIT_CODE: Final = 124
 SHA_PATTERN: Final = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
 WINDOWS_ABSOLUTE_PATH: Final = re.compile(r"^[A-Za-z]:[\\/]")
@@ -44,6 +47,74 @@ SENSITIVE_VALUE_PATTERNS: Final = (
 
 class WorkflowToolError(RuntimeError):
     """Expected user-facing workflow tooling error."""
+
+
+ProgressCallback = Callable[[], None]
+
+
+class ProgressReporter:
+    """Write bounded, non-authoritative workflow progress to stderr."""
+
+    _EVENTS: Final = frozenset(
+        {"started", "running", "heartbeat", "completed", "failed"}
+    )
+
+    def __init__(self, operation: str) -> None:
+        self.operation = operation
+        self._enabled = True
+        self._last_stage = "initializing"
+
+    @staticmethod
+    def _value(value: str) -> str:
+        # Progress values are internal identifiers, but keep the output safe if
+        # a future caller derives one from a command or error path.
+        normalized = " ".join(value.replace("\x00", "").split())
+        return safe_text(normalized, limit=96) or "unknown"
+
+    def emit(
+        self,
+        event: str,
+        stage: str,
+        *,
+        command_id: str | None = None,
+    ) -> None:
+        """Emit one small JSONL event without affecting lifecycle execution."""
+        if not self._enabled or event not in self._EVENTS:
+            return
+        if event != "failed":
+            self._last_stage = stage
+        payload: dict[str, str | int] = {
+            "schema_version": 1,
+            "kind": "workflow-progress",
+            "operation": self._value(self.operation),
+            "stage": self._value(stage),
+            "event": event,
+            "authority": "non-authoritative observability only",
+        }
+        if command_id is not None:
+            payload["command_id"] = self._value(command_id)
+        try:
+            print(json_dumps(payload), end="", file=sys.stderr, flush=True)
+        except Exception:
+            # Progress is deliberately outside the lifecycle result contract.
+            # A closed or unavailable diagnostic stream must not change the
+            # command's exit status or suppress its final machine result.
+            self._enabled = False
+
+    def started(self, stage: str) -> None:
+        self.emit("started", stage)
+
+    def running(self, stage: str, *, command_id: str | None = None) -> None:
+        self.emit("running", stage, command_id=command_id)
+
+    def heartbeat(self, stage: str, *, command_id: str | None = None) -> None:
+        self.emit("heartbeat", stage, command_id=command_id)
+
+    def completed(self, stage: str) -> None:
+        self.emit("completed", stage)
+
+    def failed(self, stage: str | None = None) -> None:
+        self.emit("failed", stage or self._last_stage)
 
 
 def build_workflow_env(repo_root: Path) -> dict[str, str]:
@@ -104,8 +175,9 @@ def _run_process(
     cwd: Path,
     env: Mapping[str, str],
     timeout_seconds: float,
+    on_heartbeat: ProgressCallback | None = None,
 ) -> tuple[int, str, str, bool]:
-    """Run one command with a timeout and process-group cleanup."""
+    """Run one command with a timeout and bounded heartbeat cadence."""
     process = subprocess.Popen(
         resolved_argv,
         cwd=cwd,
@@ -117,19 +189,70 @@ def _run_process(
         env=env,
         start_new_session=os.name == "posix",
     )
-    try:
-        stdout, stderr = process.communicate(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
+
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+
+    def drain(pipe: Any, parts: list[str]) -> None:
+        try:
+            value = pipe.read()
+            if value:
+                parts.append(value)
+        finally:
+            pipe.close()
+
+    readers = (
+        threading.Thread(
+            target=drain,
+            args=(process.stdout, stdout_parts),
+            daemon=True,
+        ),
+        threading.Thread(
+            target=drain,
+            args=(process.stderr, stderr_parts),
+            daemon=True,
+        ),
+    )
+    for reader in readers:
+        reader.start()
+
+    timed_out = False
+    deadline = time.monotonic() + timeout_seconds
+    while process.poll() is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timed_out = True
+            break
+        wait_window = min(remaining, PROGRESS_HEARTBEAT_INTERVAL_SECONDS)
+        try:
+            process.wait(timeout=wait_window)
+        except subprocess.TimeoutExpired:
+            if on_heartbeat is not None:
+                try:
+                    on_heartbeat()
+                except Exception:
+                    # The progress channel is not allowed to affect command
+                    # execution or its final result.
+                    pass
+
+    if timed_out:
         _signal_process_group(process, signal.SIGTERM)
         try:
-            stdout, stderr = process.communicate(timeout=PROCESS_TERM_GRACE_SECONDS)
+            process.wait(timeout=PROCESS_TERM_GRACE_SECONDS)
         except subprocess.TimeoutExpired:
             _signal_process_group(process, signal.SIGKILL)
-            stdout, stderr = process.communicate()
+            process.wait()
         timeout_message = f"command timed out after {timeout_seconds:g} seconds"
-        stderr = f"{stderr.rstrip()}\n{timeout_message}" if stderr else timeout_message
-        return TIMEOUT_EXIT_CODE, stdout, stderr, True
-    return process.returncode, stdout, stderr, False
+        stderr_parts.append(timeout_message)
+
+    for reader in readers:
+        reader.join()
+    return (
+        TIMEOUT_EXIT_CODE if timed_out else int(process.returncode),
+        "".join(stdout_parts),
+        "\n".join(stderr_parts),
+        timed_out,
+    )
 
 
 class CommandRunner:
@@ -152,6 +275,7 @@ class CommandRunner:
         env: Mapping[str, str] | None = None,
         timeout_seconds: float | None = None,
         retries: int = 0,
+        progress: ProgressCallback | None = None,
     ) -> CommandResult:
         if not argv:
             raise WorkflowToolError("command argv cannot be empty")
@@ -193,6 +317,7 @@ class CommandRunner:
                     cwd=cwd or self.repo_root,
                     env=process_env,
                     timeout_seconds=effective_timeout,
+                    on_heartbeat=progress,
                 )
             except FileNotFoundError:
                 return CommandResult(
