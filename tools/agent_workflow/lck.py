@@ -4697,9 +4697,10 @@ class DeliveryCompleter:
     """Complete Delivery from one immutable operation-start snapshot.
 
     Lifecycle authority is acquired once.  Local/remote/PR/metadata mutations
-    then prove only their own exact postconditions.  If asynchronous PR checks
-    are pending, the operation stops after the durable commit/push/PR effects;
-    a later invocation acquires a fresh snapshot and continues idempotently.
+    then prove only their own exact postconditions.  Asynchronous PR checks are
+    observed without blocking Delivery; pending checks are reported while the
+    operation continues through Project Status and final identity verification.
+    Strict check evaluation remains owned by Review Complete and Merge Preflight.
     """
 
     def __init__(
