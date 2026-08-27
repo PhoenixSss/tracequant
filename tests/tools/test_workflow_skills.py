@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
@@ -29,6 +30,29 @@ def _dual_skill(name: str) -> tuple[str, str]:
         (ROOT / ".agents/skills" / name / "SKILL.md").read_text(encoding="utf-8"),
         (ROOT / ".claude/skills" / name / "SKILL.md").read_text(encoding="utf-8"),
     )
+
+
+# The sandbox execution-route contract (sandbox-first / elevated-first) is a
+# Codex execution-profile concept. Claude Code permissions are governed by
+# `.claude/settings.json`, so the Claude Skills deliberately omit the
+# Codex-only `## Execution route contract` section; the dual Skills stay
+# mirrored modulo that single section.
+
+
+def _without_route_contract(text: str) -> str:
+    """Return ``text`` with the Codex-only execution route contract removed."""
+    marker = "## Execution route contract"
+    start = text.find(marker)
+    assert start != -1
+    # The section ends at the next heading, or at the `Critical Outcome`
+    # paragraph that follows it in the delivery Skill.
+    ends = [
+        index
+        for probe in ("\n## ", "\nIt must contain")
+        if (index := text.find(probe, start)) != -1
+    ]
+    assert ends
+    return text[:start] + text[min(ends) + 1 :]
 
 
 def test_current_runner_skills_use_one_mechanical_path() -> None:
@@ -76,7 +100,96 @@ def test_lck_commands_use_the_pinned_project_python() -> None:
         encoding="utf-8"
     )
     assert 'executable = "python"' not in profile
-    assert 'name = "uv-toolchain"' in profile
+    assert 'name = "lck-delivery-prepare"' in profile
+
+
+def test_lck_git_write_operations_use_deterministic_controlled_execution_routes() -> (
+    None
+):
+    profile = tomllib.loads(
+        (ROOT / ".agents/execution-profile.example.toml").read_text(encoding="utf-8")
+    )
+
+    assert profile == {
+        "schema_version": 1,
+        "default_route": "sandbox-first",
+        "rules": profile["rules"],
+    }
+    rules = profile["rules"]
+    assert isinstance(rules, list)
+    assert all(
+        set(rule) == {"name", "executable", "argument_prefix", "route", "reason"}
+        for rule in rules
+    )
+    lck_prefix = (
+        "run",
+        "--frozen",
+        "python",
+        "tools/agent_workflow/lck.py",
+    )
+    expected_routes = {
+        lck_prefix + ("status",): "sandbox-first",
+        lck_prefix + ("delivery", "prepare"): "elevated-first",
+        lck_prefix + ("delivery", "complete"): "elevated-first",
+        lck_prefix + ("review", "prepare"): "sandbox-first",
+        lck_prefix + ("review", "complete"): "sandbox-first",
+        lck_prefix + ("remediation", "prepare"): "elevated-first",
+        lck_prefix + ("remediation", "no-change"): "sandbox-first",
+        lck_prefix + ("remediation", "complete"): "elevated-first",
+        lck_prefix + ("merge", "preflight"): "sandbox-first",
+        lck_prefix + ("merge-preflight",): "sandbox-first",
+        lck_prefix + ("closeout",): "elevated-first",
+    }
+    lck_rules = {
+        tuple(rule["argument_prefix"]): rule["route"]
+        for rule in rules
+        if rule["executable"] == "uv"
+    }
+    assert lck_rules == expected_routes
+    assert all(prefix[: len(lck_prefix)] == lck_prefix for prefix in lck_rules)
+    assert all(prefix for prefix in lck_rules)
+    assert all(rule["executable"] != "python" for rule in rules)
+    assert all(rule["executable"] != "gh" for rule in rules)
+    assert () not in lck_rules
+
+    git_rules = {
+        (rule["executable"], tuple(rule["argument_prefix"]), rule["route"])
+        for rule in rules
+        if rule["executable"] == "git"
+    }
+    assert git_rules == {
+        ("git", ("status",), "sandbox-first"),
+        ("git", ("diff",), "sandbox-first"),
+    }
+
+    policy = (ROOT / ".agents/policies/command-execution.md").read_text(
+        encoding="utf-8"
+    )
+    assert "The route classification is deterministic" in policy
+    assert "The profile must not contain" in policy
+    assert "a generic `uv`, `python`, `git`, or `gh` write rule." in policy
+    assert "Independent Review" in policy
+    for retry_rule in (
+        "sandbox-denied",
+        "credential-isolated",
+        "Only `sandbox-denied` or `credential-isolated` may justify an exact-context",
+        "Do not retry a real command failure with broader permissions.",
+    ):
+        assert retry_rule in policy
+
+    # The route contract is a Codex execution-profile concept; the Codex
+    # Skills document it while the Claude Skills deliberately omit it (Claude
+    # Code permissions come from `.claude/settings.json`). The Skills stay
+    # mirrored modulo that single Codex-only section.
+    for name in (
+        "task-delivery-runner",
+        "task-pr-review-runner",
+        "task-closeout",
+    ):
+        codex, claude = _dual_skill(name)
+        assert "## Execution route contract" in codex
+        assert "## Execution route contract" not in claude
+        assert _without_route_contract(codex) == claude
 
 
 def test_delivery_runner_uses_lck_for_initial_delivery_and_explicit_remediation() -> (
@@ -107,7 +220,7 @@ def test_delivery_runner_uses_lck_for_initial_delivery_and_explicit_remediation(
 
 def test_delivery_lck_contract_is_shared_by_both_skills() -> None:
     agent, claude = _dual_skill("task-delivery-runner")
-    assert agent == claude
+    assert _without_route_contract(agent) == claude
     for phrase in (
         "LCK Delivery Prepare",
         "LCK Delivery Complete",
@@ -129,7 +242,7 @@ def test_delivery_lck_contract_is_shared_by_both_skills() -> None:
 
 def test_review_runner_is_fresh_read_only_lck_review() -> None:
     agent, claude = _dual_skill("task-pr-review-runner")
-    assert agent == claude
+    assert _without_route_contract(agent) == claude
     text = agent
     for phrase in (
         "fresh session",

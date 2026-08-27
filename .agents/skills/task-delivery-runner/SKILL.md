@@ -68,6 +68,24 @@ Read only the sections needed by the current invocation.
 The current Task body is the business specification. Do not default to reading comments, complete Parent/Epic bodies, dependency bodies, templates, workflows, validation sources, or linked docs/ADRs. Expand only when the current Task explicitly references them, the specification is missing or ambiguous, a dependency affects implementation, a safety/architecture constraint applies, or verification requires it.
 Verifying these mechanical facts does not require reading the full text of any source into the model context. Read the minimum relevant source/section, evaluate sufficiency, and expand further only if still insufficient.
 
+## Execution route contract
+
+Select the route from the exact LCK invocation before running it. The known
+Git-metadata or GitHub-lifecycle write operations use `elevated-first`:
+`delivery prepare`, `delivery complete`, `remediation prepare`,
+`remediation complete`, and `closeout`. The source-repository read-only
+operations use `sandbox-first`: `status`, `review prepare`, `review complete`,
+`remediation no-change`, and `merge preflight` (including its compatibility
+alias `merge-preflight`).
+
+This route only selects the execution context for a command already authorized
+by this Skill and LCK; it does not grant branch, commit, push, PR, Project,
+merge, cleanup, or lifecycle authority. Do not intentionally run a known
+write operation in the sandbox to obtain a predictable `.git/index.lock` or
+equivalent failure before using its approved route. If a sandbox-first command
+fails, preserve the command-execution policy's classification and exact-context
+retry rules; a real command failure never justifies a broader-permission retry.
+
 It must contain a valid `Critical Outcome` contract with:
 
 ```text

@@ -34,6 +34,35 @@ prompt          request approval
 A route is valid only for the exact LCK/validation contract. It cannot alter
 Task/PR IDs, base/head SHAs, repository, output paths, or profile semantics.
 
+## Authoritative LCK route contract
+
+The versioned execution-profile example contains one exact `uv run --frozen
+python tools/agent_workflow/lck.py ...` rule for every supported LCK operation.
+The route classification is deterministic and is resolved before the command
+starts; an Agent must not probe the normal sandbox first when the matching rule
+is `elevated-first`.
+
+| LCK invocation | Route | Why |
+| --- | --- | --- |
+| `status` | `sandbox-first` | Resolves live facts without changing repository metadata |
+| `delivery prepare` | `elevated-first` | May create or switch the Task branch |
+| `delivery complete` | `elevated-first` | Commits, pushes, and performs the authorized PR/Project effects |
+| `review prepare` | `sandbox-first` | Keeps the source repository read-only; the temporary clone is operation-owned |
+| `review complete` | `sandbox-first` | Writes only ignored LCK continuity/evidence state in the source repository |
+| `remediation prepare` | `elevated-first` | May restore or switch the Task branch |
+| `remediation no-change` | `sandbox-first` | Writes only the ignored no-change receipt |
+| `remediation complete` | `elevated-first` | Reuses the authorized commit, push, and existing-PR effects |
+| `merge preflight` / `merge-preflight` | `sandbox-first` | Read-only merge gate; it never merges |
+| `closeout` | `elevated-first` | Performs the authorized main, lifecycle metadata, and exact-branch effects |
+
+`elevated-first` is reserved for operations whose already-authorized LCK path
+can write Git metadata or GitHub lifecycle state. The profile must not contain
+a generic `uv`, `python`, `git`, or `gh` write rule. Explicit read-only rules
+may remain `sandbox-first`, including the source-repository boundary of
+Independent Review. This table chooses how an active Skill-authorized LCK
+command runs; it never grants lifecycle, GitHub, commit, push, merge, or
+cleanup permission.
+
 ## Failure classification
 
 Before retrying, classify the failure:
