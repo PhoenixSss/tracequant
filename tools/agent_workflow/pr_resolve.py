@@ -53,6 +53,30 @@ _REQUIRED_PR_FIELDS: Final = (
 )
 
 
+def _pr_fields(
+    *,
+    include_checks: bool,
+    include_mergeability: bool,
+    include_history_details: bool,
+) -> str:
+    fields = list(_REQUIRED_PR_FIELDS)
+    if include_history_details:
+        fields.extend(
+            (
+                "mergeCommit",
+                "mergedAt",
+                "reviewDecision",
+                "headRepository",
+                "closingIssuesReferences",
+            )
+        )
+    if include_checks:
+        fields.append("statusCheckRollup")
+    if include_mergeability:
+        fields.append("mergeable")
+    return ",".join(fields)
+
+
 class PrResolveError(WorkflowToolError):
     """Expected fail-closed error from PR resolve/create operations."""
 
@@ -134,6 +158,8 @@ def list_matching_prs(
     *,
     state: str = "all",
     limit: int = 100,
+    include_checks: bool = True,
+    include_mergeability: bool = True,
 ) -> list[dict[str, Any]]:
     """Read matching PRs for live-state consumers without any side effect."""
     if state not in {"open", "closed", "merged", "all"}:
@@ -156,7 +182,11 @@ def list_matching_prs(
             "--limit",
             str(limit),
             "--json",
-            _PR_LIST_FIELDS,
+            _pr_fields(
+                include_checks=include_checks,
+                include_mergeability=include_mergeability,
+                include_history_details=True,
+            ),
         ],
         command_id="gh-pr-list-live-state-history",
     )
@@ -185,6 +215,9 @@ def resolve_open_pr(
     current_branch: str,
     base_branch: str,
     warnings: list[dict[str, Any]],
+    include_checks: bool = True,
+    include_mergeability: bool = True,
+    include_history_details: bool = True,
 ) -> dict[str, Any] | None:
     """Resolve the unique matching OPEN PR without creating or changing one.
 
@@ -208,7 +241,11 @@ def resolve_open_pr(
             "--limit",
             "2",
             "--json",
-            _PR_LIST_FIELDS,
+            _pr_fields(
+                include_checks=include_checks,
+                include_mergeability=include_mergeability,
+                include_history_details=include_history_details,
+            ),
         ],
         command_id="gh-pr-list-live-state",
     )
@@ -251,7 +288,11 @@ def resolve_open_pr(
             "--repo",
             repository,
             "--json",
-            _PR_VIEW_FIELDS,
+            _pr_fields(
+                include_checks=include_checks,
+                include_mergeability=include_mergeability,
+                include_history_details=include_history_details,
+            ),
         ],
         command_id="gh-pr-view-live-state",
     )

@@ -226,6 +226,7 @@ def _git_snapshot(
     warnings: list[dict[str, Any]],
     *,
     read_only_local_refs: bool = False,
+    include_workspace_inventory: bool = True,
 ) -> dict[str, Any]:
     """Collect bounded Git facts for Feature audit and LCK queries.
 
@@ -279,23 +280,35 @@ def _git_snapshot(
         status_lines: list[str] | None = None
     else:
         status_lines = [line for line in status_result.stdout.splitlines() if line]
-    staged = _git_lines(
-        runner,
-        ["diff", "--cached", "--name-only"],
-        command_id="git-staged-files",
-        warnings=warnings,
+    staged = (
+        _git_lines(
+            runner,
+            ["diff", "--cached", "--name-only"],
+            command_id="git-staged-files",
+            warnings=warnings,
+        )
+        if include_workspace_inventory
+        else []
     )
-    changed = _git_lines(
-        runner,
-        ["diff", "--name-only"],
-        command_id="git-changed-files",
-        warnings=warnings,
+    changed = (
+        _git_lines(
+            runner,
+            ["diff", "--name-only"],
+            command_id="git-changed-files",
+            warnings=warnings,
+        )
+        if include_workspace_inventory
+        else []
     )
-    worktrees = _git_lines(
-        runner,
-        ["worktree", "list", "--porcelain"],
-        command_id="git-worktrees",
-        warnings=warnings,
+    worktrees = (
+        _git_lines(
+            runner,
+            ["worktree", "list", "--porcelain"],
+            command_id="git-worktrees",
+            warnings=warnings,
+        )
+        if include_workspace_inventory
+        else []
     )
     worktree_branches = sorted(
         line.removeprefix("branch refs/heads/")
@@ -326,10 +339,26 @@ def _git_snapshot(
         "remote_main_query": "pass" if is_sha(remote_main) else "unknown",
         "clean": None if status_lines is None else len(status_lines) == 0,
         "status_entries": None if status_lines is None else len(status_lines),
-        "staged_files": bounded_list(staged, item_limit=MAX_FILES),
-        "changed_files": bounded_list(changed, item_limit=MAX_FILES),
-        "worktree_count": sum(1 for line in worktrees if line.startswith("worktree ")),
-        "worktree_branches": bounded_list(worktree_branches, item_limit=MAX_FILES),
+        "staged_files": (
+            bounded_list(staged, item_limit=MAX_FILES)
+            if include_workspace_inventory
+            else None
+        ),
+        "changed_files": (
+            bounded_list(changed, item_limit=MAX_FILES)
+            if include_workspace_inventory
+            else None
+        ),
+        "worktree_count": (
+            sum(1 for line in worktrees if line.startswith("worktree "))
+            if include_workspace_inventory
+            else None
+        ),
+        "worktree_branches": (
+            bounded_list(worktree_branches, item_limit=MAX_FILES)
+            if include_workspace_inventory
+            else None
+        ),
     }
 
 
@@ -338,6 +367,9 @@ def _issue_view_with_contract(
     repository: str,
     number: int,
     warnings: list[dict[str, Any]],
+    include_comments: bool = True,
+    include_closure: bool = True,
+    include_contract: bool = True,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Read one Issue once and return compact facts plus the Task contract.
 
@@ -346,10 +378,13 @@ def _issue_view_with_contract(
     single GitHub read therefore produces both representations so callers do
     not re-query the same Task later in an operation.
     """
-    fields = (
-        "number,title,body,comments,state,labels,projectItems,url,closedAt,"
-        "closedByPullRequestsReferences"
-    )
+    fields = ["number", "title", "state", "labels", "projectItems", "url"]
+    if include_contract:
+        fields.append("body")
+    if include_comments:
+        fields.append("comments")
+    if include_closure:
+        fields.extend(("closedAt", "closedByPullRequestsReferences"))
     result = runner.run(
         [
             "gh",
@@ -359,7 +394,7 @@ def _issue_view_with_contract(
             "--repo",
             repository,
             "--json",
-            fields,
+            ",".join(fields),
         ],
         command_id=f"gh-issue-view-{number}",
         retries=1,
@@ -374,7 +409,16 @@ def _issue_view_with_contract(
                 "--repo",
                 repository,
                 "--json",
-                "number,title,body,state,labels,url,closedAt",
+                ",".join(
+                    field
+                    for field in fields
+                    if field
+                    not in {
+                        "comments",
+                        "projectItems",
+                        "closedByPullRequestsReferences",
+                    }
+                ),
             ],
             command_id=f"gh-issue-view-fallback-{number}",
         )
@@ -437,7 +481,10 @@ def _issue_view_with_contract(
                     else None,
                 }
             )
-    content_facts = {"body": body, "comments": comment_facts}
+    content_facts = {
+        "body": body,
+        "comments": comment_facts if include_comments else None,
+    }
     issue = {
         "number": value.get("number"),
         "title": safe_text(value.get("title")),
@@ -445,7 +492,7 @@ def _issue_view_with_contract(
         "body_sha256": sha256_json({"body": body}),
         "body_characters": len(body) if body is not None else None,
         "critical_outcome": critical_outcome_snapshot(body),
-        "comment_count": len(comment_facts),
+        "comment_count": len(comment_facts) if include_comments else None,
         "state": safe_text(value.get("state")),
         "labels": bounded_list(sorted(normalized_labels)),
         "project_status": _find_project_status(value.get("projectItems")),
@@ -453,9 +500,10 @@ def _issue_view_with_contract(
         "closed_at": safe_text(value.get("closedAt")),
         "closing_pull_requests": bounded_list(pull_refs),
     }
-    issue["issue_closure"] = _issue_closure_snapshot(
-        runner, repository, number, warnings
-    )
+    if include_closure:
+        issue["issue_closure"] = _issue_closure_snapshot(
+            runner, repository, number, warnings
+        )
     contract = (
         {
             "number": value.get("number"),
@@ -465,7 +513,7 @@ def _issue_view_with_contract(
             "body_sha256": issue["body_sha256"],
             "critical_outcome": issue["critical_outcome"],
         }
-        if body is not None
+        if include_contract and body is not None
         else None
     )
     return issue, contract

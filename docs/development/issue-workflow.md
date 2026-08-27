@@ -120,6 +120,9 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
 - Task `Critical Outcome` 是正式 Delivery gate：LCK 从当前 Task body 读取结构化
   contract，使用固定 pytest verifier 执行真实 supported path。缺失、malformed、unsafe
   target 或 verifier failure 均 fail closed；不得用普通 unit/static check 替代。
+- 每个 authoritative operation 在入口绑定一个稳定的 fact profile，并在 operation snapshot
+  中记录 profile 与 acquired facts。Delivery Prepare 直接返回同一次 fresh acquisition 绑定的
+  完整 Task Contract；semantic caller 不应为同一 operation 再查询 Task body。
 - Initial Delivery 的 lifecycle mechanics（workspace prepare、commit validated tree、
   remote synchronization、OPEN PR resolve/create、Project Status → Review）由 LCK
   deterministic control 执行；Agent/Skill 不提供 branch/SHA/PR/refspec authority。

@@ -964,6 +964,7 @@ def test_delivery_prepare_creates_then_reuses_workspace(
 
     assert created.action == "created-from-main"
     assert reused.action == "already-prepared"
+    assert created.to_dict()["task_contract"]["body"] == "Task Contract"
     assert fake.branch == "task/159-lck-core-live-state-resolution"
     assert sum(command[:2] == ("git", "switch") for command in fake.commands) == 1
     assert not any(
@@ -1492,6 +1493,140 @@ def test_review_complete_acquires_one_fresh_snapshot_and_accepts_unchanged_targe
     assert "fresh Review Complete snapshot matched" in record["authority_note"]
     assert workspace.ready_checked == [review_root]
     assert workspace.removed == [review_root]
+
+
+def test_review_complete_acquires_only_review_complete_fact_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "task/159-lck-core-live-state-resolution"
+    issue = _issue()
+    issue.update({"project_status": "Review", "body_sha256": "d" * 64})
+    contract = _task_contract(issue)
+    contract["body_sha256"] = "d" * 64
+    pr = _open_pr(branch)
+    pr["statusCheckRollup"] = [{"name": "quality", "conclusion": "SUCCESS"}]
+    observations: dict[str, list[Any]] = {
+        "issue": [],
+        "branches": [],
+        "pr": [],
+    }
+
+    monkeypatch.setattr(lck, "_repository_slug", lambda *_args: "owner/repo")
+
+    def issue_query(*args: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+        observations["issue"].append(tuple(args[-3:]))
+        return issue, contract
+
+    def task_branches(
+        _self: Any,
+        _task: int,
+        _warnings: list[dict[str, Any]],
+        *,
+        include_local: bool,
+        include_remote: bool,
+    ) -> tuple[set[str], dict[str, str], bool]:
+        observations["branches"].append((include_local, include_remote))
+        return set(), {branch: SHA}, True
+
+    def open_pr_query(*args: Any) -> dict[str, Any]:
+        observations["pr"].append(tuple(args[-3:]))
+        return pr
+
+    monkeypatch.setattr(lck, "_issue_view_with_contract", issue_query)
+    monkeypatch.setattr(lck, "_relationship_snapshot", lambda *_args: _relationships())
+    monkeypatch.setattr(lck.LiveStateResolver, "_task_branches", task_branches)
+    monkeypatch.setattr(lck, "resolve_open_pr", open_pr_query)
+    monkeypatch.setattr(
+        lck,
+        "list_matching_prs",
+        lambda *_args, **_kwargs: pytest.fail("Review Complete queried PR history"),
+    )
+    monkeypatch.setattr(
+        lck,
+        "_git_snapshot",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Review Complete queried source workspace Git facts"
+        ),
+    )
+
+    snapshot = lck.OperationSnapshotBuilder(
+        lck.LiveStateResolver(tmp_path, runner=cast(Any, FakeRunner()))
+    ).acquire(159, operation="review-complete")
+
+    assert snapshot.state.status is lck.ResolutionStatus.RESOLVED
+    assert snapshot.fact_profile == "review-complete"
+    assert observations == {
+        "issue": [(False, False, True)],
+        "branches": [(False, True)],
+        "pr": [(True, False, False)],
+    }
+    assert "task_contract" in snapshot.acquired_facts
+    assert "checks" in snapshot.acquired_facts
+    assert {
+        "comments",
+        "issue_closure",
+        "git",
+        "workspace_inventory",
+        "local_task_branches",
+        "pr_history",
+    }.isdisjoint(snapshot.acquired_facts)
+
+
+@pytest.mark.parametrize(
+    ("operation", "included", "excluded"),
+    [
+        (
+            "Delivery Prepare",
+            {"task_contract", "git", "workspace_inventory", "pr_history"},
+            {"comments", "issue_closure", "checks"},
+        ),
+        (
+            "Delivery Complete",
+            {"task_contract", "git", "checks", "pr_history"},
+            {"comments", "issue_closure", "workspace_inventory"},
+        ),
+        (
+            "review-prepare",
+            {"task_contract", "remote_task_branches", "open_pr", "checks"},
+            {"comments", "issue_closure", "git", "pr_history"},
+        ),
+        (
+            "review-complete",
+            {"task_contract", "remote_task_branches", "open_pr", "checks"},
+            {"comments", "issue_closure", "git", "pr_history"},
+        ),
+        (
+            "Remediation Prepare",
+            {"task_contract", "git", "local_task_branches", "open_pr"},
+            {"comments", "issue_closure", "checks", "pr_history"},
+        ),
+        (
+            "Remediation Complete",
+            {"task_contract", "git", "local_task_branches", "checks"},
+            {"comments", "issue_closure", "workspace_inventory", "pr_history"},
+        ),
+        (
+            "merge-preflight",
+            {"task_contract", "remote_task_branches", "checks", "mergeability"},
+            {"comments", "issue_closure", "git", "pr_history"},
+        ),
+        (
+            "closeout",
+            {"issue_closure", "git", "workspace_inventory", "pr_history"},
+            {"comments", "task_contract", "checks"},
+        ),
+    ],
+)
+def test_authoritative_operations_bind_stable_fact_profiles(
+    operation: str,
+    included: set[str],
+    excluded: set[str],
+) -> None:
+    facts = set(lck.fact_profile_for_operation(operation).facts())
+
+    assert included <= facts
+    assert excluded.isdisjoint(facts)
 
 
 def test_review_complete_can_retry_after_transient_live_resolution_failure(
