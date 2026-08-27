@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
@@ -76,7 +77,91 @@ def test_lck_commands_use_the_pinned_project_python() -> None:
         encoding="utf-8"
     )
     assert 'executable = "python"' not in profile
-    assert 'name = "uv-toolchain"' in profile
+    assert 'name = "lck-delivery-prepare"' in profile
+
+
+def test_lck_git_write_operations_use_deterministic_controlled_execution_routes() -> (
+    None
+):
+    profile = tomllib.loads(
+        (ROOT / ".agents/execution-profile.example.toml").read_text(encoding="utf-8")
+    )
+
+    assert profile == {
+        "schema_version": 1,
+        "default_route": "sandbox-first",
+        "rules": profile["rules"],
+    }
+    rules = profile["rules"]
+    assert isinstance(rules, list)
+    assert all(
+        set(rule) == {"name", "executable", "argument_prefix", "route", "reason"}
+        for rule in rules
+    )
+    lck_prefix = (
+        "run",
+        "--frozen",
+        "python",
+        "tools/agent_workflow/lck.py",
+    )
+    expected_routes = {
+        lck_prefix + ("status",): "sandbox-first",
+        lck_prefix + ("delivery", "prepare"): "elevated-first",
+        lck_prefix + ("delivery", "complete"): "elevated-first",
+        lck_prefix + ("review", "prepare"): "sandbox-first",
+        lck_prefix + ("review", "complete"): "sandbox-first",
+        lck_prefix + ("remediation", "prepare"): "elevated-first",
+        lck_prefix + ("remediation", "no-change"): "sandbox-first",
+        lck_prefix + ("remediation", "complete"): "elevated-first",
+        lck_prefix + ("merge", "preflight"): "sandbox-first",
+        lck_prefix + ("merge-preflight",): "sandbox-first",
+        lck_prefix + ("closeout",): "elevated-first",
+    }
+    lck_rules = {
+        tuple(rule["argument_prefix"]): rule["route"]
+        for rule in rules
+        if rule["executable"] == "uv"
+    }
+    assert lck_rules == expected_routes
+    assert all(prefix[: len(lck_prefix)] == lck_prefix for prefix in lck_rules)
+    assert all(prefix for prefix in lck_rules)
+    assert all(rule["executable"] != "python" for rule in rules)
+    assert all(rule["executable"] != "gh" for rule in rules)
+    assert () not in lck_rules
+
+    git_rules = {
+        (rule["executable"], tuple(rule["argument_prefix"]), rule["route"])
+        for rule in rules
+        if rule["executable"] == "git"
+    }
+    assert git_rules == {
+        ("git", ("status",), "sandbox-first"),
+        ("git", ("diff",), "sandbox-first"),
+    }
+
+    policy = (ROOT / ".agents/policies/command-execution.md").read_text(
+        encoding="utf-8"
+    )
+    assert "The route classification is deterministic" in policy
+    assert "The profile must not contain" in policy
+    assert "a generic `uv`, `python`, `git`, or `gh` write rule." in policy
+    assert "Independent Review" in policy
+    for retry_rule in (
+        "sandbox-denied",
+        "credential-isolated",
+        "Only `sandbox-denied` or `credential-isolated` may justify an exact-context",
+        "Do not retry a real command failure with broader permissions.",
+    ):
+        assert retry_rule in policy
+
+    for name in (
+        "task-delivery-runner",
+        "task-pr-review-runner",
+        "task-closeout",
+    ):
+        codex, claude = _dual_skill(name)
+        assert codex == claude
+        assert "## Execution route contract" in codex
 
 
 def test_delivery_runner_uses_lck_for_initial_delivery_and_explicit_remediation() -> (

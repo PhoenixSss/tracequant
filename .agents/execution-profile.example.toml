@@ -6,18 +6,81 @@ schema_version = 1
 default_route = "sandbox-first"
 
 [[rules]]
-name = "uv-toolchain"
+name = "lck-status"
 executable = "uv"
-argument_prefix = []
-route = "elevated-first"
-reason = "Repeated access-denied isolation on this workstation"
+argument_prefix = ["run", "--frozen", "python", "tools/agent_workflow/lck.py", "status"]
+route = "sandbox-first"
+reason = "LCK status resolves live facts without writing repository metadata"
 
 [[rules]]
-name = "github-cli"
-executable = "gh"
-argument_prefix = []
-route = "adaptive"
-reason = "Use session evidence for read-only queries; Skill permissions still govern writes"
+name = "lck-delivery-prepare"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "tools/agent_workflow/lck.py", "delivery", "prepare"]
+route = "elevated-first"
+reason = "Repeated sandbox-denied Git metadata writes; branch bootstrap is LCK-authorized"
+
+[[rules]]
+name = "lck-delivery-complete"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "tools/agent_workflow/lck.py", "delivery", "complete"]
+route = "elevated-first"
+reason = "Repeated sandbox-denied Git and lifecycle metadata writes; Delivery effects are LCK-authorized"
+
+[[rules]]
+name = "lck-review-prepare"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "tools/agent_workflow/lck.py", "review", "prepare"]
+route = "sandbox-first"
+reason = "Review keeps the source repository read-only; its temporary clone is operation-owned"
+
+[[rules]]
+name = "lck-review-complete"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "tools/agent_workflow/lck.py", "review", "complete"]
+route = "sandbox-first"
+reason = "Review completion keeps the source repository read-only and writes only ignored LCK state"
+
+[[rules]]
+name = "lck-remediation-prepare"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "tools/agent_workflow/lck.py", "remediation", "prepare"]
+route = "elevated-first"
+reason = "Repeated sandbox-denied branch metadata writes when restoring or selecting the Task branch"
+
+[[rules]]
+name = "lck-remediation-no-change"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "tools/agent_workflow/lck.py", "remediation", "no-change"]
+route = "sandbox-first"
+reason = "No-change closes only ignored LCK continuity state and does not alter Git metadata"
+
+[[rules]]
+name = "lck-remediation-complete"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "tools/agent_workflow/lck.py", "remediation", "complete"]
+route = "elevated-first"
+reason = "Repeated sandbox-denied Git and lifecycle metadata writes; remediation effects are LCK-authorized"
+
+[[rules]]
+name = "lck-merge-preflight"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "tools/agent_workflow/lck.py", "merge", "preflight"]
+route = "sandbox-first"
+reason = "Merge Preflight is a source-repository read-only gate"
+
+[[rules]]
+name = "lck-merge-preflight-alias"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "tools/agent_workflow/lck.py", "merge-preflight"]
+route = "sandbox-first"
+reason = "Compatibility alias for the source-repository read-only Merge Preflight gate"
+
+[[rules]]
+name = "lck-closeout"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "tools/agent_workflow/lck.py", "closeout"]
+route = "elevated-first"
+reason = "Repeated sandbox-denied Git and lifecycle metadata writes; closeout effects are LCK-authorized"
 
 [[rules]]
 name = "git-status"
