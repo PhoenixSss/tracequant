@@ -124,6 +124,12 @@ workspace ownership；这些是“审查了什么”的历史证据，不是 Rev
 Review Complete 在 operation 入口只获取一次 fresh `ReviewCompleteSnapshot`，并与
 Prepare 时封存的 target 比较：
 
+该 snapshot 使用 review-complete fact profile：读取当前 Task Contract、关系/阻塞、
+OPEN PR identity 与当前 checks，但不读取 Issue comments、closure timeline、source
+Delivery workspace staged/changed/worktree inventory 或完整 PR history。PASS 所需的
+exact-base required-check policy 绑定在同一个 bounded operation-start window 内，不触发
+第二次 full live-state resolve。
+
 ```text
 PR changed            → REVIEW_STALE_PR
 PR head changed       → REVIEW_STALE_HEAD

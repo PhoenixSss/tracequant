@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +21,7 @@ if AGENT_WORKFLOW not in sys.path:
 import lck  # type: ignore[import-not-found]  # noqa: E402
 from pr_resolve import (  # type: ignore[import-not-found]
     PrResolveError,
+    list_matching_prs,
     resolve_open_pr,
 )  # noqa: E402
 from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
@@ -964,6 +966,7 @@ def test_delivery_prepare_creates_then_reuses_workspace(
 
     assert created.action == "created-from-main"
     assert reused.action == "already-prepared"
+    assert created.to_dict()["task_contract"]["body"] == "Task Contract"
     assert fake.branch == "task/159-lck-core-live-state-resolution"
     assert sum(command[:2] == ("git", "switch") for command in fake.commands) == 1
     assert not any(
@@ -1129,6 +1132,51 @@ def _review_state(
             "critical_outcome": issue.get("critical_outcome"),
         },
     )
+
+
+def test_closeout_cleanup_keeps_exact_worktree_safety_precondition(
+    tmp_path: Path,
+) -> None:
+    state = _review_state()
+
+    class WorktreeInUseRunner:
+        def __init__(self) -> None:
+            self.commands: list[tuple[str, ...]] = []
+
+        def run(
+            self,
+            argv: list[str] | tuple[str, ...],
+            *,
+            command_id: str,
+            **_: Any,
+        ) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            self.commands.append(command)
+            assert command_id == "lck-closeout-worktree-precondition"
+            assert command == ("git", "worktree", "list", "--porcelain")
+            return CommandResult(
+                command_id,
+                command,
+                0,
+                f"worktree /tmp/task\nbranch refs/heads/{state.target_branch}\n",
+                "",
+            )
+
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    runner = WorktreeInUseRunner()
+    resolver.runner = runner
+
+    receipt = lck.CleanupTaskRefsEffect(resolver).execute(
+        state,
+        expected_head_sha=SHA,
+        merge_sha="b" * 40,
+    )
+
+    assert receipt.action == "pending"
+    assert (
+        receipt.details["reason"] == "verified Task branch is still used by a worktree"
+    )
+    assert runner.commands == [("git", "worktree", "list", "--porcelain")]
 
 
 def _review_identity_value(*, head: str = SHA, base: str = SHA) -> lck.ReviewIdentity:
@@ -1492,6 +1540,470 @@ def test_review_complete_acquires_one_fresh_snapshot_and_accepts_unchanged_targe
     assert "fresh Review Complete snapshot matched" in record["authority_note"]
     assert workspace.ready_checked == [review_root]
     assert workspace.removed == [review_root]
+
+
+def test_review_complete_acquires_only_review_complete_fact_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "task/159-lck-core-live-state-resolution"
+    issue = _issue()
+    issue.update({"project_status": "Review", "body_sha256": "d" * 64})
+    contract = _task_contract(issue)
+    contract["body_sha256"] = "d" * 64
+    pr = _open_pr(branch)
+    pr["statusCheckRollup"] = [{"name": "quality", "conclusion": "SUCCESS"}]
+    observations: dict[str, list[Any]] = {
+        "issue": [],
+        "branches": [],
+        "pr": [],
+    }
+
+    monkeypatch.setattr(lck, "_repository_slug", lambda *_args: "owner/repo")
+
+    def issue_query(*args: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+        observations["issue"].append(tuple(args[-3:]))
+        return issue, contract
+
+    def task_branches(
+        _self: Any,
+        _task: int,
+        _warnings: list[dict[str, Any]],
+        *,
+        include_local: bool,
+        include_remote: bool,
+    ) -> tuple[set[str], dict[str, str], bool]:
+        observations["branches"].append((include_local, include_remote))
+        return set(), {branch: SHA}, True
+
+    def open_pr_query(*args: Any) -> dict[str, Any]:
+        observations["pr"].append(tuple(args[-3:]))
+        return pr
+
+    monkeypatch.setattr(lck, "_issue_view_with_contract", issue_query)
+    monkeypatch.setattr(lck, "_relationship_snapshot", lambda *_args: _relationships())
+    monkeypatch.setattr(lck.LiveStateResolver, "_task_branches", task_branches)
+    monkeypatch.setattr(lck, "resolve_open_pr", open_pr_query)
+    monkeypatch.setattr(
+        lck,
+        "list_matching_prs",
+        lambda *_args, **_kwargs: pytest.fail("Review Complete queried PR history"),
+    )
+    monkeypatch.setattr(
+        lck,
+        "_git_snapshot",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Review Complete queried source workspace Git facts"
+        ),
+    )
+
+    snapshot = lck.OperationSnapshotBuilder(
+        lck.LiveStateResolver(tmp_path, runner=cast(Any, FakeRunner()))
+    ).acquire(159, operation="review-complete")
+
+    assert snapshot.state.status is lck.ResolutionStatus.RESOLVED
+    assert snapshot.fact_profile == "review-complete"
+    assert observations == {
+        "issue": [(False, False, True)],
+        "branches": [(False, True)],
+        "pr": [(True, False, False)],
+    }
+    assert "task_contract" in snapshot.acquired_facts
+    assert "checks" in snapshot.acquired_facts
+    assert {
+        "comments",
+        "issue_closure",
+        "git",
+        "workspace_inventory",
+        "local_task_branches",
+        "pr_history",
+    }.isdisjoint(snapshot.acquired_facts)
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        (
+            "Delivery Prepare",
+            {
+                "issue": (False, False, True),
+                "git": {
+                    "read_only_local_refs": True,
+                    "include_workspace_inventory": False,
+                },
+                "branches": (True, True),
+                "pr": (False, False, False),
+                "history": {
+                    "include_checks": False,
+                    "include_mergeability": False,
+                    "include_history_details": False,
+                },
+                "included": {
+                    "task_contract",
+                    "git",
+                    "pr_history",
+                },
+                "excluded": {
+                    "comments",
+                    "issue_closure",
+                    "workspace_inventory",
+                    "checks",
+                },
+            },
+        ),
+        (
+            "Delivery Complete",
+            {
+                "issue": (False, False, True),
+                "git": {
+                    "read_only_local_refs": True,
+                    "include_workspace_inventory": False,
+                },
+                "branches": (True, True),
+                "pr": (True, False, False),
+                "history": {
+                    "include_checks": False,
+                    "include_mergeability": False,
+                    "include_history_details": False,
+                },
+                "included": {"task_contract", "git", "checks", "pr_history"},
+                "excluded": {"comments", "issue_closure", "workspace_inventory"},
+            },
+        ),
+        (
+            "review-prepare",
+            {
+                "issue": (False, False, True),
+                "git": None,
+                "branches": (False, True),
+                "pr": (True, False, False),
+                "history": None,
+                "included": {
+                    "task_contract",
+                    "remote_task_branches",
+                    "open_pr",
+                    "checks",
+                },
+                "excluded": {
+                    "comments",
+                    "issue_closure",
+                    "git",
+                    "workspace_inventory",
+                    "local_task_branches",
+                    "pr_history",
+                },
+            },
+        ),
+        (
+            "Remediation Prepare",
+            {
+                "issue": (False, False, True),
+                "git": {
+                    "read_only_local_refs": True,
+                    "include_workspace_inventory": False,
+                },
+                "branches": (True, True),
+                "pr": (False, False, False),
+                "history": None,
+                "included": {
+                    "task_contract",
+                    "git",
+                    "local_task_branches",
+                    "remote_task_branches",
+                    "open_pr",
+                },
+                "excluded": {
+                    "comments",
+                    "issue_closure",
+                    "workspace_inventory",
+                    "checks",
+                    "pr_history",
+                },
+            },
+        ),
+        (
+            "Remediation No Change",
+            {
+                "issue": (False, False, False),
+                "git": {
+                    "read_only_local_refs": True,
+                    "include_workspace_inventory": False,
+                },
+                "branches": (True, True),
+                "pr": (False, False, False),
+                "history": None,
+                "included": {
+                    "git",
+                    "local_task_branches",
+                    "remote_task_branches",
+                    "open_pr",
+                },
+                "excluded": {
+                    "comments",
+                    "issue_closure",
+                    "task_contract",
+                    "workspace_inventory",
+                    "checks",
+                    "pr_history",
+                },
+            },
+        ),
+        (
+            "merge-preflight",
+            {
+                "issue": (False, False, True),
+                "git": None,
+                "branches": (False, True),
+                "pr": (True, True, False),
+                "history": None,
+                "included": {
+                    "task_contract",
+                    "remote_task_branches",
+                    "open_pr",
+                    "checks",
+                    "mergeability",
+                },
+                "excluded": {
+                    "comments",
+                    "issue_closure",
+                    "git",
+                    "workspace_inventory",
+                    "local_task_branches",
+                    "pr_history",
+                },
+            },
+        ),
+        (
+            "closeout",
+            {
+                "issue": (False, True, False),
+                "git": {
+                    "read_only_local_refs": True,
+                    "include_workspace_inventory": False,
+                },
+                "branches": (True, True),
+                "pr": (False, False, False),
+                "history": {
+                    "include_checks": False,
+                    "include_mergeability": False,
+                    "include_history_details": True,
+                },
+                "included": {
+                    "issue_closure",
+                    "git",
+                    "pr_history",
+                },
+                "excluded": {
+                    "comments",
+                    "task_contract",
+                    "workspace_inventory",
+                    "checks",
+                },
+            },
+        ),
+    ],
+)
+def test_authoritative_operation_resolver_queries_only_its_fact_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    expected: dict[str, Any],
+) -> None:
+    branch = "task/159-lck-core-live-state-resolution"
+    issue = _issue()
+    contract = _task_contract(issue)
+    pr = _open_pr(branch)
+    pr["statusCheckRollup"] = [{"name": "quality", "conclusion": "SUCCESS"}]
+    observations: dict[str, list[Any]] = {
+        "issue": [],
+        "relationships": [],
+        "git": [],
+        "branches": [],
+        "pr": [],
+        "history": [],
+    }
+
+    monkeypatch.setattr(lck, "_repository_slug", lambda *_args: "owner/repo")
+
+    def issue_query(*args: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+        observations["issue"].append(tuple(args[-3:]))
+        return issue, contract
+
+    def relationship_query(*_args: Any) -> dict[str, Any]:
+        observations["relationships"].append(True)
+        return _relationships()
+
+    def git_query(*_args: Any, **kwargs: Any) -> dict[str, Any]:
+        if expected["git"] is None:
+            pytest.fail(f"{operation} queried source workspace Git facts")
+        if operation in {"Delivery Prepare", "closeout"} and (
+            kwargs.get("include_workspace_inventory") is not False
+        ):
+            pytest.fail(
+                f"{operation} queried forbidden staged/changed/worktree inventory"
+            )
+        observations["git"].append(kwargs)
+        return _git_snapshot(FakeRunner(branch=branch))
+
+    def task_branches(
+        _self: Any,
+        _task: int,
+        _warnings: list[dict[str, Any]],
+        *,
+        include_local: bool = True,
+        include_remote: bool = True,
+    ) -> tuple[set[str], dict[str, str], bool]:
+        observations["branches"].append((include_local, include_remote))
+        return set(), {branch: SHA} if include_remote else {}, True
+
+    def open_pr_query(*args: Any) -> dict[str, Any]:
+        observations["pr"].append(tuple(args[-3:]))
+        return pr
+
+    def history_query(*_args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        if expected["history"] is None:
+            pytest.fail(f"{operation} queried PR history")
+        observations["history"].append(kwargs)
+        return []
+
+    monkeypatch.setattr(lck, "_issue_view_with_contract", issue_query)
+    monkeypatch.setattr(lck, "_relationship_snapshot", relationship_query)
+    monkeypatch.setattr(lck, "_git_snapshot", git_query)
+    monkeypatch.setattr(lck.LiveStateResolver, "_task_branches", task_branches)
+    monkeypatch.setattr(lck, "resolve_open_pr", open_pr_query)
+    monkeypatch.setattr(lck, "list_matching_prs", history_query)
+
+    snapshot = lck.OperationSnapshotBuilder(
+        lck.LiveStateResolver(tmp_path, runner=cast(Any, FakeRunner()))
+    ).acquire(159, operation=operation)
+
+    assert snapshot.state.status is lck.ResolutionStatus.RESOLVED
+    assert observations["issue"] == [expected["issue"]]
+    assert observations["relationships"] == [True]
+    assert observations["git"] == ([] if expected["git"] is None else [expected["git"]])
+    assert observations["branches"] == [expected["branches"]]
+    assert observations["pr"] == [expected["pr"]]
+    assert observations["history"] == (
+        [] if expected["history"] is None else [expected["history"]]
+    )
+    facts = set(snapshot.acquired_facts)
+    assert expected["included"] <= facts
+    assert expected["excluded"].isdisjoint(facts)
+
+
+@pytest.mark.parametrize(
+    ("operation", "included", "excluded"),
+    [
+        (
+            "Delivery Prepare",
+            {"task_contract", "git", "pr_history"},
+            {"comments", "issue_closure", "workspace_inventory", "checks"},
+        ),
+        (
+            "Delivery Complete",
+            {"task_contract", "git", "checks", "pr_history"},
+            {"comments", "issue_closure", "workspace_inventory"},
+        ),
+        (
+            "review-prepare",
+            {"task_contract", "remote_task_branches", "open_pr", "checks"},
+            {"comments", "issue_closure", "git", "pr_history"},
+        ),
+        (
+            "review-complete",
+            {"task_contract", "remote_task_branches", "open_pr", "checks"},
+            {"comments", "issue_closure", "git", "pr_history"},
+        ),
+        (
+            "Remediation Prepare",
+            {"task_contract", "git", "local_task_branches", "open_pr"},
+            {"comments", "issue_closure", "checks", "pr_history"},
+        ),
+        (
+            "Remediation No Change",
+            {"git", "local_task_branches", "open_pr"},
+            {"comments", "issue_closure", "task_contract", "checks", "pr_history"},
+        ),
+        (
+            "Remediation Complete",
+            {"task_contract", "git", "local_task_branches", "checks"},
+            {"comments", "issue_closure", "workspace_inventory", "pr_history"},
+        ),
+        (
+            "merge-preflight",
+            {"task_contract", "remote_task_branches", "checks", "mergeability"},
+            {"comments", "issue_closure", "git", "pr_history"},
+        ),
+        (
+            "closeout",
+            {"issue_closure", "git", "pr_history"},
+            {"comments", "task_contract", "workspace_inventory", "checks"},
+        ),
+    ],
+)
+def test_authoritative_operations_bind_stable_fact_profiles(
+    operation: str,
+    included: set[str],
+    excluded: set[str],
+) -> None:
+    facts = set(lck.fact_profile_for_operation(operation).facts())
+
+    assert included <= facts
+    assert excluded.isdisjoint(facts)
+
+
+def test_delivery_history_query_requests_only_merged_detection_fields() -> None:
+    fake = FakeRunner()
+
+    assert (
+        list_matching_prs(
+            cast(Any, fake),
+            "owner/repo",
+            "task/159-lck-core-live-state-resolution",
+            "main",
+            [],
+            include_checks=False,
+            include_mergeability=False,
+            include_history_details=False,
+        )
+        == []
+    )
+
+    command = fake.commands[-1]
+    assert command[command.index("--json") + 1] == "number,state"
+
+
+def test_closeout_history_query_retains_required_identity_details() -> None:
+    fake = FakeRunner()
+
+    assert (
+        list_matching_prs(
+            cast(Any, fake),
+            "owner/repo",
+            "task/159-lck-core-live-state-resolution",
+            "main",
+            [],
+            include_checks=False,
+            include_mergeability=False,
+            include_history_details=True,
+        )
+        == []
+    )
+
+    command = fake.commands[-1]
+    fields = set(command[command.index("--json") + 1].split(","))
+    assert {
+        "number",
+        "state",
+        "baseRefName",
+        "baseRefOid",
+        "headRefName",
+        "headRefOid",
+        "mergeCommit",
+        "mergedAt",
+        "closingIssuesReferences",
+    } <= fields
+    assert {"statusCheckRollup", "mergeable"}.isdisjoint(fields)
 
 
 def test_review_complete_can_retry_after_transient_live_resolution_failure(
@@ -2262,6 +2774,8 @@ def test_remediation_prepare_uses_live_head_not_review_record_identity(
     context = lck.RemediationPreparer(resolver, store=store).prepare(159, review_id)
 
     assert context.to_dict()["live_target"]["head_sha"] == live_head
+    assert context.task_contract["body"] == "Task Contract"
+    assert context.to_dict()["task_contract"]["body"] == "Task Contract"
     assert context.findings == "[F1][Medium] Semantic repair input."
     assert (
         "operation snapshot acquired at Remediation entry"
@@ -2784,3 +3298,256 @@ def test_remediation_complete_can_resume_committed_new_head_and_requires_re_revi
     assert required["remediated_head"] == repaired_head
     with pytest.raises(lck.LckStopError, match="fresh Independent Review is required"):
         lck.RemediationPreparer(resolver, store=store).prepare(159, review_id)
+
+
+def _write_owned_candidate_session(
+    store: lck.ReviewInvocationStore,
+    review_id: str,
+    *,
+    start_head: str = SHA,
+    candidate_head: str = "b" * 40,
+    candidate_tree: str = "c" * 40,
+) -> None:
+    operation_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": review_id,
+            "operation_id": operation_id,
+            "start_head_sha": start_head,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "f" * 64,
+            "findings_source": "local-review-record",
+            "candidate": {
+                "operation_id": operation_id,
+                "start_head_sha": start_head,
+                "head_sha": candidate_head,
+                "tree_oid": candidate_tree,
+            },
+            "authority": "test",
+        },
+    )
+
+
+class OwnedCandidateRunner(FakeRunner):
+    def __init__(self, *, head_sha: str, tree_oid: str) -> None:
+        branch = "task/159-lck-core-live-state-resolution"
+        open_pr = _open_pr(branch)
+        super().__init__(
+            branch=branch,
+            local_branches={branch},
+            remote_branches={branch: SHA},
+            clean=True,
+            head_sha=head_sha,
+            open_pr=open_pr,
+        )
+        self.tree_oid = tree_oid
+
+    def run(
+        self,
+        argv: list[str] | tuple[str, ...],
+        *,
+        command_id: str,
+        **kwargs: Any,
+    ) -> CommandResult:
+        command = tuple(str(item) for item in argv)
+        if command == ("git", "rev-parse", "HEAD^{tree}"):
+            self.commands.append(command)
+            return CommandResult(command_id, command, 0, f"{self.tree_oid}\n", "")
+        if command == ("git", "diff", "--quiet"):
+            self.commands.append(command)
+            return CommandResult(command_id, command, 0, "", "")
+        if command[:3] == ("git", "diff", "--quiet"):
+            self.commands.append(command)
+            return CommandResult(command_id, command, 1, "", "")
+        if command == (
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        ):
+            self.commands.append(command)
+            return CommandResult(command_id, command, 0, "", "")
+        if command == ("git", "write-tree"):
+            self.commands.append(command)
+            return CommandResult(command_id, command, 0, f"{self.tree_oid}\n", "")
+        if command[:3] == ("git", "cat-file", "-e"):
+            self.commands.append(command)
+            return CommandResult(command_id, command, 0, "", "")
+        if command[:3] == ("git", "merge-base", "--is-ancestor"):
+            self.commands.append(command)
+            return CommandResult(command_id, command, 0, "", "")
+        if command[:3] == ("git", "push", "-u"):
+            self.commands.append(command)
+            self.remote_branches[self.branch] = self.head_sha
+            assert self.open_pr is not None
+            self.open_pr["headRefOid"] = self.head_sha
+            return CommandResult(command_id, command, 0, "", "")
+        if command == (
+            "git",
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ):
+            self.commands.append(command)
+            return CommandResult(command_id, command, 0, f"origin/{self.branch}\n", "")
+        return super().run(argv, command_id=command_id, **kwargs)
+
+
+def test_remediation_complete_recovers_exact_owned_partial_effect_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start_head = SHA
+    candidate_head = "b" * 40
+    candidate_tree = "c" * 40
+    initial = _review_state(head=start_head, clean=True)
+    partial = replace(
+        initial,
+        git={**initial.git, "head_sha": candidate_head},
+        local_task_head=candidate_head,
+    )
+    resolver = cast(Any, StaticResolver(tmp_path, partial))
+    runner = OwnedCandidateRunner(head_sha=candidate_head, tree_oid=candidate_tree)
+    resolver.runner = runner
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    _write_owned_candidate_session(
+        store,
+        review_id,
+        start_head=start_head,
+        candidate_head=candidate_head,
+        candidate_tree=candidate_tree,
+    )
+    calls = {"critical": 0, "validation": 0}
+
+    def critical_outcome(
+        _self: lck.DeliveryCompleter,
+        _state: lck.LiveState,
+        *,
+        progress: lck.ProgressReporter | None = None,
+    ) -> dict[str, Any]:
+        del progress
+        calls["critical"] += 1
+        return {"status": "pass"}
+
+    def formal_validation(
+        _self: lck.FormalValidationGate, base_sha: str
+    ) -> dict[str, Any]:
+        assert base_sha == SHA
+        calls["validation"] += 1
+        return {"status": "pass"}
+
+    monkeypatch.setattr(
+        lck.DeliveryCompleter, "_run_critical_outcome", critical_outcome
+    )
+    monkeypatch.setattr(lck.FormalValidationGate, "run", formal_validation)
+
+    result = lck.RemediationCompleter(resolver, store=store).complete(
+        159, review_id, commit_message="repair", summary="repair"
+    )
+
+    assert result.to_dict()["status"] == "READY_FOR_NEW_REVIEW"
+    assert calls == {"critical": 1, "validation": 1}
+    assert resolver.calls == 1
+    assert [effect.action for effect in result.delivery.effects] == [
+        "already-committed-revalidated",
+        "fast-forwarded",
+        "reused-current-open-pr",
+        "already-review",
+    ]
+    assert not any(command[:2] == ("git", "commit") for command in runner.commands)
+    assert any(command[:3] == ("git", "push", "-u") for command in runner.commands)
+    assert store.read_remediation_session(159) is None
+    required = store.read_review_required(159)
+    assert required is not None
+    assert required["remediated_head"] == candidate_head
+
+
+def test_real_delivery_completer_rejects_unowned_local_ahead_remediation_candidate(
+    tmp_path: Path,
+) -> None:
+    candidate_head = "b" * 40
+    state = _review_state(head=SHA, clean=True)
+    state = replace(
+        state,
+        git={**state.git, "head_sha": candidate_head},
+        local_task_head=candidate_head,
+    )
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    snapshot = lck.OperationSnapshot(
+        operation=lck.Phase.REMEDIATION_COMPLETE.value,
+        state=state,
+    )
+
+    with pytest.raises(
+        lck.LckStopError, match="local Task branch must match current OPEN PR head"
+    ):
+        lck.DeliveryCompleter(
+            resolver,
+            require_existing_open_pr=True,
+        ).complete(
+            159,
+            commit_message="repair",
+            summary="repair",
+            operation_snapshot=snapshot,
+            phase=lck.Phase.REMEDIATION_COMPLETE,
+        )
+
+    assert resolver.calls == 0
+
+
+def test_remediation_owned_candidate_recovery_rejects_replaced_local_head(
+    tmp_path: Path,
+) -> None:
+    candidate_head = "b" * 40
+    replacement_head = "d" * 40
+    state = _review_state(head=SHA, clean=True)
+    state = replace(
+        state,
+        git={**state.git, "head_sha": replacement_head},
+        local_task_head=replacement_head,
+    )
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    _write_owned_candidate_session(store, review_id, candidate_head=candidate_head)
+
+    with pytest.raises(lck.LckStopError, match="exactly match its owned session"):
+        lck.RemediationCompleter(resolver, store=store).complete(
+            159, review_id, commit_message="repair", summary="repair"
+        )
+
+
+@pytest.mark.parametrize("moved", ["pr", "remote"])
+def test_remediation_owned_candidate_recovery_rejects_moved_remote_or_pr(
+    tmp_path: Path,
+    moved: str,
+) -> None:
+    candidate_head = "b" * 40
+    moved_head = "d" * 40
+    original = _review_state(head=SHA, clean=True)
+    pr = dict(original.open_pr or {})
+    if moved == "pr":
+        pr["headRefOid"] = moved_head
+    state = replace(
+        original,
+        git={**original.git, "head_sha": candidate_head},
+        local_task_head=candidate_head,
+        remote_task_oid=moved_head if moved == "remote" else SHA,
+        open_pr=pr,
+    )
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    _write_owned_candidate_session(store, review_id, candidate_head=candidate_head)
+
+    with pytest.raises(lck.LckStopError, match="exactly match its owned session"):
+        lck.RemediationCompleter(resolver, store=store).complete(
+            159, review_id, commit_message="repair", summary="repair"
+        )

@@ -260,8 +260,128 @@ def test_ensure_remote_branch_stops_on_divergence(tmp_path: Path) -> None:
     _git(repo, "add", "local.txt")
     _git(repo, "commit", "-m", "local")
 
-    with pytest.raises(lck.LckStopError, match="ahead/diverged"):
+    with pytest.raises(lck.LckStopError, match="REMOTE_BRANCH_DIVERGED"):
         effect.execute("task/160-delivery")
+
+
+class RecordingGitRunner:
+    def __init__(
+        self,
+        repo: Path,
+        *,
+        fail_fetch: bool = False,
+        force_missing_object: bool = False,
+    ) -> None:
+        self.delegate = CommandRunner(repo)
+        self.commands: list[tuple[str, ...]] = []
+        self.fail_fetch = fail_fetch
+        self.force_missing_object = force_missing_object
+
+    def run(
+        self,
+        argv: list[str] | tuple[str, ...],
+        *,
+        command_id: str,
+        **kwargs: Any,
+    ) -> CommandResult:
+        command = tuple(str(item) for item in argv)
+        self.commands.append(command)
+        if self.force_missing_object and command[:3] == ("git", "cat-file", "-e"):
+            return CommandResult(
+                command_id=command_id,
+                argv=command,
+                returncode=1,
+                stdout="",
+                stderr="object unavailable",
+            )
+        if self.fail_fetch and command[:3] == ("git", "fetch", "--no-tags"):
+            return CommandResult(
+                command_id=command_id,
+                argv=command,
+                returncode=23,
+                stdout="",
+                stderr="fetch failed\n" + ("x" * 4000),
+            )
+        return self.delegate.run(argv, command_id=command_id, **kwargs)
+
+
+def test_ensure_remote_branch_uses_local_exact_remote_oid_without_fetch(
+    tmp_path: Path,
+) -> None:
+    repo, _ = _repo(tmp_path)
+    branch = "task/160-delivery"
+    _git(repo, "switch", "-c", branch)
+    (repo / "task.txt").write_text("one\n", encoding="utf-8")
+    _git(repo, "add", "task.txt")
+    _git(repo, "commit", "-m", "one")
+    _git(repo, "push", "-u", "origin", branch)
+    (repo / "task.txt").write_text("two\n", encoding="utf-8")
+    _git(repo, "commit", "-am", "two")
+    runner = RecordingGitRunner(repo)
+    resolver = lck.LiveStateResolver(repo, runner=runner, repository="owner/repo")
+
+    receipt = lck.EnsureRemoteBranchEffect(resolver).execute(branch)
+
+    assert receipt.action == "fast-forwarded"
+    assert not any(command[:2] == ("git", "fetch") for command in runner.commands)
+
+
+def test_ensure_remote_branch_fetches_only_when_exact_remote_oid_is_missing(
+    tmp_path: Path,
+) -> None:
+    repo, origin = _repo(tmp_path)
+    branch = "task/160-delivery"
+    _git(repo, "switch", "-c", branch)
+    (repo / "task.txt").write_text("candidate\n", encoding="utf-8")
+    _git(repo, "add", "task.txt")
+    _git(repo, "commit", "-m", "candidate")
+
+    other = tmp_path / "other-missing-object"
+    subprocess.run(
+        ["git", "clone", str(origin), str(other)], check=True, capture_output=True
+    )
+    _git(other, "config", "user.name", "Other")
+    _git(other, "config", "user.email", "other@example.invalid")
+    _git(other, "switch", "-c", branch, "origin/main")
+    _git(other, "push", "-u", "origin", branch)
+
+    runner = RecordingGitRunner(repo, force_missing_object=True)
+    resolver = lck.LiveStateResolver(repo, runner=runner, repository="owner/repo")
+    receipt = lck.EnsureRemoteBranchEffect(resolver).execute(branch)
+
+    assert receipt.action == "fast-forwarded"
+    assert any(command[:2] == ("git", "fetch") for command in runner.commands)
+
+
+def test_ensure_remote_branch_fetch_failure_has_bounded_classified_diagnostic(
+    tmp_path: Path,
+) -> None:
+    repo, origin = _repo(tmp_path)
+    branch = "task/160-delivery"
+    _git(repo, "switch", "-c", branch)
+    (repo / "task.txt").write_text("candidate\n", encoding="utf-8")
+    _git(repo, "add", "task.txt")
+    _git(repo, "commit", "-m", "candidate")
+
+    other = tmp_path / "other-fetch-failure"
+    subprocess.run(
+        ["git", "clone", str(origin), str(other)], check=True, capture_output=True
+    )
+    _git(other, "config", "user.name", "Other")
+    _git(other, "config", "user.email", "other@example.invalid")
+    _git(other, "switch", "-c", branch, "origin/main")
+    _git(other, "push", "-u", "origin", branch)
+
+    runner = RecordingGitRunner(repo, fail_fetch=True, force_missing_object=True)
+    resolver = lck.LiveStateResolver(repo, runner=runner, repository="owner/repo")
+    with pytest.raises(lck.LckStopError, match="REMOTE_HEAD_FETCH_FAILED") as error:
+        lck.EnsureRemoteBranchEffect(resolver).execute(branch)
+
+    diagnostic = str(error.value)
+    assert "local_object_available=false" in diagnostic
+    assert "git_exit_code=23" in diagnostic
+    assert len(diagnostic) < 1800
+    assert not any(command[:2] == ("git", "push") for command in runner.commands)
 
 
 class ValidationRunner:

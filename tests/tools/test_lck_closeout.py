@@ -619,7 +619,10 @@ def test_resolver_recovers_deleted_noncanonical_branch_from_closing_pr(
         current_branch: str,
         _base_branch: str,
         _warnings: list[dict[str, Any]],
+        *,
+        include_history_details: bool,
     ) -> list[dict[str, Any]]:
+        assert include_history_details is True
         history_branches.append(current_branch)
         return [pr]
 
