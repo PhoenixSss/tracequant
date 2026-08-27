@@ -26,7 +26,7 @@ import unicodedata
 import uuid
 
 import yaml
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -1246,7 +1246,13 @@ class PhaseDecision:
 class PhaseEligibilityResolver:
     """Apply static phase capabilities to current live preconditions."""
 
-    def resolve(self, state: LiveState, phase: Phase) -> PhaseDecision:
+    def resolve(
+        self,
+        state: LiveState,
+        phase: Phase,
+        *,
+        owned_remediation_candidate: bool = False,
+    ) -> PhaseDecision:
         reasons = list(state.stop_reasons)
         issue = state.issue
         relationships = state.relationships
@@ -1399,7 +1405,13 @@ class PhaseEligibilityResolver:
                 reasons.append("current OPEN PR base must match current origin/main")
             if state.remote_task_oid != pr_head:
                 reasons.append("remote Task branch must match current OPEN PR head")
-            if state.local_task_head is not None and state.local_task_head != pr_head:
+            if (
+                state.local_task_head is not None
+                and state.local_task_head != pr_head
+                and not (
+                    phase is Phase.REMEDIATION_COMPLETE and owned_remediation_candidate
+                )
+            ):
                 reasons.append("local Task branch must match current OPEN PR head")
             if phase is Phase.REMEDIATION_PREPARE:
                 capabilities = ("prepare_task_workspace", "load_review_findings")
@@ -2618,6 +2630,48 @@ class ReviewInvocationStore:
         atomic_write_json(path, payload)
         return path
 
+    def record_remediation_candidate(
+        self,
+        task_number: int,
+        review_id: str,
+        *,
+        start_head_sha: str,
+        candidate_head_sha: str,
+        candidate_tree_oid: str,
+    ) -> Path:
+        """Bind one exact committed candidate to its prepared Remediation session."""
+        session = self.read_remediation_session(task_number)
+        if session is None:
+            raise LckStopError(
+                "cannot record a Remediation candidate without a prepared session"
+            )
+        if (
+            session.get("review_id") != review_id
+            or session.get("start_head_sha") != start_head_sha
+        ):
+            raise LckStopError(
+                "Remediation candidate does not belong to the prepared session"
+            )
+        if not is_sha(candidate_head_sha) or not is_sha(candidate_tree_oid):
+            raise LckStopError("Remediation candidate identity is incomplete")
+        operation_id = session.get("operation_id")
+        if not isinstance(operation_id, str) or not operation_id:
+            operation_id = self.new_id()
+            session["operation_id"] = operation_id
+        candidate = {
+            "operation_id": operation_id,
+            "start_head_sha": start_head_sha,
+            "head_sha": candidate_head_sha,
+            "tree_oid": candidate_tree_oid,
+        }
+        existing = session.get("candidate")
+        if existing is not None and existing != candidate:
+            raise LckStopError(
+                "prepared Remediation session already owns a different candidate"
+            )
+        session["candidate"] = candidate
+        return self.write_remediation_session(task_number, session)
+
     def read_remediation_session(self, task_number: int) -> dict[str, Any] | None:
         path = self.remediation_session_path(task_number)
         if not path.exists():
@@ -3499,27 +3553,49 @@ class EnsureRemoteBranchEffect:
                 },
             )
         if remote_oid is not None:
-            fetch = self.resolver.runner.run(
-                ["git", "fetch", "--no-tags", "origin", f"refs/heads/{branch}"],
-                command_id="lck-fetch-observed-remote-task-branch",
+            remote_ref = f"refs/heads/{branch}"
+            available = self.resolver.runner.run(
+                ["git", "cat-file", "-e", f"{remote_oid}^{{commit}}"],
+                command_id="lck-observed-remote-object-available",
             )
-            if fetch.returncode != 0:
-                raise LckStopError("cannot verify existing remote Task branch ancestry")
-            fetched = self.resolver.runner.run(
-                ["git", "rev-parse", "FETCH_HEAD"],
-                command_id="lck-fetched-remote-task-head",
-            )
-            if fetched.returncode != 0 or fetched.stdout.strip() != remote_oid:
-                raise LckStopError(
-                    "remote Task branch changed during push precondition check"
+            local_object_available = available.returncode == 0
+            if not local_object_available:
+                fetch = self.resolver.runner.run(
+                    ["git", "fetch", "--no-tags", "origin", remote_ref],
+                    command_id="lck-fetch-observed-remote-task-branch",
                 )
+                if fetch.returncode != 0:
+                    diagnostic = stderr_tail(fetch.stderr or fetch.stdout, limit=1200)
+                    raise LckStopError(
+                        "REMOTE_HEAD_FETCH_FAILED: "
+                        f"remote_ref={remote_ref}; observed_remote_oid={remote_oid}; "
+                        f"candidate_oid={head}; local_object_available=false; "
+                        f"git_exit_code={fetch.returncode}; stderr={diagnostic or 'empty'}"
+                    )
+                fetched = self.resolver.runner.run(
+                    ["git", "rev-parse", "FETCH_HEAD"],
+                    command_id="lck-fetched-remote-task-head",
+                )
+                if fetched.returncode != 0 or fetched.stdout.strip() != remote_oid:
+                    observed = (
+                        fetched.stdout.strip()
+                        if fetched.returncode == 0
+                        else "unavailable"
+                    )
+                    raise LckStopError(
+                        "REMOTE_HEAD_CHANGED: "
+                        f"remote_ref={remote_ref}; observed_remote_oid={remote_oid}; "
+                        f"materialized_oid={observed}; candidate_oid={head}"
+                    )
             ancestor = self.resolver.runner.run(
                 ["git", "merge-base", "--is-ancestor", remote_oid, head],
                 command_id="lck-remote-fast-forward-check",
             )
             if ancestor.returncode != 0:
                 raise LckStopError(
-                    "remote Task branch is ahead/diverged; LCK will not rebase or force push"
+                    "REMOTE_BRANCH_DIVERGED: "
+                    f"remote_oid={remote_oid}; candidate_oid={head}; "
+                    "LCK will not rebase or force push"
                 )
             action = "fast-forwarded"
         else:
@@ -3536,9 +3612,11 @@ class EnsureRemoteBranchEffect:
             command_id="lck-push-task-branch",
         )
         if push.returncode != 0:
+            diagnostic = stderr_tail(push.stderr or push.stdout, limit=1200)
             raise LckStopError(
-                "Task branch push failed: "
-                + (push.stderr.strip() or push.stdout.strip())
+                "REMOTE_PUSH_REJECTED: "
+                f"remote_ref=refs/heads/{branch}; candidate_oid={head}; "
+                f"git_exit_code={push.returncode}; stderr={diagnostic or 'empty'}"
             )
         final_head, final_remote = self._identity(
             branch,
@@ -3546,7 +3624,8 @@ class EnsureRemoteBranchEffect:
         )
         if final_head != head or final_remote != head:
             raise LckStopError(
-                "push postcondition failed: local and remote heads differ"
+                "REMOTE_HEAD_CHANGED: push postcondition failed: "
+                f"candidate_oid={head}; local_oid={final_head}; remote_oid={final_remote}"
             )
         upstream = self._ensure_upstream(branch)
         return EffectReceipt(
@@ -4911,6 +4990,7 @@ class DeliveryCompleter:
         status_effect: SetReviewStatusEffect | None = None,
         checks_gate: DeliveryChecksGate | None = None,
         require_existing_open_pr: bool = False,
+        candidate_recorder: Callable[[str, str], None] | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
@@ -4922,6 +5002,7 @@ class DeliveryCompleter:
         self.status_effect = status_effect or SetReviewStatusEffect(resolver)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.require_existing_open_pr = require_existing_open_pr
+        self.candidate_recorder = candidate_recorder
 
     def _run_critical_outcome(
         self,
@@ -5082,6 +5163,9 @@ class DeliveryCompleter:
             head = commit.details.get("head_sha")
             if not is_sha(head):
                 raise LckStopError("commit receipt did not contain a valid head SHA")
+
+        if self.candidate_recorder is not None:
+            self.candidate_recorder(str(head), validated_tree)
 
         progress.running("remote-branch")
         remote = self.remote_effect.execute(branch, expected_head_sha=str(head))
@@ -5423,6 +5507,7 @@ class RemediationPreparer:
                 "kind": "remediation-session",
                 "task_number": task_number,
                 "review_id": review_id,
+                "operation_id": self.store.new_id(),
                 "start_head_sha": pr_head,
                 "pr_number": pr_number,
                 "base_sha": pr_base,
@@ -5698,6 +5783,68 @@ class RemediationCompleter:
         self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
 
+    def _owned_candidate_recovery(
+        self,
+        session: Mapping[str, Any],
+        state: LiveState,
+        *,
+        task_number: int,
+        review_id: str,
+    ) -> bool:
+        candidate = session.get("candidate")
+        if not isinstance(candidate, Mapping):
+            return False
+        operation_id = session.get("operation_id")
+        start_head = session.get("start_head_sha")
+        candidate_head = candidate.get("head_sha")
+        candidate_tree = candidate.get("tree_oid")
+        pr = state.open_pr or {}
+        exact_identity = (
+            session.get("task_number") == task_number
+            and session.get("review_id") == review_id
+            and isinstance(operation_id, str)
+            and bool(operation_id)
+            and candidate.get("operation_id") == operation_id
+            and candidate.get("start_head_sha") == start_head
+            and is_sha(start_head)
+            and is_sha(candidate_head)
+            and is_sha(candidate_tree)
+            and pr.get("number") == session.get("pr_number")
+            and pr.get("baseRefOid") == session.get("base_sha")
+            and pr.get("headRefOid") == start_head
+            and state.remote_task_oid == start_head
+            and state.local_task_head == candidate_head
+            and state.git.get("branch") == state.target_branch
+            and state.git.get("clean") is True
+        )
+        if not exact_identity:
+            raise LckStopError(
+                "Remediation committed candidate does not exactly match its owned session target"
+            )
+        tree = self.resolver.runner.run(
+            ["git", "rev-parse", "HEAD^{tree}"],
+            command_id="lck-remediation-owned-candidate-tree",
+        )
+        if tree.returncode != 0 or tree.stdout.strip() != candidate_tree:
+            raise LckStopError(
+                "Remediation committed candidate tree does not match its owned session identity"
+            )
+        ancestor = self.resolver.runner.run(
+            [
+                "git",
+                "merge-base",
+                "--is-ancestor",
+                str(start_head),
+                str(candidate_head),
+            ],
+            command_id="lck-remediation-owned-candidate-ancestry",
+        )
+        if ancestor.returncode != 0:
+            raise LckStopError(
+                "Remediation committed candidate is not a descendant of its session start head"
+            )
+        return True
+
     def complete(
         self,
         task_number: int,
@@ -5736,7 +5883,24 @@ class RemediationCompleter:
             operation=Phase.REMEDIATION_COMPLETE.value,
         )
         state = snapshot.state
-        decision = self.eligibility.resolve(state, Phase.REMEDIATION_COMPLETE)
+        owned_candidate = False
+        pr_head = state.open_pr.get("headRefOid") if state.open_pr else None
+        if (
+            session is not None
+            and session.get("candidate") is not None
+            and state.local_task_head != pr_head
+        ):
+            owned_candidate = self._owned_candidate_recovery(
+                session,
+                state,
+                task_number=task_number,
+                review_id=review_id,
+            )
+        decision = self.eligibility.resolve(
+            state,
+            Phase.REMEDIATION_COMPLETE,
+            owned_remediation_candidate=owned_candidate,
+        )
         if not decision.eligible:
             raise LckStopError(
                 f"Remediation Complete STOP for Task #{task_number}: "
@@ -5750,11 +5914,23 @@ class RemediationCompleter:
         # Initial Delivery already owns the bounded validate/commit/push/check
         # mechanics.  Remediation deliberately reuses those effects while
         # replacing PR create/resolve with a strict existing-PR postcondition.
+        def record_candidate(head_sha: str, tree_oid: str) -> None:
+            if session is None or start_head is None:
+                return
+            self.store.record_remediation_candidate(
+                task_number,
+                review_id,
+                start_head_sha=start_head,
+                candidate_head_sha=head_sha,
+                candidate_tree_oid=tree_oid,
+            )
+
         delivery = DeliveryCompleter(
             self.resolver,
             pr_effect=cast(Any, ReuseExistingOpenPrEffect(self.resolver)),
             checks_gate=self.checks_gate,
             require_existing_open_pr=True,
+            candidate_recorder=record_candidate,
         ).complete(
             task_number,
             commit_message=commit_message,
