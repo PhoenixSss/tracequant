@@ -80,6 +80,22 @@ Verification test: tests/.../test_*.py::test_*
 The verification target is data, not an arbitrary command. LCK executes only
 the bounded pytest verifier defined by the repository runtime.
 
+## Long-operation wait and progress contract
+
+For known heavyweight operations — `delivery complete`, `review prepare`, and
+formal workflow validation — use a fixed 30-second wait window for the first
+wait and every subsequent still-running poll (for example,
+`write_stdin`/`yield_time_ms=30000`). Do not use adaptive 1-second, 10-second,
+20-second, or 30-second polling. If the process exits earlier, return its
+output immediately; 30 seconds is the maximum wait window, not a minimum
+runtime.
+
+During these operations, structured progress may appear on stderr. It is
+bounded, non-authoritative observability only: use it to identify the current
+operation and stage, never as evidence for eligibility, freshness, verdicts,
+retry, Merge, Closeout, or any lifecycle result. The final stdout JSON remains
+the only machine-parseable lifecycle result.
+
 ## Initial Delivery authority boundary
 
 For **initial Delivery**, the Agent / Skill MAY:

@@ -49,6 +49,7 @@ from pr_resolve import (
 from project_status import set_project_status_with_runner
 from workflow_common import (
     CommandRunner,
+    ProgressReporter,
     WorkflowToolError,
     atomic_write_json,
     command_warning,
@@ -1413,41 +1414,52 @@ class FormalValidationGate:
             / "agent_workflow"
             / "workflow_validation.py"
         )
-        result = self.resolver.runner.run(
-            [
-                sys.executable,
-                str(tool),
-                "run",
-                "--repo-root",
-                str(self.resolver.repo_root),
-                "--phase",
-                "delivery",
-                "--base-sha",
-                base_sha,
-                "--include-skill-validators",
-                "--require-skill-validator",
-            ],
-            command_id="lck-formal-delivery-validation",
-            validation=True,
-        )
-        if not result.stdout.strip():
-            raise LckStopError(
-                "formal Delivery validation produced no structured result: "
-                + (result.stderr.strip() or f"exit {result.returncode}")
-            )
+        reporter = ProgressReporter("workflow-validation")
+        reporter.started("formal-validation")
         try:
-            payload = read_json_text(
-                result.stdout, field="lck-formal-delivery-validation"
+            result = self.resolver.runner.run(
+                [
+                    sys.executable,
+                    str(tool),
+                    "run",
+                    "--repo-root",
+                    str(self.resolver.repo_root),
+                    "--phase",
+                    "delivery",
+                    "--base-sha",
+                    base_sha,
+                    "--include-skill-validators",
+                    "--require-skill-validator",
+                ],
+                command_id="lck-formal-delivery-validation",
+                validation=True,
+                progress=lambda: reporter.heartbeat(
+                    "formal-validation",
+                    command_id="lck-formal-delivery-validation",
+                ),
             )
-        except WorkflowToolError as exc:
-            raise LckStopError(str(exc)) from exc
-        if not isinstance(payload, dict):
-            raise LckStopError("formal Delivery validation result is not an object")
-        if result.returncode != 0 or payload.get("status") != "pass":
-            raise LckStopError(
-                "formal Delivery validation failed: "
-                + str(payload.get("status") or result.returncode)
-            )
+            if not result.stdout.strip():
+                raise LckStopError(
+                    "formal Delivery validation produced no structured result: "
+                    + (result.stderr.strip() or f"exit {result.returncode}")
+                )
+            try:
+                payload = read_json_text(
+                    result.stdout, field="lck-formal-delivery-validation"
+                )
+            except WorkflowToolError as exc:
+                raise LckStopError(str(exc)) from exc
+            if not isinstance(payload, dict):
+                raise LckStopError("formal Delivery validation result is not an object")
+            if result.returncode != 0 or payload.get("status") != "pass":
+                raise LckStopError(
+                    "formal Delivery validation failed: "
+                    + str(payload.get("status") or result.returncode)
+                )
+        except BaseException:
+            reporter.failed("formal-validation")
+            raise
+        reporter.completed("formal-validation")
         return payload
 
 
@@ -1715,54 +1727,71 @@ class ReviewValidationGate:
         tool = review_root / "tools" / "agent_workflow" / "workflow_validation.py"
         if not tool.is_file():
             raise LckStopError("reviewed head does not contain workflow_validation.py")
-        result = self.resolver.runner.run(
-            [
-                sys.executable,
-                str(tool),
-                "run",
-                "--repo-root",
-                str(review_root),
-                "--phase",
-                "review",
-                "--base-sha",
-                base_sha,
-                "--include-skill-validators",
-                "--require-skill-validator",
-            ],
-            command_id="lck-formal-review-validation",
-            cwd=review_root,
-            validation=True,
-        )
-        if not result.stdout.strip():
-            return self._persist_unstructured_failure(
-                result, base_sha=base_sha, head_sha=head_sha
-            )
+        reporter = ProgressReporter("review-prepare")
+        reporter.started("formal-validation")
         try:
-            parsed = read_json_text(result.stdout, field="lck-formal-review-validation")
-        except WorkflowToolError:
-            return self._persist_unstructured_failure(
-                result, base_sha=base_sha, head_sha=head_sha
+            result = self.resolver.runner.run(
+                [
+                    sys.executable,
+                    str(tool),
+                    "run",
+                    "--repo-root",
+                    str(review_root),
+                    "--phase",
+                    "review",
+                    "--base-sha",
+                    base_sha,
+                    "--include-skill-validators",
+                    "--require-skill-validator",
+                ],
+                command_id="lck-formal-review-validation",
+                cwd=review_root,
+                validation=True,
+                progress=lambda: reporter.heartbeat(
+                    "formal-validation",
+                    command_id="lck-formal-review-validation",
+                ),
             )
-        if not isinstance(parsed, dict):
-            return self._persist_unstructured_failure(
-                result, base_sha=base_sha, head_sha=head_sha
-            )
-        payload = dict(parsed)
-        if result.returncode != 0 and payload.get("status") == "pass":
-            payload["status"] = "fail"
-        try:
-            return self._persist_validation_artifacts(
-                review_root,
-                payload,
-                base_sha=base_sha,
-                head_sha=head_sha,
-            )
-        except LckStopError:
-            if payload.get("status") != "fail" and result.returncode == 0:
-                raise
-            return self._persist_unstructured_failure(
-                result, base_sha=base_sha, head_sha=head_sha
-            )
+            if not result.stdout.strip():
+                payload = self._persist_unstructured_failure(
+                    result, base_sha=base_sha, head_sha=head_sha
+                )
+            else:
+                try:
+                    parsed = read_json_text(
+                        result.stdout, field="lck-formal-review-validation"
+                    )
+                except WorkflowToolError:
+                    parsed = None
+                if not isinstance(parsed, dict):
+                    payload = self._persist_unstructured_failure(
+                        result, base_sha=base_sha, head_sha=head_sha
+                    )
+                else:
+                    candidate = dict(parsed)
+                    if result.returncode != 0 and candidate.get("status") == "pass":
+                        candidate["status"] = "fail"
+                    try:
+                        payload = self._persist_validation_artifacts(
+                            review_root,
+                            candidate,
+                            base_sha=base_sha,
+                            head_sha=head_sha,
+                        )
+                    except LckStopError:
+                        if candidate.get("status") != "fail" and result.returncode == 0:
+                            raise
+                        payload = self._persist_unstructured_failure(
+                            result, base_sha=base_sha, head_sha=head_sha
+                        )
+        except BaseException:
+            reporter.failed()
+            raise
+        if payload.get("status") == "pass":
+            reporter.completed("formal-validation")
+        else:
+            reporter.failed("formal-validation")
+        return payload
 
 
 class ReviewWorkspaceManager:
@@ -2646,8 +2675,11 @@ class ReviewPreparer:
             )
         invocation = self.store.begin_review_prepare(task_number)
         review_root: Path | None = None
+        progress = ProgressReporter("review-prepare")
+        last_stage = "initializing"
 
         def mark(state: str, **fields: Any) -> None:
+            nonlocal last_stage
             payload: dict[str, Any] = {
                 "schema_version": LCK_SCHEMA_VERSION,
                 "kind": "review-prepare-in-flight",
@@ -2660,8 +2692,18 @@ class ReviewPreparer:
             }
             payload.update(fields)
             invocation.update(payload)
+            if state == "failed":
+                progress.failed(last_stage)
+            elif state == "handed-off":
+                progress.completed("handoff")
+            elif state == "started":
+                progress.started("initializing")
+            else:
+                progress.running(state)
+            last_stage = state
 
         try:
+            mark("started")
             recovered = invocation.recovered
             if recovered is not None:
                 previous_root = recovered.get("review_root")
@@ -4612,7 +4654,12 @@ class DeliveryCompleter:
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.require_existing_open_pr = require_existing_open_pr
 
-    def _run_critical_outcome(self, state: LiveState) -> dict[str, Any]:
+    def _run_critical_outcome(
+        self,
+        state: LiveState,
+        *,
+        progress: ProgressReporter | None = None,
+    ) -> dict[str, Any]:
         issue = state.issue
         contract_snapshot = (
             issue.get("critical_outcome") if isinstance(issue, Mapping) else None
@@ -4623,6 +4670,7 @@ class DeliveryCompleter:
                 self.resolver.repo_root,
                 self.resolver.runner,
                 contract,
+                progress=progress,
             )
         except CriticalOutcomeError as exc:
             raise LckStopError(f"Critical Outcome contract invalid: {exc}") from exc
@@ -4687,6 +4735,7 @@ class DeliveryCompleter:
         commit_message: str,
         summary: str,
         risks: str,
+        progress: ProgressReporter,
     ) -> DeliveryCompletionResult:
         state = snapshot.state
         task_number = state.task_number
@@ -4722,12 +4771,15 @@ class DeliveryCompleter:
 
         effects: list[EffectReceipt] = []
         if state.git.get("clean") is True:
+            progress.running("revalidating-candidate")
             if not self._has_task_diff(base_sha):
                 raise LckStopError(
                     "Delivery Complete found no Task diff against operation base"
                 )
             validated_tree = self.commit_effect.current_head_tree()
-            critical = self._run_critical_outcome(state)
+            progress.running("critical-outcome")
+            critical = self._run_critical_outcome(state, progress=progress)
+            progress.running("formal-validation")
             validation = self.formal_validation.run(base_sha)
             validated_head = state.local_task_head
             if not is_sha(validated_head):
@@ -4745,8 +4797,11 @@ class DeliveryCompleter:
                 )
             )
         else:
+            progress.running("staging-candidate")
             validated_tree = self.commit_effect.stage_candidate_tree()
-            critical = self._run_critical_outcome(state)
+            progress.running("critical-outcome")
+            critical = self._run_critical_outcome(state, progress=progress)
+            progress.running("formal-validation")
             validation = self.formal_validation.run(base_sha)
             self.commit_effect.verify_tree_unchanged(
                 validated_tree,
@@ -4762,11 +4817,13 @@ class DeliveryCompleter:
             if not is_sha(head):
                 raise LckStopError("commit receipt did not contain a valid head SHA")
 
+        progress.running("remote-branch")
         remote = self.remote_effect.execute(branch, expected_head_sha=str(head))
         effects.append(remote)
         if remote.details.get("remote_oid") != head:
             raise LckStopError("remote branch effect did not prove the validated head")
 
+        progress.running("open-pr")
         pr_receipt = self.pr_effect.execute(
             state,
             head_sha=str(head),
@@ -4787,6 +4844,7 @@ class DeliveryCompleter:
         ):
             raise LckStopError("PR effect did not prove the validated head/base")
 
+        progress.running("checks")
         snapshot_pr = state.open_pr
         if (
             isinstance(snapshot_pr, Mapping)
@@ -4809,6 +4867,7 @@ class DeliveryCompleter:
         checks_pr = checks.get("pr")
         if not isinstance(checks_pr, Mapping):
             raise LckStopError("checks result did not contain PR identity")
+        progress.running("project-status")
         status_receipt = self.status_effect.execute(
             state,
             expected_pr=checks_pr,
@@ -4843,20 +4902,35 @@ class DeliveryCompleter:
     ) -> DeliveryCompletionResult:
         if not summary.strip():
             raise LckStopError("Delivery summary must be non-empty")
-        snapshot = operation_snapshot or self.snapshots.acquire(
-            task_number,
-            operation=phase.value,
-            include_required_checks=True,
+        operation = (
+            "remediation-complete"
+            if phase is Phase.REMEDIATION_COMPLETE
+            else "delivery-complete"
         )
-        if snapshot.state.task_number != task_number:
-            raise LckStopError("operation snapshot belongs to another Task")
-        return self._complete_from_snapshot(
-            snapshot,
-            phase=phase,
-            commit_message=commit_message,
-            summary=summary,
-            risks=risks,
-        )
+        progress = ProgressReporter(operation)
+        progress.started("initializing")
+        try:
+            progress.running("resolving-live-state")
+            snapshot = operation_snapshot or self.snapshots.acquire(
+                task_number,
+                operation=phase.value,
+                include_required_checks=True,
+            )
+            if snapshot.state.task_number != task_number:
+                raise LckStopError("operation snapshot belongs to another Task")
+            result = self._complete_from_snapshot(
+                snapshot,
+                phase=phase,
+                commit_message=commit_message,
+                summary=summary,
+                risks=risks,
+                progress=progress,
+            )
+        except BaseException:
+            progress.failed()
+            raise
+        progress.completed("handoff")
+        return result
 
 
 @dataclass(frozen=True)
