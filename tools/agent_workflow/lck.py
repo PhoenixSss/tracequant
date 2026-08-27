@@ -179,8 +179,17 @@ _OPERATION_FACT_PROFILES: Final = {
         include_local_task_branches=False,
         include_checks=True,
     ),
-    "remediation-prepare": FactProfile(name="remediation-prepare"),
-    "remediation-no-change": FactProfile(name="remediation-no-change"),
+    # Remediation Prepare hands the current contract to the semantic repair
+    # caller; the no-change terminal operation has no semantic caller and does
+    # not need to reacquire the Issue body.
+    "remediation-prepare": FactProfile(
+        name="remediation-prepare",
+        include_task_contract=True,
+    ),
+    "remediation-no-change": FactProfile(
+        name="remediation-no-change",
+        include_task_contract=False,
+    ),
     "remediation-complete": FactProfile(
         name="remediation-complete",
         include_checks=True,
@@ -5304,6 +5313,11 @@ class RemediationContext:
     def state(self) -> LiveState:
         return self.operation_snapshot.state
 
+    @property
+    def task_contract(self) -> dict[str, Any]:
+        """Return the contract bound to this Remediation Prepare snapshot."""
+        return _task_contract_from_state(self.state)
+
     def to_dict(self) -> dict[str, Any]:
         pr = self.state.open_pr or {}
         return {
@@ -5315,6 +5329,7 @@ class RemediationContext:
             "action": self.action,
             "findings": self.findings,
             "findings_source": self.findings_source,
+            "task_contract": _jsonable(self.task_contract),
             "operation_snapshot": self.operation_snapshot.to_dict(),
             "live_target": {
                 "pr_number": pr.get("number"),

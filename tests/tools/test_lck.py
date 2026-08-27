@@ -1695,6 +1695,60 @@ def test_review_complete_acquires_only_review_complete_fact_profile(
             },
         ),
         (
+            "Remediation Prepare",
+            {
+                "issue": (False, False, True),
+                "git": {
+                    "read_only_local_refs": True,
+                    "include_workspace_inventory": False,
+                },
+                "branches": (True, True),
+                "pr": (False, False, False),
+                "history": None,
+                "included": {
+                    "task_contract",
+                    "git",
+                    "local_task_branches",
+                    "remote_task_branches",
+                    "open_pr",
+                },
+                "excluded": {
+                    "comments",
+                    "issue_closure",
+                    "workspace_inventory",
+                    "checks",
+                    "pr_history",
+                },
+            },
+        ),
+        (
+            "Remediation No Change",
+            {
+                "issue": (False, False, False),
+                "git": {
+                    "read_only_local_refs": True,
+                    "include_workspace_inventory": False,
+                },
+                "branches": (True, True),
+                "pr": (False, False, False),
+                "history": None,
+                "included": {
+                    "git",
+                    "local_task_branches",
+                    "remote_task_branches",
+                    "open_pr",
+                },
+                "excluded": {
+                    "comments",
+                    "issue_closure",
+                    "task_contract",
+                    "workspace_inventory",
+                    "checks",
+                    "pr_history",
+                },
+            },
+        ),
+        (
             "merge-preflight",
             {
                 "issue": (False, False, True),
@@ -1864,6 +1918,11 @@ def test_authoritative_operation_resolver_queries_only_its_fact_profile(
             "Remediation Prepare",
             {"task_contract", "git", "local_task_branches", "open_pr"},
             {"comments", "issue_closure", "checks", "pr_history"},
+        ),
+        (
+            "Remediation No Change",
+            {"git", "local_task_branches", "open_pr"},
+            {"comments", "issue_closure", "task_contract", "checks", "pr_history"},
         ),
         (
             "Remediation Complete",
@@ -2715,6 +2774,8 @@ def test_remediation_prepare_uses_live_head_not_review_record_identity(
     context = lck.RemediationPreparer(resolver, store=store).prepare(159, review_id)
 
     assert context.to_dict()["live_target"]["head_sha"] == live_head
+    assert context.task_contract["body"] == "Task Contract"
+    assert context.to_dict()["task_contract"]["body"] == "Task Contract"
     assert context.findings == "[F1][Medium] Semantic repair input."
     assert (
         "operation snapshot acquired at Remediation entry"
