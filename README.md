@@ -101,6 +101,10 @@ Pull requests targeting `main` and pushes to `main` automatically run CI. The wo
 
 Internal datetimes must be timezone-aware and use UTC as the standard timezone. Naive datetimes are explicitly rejected. Time utilities are provided by `tracequant.core.time`.
 
+The initial Research MVP domain models are documented in
+[Domain models](docs/architecture/domain-models.md) and are imported from
+`tracequant.domain`.
+
 ## Configuration
 
 Application configuration is loaded explicitly with `tracequant.config.load_settings`.
