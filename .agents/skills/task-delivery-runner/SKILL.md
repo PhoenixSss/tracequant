@@ -201,7 +201,7 @@ reacquire live Task/Git/GitHub facts
 → commit_current_tree
 → ensure_remote_branch
 → ensure_open_pr
-→ wait for applicable checks
+→ observe current checks without making CI completion a Delivery gate
 → set Project Status Review
 → reacquire live facts
 → prove local HEAD == remote HEAD == PR head
@@ -214,9 +214,12 @@ trust a previous receipt as authority. It reacquires current facts and reruns
 the applicable Critical Outcome / formal validation gates before continuing.
 
 `Critical Outcome FAIL`, formal validation failure, remote divergence,
-ambiguous PR identity, failed/unknown checks, stale lifecycle facts, or failed
-postconditions are terminal for that invocation. LCK does not rebase, force
-push, guess an identity, or route itself into repair.
+ambiguous PR identity, stale lifecycle facts, or failed postconditions are
+terminal for that invocation. Pending, failed, missing, or otherwise unresolved
+PR checks may be reported as a non-authoritative observation, but do not veto
+Initial Delivery. Required-check success remains a Review Complete / Merge
+Preflight gate. LCK does not rebase, force push, guess an identity, or route
+itself into repair.
 
 ### 4. Initial Delivery reporting
 
@@ -227,7 +230,7 @@ On `READY_FOR_REVIEW`, report:
 - Critical Outcome result;
 - formal Delivery validation result;
 - LCK effect receipts at summary level;
-- checks result and preserved limitations;
+- non-blocking checks observation and preserved limitations;
 - current lifecycle state;
 - remaining semantic risks or limitations;
 - exact fresh-session `task-pr-review-runner` prompt.
@@ -328,9 +331,9 @@ uv run --frozen python tools/agent_workflow/lck.py remediation complete <TASK> \
 ```
 
 LCK reuses the Task-2 Delivery effects for Critical Outcome, formal validation, exact
-validated-tree commit, remote synchronization, checks, and final local/remote/PR head
-verification. Unlike Initial Delivery, Remediation must reuse existing OPEN PR state; it never
-creates a replacement PR.
+validated-tree commit, remote synchronization, non-blocking check observation, and final
+local/remote/PR head verification. Unlike Initial Delivery, Remediation must reuse existing OPEN PR
+state; it never creates a replacement PR.
 
 `remediation complete` gates the repaired implementation and the mechanics needed to create
 a stable new candidate head. It MUST NOT require provider-attributed implementation receipts,

@@ -527,6 +527,34 @@ class StubChecks:
             str(pr.get("baseRefOid", SHA)),
         )
 
+    def observe(self, snapshot: lck.OperationSnapshot) -> dict[str, Any]:
+        self.calls += 1
+        pr = snapshot.state.open_pr or {}
+        result = self._result(
+            int(pr.get("number", 10)),
+            str(pr.get("headRefOid", "b" * 40)),
+            str(pr.get("baseRefOid", SHA)),
+        )
+        result["status"] = "observed"
+        result["gate"] = "non-blocking"
+        result["check_state"] = "pass"
+        return result
+
+    def observe_exact_pr(
+        self,
+        _repository: str,
+        pr_number: int,
+        *,
+        expected_head_sha: str,
+        expected_base_sha: str,
+    ) -> dict[str, Any]:
+        self.calls += 1
+        result = self._result(pr_number, expected_head_sha, expected_base_sha)
+        result["status"] = "observed"
+        result["gate"] = "non-blocking"
+        result["check_state"] = "pass"
+        return result
+
     def query_exact_pr(
         self,
         _repository: str,
@@ -1273,9 +1301,12 @@ def test_review_required_checks_policy_is_governed_by_pr_base_not_candidate_head
     assert "self-approved" in _git(repo, "show", f"{head_sha}:.github/workflows/ci.yml")
 
 
-def test_delivery_rejects_unresolved_required_check_policy_before_effects(
+def test_delivery_does_not_require_required_check_policy_before_effects(
     tmp_path: Path,
 ) -> None:
+    target = tmp_path / "tests" / "test_critical_path.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("def test_critical_path(): pass\n", encoding="utf-8")
     head = "b" * 40
     state = _live_state(
         head=head,
@@ -1298,29 +1329,29 @@ def test_delivery_rejects_unresolved_required_check_policy_before_effects(
     pr = StubEffect("ensure_open_pr", "created")
     status = StubEffect("set_review_status", "updated")
 
-    with pytest.raises(lck.LckStopError, match="canonical-CI check contract"):
-        lck.DeliveryCompleter(
-            cast(Any, resolver),
-            formal_validation=cast(Any, StubValidation()),
-            commit_effect=cast(Any, commit),
-            remote_effect=cast(Any, remote),
-            pr_effect=cast(Any, pr),
-            status_effect=cast(Any, status),
-            checks_gate=cast(Any, StubChecks()),
-        ).complete(
-            160,
-            commit_message="candidate",
-            summary="candidate",
-            operation_snapshot=snapshot,
-        )
+    result = lck.DeliveryCompleter(
+        cast(Any, resolver),
+        formal_validation=cast(Any, StubValidation()),
+        commit_effect=cast(Any, commit),
+        remote_effect=cast(Any, remote),
+        pr_effect=cast(Any, pr),
+        status_effect=cast(Any, status),
+        checks_gate=cast(Any, StubChecks()),
+    ).complete(
+        160,
+        commit_message="candidate",
+        summary="candidate",
+        operation_snapshot=snapshot,
+    )
 
-    assert commit.calls == []
-    assert remote.calls == 0
-    assert pr.calls == 0
-    assert status.calls == 0
+    assert result.status == "READY_FOR_REVIEW"
+    assert commit.calls == ["current_head_tree", "verify_tree_unchanged"]
+    assert remote.calls == 1
+    assert pr.calls == 1
+    assert status.calls == 1
 
 
-def test_delivery_checks_gate_requires_named_required_check_success(
+def test_strict_checks_gate_requires_named_required_check_success(
     tmp_path: Path,
 ) -> None:
     head = "b" * 40
@@ -1353,7 +1384,7 @@ def test_delivery_checks_gate_requires_named_required_check_success(
     assert resolver.calls == 0
 
 
-def test_delivery_checks_gate_stops_on_failed_check(tmp_path: Path) -> None:
+def test_strict_checks_gate_stops_on_failed_check(tmp_path: Path) -> None:
     head = "b" * 40
     base = _live_state(
         head=head,
@@ -1383,7 +1414,7 @@ def test_delivery_checks_gate_stops_on_failed_check(tmp_path: Path) -> None:
     assert resolver.calls == 0
 
 
-def test_delivery_checks_gate_pending_stops_without_polling(tmp_path: Path) -> None:
+def test_strict_checks_gate_pending_stops_without_polling(tmp_path: Path) -> None:
     head = "b" * 40
     base = _live_state(
         head=head,
@@ -1401,7 +1432,7 @@ def test_delivery_checks_gate_pending_stops_without_polling(tmp_path: Path) -> N
     state = _with_checks(base, _checks(category="pending", state_name="IN_PROGRESS"))
     resolver = SequenceResolver(tmp_path, CompletionRunner(), [state])
 
-    with pytest.raises(lck.LckStopError, match="start a new lifecycle operation"):
+    with pytest.raises(lck.LckStopError, match="strict check gate"):
         lck.DeliveryChecksGate(cast(Any, resolver)).evaluate(
             _snapshot(
                 state,
@@ -1413,7 +1444,7 @@ def test_delivery_checks_gate_pending_stops_without_polling(tmp_path: Path) -> N
     assert resolver.calls == 0
 
 
-def test_delivery_checks_gate_rejects_legacy_plan_limited_policy(
+def test_strict_checks_gate_rejects_legacy_plan_limited_policy(
     tmp_path: Path,
 ) -> None:
     head = "b" * 40
@@ -1447,6 +1478,31 @@ def test_delivery_checks_gate_rejects_legacy_plan_limited_policy(
 
 
 class FailingChecks:
+    def observe(self, snapshot: lck.OperationSnapshot) -> dict[str, Any]:
+        pr = snapshot.state.open_pr or {}
+        return {
+            "status": "observed",
+            "gate": "non-blocking",
+            "check_state": "failed",
+            "pr": {
+                "number": pr.get("number", 10),
+                "head_sha": pr.get("headRefOid", "b" * 40),
+                "base_sha": pr.get("baseRefOid", SHA),
+            },
+        }
+
+    def observe_exact_pr(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "status": "observed",
+            "gate": "non-blocking",
+            "check_state": "failed",
+            "pr": {
+                "number": 10,
+                "head_sha": "b" * 40,
+                "base_sha": SHA,
+            },
+        }
+
     def evaluate(self, _snapshot: lck.OperationSnapshot) -> dict[str, Any]:
         raise lck.LckStopError("checks failed")
 
@@ -1537,7 +1593,9 @@ def test_delivery_complete_freezes_authority_for_the_operation(tmp_path: Path) -
     assert resolver.calls == 1
 
 
-def test_failed_checks_do_not_move_project_status_to_review(tmp_path: Path) -> None:
+def test_failed_checks_do_not_block_delivery_project_status_transition(
+    tmp_path: Path,
+) -> None:
     target = tmp_path / "tests" / "test_critical_path.py"
     target.parent.mkdir(parents=True)
     target.write_text(
@@ -1578,22 +1636,69 @@ def test_failed_checks_do_not_move_project_status_to_review(tmp_path: Path) -> N
     resolver = SequenceResolver(tmp_path, runner, [pre, pre, remote, with_pr])
     status = StubEffect("set_review_status", "updated")
 
-    with pytest.raises(lck.LckStopError, match="checks failed"):
-        lck.DeliveryCompleter(
-            cast(Any, resolver),
-            formal_validation=cast(Any, StubValidation()),
-            commit_effect=cast(Any, StubCommit(dirty=False)),
-            remote_effect=cast(Any, StubEffect("ensure_remote_branch", "created")),
-            pr_effect=cast(Any, StubEffect("ensure_open_pr", "created")),
-            status_effect=cast(Any, status),
-            checks_gate=cast(Any, FailingChecks()),
-        ).complete(
-            160,
-            commit_message="Implement LCK Delivery cutover",
-            summary="Move initial Delivery mechanics into LCK.",
-        )
+    result = lck.DeliveryCompleter(
+        cast(Any, resolver),
+        formal_validation=cast(Any, StubValidation()),
+        commit_effect=cast(Any, StubCommit(dirty=False)),
+        remote_effect=cast(Any, StubEffect("ensure_remote_branch", "created")),
+        pr_effect=cast(Any, StubEffect("ensure_open_pr", "created")),
+        status_effect=cast(Any, status),
+        checks_gate=cast(Any, FailingChecks()),
+    ).complete(
+        160,
+        commit_message="Implement LCK Delivery cutover",
+        summary="Move initial Delivery mechanics into LCK.",
+    )
 
-    assert status.calls == 0
+    assert result.status == "READY_FOR_REVIEW"
+    assert status.calls == 1
+
+
+def test_initial_delivery_reaches_ready_for_review_with_pending_checks(
+    tmp_path: Path,
+) -> None:
+    """Critical Outcome: pending CI is observed but is not a Delivery veto."""
+    target = tmp_path / "tests" / "test_critical_path.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("def test_critical_path(): pass\n", encoding="utf-8")
+    head = "b" * 40
+    pr = {
+        "number": 10,
+        "state": "OPEN",
+        "isDraft": False,
+        "headRefOid": head,
+        "baseRefOid": SHA,
+        "statusCheckRollup": [
+            {"name": "quality", "status": "IN_PROGRESS", "conclusion": None}
+        ],
+    }
+    state = _live_state(
+        head=head,
+        clean=True,
+        project_status="In Progress",
+        open_pr=pr,
+        remote_oid=head,
+    )
+    resolver = SequenceResolver(tmp_path, CompletionRunner(), [state])
+    status = StubEffect("set_review_status", "updated")
+
+    result = lck.DeliveryCompleter(
+        cast(Any, resolver),
+        formal_validation=cast(Any, StubValidation()),
+        commit_effect=cast(Any, StubCommit(dirty=False)),
+        remote_effect=cast(Any, StubEffect("ensure_remote_branch", "already-present")),
+        pr_effect=cast(Any, StubEffect("ensure_open_pr", "already-present")),
+        status_effect=cast(Any, status),
+    ).complete(
+        160,
+        commit_message="Move required checks to Review and Merge gates",
+        summary="Publish the validated candidate without waiting for CI.",
+    )
+
+    assert result.status == "READY_FOR_REVIEW"
+    assert result.checks["status"] == "observed"
+    assert result.checks["check_state"] == "pending"
+    assert status.calls == 1
 
 
 def test_delivery_complete_does_not_requery_checks_after_gate(tmp_path: Path) -> None:
@@ -1689,7 +1794,7 @@ def test_set_review_status_rejects_failed_checks_receipt_before_mutation(
     resolver = SequenceResolver(tmp_path, runner, [state])
     identity = {"number": 10, "head_sha": head, "base_sha": SHA}
 
-    with pytest.raises(lck.LckStopError, match="PR checks are not passing"):
+    with pytest.raises(lck.LckStopError, match="PR checks receipt is invalid"):
         lck.SetReviewStatusEffect(cast(Any, resolver)).execute(
             state,
             expected_pr=identity,
@@ -1698,3 +1803,31 @@ def test_set_review_status_rejects_failed_checks_receipt_before_mutation(
 
     assert not any(command[:2] == ("gh", "project") for command in runner.commands)
     assert resolver.calls == 0
+
+
+def test_set_review_status_accepts_nonblocking_checks_observation(
+    tmp_path: Path,
+) -> None:
+    head = "b" * 40
+    state = _live_state(
+        head=head,
+        clean=True,
+        project_status="Review",
+        open_pr=None,
+        remote_oid=head,
+    )
+    resolver = SequenceResolver(tmp_path, CompletionRunner(), [state])
+    identity = {"number": 10, "head_sha": head, "base_sha": SHA}
+
+    receipt = lck.SetReviewStatusEffect(cast(Any, resolver)).execute(
+        state,
+        expected_pr=identity,
+        checks_result={
+            "status": "observed",
+            "gate": "non-blocking",
+            "check_state": "pending",
+            "pr": identity,
+        },
+    )
+
+    assert receipt.action == "already-review"
