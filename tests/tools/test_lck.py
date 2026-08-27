@@ -3274,12 +3274,15 @@ def _write_owned_candidate_session(
 
 class OwnedCandidateRunner(FakeRunner):
     def __init__(self, *, head_sha: str, tree_oid: str) -> None:
+        branch = "task/159-lck-core-live-state-resolution"
+        open_pr = _open_pr(branch)
         super().__init__(
-            branch="task/159-lck-core-live-state-resolution",
-            local_branches={"task/159-lck-core-live-state-resolution"},
-            remote_branches={"task/159-lck-core-live-state-resolution": SHA},
+            branch=branch,
+            local_branches={branch},
+            remote_branches={branch: SHA},
             clean=True,
             head_sha=head_sha,
+            open_pr=open_pr,
         )
         self.tree_oid = tree_oid
 
@@ -3294,9 +3297,44 @@ class OwnedCandidateRunner(FakeRunner):
         if command == ("git", "rev-parse", "HEAD^{tree}"):
             self.commands.append(command)
             return CommandResult(command_id, command, 0, f"{self.tree_oid}\n", "")
+        if command == ("git", "diff", "--quiet"):
+            self.commands.append(command)
+            return CommandResult(command_id, command, 0, "", "")
+        if command[:3] == ("git", "diff", "--quiet"):
+            self.commands.append(command)
+            return CommandResult(command_id, command, 1, "", "")
+        if command == (
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        ):
+            self.commands.append(command)
+            return CommandResult(command_id, command, 0, "", "")
+        if command == ("git", "write-tree"):
+            self.commands.append(command)
+            return CommandResult(command_id, command, 0, f"{self.tree_oid}\n", "")
+        if command[:3] == ("git", "cat-file", "-e"):
+            self.commands.append(command)
+            return CommandResult(command_id, command, 0, "", "")
         if command[:3] == ("git", "merge-base", "--is-ancestor"):
             self.commands.append(command)
             return CommandResult(command_id, command, 0, "", "")
+        if command[:3] == ("git", "push", "-u"):
+            self.commands.append(command)
+            self.remote_branches[self.branch] = self.head_sha
+            assert self.open_pr is not None
+            self.open_pr["headRefOid"] = self.head_sha
+            return CommandResult(command_id, command, 0, "", "")
+        if command == (
+            "git",
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ):
+            self.commands.append(command)
+            return CommandResult(command_id, command, 0, f"origin/{self.branch}\n", "")
         return super().run(argv, command_id=command_id, **kwargs)
 
 
@@ -3307,88 +3345,100 @@ def test_remediation_complete_recovers_exact_owned_partial_effect_candidate(
     start_head = SHA
     candidate_head = "b" * 40
     candidate_tree = "c" * 40
-    initial = _review_state(head=start_head, clean=False)
-    resolver = cast(Any, StaticResolver(tmp_path, initial))
-    store = lck.ReviewInvocationStore(tmp_path)
-    review_id = store.new_id()
-    operation_id = store.new_id()
-    store.write_remediation_session(
-        159,
-        {
-            "schema_version": lck.LCK_SCHEMA_VERSION,
-            "kind": "remediation-session",
-            "task_number": 159,
-            "review_id": review_id,
-            "operation_id": operation_id,
-            "start_head_sha": start_head,
-            "pr_number": 200,
-            "base_sha": SHA,
-            "findings_sha256": "f" * 64,
-            "findings_source": "local-review-record",
-            "authority": "test",
-        },
-    )
-    calls = {"completion": 0, "critical": 0, "validation": 0}
-
-    class PartialEffectDeliveryCompleter:
-        def __init__(self, *_args: Any, **kwargs: Any) -> None:
-            self.recorder = kwargs["candidate_recorder"]
-
-        def complete(
-            self, task_number: int, **kwargs: Any
-        ) -> lck.DeliveryCompletionResult:
-            calls["completion"] += 1
-            calls["critical"] += 1
-            calls["validation"] += 1
-            if calls["completion"] == 1:
-                self.recorder(candidate_head, candidate_tree)
-                raise lck.LckStopError("REMOTE_PUSH_REJECTED: simulated interruption")
-            return lck.DeliveryCompletionResult(
-                task_number=task_number,
-                status="READY_FOR_REVIEW",
-                branch=initial.target_branch,
-                head_sha=candidate_head,
-                critical_outcome={"status": "pass"},
-                validation={"status": "pass"},
-                checks={"status": "pass"},
-                effects=(),
-                operation_snapshot=kwargs["operation_snapshot"],
-            )
-
-    monkeypatch.setattr(lck, "DeliveryCompleter", PartialEffectDeliveryCompleter)
-    completer = lck.RemediationCompleter(resolver, store=store)
-
-    with pytest.raises(lck.LckStopError, match="REMOTE_PUSH_REJECTED"):
-        completer.complete(159, review_id, commit_message="repair", summary="repair")
-
-    session = store.read_remediation_session(159)
-    assert session is not None
-    assert session["candidate"] == {
-        "operation_id": operation_id,
-        "start_head_sha": start_head,
-        "head_sha": candidate_head,
-        "tree_oid": candidate_tree,
-    }
-
+    initial = _review_state(head=start_head, clean=True)
     partial = replace(
         initial,
-        git={**initial.git, "head_sha": candidate_head, "clean": True},
+        git={**initial.git, "head_sha": candidate_head},
         local_task_head=candidate_head,
     )
-    resolver.state = partial
-    resolver.runner = OwnedCandidateRunner(
-        head_sha=candidate_head, tree_oid=candidate_tree
+    resolver = cast(Any, StaticResolver(tmp_path, partial))
+    runner = OwnedCandidateRunner(head_sha=candidate_head, tree_oid=candidate_tree)
+    resolver.runner = runner
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    _write_owned_candidate_session(
+        store,
+        review_id,
+        start_head=start_head,
+        candidate_head=candidate_head,
+        candidate_tree=candidate_tree,
     )
-    result = completer.complete(
+    calls = {"critical": 0, "validation": 0}
+
+    def critical_outcome(
+        _self: lck.DeliveryCompleter,
+        _state: lck.LiveState,
+        *,
+        progress: lck.ProgressReporter | None = None,
+    ) -> dict[str, Any]:
+        del progress
+        calls["critical"] += 1
+        return {"status": "pass"}
+
+    def formal_validation(
+        _self: lck.FormalValidationGate, base_sha: str
+    ) -> dict[str, Any]:
+        assert base_sha == SHA
+        calls["validation"] += 1
+        return {"status": "pass"}
+
+    monkeypatch.setattr(
+        lck.DeliveryCompleter, "_run_critical_outcome", critical_outcome
+    )
+    monkeypatch.setattr(lck.FormalValidationGate, "run", formal_validation)
+
+    result = lck.RemediationCompleter(resolver, store=store).complete(
         159, review_id, commit_message="repair", summary="repair"
     )
 
     assert result.to_dict()["status"] == "READY_FOR_NEW_REVIEW"
-    assert calls == {"completion": 2, "critical": 2, "validation": 2}
+    assert calls == {"critical": 1, "validation": 1}
+    assert resolver.calls == 1
+    assert [effect.action for effect in result.delivery.effects] == [
+        "already-committed-revalidated",
+        "fast-forwarded",
+        "reused-current-open-pr",
+        "already-review",
+    ]
+    assert not any(command[:2] == ("git", "commit") for command in runner.commands)
+    assert any(command[:3] == ("git", "push", "-u") for command in runner.commands)
     assert store.read_remediation_session(159) is None
     required = store.read_review_required(159)
     assert required is not None
     assert required["remediated_head"] == candidate_head
+
+
+def test_real_delivery_completer_rejects_unowned_local_ahead_remediation_candidate(
+    tmp_path: Path,
+) -> None:
+    candidate_head = "b" * 40
+    state = _review_state(head=SHA, clean=True)
+    state = replace(
+        state,
+        git={**state.git, "head_sha": candidate_head},
+        local_task_head=candidate_head,
+    )
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    snapshot = lck.OperationSnapshot(
+        operation=lck.Phase.REMEDIATION_COMPLETE.value,
+        state=state,
+    )
+
+    with pytest.raises(
+        lck.LckStopError, match="local Task branch must match current OPEN PR head"
+    ):
+        lck.DeliveryCompleter(
+            resolver,
+            require_existing_open_pr=True,
+        ).complete(
+            159,
+            commit_message="repair",
+            summary="repair",
+            operation_snapshot=snapshot,
+            phase=lck.Phase.REMEDIATION_COMPLETE,
+        )
+
+    assert resolver.calls == 0
 
 
 def test_remediation_owned_candidate_recovery_rejects_replaced_local_head(

@@ -5085,6 +5085,7 @@ class DeliveryCompleter:
         snapshot: OperationSnapshot,
         *,
         phase: Phase,
+        owned_remediation_candidate: bool = False,
         commit_message: str,
         summary: str,
         risks: str,
@@ -5092,7 +5093,11 @@ class DeliveryCompleter:
     ) -> DeliveryCompletionResult:
         state = snapshot.state
         task_number = state.task_number
-        decision = self.eligibility.resolve(state, phase)
+        decision = self.eligibility.resolve(
+            state,
+            phase,
+            owned_remediation_candidate=owned_remediation_candidate,
+        )
         if not decision.eligible:
             raise LckStopError(
                 f"{phase.value} STOP for Task #{task_number}: "
@@ -5251,6 +5256,7 @@ class DeliveryCompleter:
         risks: str = "",
         operation_snapshot: OperationSnapshot | None = None,
         phase: Phase = Phase.DELIVERY_COMPLETE,
+        owned_remediation_candidate: bool = False,
     ) -> DeliveryCompletionResult:
         if not summary.strip():
             raise LckStopError("Delivery summary must be non-empty")
@@ -5272,6 +5278,7 @@ class DeliveryCompleter:
             result = self._complete_from_snapshot(
                 snapshot,
                 phase=phase,
+                owned_remediation_candidate=owned_remediation_candidate,
                 commit_message=commit_message,
                 summary=summary,
                 risks=risks,
@@ -5941,6 +5948,7 @@ class RemediationCompleter:
             risks=risks,
             operation_snapshot=snapshot,
             phase=Phase.REMEDIATION_COMPLETE,
+            owned_remediation_candidate=owned_candidate,
         )
         if delivery.head_sha == start_head:
             raise LckStopError(
