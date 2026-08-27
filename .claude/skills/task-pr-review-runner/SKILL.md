@@ -58,6 +58,8 @@ Task Contract, current review target, validation/check state, and `review_root`.
 The `review_root` is a detached, clean, implementation-read-only standalone temporary
 clone for the live-resolved head. The source tracked tree and source Git metadata remain
 read-only; only ignored LCK operation/evidence state may be written outside the clone.
+Review Prepare may begin while CI checks are pending or have failed; check success
+is revalidated as a fresh gate by Review Complete and Merge Preflight.
 
 If LCK returns STOP or stale, do not fall back to archived evidence snapshots,
 expected SHAs, direct `gh` selection, or a Delivery handoff.
@@ -118,8 +120,10 @@ explicit stale result such as `REVIEW_STALE_HEAD`, `REVIEW_STALE_BASE`,
 `REVIEW_STALE_TASK`, or `REVIEW_STALE_DIFF`. A stale semantic verdict is not accepted as
 the current Review result; start a fresh Review Prepare for the new target.
 
-Current applicable PR checks must also still pass. Review Complete itself performs no
-nested/full-state refresh after its operation snapshot is frozen.
+For a PASS, current applicable PR checks must also still pass. For a FAIL, current
+checks are only observed so a semantic finding is not delayed by pending or failed
+CI. Review Complete itself performs no nested/full-state refresh after its operation
+snapshot is frozen.
 
 A valid PASS returns `READY_FOR_MERGE_PREFLIGHT`, not direct merge readiness. FAIL returns
 `STOP_REQUIRED` and stops; do not start Remediation automatically.

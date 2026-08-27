@@ -863,9 +863,9 @@ def _required_checks_policy_source_sha(
 ) -> str:
     """Return the immutable base commit that governs required-check policy.
 
-    Candidate heads cannot authorize their own checks.  Delivery is governed by
-    current authoritative main; operations on an existing PR are governed by the
-    exact PR base commit.
+    Candidate heads cannot authorize their own checks. Operations on an existing
+    PR are governed by the exact PR base commit; the legacy Delivery branch is
+    retained for callers that still request that policy source explicitly.
     """
 
     if operation == Phase.DELIVERY_COMPLETE.value:
@@ -2746,15 +2746,11 @@ class ReviewPreparer:
                 target=target.to_dict(),
                 review_root=str(review_root),
             )
-            snapshot = self.snapshots.bind_required_checks(
-                snapshot, repo_root=review_root
-            )
             mark(
                 "checking-current-pr",
                 target=target.to_dict(),
-                required_checks=snapshot.required_checks,
             )
-            checks = self.checks_gate.evaluate(snapshot)
+            checks = self.checks_gate.observe(snapshot)
             identity = _review_identity(
                 self.resolver,
                 state,
@@ -2944,11 +2940,8 @@ class ReviewCompleter:
                     "Review invocation identity does not belong to this Task"
                 )
             prepared_checks = guard.get("checks")
-            if (
-                not isinstance(prepared_checks, Mapping)
-                or prepared_checks.get("status") != "pass"
-            ):
-                raise LckStopError("Review invocation has no successful PR check gate")
+            if not isinstance(prepared_checks, Mapping):
+                raise LckStopError("Review invocation has no PR check observation")
             prepared_snapshot = guard.get("snapshot")
             if not isinstance(prepared_snapshot, Mapping):
                 raise LckStopError("Review invocation has no sealed operation snapshot")
@@ -2975,9 +2968,6 @@ class ReviewCompleter:
             self.workspace.assert_ready_for_completion(
                 review_root, reviewed_identity.head_sha
             )
-            completion_snapshot = self.snapshots.bind_required_checks(
-                completion_snapshot, repo_root=review_root
-            )
             current_identity = _review_identity(
                 self.resolver,
                 state,
@@ -2985,7 +2975,13 @@ class ReviewCompleter:
                 repo_root=review_root,
             )
             _assert_review_applicable(reviewed_identity, current_identity)
-            completion_checks = self.checks_gate.evaluate(completion_snapshot)
+            if verdict == "PASS":
+                completion_snapshot = self.snapshots.bind_required_checks(
+                    completion_snapshot, repo_root=review_root
+                )
+                completion_checks = self.checks_gate.evaluate(completion_snapshot)
+            else:
+                completion_checks = self.checks_gate.observe(completion_snapshot)
             record = {
                 "schema_version": LCK_SCHEMA_VERSION,
                 "kind": "independent-review-record",
@@ -3591,7 +3587,7 @@ class SetReviewStatusEffect:
             raise LckStopError("cannot set Review status without repository identity")
         if expected_pr is None or checks_result is None:
             raise LckStopError(
-                "Project Status Review requires the exact checks-gated PR receipt"
+                "Project Status Review requires the exact PR checks observation"
             )
         gated_pr = checks_result.get("pr")
         expected_identity = {
@@ -3611,9 +3607,9 @@ class SetReviewStatusEffect:
             raise LckStopError(
                 "Project Status precondition failed: checks receipt PR identity mismatch"
             )
-        if checks_result.get("status") != "pass":
+        if checks_result.get("status") not in {"pass", "observed"}:
             raise LckStopError(
-                "Project Status precondition failed: PR checks are not passing"
+                "Project Status precondition failed: PR checks receipt is invalid"
             )
         if state.project_status == "Review":
             return EffectReceipt(
@@ -3663,11 +3659,11 @@ class SetReviewStatusEffect:
 
 
 class DeliveryChecksGate:
-    """Evaluate PR checks from one operation snapshot or one exact PR query.
+    """Observe or strictly evaluate PR checks from an operation snapshot/query.
 
-    This gate never resolves lifecycle state and never polls.  If checks are
-    pending, the current operation stops and a later lifecycle invocation
-    acquires a fresh snapshot.
+    This gate never resolves lifecycle state and never polls.  Delivery and
+    Review Prepare use the non-blocking observation path; Review Complete and
+    Merge Preflight use the strict evaluation path.
     """
 
     PR_FIELDS: Final = (
@@ -3719,11 +3715,15 @@ class DeliveryChecksGate:
     def _evaluate_pr_checks(
         cls,
         pr: Mapping[str, Any],
-        required: Mapping[str, Any],
+        required: Mapping[str, Any] | None,
+        *,
+        require_success: bool = True,
     ) -> dict[str, Any]:
         checks = _normalize_checks(pr.get("statusCheckRollup"))
-        required_names = cls._required_names(required)
-        config = required.get("configuration")
+        required_names = (
+            cls._required_names(required) if required is not None else set()
+        )
+        config = required.get("configuration") if required is not None else None
         observed = cls._observed_categories(checks)
         try:
             failed = int(checks.get("failed", 0) or 0)
@@ -3732,37 +3732,55 @@ class DeliveryChecksGate:
         except (TypeError, ValueError) as exc:
             raise LckStopError("PR check summary is malformed") from exc
 
-        if failed > 0 or unknown > 0:
-            raise LckStopError("PR checks failed, cancelled, skipped, or unknown")
-        if pending > 0:
-            raise LckStopError(
-                "PR checks are pending; start a new lifecycle operation after CI completes"
-            )
-
-        if required_names:
-            failed_required = {
-                name
-                for name in required_names
-                if observed.get(name) not in {None, "success"}
-            }
+        failed_required = {
+            name
+            for name in required_names
+            if observed.get(name) not in {None, "success"}
+        }
+        missing = required_names - set(observed)
+        if require_success:
+            if failed > 0 or unknown > 0:
+                raise LckStopError("PR checks failed, cancelled, skipped, or unknown")
+            if pending > 0:
+                raise LckStopError(
+                    "PR checks are pending; strict check gate is not satisfied"
+                )
             if failed_required:
                 raise LckStopError(
                     "required PR checks are not successful: "
                     + ", ".join(sorted(failed_required))
                 )
-            missing = required_names - set(observed)
             if missing:
                 raise LckStopError(
                     "required PR checks are not present: " + ", ".join(sorted(missing))
                 )
 
-        return {
-            "status": "pass",
+        if failed > 0 or failed_required:
+            check_state = "failed"
+        elif unknown > 0:
+            check_state = "unknown"
+        elif pending > 0:
+            check_state = "pending"
+        elif missing:
+            check_state = "missing"
+        else:
+            check_state = "pass"
+
+        result = {
+            "status": "pass" if require_success else "observed",
             "configuration": config,
             "required": sorted(required_names),
             "pr": cls._pr_identity_from_pr(pr),
             "checks": checks,
         }
+        if not require_success:
+            result.update(
+                {
+                    "gate": "non-blocking",
+                    "check_state": check_state,
+                }
+            )
+        return result
 
     def evaluate(self, snapshot: OperationSnapshot) -> dict[str, Any]:
         state = snapshot.state
@@ -3778,7 +3796,20 @@ class DeliveryChecksGate:
         if not isinstance(required, Mapping):
             raise LckStopError("required PR check configuration was not acquired")
         _required_check_contract_for_snapshot(snapshot)
-        return self._evaluate_pr_checks(pr, required)
+        return self._evaluate_pr_checks(pr, required, require_success=True)
+
+    def observe(self, snapshot: OperationSnapshot) -> dict[str, Any]:
+        """Return a bounded check observation without requiring CI success."""
+        state = snapshot.state
+        if state.status is not ResolutionStatus.RESOLVED:
+            raise LckStopError(
+                "cannot observe checks from unresolved operation snapshot: "
+                + "; ".join(state.stop_reasons)
+            )
+        pr = state.open_pr
+        if not isinstance(pr, Mapping):
+            raise LckStopError("PR checks require one OPEN PR in operation snapshot")
+        return self._evaluate_pr_checks(pr, None, require_success=False)
 
     def query_exact_pr(
         self,
@@ -3789,7 +3820,26 @@ class DeliveryChecksGate:
         expected_base_sha: str,
         required_checks: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Targeted post-effect query for a PR created/updated by this operation."""
+        """Targeted strict query for a PR created/updated by this operation."""
+        return self._query_exact_pr(
+            repository,
+            pr_number,
+            expected_head_sha=expected_head_sha,
+            expected_base_sha=expected_base_sha,
+            required_checks=required_checks,
+            require_success=True,
+        )
+
+    def _query_exact_pr(
+        self,
+        repository: str,
+        pr_number: int,
+        *,
+        expected_head_sha: str,
+        expected_base_sha: str,
+        required_checks: Mapping[str, Any] | None,
+        require_success: bool,
+    ) -> dict[str, Any]:
         result = self.runner.run(
             [
                 "gh",
@@ -3819,7 +3869,29 @@ class DeliveryChecksGate:
             or value.get("baseRefOid") != expected_base_sha
         ):
             raise LckStopError("exact PR identity changed after the PR effect")
-        return self._evaluate_pr_checks(value, required_checks)
+        return self._evaluate_pr_checks(
+            value,
+            required_checks,
+            require_success=require_success,
+        )
+
+    def observe_exact_pr(
+        self,
+        repository: str,
+        pr_number: int,
+        *,
+        expected_head_sha: str,
+        expected_base_sha: str,
+    ) -> dict[str, Any]:
+        """Observe a post-effect PR without making CI success a Delivery gate."""
+        return self._query_exact_pr(
+            repository,
+            pr_number,
+            expected_head_sha=expected_head_sha,
+            expected_base_sha=expected_base_sha,
+            required_checks=None,
+            require_success=False,
+        )
 
     @staticmethod
     def _checks_postcondition(
@@ -4739,9 +4811,6 @@ class DeliveryCompleter:
     ) -> DeliveryCompletionResult:
         state = snapshot.state
         task_number = state.task_number
-        required_checks = snapshot.required_checks
-        _required_check_contract_for_snapshot(snapshot)
-        required_checks_mapping = cast(Mapping[str, Any], required_checks)
         decision = self.eligibility.resolve(state, phase)
         if not decision.eligible:
             raise LckStopError(
@@ -4852,16 +4921,15 @@ class DeliveryCompleter:
             and snapshot_pr.get("headRefOid") == head
             and snapshot_pr.get("baseRefOid") == base_sha
         ):
-            checks = self.checks_gate.evaluate(snapshot)
+            checks = self.checks_gate.observe(snapshot)
         else:
             if not isinstance(state.repository, str):
                 raise LckStopError("repository identity is unavailable for PR checks")
-            checks = self.checks_gate.query_exact_pr(
+            checks = self.checks_gate.observe_exact_pr(
                 state.repository,
                 pr_number,
                 expected_head_sha=str(head),
                 expected_base_sha=base_sha,
-                required_checks=required_checks_mapping,
             )
 
         checks_pr = checks.get("pr")
@@ -4914,7 +4982,6 @@ class DeliveryCompleter:
             snapshot = operation_snapshot or self.snapshots.acquire(
                 task_number,
                 operation=phase.value,
-                include_required_checks=True,
             )
             if snapshot.state.task_number != task_number:
                 raise LckStopError("operation snapshot belongs to another Task")
@@ -5470,7 +5537,6 @@ class RemediationCompleter:
         snapshot = self.snapshots.acquire(
             task_number,
             operation=Phase.REMEDIATION_COMPLETE.value,
-            include_required_checks=True,
         )
         state = snapshot.state
         decision = self.eligibility.resolve(state, Phase.REMEDIATION_COMPLETE)

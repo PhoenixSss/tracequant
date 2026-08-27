@@ -90,6 +90,9 @@ remediation rationale 或 persuasive framing 当作 evidence。
 Review Agent 可以读取完整 effective diff、相关 unchanged code、tests、docs、config
 和 public interfaces；必须逐项判断 Acceptance Criteria、正确性、failure paths、
 安全边界与回归风险。
+Review Prepare 不等待 CI checks 进入终态；semantic Review 可以与 CI 并行。Checks
+success 只在 Review Complete 与后续 Merge Preflight 的 fresh gate 中决定是否可进入
+人工合并边界。
 
 ## 5. Review Complete：fresh applicability snapshot
 
@@ -129,9 +132,10 @@ Task Contract changed → REVIEW_STALE_TASK
 effective diff changed→ REVIEW_STALE_DIFF
 ```
 
-current applicable checks 也必须仍然满足 completion gate。若 PR/base/head/Task identity
-仍一致，effective diff applicability 从仍受 LCK ownership 保护的 sealed Review clone
-重新机械推导；Review Complete 不要求 source repository materialize reviewed commits。
+PASS 的 current applicable checks 也必须仍然满足 completion gate；FAIL 只观察 current
+checks，从而不会因 pending 或 failed CI 延迟 semantic finding。若 PR/base/head/Task
+identity 仍一致，effective diff applicability 从仍受 LCK ownership 保护的 sealed Review
+clone 重新机械推导；Review Complete 不要求 source repository materialize reviewed commits。
 
 任何 stale result 都不会把 semantic verdict 发布成当前有效 Review PASS/FAIL，也不会
 解除 fresh-review requirement；必须重新执行新的 Review Prepare。Review Complete

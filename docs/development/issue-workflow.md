@@ -21,8 +21,7 @@ Codex 与 Claude Code 的 workflow Skills 引用本文件作为生命周期语�
 Issue (Specifying)
   → Ready（codex:ready + Project Ready + 无 blocker）
   → Delivery（branch → implementation/tests → commit/push → PR）
-  → CI checks
-  → Independent Review（fresh session，read-only）
+  → Independent Review（fresh session，read-only；可与 CI 并行）
   → maintainer manual Squash Merge
   → Closeout（merge identity / state convergence / branch cleanup）
   → Feature completion（hierarchy-aware audit）
@@ -126,8 +125,8 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
   deterministic control 执行；Agent/Skill 不提供 branch/SHA/PR/refspec authority。
 - 一次 Initial Delivery 覆盖：LCK Delivery Prepare → semantic implementation / targeted
   development validation → LCK Delivery Complete → Critical Outcome → formal validation →
-  commit validated tree → ensure remote branch → ensure OPEN PR → CI checks → Project
-  Status `Review` → final live verification → `READY_FOR_REVIEW`。
+  commit validated tree → ensure remote branch → ensure OPEN PR → observe current CI checks
+  （non-blocking）→ Project Status `Review` → final live verification → `READY_FOR_REVIEW`。
 - 一个 Task 通常产生一个 PR（base = `main`）。
 - Initial Task branch bootstrap is LCK-owned. An existing branch is reusable only when
   Task identity, ownership, base, and the required worktree state are mechanically proven.
@@ -156,10 +155,10 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
   check 名称由 canonical CI workflow 中的静态 job 定义，并从 **exact trusted
   base commit** 读取；不能读取调用者当前 checkout、未提交修改或 candidate
   head 上的未来 workflow policy。LCK v1 对 dynamic job name / matrix job
-  fail closed。Delivery Complete 由当前 authoritative `main` policy 约束；
-  已有 PR 的 Review / Remediation / Merge
-  Preflight 由 exact PR base policy 约束。候选 head 对该配置的修改只在 merge
-  后成为后续 operation 的新 policy，不能降低它自身的验收门禁。GitHub
+  fail closed。Initial Delivery / Remediation 只观察当前 PR checks，不以 required
+  check success 作为完成条件；Review Complete / Merge Preflight 由 exact PR base
+  policy 约束。候选 head 对该配置的修改只在 merge 后成为后续 operation 的新
+  policy，不能降低它自身的验收门禁。GitHub
   `statusCheckRollup` 只提供 exact PR head 上这些 check 的 live result。
   GitHub Ruleset 可继续作为平台侧独立强制层，但 plan/permission-dependent
   Required-Checks discovery API 不作为 LCK lifecycle authority。
@@ -177,9 +176,10 @@ fresh session、strict read-only、head lock、independent judgement、
 no Delivery mechanical authority inheritance、LCK live target resolution、
 Review Prepare/Complete operation-boundary stale guard、PASS / FAIL、new head → fresh re-review。
 
-本文件只声明其在 lifecycle 中的位置：Review 在 CI checks 通过后、
-maintainer merge 前执行；Review FAIL 必须先 STOP，只有 Human 显式发起后
-才进入 remediation（§10）。
+本文件只声明其在 lifecycle 中的位置：Review 可在 CI checks 运行期间与其并行，
+但 Review Complete 的 PASS 与 maintainer merge 前的 Merge Preflight 都必须
+基于各自 fresh authority 验证 checks 通过；Review FAIL 必须先 STOP，只有
+Human 显式发起后才进入 remediation（§10）。
 
 ## 9. Human Gate
 

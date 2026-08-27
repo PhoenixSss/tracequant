@@ -1276,6 +1276,21 @@ class FakeReviewChecks:
             "checks": snapshot.state.checks,
         }
 
+    def observe(self, snapshot: lck.OperationSnapshot) -> dict[str, Any]:
+        self.calls += 1
+        pr = snapshot.state.open_pr or {}
+        return {
+            "status": "observed",
+            "gate": "non-blocking",
+            "check_state": "pending",
+            "pr": {
+                "number": pr.get("number", 200),
+                "head_sha": pr.get("headRefOid", SHA),
+                "base_sha": pr.get("baseRefOid", SHA),
+            },
+            "checks": snapshot.state.checks,
+        }
+
 
 class FakeReviewValidation:
     def run(self, _root: Path, _base: str, _head: str) -> dict[str, Any]:
@@ -1341,6 +1356,33 @@ def test_review_prepare_builds_context_only_from_live_resolution(
     )
     assert inflight["state"] == "handed-off"
     assert inflight["review_id"] == context.review_id
+    assert checks.calls == 1
+
+
+def test_review_prepare_allows_pending_checks_for_parallel_semantic_review(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _review_state()
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    identity = _review_identity_value()
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
+
+    class PendingChecks(FakeReviewChecks):
+        def evaluate(self, _snapshot: lck.OperationSnapshot) -> dict[str, Any]:
+            raise AssertionError("Review Prepare must not require passing checks")
+
+    checks = PendingChecks()
+    context = lck.ReviewPreparer(
+        resolver,
+        validation=cast(Any, FakeReviewValidation()),
+        checks_gate=cast(Any, checks),
+        workspace=cast(Any, FakeReviewWorkspace(tmp_path / "review-root")),
+        store=lck.ReviewInvocationStore(tmp_path),
+    ).prepare(159)
+
+    assert context.checks["status"] == "observed"
+    assert context.checks["check_state"] == "pending"
     assert checks.calls == 1
 
 
@@ -1694,6 +1736,37 @@ def test_review_complete_revalidates_current_checks(
 
     assert resolver.calls == 1
     assert store.read_latest_review(159) is None
+
+
+def test_review_fail_is_not_delayed_by_pending_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = _review_identity_value()
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    store.write_guard(review_id, _review_guard(identity, review_root=review_root))
+    findings = tmp_path / "findings.txt"
+    findings.write_text(
+        "[F1][Medium] CI-independent semantic finding.\n", encoding="utf-8"
+    )
+
+    class PendingChecks(FakeReviewChecks):
+        def evaluate(self, _snapshot: lck.OperationSnapshot) -> dict[str, Any]:
+            raise lck.LckStopError("PR checks are pending")
+
+    result = lck.ReviewCompleter(
+        resolver,
+        checks_gate=cast(Any, PendingChecks()),
+        store=store,
+        workspace=cast(Any, FakeReviewWorkspace(review_root)),
+    ).complete(159, review_id, verdict="FAIL", findings_file=findings)
+
+    assert result.status == "STOP_REQUIRED"
 
 
 def test_review_workspace_seal_removes_write_bits(tmp_path: Path) -> None:
