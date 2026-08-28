@@ -1407,6 +1407,124 @@ def test_review_prepare_builds_context_only_from_live_resolution(
     assert checks.calls == 1
 
 
+def test_review_prepare_returns_compact_agent_view_and_full_audit_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Critical Outcome: Review Prepare separates Agent output from evidence."""
+    state = _review_state()
+    identity = _review_identity_value()
+    review_id = "b" * 32
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    store = lck.ReviewInvocationStore(tmp_path)
+    snapshot = lck.OperationSnapshot(
+        operation="review-prepare",
+        state=state,
+        fact_profile="review-prepare",
+        acquired_facts=("task_contract", "remote_task_branches", "open_pr", "checks"),
+    )
+    guard = _review_guard(identity, review_root=review_root)
+    guard.update(
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "review-invocation-guard",
+            "review_id": review_id,
+            "snapshot": snapshot.to_dict(),
+        }
+    )
+    store.write_guard(review_id, guard)
+    context = lck.ReviewContext(
+        review_id=review_id,
+        task_contract=state.task_contract or {},
+        identity=identity,
+        checks={
+            "status": "observed",
+            "check_state": "pending",
+            "pr": {"number": 200, "head_sha": SHA, "base_sha": SHA},
+            "observed": {"quality": {"status": "pending"}},
+        },
+        validation={"status": "pass", "commands": [{"command_id": "pytest"}]},
+        review_root=review_root,
+    )
+
+    class FakePreparer:
+        def __init__(self, _resolver: Any) -> None:
+            pass
+
+        def prepare(self, _task_number: int) -> lck.ReviewContext:
+            return context
+
+    resolver = StaticResolver(tmp_path, state)
+    monkeypatch.setattr(
+        lck,
+        "LiveStateResolver",
+        lambda _root, repository=None: resolver,
+    )
+    monkeypatch.setattr(lck, "ReviewPreparer", FakePreparer)
+
+    exit_code = lck.main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--repository",
+            "owner/repo",
+            "review",
+            "prepare",
+            "159",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["kind"] == "lck-agent-view"
+    assert payload["status"] == "READY_FOR_SEMANTIC_REVIEW"
+    assert payload["review_target"] == identity.to_dict()
+    assert payload["task_contract"]["body"] == "Task Contract"
+    assert "operation_snapshot" not in payload
+    assert "observed" not in payload["checks"]
+
+    reference = payload["receipt_reference"]
+    receipt = lck.AuditReceiptStore(tmp_path).read(reference)
+    assert receipt["kind"] == "lck-audit-receipt"
+    assert receipt["operation"] == "review-prepare"
+    assert receipt["operation_snapshot"] == snapshot.to_dict()
+    assert receipt["agent_view"]["review_target"] == payload["review_target"]
+    assert receipt["audit"]["review_guard"]["review_id"] == review_id
+
+
+def test_lck_stop_result_has_structured_receipt_reference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class FailingResolver:
+        repo_root = tmp_path
+
+        def resolve(self, _task_number: int) -> lck.LiveState:
+            raise lck.LckStopError("live state is unavailable")
+
+    resolver = FailingResolver()
+    monkeypatch.setattr(
+        lck,
+        "LiveStateResolver",
+        lambda _root, repository=None: resolver,
+    )
+
+    exit_code = lck.main(["--repo-root", str(tmp_path), "status", "159"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 2
+    assert payload["kind"] == "lck-agent-view"
+    assert payload["operation"] == "status"
+    assert payload["status"] == "stop"
+    assert payload["next_action"]
+    receipt = lck.AuditReceiptStore(tmp_path).read(payload["receipt_reference"])
+    assert receipt["outcome"]["status"] == "stop"
+    assert receipt["agent_view"]["error"] == "live state is unavailable"
+
+
 def test_review_prepare_allows_pending_checks_for_parallel_semantic_review(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

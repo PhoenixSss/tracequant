@@ -1168,11 +1168,13 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
     assert exit_code == 0, output
     assert payload["status"] == "READY_FOR_REVIEW"
     assert payload["human_boundary"] == "Independent Review must be started separately"
+    assert "operation_snapshot" not in payload
+    receipt = lck.AuditReceiptStore(tmp_path).read(payload["receipt_reference"])
     assert (
-        payload["operation_snapshot"]["operation"] == lck.Phase.DELIVERY_COMPLETE.value
+        receipt["operation_snapshot"]["operation"] == lck.Phase.DELIVERY_COMPLETE.value
     )
     assert (
-        payload["operation_snapshot"]["state"]["issue"]["project_status"]
+        receipt["operation_snapshot"]["state"]["issue"]["project_status"]
         == "In Progress"
     )
     assert payload["effects"][-1]["effect"] == "set_review_status"
