@@ -1,3 +1,5 @@
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import json
@@ -13,10 +15,34 @@ AGENT_WORKFLOW = str(Path(__file__).parents[2] / "tools" / "agent_workflow")
 if AGENT_WORKFLOW not in sys.path:
     sys.path.insert(0, AGENT_WORKFLOW)
 
-import lck  # type: ignore[import-not-found]  # noqa: E402
+from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
+    cli as lck_cli,
+)
+from lck_core import (
+    delivery as lck_delivery,
+)
+from lck_core import (
+    effects as lck_effects,
+)
+from lck_core import (
+    models as lck_models,
+)
+from lck_core import (
+    receipts as lck_receipts,
+)
+from lck_core import (
+    review_workspace as lck_review_workspace,
+)
+from lck_core import (
+    state as lck_state,
+)
+from lck_core import (
+    validation as lck_validation,
+)
 from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
     CommandResult,
     CommandRunner,
+    sha256_json,
 )
 
 SHA = "a" * 40
@@ -71,7 +97,7 @@ def _required_policy(*names: str, source_sha: str = SHA) -> dict[str, Any]:
         "source": f"git:{source_sha}:.github/workflows/ci.yml:jobs",
         "source_sha": source_sha,
         "workflow_path": ".github/workflows/ci.yml",
-        "contract_sha256": lck.sha256_json(
+        "contract_sha256": sha256_json(
             {"workflow": ".github/workflows/ci.yml", "required-checks": items}
         ),
         "contexts": {"items": items, "count": len(items), "truncated": False},
@@ -104,8 +130,8 @@ def _repo(tmp_path: Path) -> tuple[Path, Path]:
     return repo, origin
 
 
-def _resolver_for_repo(repo: Path) -> lck.LiveStateResolver:
-    return lck.LiveStateResolver(
+def _resolver_for_repo(repo: Path) -> lck_state.LiveStateResolver:
+    return lck_state.LiveStateResolver(
         repo, runner=CommandRunner(repo), repository="owner/repo"
     )
 
@@ -114,7 +140,7 @@ def test_commit_current_tree_binds_validated_tree_to_commit(tmp_path: Path) -> N
     repo, _ = _repo(tmp_path)
     _git(repo, "switch", "-c", "task/160-delivery")
     (repo / "seed.txt").write_text("changed\n", encoding="utf-8")
-    effect = lck.CommitCurrentTreeEffect(_resolver_for_repo(repo))
+    effect = lck_effects.CommitCurrentTreeEffect(_resolver_for_repo(repo))
 
     tree = effect.stage_candidate_tree()
     effect.verify_tree_unchanged(tree)
@@ -131,11 +157,13 @@ def test_commit_current_tree_rejects_tree_change_after_validation(
     repo, _ = _repo(tmp_path)
     _git(repo, "switch", "-c", "task/160-delivery")
     (repo / "seed.txt").write_text("candidate\n", encoding="utf-8")
-    effect = lck.CommitCurrentTreeEffect(_resolver_for_repo(repo))
+    effect = lck_effects.CommitCurrentTreeEffect(_resolver_for_repo(repo))
     tree = effect.stage_candidate_tree()
     (repo / "seed.txt").write_text("changed-after-validation\n", encoding="utf-8")
 
-    with pytest.raises(lck.LckStopError, match="changed during formal validation"):
+    with pytest.raises(
+        lck_models.LckStopError, match="changed during formal validation"
+    ):
         effect.verify_tree_unchanged(tree)
 
 
@@ -145,12 +173,14 @@ def test_commit_current_tree_rejects_head_change_after_validation(
     repo, _ = _repo(tmp_path)
     _git(repo, "switch", "-c", "task/160-delivery")
     (repo / "seed.txt").write_text("candidate\n", encoding="utf-8")
-    effect = lck.CommitCurrentTreeEffect(_resolver_for_repo(repo))
+    effect = lck_effects.CommitCurrentTreeEffect(_resolver_for_repo(repo))
     original_head = _git(repo, "rev-parse", "HEAD")
     tree = effect.stage_candidate_tree()
     _git(repo, "commit", "-m", "concurrent")
 
-    with pytest.raises(lck.LckStopError, match="HEAD changed during formal validation"):
+    with pytest.raises(
+        lck_models.LckStopError, match="HEAD changed during formal validation"
+    ):
         effect.verify_tree_unchanged(tree, expected_head_sha=original_head)
 
 
@@ -160,7 +190,7 @@ def test_ensure_remote_branch_create_then_idempotent(tmp_path: Path) -> None:
     (repo / "task.txt").write_text("task\n", encoding="utf-8")
     _git(repo, "add", "task.txt")
     _git(repo, "commit", "-m", "task")
-    effect = lck.EnsureRemoteBranchEffect(_resolver_for_repo(repo))
+    effect = lck_effects.EnsureRemoteBranchEffect(_resolver_for_repo(repo))
 
     created = effect.execute("task/160-delivery")
     repeated = effect.execute("task/160-delivery")
@@ -179,7 +209,7 @@ def test_ensure_remote_branch_repairs_missing_upstream_when_already_synced(
     (repo / "task.txt").write_text("task\n", encoding="utf-8")
     _git(repo, "add", "task.txt")
     _git(repo, "commit", "-m", "task")
-    effect = lck.EnsureRemoteBranchEffect(_resolver_for_repo(repo))
+    effect = lck_effects.EnsureRemoteBranchEffect(_resolver_for_repo(repo))
     effect.execute(branch)
     _git(repo, "branch", "--unset-upstream")
 
@@ -207,9 +237,11 @@ def test_ensure_remote_branch_rejects_unvalidated_local_head(
     (repo / "task.txt").write_text("task\n", encoding="utf-8")
     _git(repo, "add", "task.txt")
     _git(repo, "commit", "-m", "task")
-    effect = lck.EnsureRemoteBranchEffect(_resolver_for_repo(repo))
+    effect = lck_effects.EnsureRemoteBranchEffect(_resolver_for_repo(repo))
 
-    with pytest.raises(lck.LckStopError, match="validated local Task HEAD changed"):
+    with pytest.raises(
+        lck_models.LckStopError, match="validated local Task HEAD changed"
+    ):
         effect.execute("task/160-delivery", expected_head_sha="b" * 40)
 
     assert _git(repo, "ls-remote", "--heads", "origin", "task/160-delivery") == ""
@@ -223,7 +255,7 @@ def test_ensure_remote_branch_fast_forwards_only_when_remote_is_ancestor(
     (repo / "task.txt").write_text("one\n", encoding="utf-8")
     _git(repo, "add", "task.txt")
     _git(repo, "commit", "-m", "one")
-    effect = lck.EnsureRemoteBranchEffect(_resolver_for_repo(repo))
+    effect = lck_effects.EnsureRemoteBranchEffect(_resolver_for_repo(repo))
     effect.execute("task/160-delivery")
 
     (repo / "task.txt").write_text("two\n", encoding="utf-8")
@@ -239,7 +271,7 @@ def test_ensure_remote_branch_stops_on_divergence(tmp_path: Path) -> None:
     (repo / "task.txt").write_text("one\n", encoding="utf-8")
     _git(repo, "add", "task.txt")
     _git(repo, "commit", "-m", "one")
-    effect = lck.EnsureRemoteBranchEffect(_resolver_for_repo(repo))
+    effect = lck_effects.EnsureRemoteBranchEffect(_resolver_for_repo(repo))
     effect.execute("task/160-delivery")
     shared = _git(repo, "rev-parse", "HEAD")
 
@@ -260,7 +292,7 @@ def test_ensure_remote_branch_stops_on_divergence(tmp_path: Path) -> None:
     _git(repo, "add", "local.txt")
     _git(repo, "commit", "-m", "local")
 
-    with pytest.raises(lck.LckStopError, match="REMOTE_BRANCH_DIVERGED"):
+    with pytest.raises(lck_models.LckStopError, match="REMOTE_BRANCH_DIVERGED"):
         effect.execute("task/160-delivery")
 
 
@@ -318,9 +350,9 @@ def test_ensure_remote_branch_uses_local_exact_remote_oid_without_fetch(
     (repo / "task.txt").write_text("two\n", encoding="utf-8")
     _git(repo, "commit", "-am", "two")
     runner = RecordingGitRunner(repo)
-    resolver = lck.LiveStateResolver(repo, runner=runner, repository="owner/repo")
+    resolver = lck_state.LiveStateResolver(repo, runner=runner, repository="owner/repo")
 
-    receipt = lck.EnsureRemoteBranchEffect(resolver).execute(branch)
+    receipt = lck_effects.EnsureRemoteBranchEffect(resolver).execute(branch)
 
     assert receipt.action == "fast-forwarded"
     assert not any(command[:2] == ("git", "fetch") for command in runner.commands)
@@ -346,8 +378,8 @@ def test_ensure_remote_branch_fetches_only_when_exact_remote_oid_is_missing(
     _git(other, "push", "-u", "origin", branch)
 
     runner = RecordingGitRunner(repo, force_missing_object=True)
-    resolver = lck.LiveStateResolver(repo, runner=runner, repository="owner/repo")
-    receipt = lck.EnsureRemoteBranchEffect(resolver).execute(branch)
+    resolver = lck_state.LiveStateResolver(repo, runner=runner, repository="owner/repo")
+    receipt = lck_effects.EnsureRemoteBranchEffect(resolver).execute(branch)
 
     assert receipt.action == "fast-forwarded"
     assert any(command[:2] == ("git", "fetch") for command in runner.commands)
@@ -373,9 +405,11 @@ def test_ensure_remote_branch_fetch_failure_has_bounded_classified_diagnostic(
     _git(other, "push", "-u", "origin", branch)
 
     runner = RecordingGitRunner(repo, fail_fetch=True, force_missing_object=True)
-    resolver = lck.LiveStateResolver(repo, runner=runner, repository="owner/repo")
-    with pytest.raises(lck.LckStopError, match="REMOTE_HEAD_FETCH_FAILED") as error:
-        lck.EnsureRemoteBranchEffect(resolver).execute(branch)
+    resolver = lck_state.LiveStateResolver(repo, runner=runner, repository="owner/repo")
+    with pytest.raises(
+        lck_models.LckStopError, match="REMOTE_HEAD_FETCH_FAILED"
+    ) as error:
+        lck_effects.EnsureRemoteBranchEffect(resolver).execute(branch)
 
     diagnostic = str(error.value)
     assert "local_object_available=false" in diagnostic
@@ -410,11 +444,11 @@ class ValidationRunner:
 
 def test_formal_validation_gate_requires_structured_pass(tmp_path: Path) -> None:
     runner = ValidationRunner()
-    resolver = lck.LiveStateResolver(
+    resolver = lck_state.LiveStateResolver(
         tmp_path, runner=cast(Any, runner), repository="owner/repo"
     )
 
-    payload = lck.FormalValidationGate(resolver).run(SHA)
+    payload = lck_validation.FormalValidationGate(resolver).run(SHA)
 
     assert payload["status"] == "pass"
     assert "--phase" in runner.commands[0]
@@ -426,12 +460,14 @@ def test_formal_validation_gate_fails_closed(
     tmp_path: Path, status: str, returncode: int
 ) -> None:
     runner = ValidationRunner(status=status, returncode=returncode)
-    resolver = lck.LiveStateResolver(
+    resolver = lck_state.LiveStateResolver(
         tmp_path, runner=cast(Any, runner), repository="owner/repo"
     )
-    gate = lck.FormalValidationGate(resolver)
+    gate = lck_validation.FormalValidationGate(resolver)
 
-    with pytest.raises(lck.LckStopError, match="formal Delivery validation failed"):
+    with pytest.raises(
+        lck_models.LckStopError, match="formal Delivery validation failed"
+    ):
         gate.run(SHA)
 
     assert gate.last_payload == {"status": status}
@@ -451,16 +487,16 @@ def test_ensure_open_pr_uses_operation_snapshot_preconditions(
         remote_oid=head,
     )
     if mutation == "merged":
-        state = lck.LiveState(**{**state.__dict__, "merged": True})
+        state = lck_models.LiveState(**{**state.__dict__, "merged": True})
         expected = "already merged"
     else:
-        state = lck.LiveState(**{**state.__dict__, "target_branch": "main"})
+        state = lck_models.LiveState(**{**state.__dict__, "target_branch": "main"})
         expected = "Task branch is invalid"
     runner = CompletionRunner()
     resolver = SequenceResolver(tmp_path, runner, [state])
 
-    with pytest.raises(lck.LckStopError, match=expected):
-        lck.EnsureOpenPrEffect(cast(Any, resolver)).execute(
+    with pytest.raises(lck_models.LckStopError, match=expected):
+        lck_effects.EnsureOpenPrEffect(cast(Any, resolver)).execute(
             state,
             head_sha=head,
             summary="Move initial Delivery mechanics into LCK.",
@@ -494,9 +530,9 @@ def _live_state(
     project_status: str,
     open_pr: dict[str, Any] | None,
     remote_oid: str | None,
-) -> lck.LiveState:
+) -> lck_models.LiveState:
     branch = "task/160-delivery-cutover"
-    return lck.LiveState(
+    return lck_models.LiveState(
         task_number=160,
         repository="owner/repo",
         issue={
@@ -544,12 +580,12 @@ def _live_state(
 
 
 def _snapshot(
-    state: lck.LiveState,
+    state: lck_models.LiveState,
     *,
-    operation: str = lck.Phase.DELIVERY_COMPLETE.value,
+    operation: str = lck_models.Phase.DELIVERY_COMPLETE.value,
     required: dict[str, Any] | None = None,
-) -> lck.OperationSnapshot:
-    return lck.OperationSnapshot(
+) -> lck_models.OperationSnapshot:
+    return lck_models.OperationSnapshot(
         operation=operation,
         state=state,
         required_checks=required or _required_policy("quality"),
@@ -601,14 +637,17 @@ class CompletionRunner:
 
 class SequenceResolver:
     def __init__(
-        self, repo_root: Path, runner: CompletionRunner, states: list[lck.LiveState]
+        self,
+        repo_root: Path,
+        runner: CompletionRunner,
+        states: list[lck_models.LiveState],
     ) -> None:
         self.repo_root = repo_root
         self.runner = cast(Any, runner)
         self._states = states
         self.calls = 0
 
-    def resolve(self, _task: int) -> lck.LiveState:
+    def resolve(self, _task: int) -> lck_models.LiveState:
         index = min(self.calls, len(self._states) - 1)
         self.calls += 1
         return self._states[index]
@@ -627,7 +666,7 @@ class StubChecks:
 
     def _result(self, number: int, head: str, base: str) -> dict[str, Any]:
         if self.fail:
-            raise lck.LckStopError(self.fail)
+            raise lck_models.LckStopError(self.fail)
         result = {
             "status": "pass",
             "configuration": "repository",
@@ -644,7 +683,7 @@ class StubChecks:
         self.last_result = dict(result)
         return result
 
-    def evaluate(self, snapshot: lck.OperationSnapshot) -> dict[str, Any]:
+    def evaluate(self, snapshot: lck_models.OperationSnapshot) -> dict[str, Any]:
         self.calls += 1
         pr = snapshot.state.open_pr or {}
         return self._result(
@@ -653,7 +692,7 @@ class StubChecks:
             str(pr.get("baseRefOid", SHA)),
         )
 
-    def observe(self, snapshot: lck.OperationSnapshot) -> dict[str, Any]:
+    def observe(self, snapshot: lck_models.OperationSnapshot) -> dict[str, Any]:
         self.calls += 1
         pr = snapshot.state.open_pr or {}
         result = self._result(
@@ -721,9 +760,9 @@ class StubCommit:
         _message: str,
         *,
         expected_parent_sha: str | None = None,
-    ) -> lck.EffectReceipt:
+    ) -> lck_models.EffectReceipt:
         self.calls.append("execute")
-        return lck.EffectReceipt(
+        return lck_models.EffectReceipt(
             "commit_current_tree",
             "committed",
             {"head_sha": "b" * 40, "tree_oid": tree},
@@ -736,7 +775,7 @@ class StubEffect:
         self.action = action
         self.calls = 0
 
-    def execute(self, *_args: Any, **kwargs: Any) -> lck.EffectReceipt:
+    def execute(self, *_args: Any, **kwargs: Any) -> lck_models.EffectReceipt:
         self.calls += 1
         details: dict[str, Any] = {}
         if self.name == "ensure_remote_branch":
@@ -749,7 +788,7 @@ class StubEffect:
                     "base_sha": kwargs.get("expected_base_sha"),
                 }
             )
-        return lck.EffectReceipt(self.name, self.action, details)
+        return lck_models.EffectReceipt(self.name, self.action, details)
 
 
 class CliDeliveryRunner:
@@ -1098,7 +1137,7 @@ def test_delivery_complete_revalidates_clean_committed_head_and_stops_at_review_
     pr = StubEffect("ensure_open_pr", "created")
     status = StubEffect("set_review_status", "updated")
 
-    result = lck.DeliveryCompleter(
+    result = lck_delivery.DeliveryCompleter(
         cast(Any, resolver),
         formal_validation=cast(Any, StubValidation()),
         commit_effect=cast(Any, commit),
@@ -1153,9 +1192,9 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
     tool.write_text("# deterministic external validation boundary\n", encoding="utf-8")
 
     runner = CliDeliveryRunner()
-    monkeypatch.setattr(lck, "CommandRunner", lambda _repo_root: runner)
+    monkeypatch.setattr(lck_state, "CommandRunner", lambda _repo_root: runner)
 
-    exit_code = lck.main(
+    exit_code = lck_cli.main(
         [
             "--repo-root",
             str(tmp_path),
@@ -1177,9 +1216,12 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
     assert payload["status"] == "READY_FOR_REVIEW"
     assert payload["human_boundary"] == "Independent Review must be started separately"
     assert "operation_snapshot" not in payload
-    receipt = lck.AuditReceiptStore(tmp_path).read(payload["receipt_reference"])
+    receipt = lck_receipts.AuditReceiptStore(tmp_path).read(
+        payload["receipt_reference"]
+    )
     assert (
-        receipt["operation_snapshot"]["operation"] == lck.Phase.DELIVERY_COMPLETE.value
+        receipt["operation_snapshot"]["operation"]
+        == lck_models.Phase.DELIVERY_COMPLETE.value
     )
     assert (
         receipt["operation_snapshot"]["state"]["issue"]["project_status"]
@@ -1261,7 +1303,7 @@ def test_lck_rollback_procedure_reverts_candidate_and_requires_fresh_review(
     fresh_head = _git(repo, "rev-parse", "HEAD")
     assert fresh_head not in {last_reviewed_head, activated_head, rollback_head}
 
-    reviewed_identity = lck.ReviewIdentity(
+    reviewed_identity = lck_review_workspace.ReviewIdentity(
         task_number=163,
         pr_number=168,
         base_sha=last_reviewed_head,
@@ -1271,7 +1313,7 @@ def test_lck_rollback_procedure_reverts_candidate_and_requires_fresh_review(
         effective_diff_sha256="b" * 64,
         changed_files=("activation.txt",),
     )
-    current_identity = lck.ReviewIdentity(
+    current_identity = lck_review_workspace.ReviewIdentity(
         task_number=163,
         pr_number=168,
         base_sha=last_reviewed_head,
@@ -1281,11 +1323,15 @@ def test_lck_rollback_procedure_reverts_candidate_and_requires_fresh_review(
         effective_diff_sha256="b" * 64,
         changed_files=("activation.txt",),
     )
-    with pytest.raises(lck.ReviewStaleError, match="REVIEW_STALE_HEAD"):
-        lck._assert_review_applicable(reviewed_identity, current_identity)
+    with pytest.raises(lck_models.ReviewStaleError, match="REVIEW_STALE_HEAD"):
+        lck_review_workspace._assert_review_applicable(
+            reviewed_identity, current_identity
+        )
 
 
-def _with_checks(state: lck.LiveState, checks: dict[str, Any]) -> lck.LiveState:
+def _with_checks(
+    state: lck_models.LiveState, checks: dict[str, Any]
+) -> lck_models.LiveState:
     pr = dict(state.open_pr or {})
     items = (
         checks.get("items", {}).get("items", [])
@@ -1297,7 +1343,7 @@ def _with_checks(state: lck.LiveState, checks: dict[str, Any]) -> lck.LiveState:
         for item in items
         if isinstance(item, dict)
     ]
-    return lck.LiveState(
+    return lck_models.LiveState(
         task_number=state.task_number,
         repository=state.repository,
         issue=state.issue,
@@ -1347,14 +1393,14 @@ def test_repository_required_checks_policy_is_bound_to_exact_base_commit(
     )
     resolver = _resolver_for_repo(repo)
 
-    policy = lck._repository_required_checks_at_commit(resolver, base_sha)
+    policy = lck_state._repository_required_checks_at_commit(resolver, base_sha)
 
     assert policy["configuration"] == "repository-base-ci"
     assert policy["source_sha"] == base_sha
     assert policy["source"] == f"git:{base_sha}:.github/workflows/ci.yml:jobs"
     assert policy["contexts"]["items"] == ["quality"]
     assert policy["workflow_path"] == ".github/workflows/ci.yml"
-    assert policy["contract_sha256"] == lck.sha256_json(
+    assert policy["contract_sha256"] == sha256_json(
         {"workflow": ".github/workflows/ci.yml", "required-checks": ["quality"]}
     )
 
@@ -1369,8 +1415,8 @@ def test_required_checks_policy_never_falls_back_to_working_tree(
     _write_required_checks_workflow(repo)
     resolver = _resolver_for_repo(repo)
 
-    with pytest.raises(lck.LckStopError, match="unavailable at trusted base"):
-        lck._repository_required_checks_at_commit(resolver, base_sha)
+    with pytest.raises(lck_models.LckStopError, match="unavailable at trusted base"):
+        lck_state._repository_required_checks_at_commit(resolver, base_sha)
 
 
 def test_review_required_checks_policy_is_governed_by_pr_base_not_candidate_head(
@@ -1416,10 +1462,10 @@ def test_review_required_checks_policy_is_governed_by_pr_base_not_candidate_head
         repo_root = repo
         runner = CommandRunner(repo)
 
-        def resolve(self, _task: int) -> lck.LiveState:
+        def resolve(self, _task: int) -> lck_models.LiveState:
             return state
 
-    snapshot = lck.OperationSnapshotBuilder(cast(Any, ExactResolver())).acquire(
+    snapshot = lck_state.OperationSnapshotBuilder(cast(Any, ExactResolver())).acquire(
         160,
         operation="review-complete",
         include_required_checks=True,
@@ -1459,7 +1505,7 @@ def test_delivery_does_not_require_required_check_policy_before_effects(
     pr = StubEffect("ensure_open_pr", "created")
     status = StubEffect("set_review_status", "updated")
 
-    result = lck.DeliveryCompleter(
+    result = lck_delivery.DeliveryCompleter(
         cast(Any, resolver),
         formal_validation=cast(Any, StubValidation()),
         commit_effect=cast(Any, commit),
@@ -1507,7 +1553,7 @@ def test_strict_checks_gate_requires_named_required_check_success(
         },
     )
 
-    result = lck.DeliveryChecksGate(cast(Any, resolver)).evaluate(snapshot)
+    result = lck_validation.DeliveryChecksGate(cast(Any, resolver)).evaluate(snapshot)
 
     assert result["status"] == "pass"
     assert result["required"] == ["quality"]
@@ -1532,8 +1578,8 @@ def test_strict_checks_gate_stops_on_failed_check(tmp_path: Path) -> None:
     state = _with_checks(base, _checks(category="failed", state_name="FAILURE"))
     resolver = SequenceResolver(tmp_path, CompletionRunner(), [state])
 
-    gate = lck.DeliveryChecksGate(cast(Any, resolver))
-    with pytest.raises(lck.LckStopError, match="checks failed"):
+    gate = lck_validation.DeliveryChecksGate(cast(Any, resolver))
+    with pytest.raises(lck_models.LckStopError, match="checks failed"):
         gate.evaluate(
             _snapshot(
                 state,
@@ -1566,8 +1612,8 @@ def test_strict_checks_gate_pending_stops_without_polling(tmp_path: Path) -> Non
     state = _with_checks(base, _checks(category="pending", state_name="IN_PROGRESS"))
     resolver = SequenceResolver(tmp_path, CompletionRunner(), [state])
 
-    with pytest.raises(lck.LckStopError, match="strict check gate"):
-        lck.DeliveryChecksGate(cast(Any, resolver)).evaluate(
+    with pytest.raises(lck_models.LckStopError, match="strict check gate"):
+        lck_validation.DeliveryChecksGate(cast(Any, resolver)).evaluate(
             _snapshot(
                 state,
                 required={
@@ -1606,13 +1652,13 @@ def test_strict_checks_gate_rejects_legacy_plan_limited_policy(
         },
     )
 
-    with pytest.raises(lck.LckStopError, match="canonical-CI check contract"):
-        lck.DeliveryChecksGate(cast(Any, resolver)).evaluate(snapshot)
+    with pytest.raises(lck_models.LckStopError, match="canonical-CI check contract"):
+        lck_validation.DeliveryChecksGate(cast(Any, resolver)).evaluate(snapshot)
     assert resolver.calls == 0
 
 
 class FailingChecks:
-    def observe(self, snapshot: lck.OperationSnapshot) -> dict[str, Any]:
+    def observe(self, snapshot: lck_models.OperationSnapshot) -> dict[str, Any]:
         pr = snapshot.state.open_pr or {}
         return {
             "status": "observed",
@@ -1637,11 +1683,11 @@ class FailingChecks:
             },
         }
 
-    def evaluate(self, _snapshot: lck.OperationSnapshot) -> dict[str, Any]:
-        raise lck.LckStopError("checks failed")
+    def evaluate(self, _snapshot: lck_models.OperationSnapshot) -> dict[str, Any]:
+        raise lck_models.LckStopError("checks failed")
 
     def query_exact_pr(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
-        raise lck.LckStopError("checks failed")
+        raise lck_models.LckStopError("checks failed")
 
 
 def test_delivery_complete_critical_outcome_failure_blocks_commit_and_remote(
@@ -1665,7 +1711,7 @@ def test_delivery_complete_critical_outcome_failure_blocks_commit_and_remote(
     resolver = SequenceResolver(tmp_path, runner, [pre])
     commit = StubCommit(dirty=True)
     remote = StubEffect("ensure_remote_branch", "created")
-    handler = lck.DeliveryCompleter(
+    handler = lck_delivery.DeliveryCompleter(
         cast(Any, resolver),
         formal_validation=cast(Any, StubValidation()),
         commit_effect=cast(Any, commit),
@@ -1675,7 +1721,7 @@ def test_delivery_complete_critical_outcome_failure_blocks_commit_and_remote(
         checks_gate=cast(Any, StubChecks()),
     )
 
-    with pytest.raises(lck.LckStopError, match="Critical Outcome FAIL"):
+    with pytest.raises(lck_models.LckStopError, match="Critical Outcome FAIL"):
         handler.complete(
             160,
             commit_message="Implement LCK Delivery cutover",
@@ -1685,8 +1731,8 @@ def test_delivery_complete_critical_outcome_failure_blocks_commit_and_remote(
     assert commit.calls == ["stage_candidate_tree"]
     assert remote.calls == 0
 
-    store = lck.AuditReceiptStore(tmp_path)
-    payload = lck._write_failure_receipt(
+    store = lck_receipts.AuditReceiptStore(tmp_path)
+    payload = lck_receipts._write_failure_receipt(
         operation="delivery-complete",
         task_number=160,
         operation_id="c" * 32,
@@ -1764,9 +1810,9 @@ def test_delivery_failure_receipt_preserves_failed_formal_validation_payload(
 
     runner = FailingFormalValidationRunner()
     resolver = SequenceResolver(tmp_path, runner, [state])
-    handler = lck.DeliveryCompleter(
+    handler = lck_delivery.DeliveryCompleter(
         cast(Any, resolver),
-        formal_validation=cast(Any, lck.FormalValidationGate(resolver)),
+        formal_validation=cast(Any, lck_validation.FormalValidationGate(resolver)),
         commit_effect=cast(Any, StubCommit(dirty=True)),
         remote_effect=cast(Any, StubEffect("ensure_remote_branch", "created")),
         pr_effect=cast(Any, StubEffect("ensure_open_pr", "created")),
@@ -1774,15 +1820,17 @@ def test_delivery_failure_receipt_preserves_failed_formal_validation_payload(
         checks_gate=cast(Any, StubChecks()),
     )
 
-    with pytest.raises(lck.LckStopError, match="formal Delivery validation failed"):
+    with pytest.raises(
+        lck_models.LckStopError, match="formal Delivery validation failed"
+    ):
         handler.complete(
             160,
             commit_message="Implement LCK Delivery cutover",
             summary="Move initial Delivery mechanics into LCK.",
         )
 
-    store = lck.AuditReceiptStore(tmp_path)
-    payload = lck._write_failure_receipt(
+    store = lck_receipts.AuditReceiptStore(tmp_path)
+    payload = lck_receipts._write_failure_receipt(
         operation="delivery-complete",
         task_number=160,
         operation_id="e" * 32,
@@ -1828,7 +1876,7 @@ def test_delivery_failure_receipt_preserves_completed_operation_evidence(
     runner = FailingFinalRunner()
     resolver = SequenceResolver(tmp_path, runner, [state])
     checks = StubChecks()
-    handler = lck.DeliveryCompleter(
+    handler = lck_delivery.DeliveryCompleter(
         cast(Any, resolver),
         formal_validation=cast(Any, StubValidation()),
         commit_effect=cast(Any, StubCommit(dirty=False)),
@@ -1838,15 +1886,15 @@ def test_delivery_failure_receipt_preserves_completed_operation_evidence(
         checks_gate=cast(Any, checks),
     )
 
-    with pytest.raises(lck.LckStopError, match="local postcondition failed"):
+    with pytest.raises(lck_models.LckStopError, match="local postcondition failed"):
         handler.complete(
             160,
             commit_message="Implement LCK Delivery cutover",
             summary="Move initial Delivery mechanics into LCK.",
         )
 
-    store = lck.AuditReceiptStore(tmp_path)
-    payload = lck._write_failure_receipt(
+    store = lck_receipts.AuditReceiptStore(tmp_path)
+    payload = lck_receipts._write_failure_receipt(
         operation="delivery-complete",
         task_number=160,
         operation_id="d" * 32,
@@ -1889,7 +1937,7 @@ def test_delivery_complete_freezes_authority_for_the_operation(tmp_path: Path) -
     )
     changed_issue = dict(pre.issue or {})
     changed_issue["body_sha256"] = "f" * 64
-    changed = lck.LiveState(
+    changed = lck_models.LiveState(
         **{
             **pre.__dict__,
             "issue": changed_issue,
@@ -1898,7 +1946,7 @@ def test_delivery_complete_freezes_authority_for_the_operation(tmp_path: Path) -
     )
     resolver = SequenceResolver(tmp_path, CompletionRunner(), [pre, changed])
 
-    result = lck.DeliveryCompleter(
+    result = lck_delivery.DeliveryCompleter(
         cast(Any, resolver),
         formal_validation=cast(Any, StubValidation()),
         commit_effect=cast(Any, StubCommit(dirty=True)),
@@ -1961,7 +2009,7 @@ def test_failed_checks_do_not_block_delivery_project_status_transition(
     resolver = SequenceResolver(tmp_path, runner, [pre, pre, remote, with_pr])
     status = StubEffect("set_review_status", "updated")
 
-    result = lck.DeliveryCompleter(
+    result = lck_delivery.DeliveryCompleter(
         cast(Any, resolver),
         formal_validation=cast(Any, StubValidation()),
         commit_effect=cast(Any, StubCommit(dirty=False)),
@@ -2007,7 +2055,7 @@ def test_initial_delivery_reaches_ready_for_review_with_pending_checks(
     resolver = SequenceResolver(tmp_path, CompletionRunner(), [state])
     status = StubEffect("set_review_status", "updated")
 
-    result = lck.DeliveryCompleter(
+    result = lck_delivery.DeliveryCompleter(
         cast(Any, resolver),
         formal_validation=cast(Any, StubValidation()),
         commit_effect=cast(Any, StubCommit(dirty=False)),
@@ -2060,7 +2108,7 @@ def test_delivery_complete_does_not_requery_checks_after_gate(tmp_path: Path) ->
     )
     checks = StubChecks()
 
-    result = lck.DeliveryCompleter(
+    result = lck_delivery.DeliveryCompleter(
         cast(Any, resolver),
         formal_validation=cast(Any, StubValidation()),
         commit_effect=cast(Any, StubCommit(dirty=False)),
@@ -2089,9 +2137,11 @@ def test_set_review_status_requires_matching_checks_receipt(tmp_path: Path) -> N
         remote_oid=head,
     )
     resolver = SequenceResolver(tmp_path, CompletionRunner(), [state])
-    effect = lck.SetReviewStatusEffect(cast(Any, resolver))
+    effect = lck_effects.SetReviewStatusEffect(cast(Any, resolver))
 
-    with pytest.raises(lck.LckStopError, match="checks receipt PR identity mismatch"):
+    with pytest.raises(
+        lck_models.LckStopError, match="checks receipt PR identity mismatch"
+    ):
         effect.execute(
             state,
             expected_pr={"number": 10, "head_sha": head, "base_sha": SHA},
@@ -2119,8 +2169,8 @@ def test_set_review_status_rejects_failed_checks_receipt_before_mutation(
     resolver = SequenceResolver(tmp_path, runner, [state])
     identity = {"number": 10, "head_sha": head, "base_sha": SHA}
 
-    with pytest.raises(lck.LckStopError, match="PR checks receipt is invalid"):
-        lck.SetReviewStatusEffect(cast(Any, resolver)).execute(
+    with pytest.raises(lck_models.LckStopError, match="PR checks receipt is invalid"):
+        lck_effects.SetReviewStatusEffect(cast(Any, resolver)).execute(
             state,
             expected_pr=identity,
             checks_result={"status": "stop", "pr": identity},
@@ -2144,7 +2194,7 @@ def test_set_review_status_accepts_nonblocking_checks_observation(
     resolver = SequenceResolver(tmp_path, CompletionRunner(), [state])
     identity = {"number": 10, "head_sha": head, "base_sha": SHA}
 
-    receipt = lck.SetReviewStatusEffect(cast(Any, resolver)).execute(
+    receipt = lck_effects.SetReviewStatusEffect(cast(Any, resolver)).execute(
         state,
         expected_pr=identity,
         checks_result={

@@ -10,7 +10,9 @@ AGENT_WORKFLOW = str(ROOT / "tools" / "agent_workflow")
 if AGENT_WORKFLOW not in sys.path:
     sys.path.insert(0, AGENT_WORKFLOW)
 
-import lck  # type: ignore[import-not-found]  # noqa: E402
+from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
+    cli as lck_cli,
+)
 
 TASK_SKILLS = (
     "task-delivery-runner",
@@ -49,7 +51,7 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     behavior; this acceptance gate checks the single control-authority shape
     and the absence of retired control paths.
     """
-    parser = lck._build_parser()
+    parser = lck_cli._build_parser()
     commands = (
         ("delivery", "prepare", "163"),
         ("delivery", "complete", "163", "--commit-message", "m", "--summary", "s"),
@@ -89,14 +91,21 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
         }
 
     lck_source = (ROOT / "tools/agent_workflow/lck.py").read_text(encoding="utf-8")
-    assert "write_actions_allowed" not in lck_source
-    assert "snapshot_id" not in lck_source
-    assert "WORKFLOW_EVIDENCE_READ_ONLY" not in lck_source
-    assert "workflow_validation.py" in lck_source
-    assert "CommandRunner" in lck_source
-    assert "workflow database" not in lck_source.casefold()
-    assert "sqlite" not in lck_source.casefold()
-    assert "daemon" not in lck_source.casefold()
+    core_root = ROOT / "tools/agent_workflow/lck_core"
+    core_sources = {
+        path.name: path.read_text(encoding="utf-8") for path in core_root.glob("*.py")
+    }
+    core_source = "\n".join(core_sources.values())
+    assert "write_actions_allowed" not in core_source
+    assert "snapshot_id" not in core_source
+    assert "WORKFLOW_EVIDENCE_READ_ONLY" not in core_source
+    assert "workflow_validation.py" in core_sources["validation.py"]
+    assert "CommandRunner" in core_sources["state.py"]
+    assert "workflow database" not in core_source.casefold()
+    assert "sqlite" not in core_source.casefold()
+    assert "daemon" not in core_source.casefold()
+    assert "from lck_core.cli import main" in lck_source
+    assert len(lck_source.splitlines()) < 500
 
     for name in TASK_SKILLS:
         codex = _skill(name)
@@ -142,38 +151,41 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     ).read_text(encoding="utf-8")
     assert "git ls-remote origin refs/heads/main" in architecture_delta
     assert "refs/remotes/origin/main" in architecture_delta
-    assert "git fetch --prune origin" not in lck_source
-    assert "lck-review-worktree-" not in lck_source
-    assert '["git", "worktree", "add"' not in lck_source
-    assert '["git", "worktree", "remove"' not in lck_source
-    assert '["git", "worktree", "prune"' not in lck_source
-    assert '"clone",' in lck_source
-    assert '"--no-hardlinks",' in lck_source
-    assert '"review-validation"' in lck_source
-    assert lck_source.count("self.resolver.resolve(task_number)") == 1
-    assert "while time.monotonic" not in lck_source
-    assert "check-timeout-seconds" not in lck_source
-    assert "required_status_checks" not in lck_source
-    assert "gh-required-checks-" not in lck_source
-    assert "_repository_required_checks_at_commit" in lck_source
-    assert '"git", "show", f"{source_sha}:{REQUIRED_CHECKS_WORKFLOW}"' in lck_source
-    assert '"source_sha": source_sha' in lck_source
-    assert '"configuration": "repository-base-ci"' in lck_source
-    assert 'repo_root / "pyproject.toml"' not in lck_source
+    assert "git fetch --prune origin" not in core_source
+    assert "lck-review-worktree-" not in core_source
+    assert '["git", "worktree", "add"' not in core_source
+    assert '["git", "worktree", "remove"' not in core_source
+    assert '["git", "worktree", "prune"' not in core_source
+    assert '"clone",' in core_sources["review_workspace.py"]
+    assert '"--no-hardlinks",' in core_sources["review_workspace.py"]
+    assert '"review-validation"' in core_sources["validation.py"]
+    assert core_sources["state.py"].count("self.resolver.resolve(task_number)") == 1
+    assert "while time.monotonic" not in core_source
+    assert "check-timeout-seconds" not in core_source
+    assert "required_status_checks" not in core_source
+    assert "gh-required-checks-" not in core_source
+    assert "_repository_required_checks_at_commit" in core_sources["state.py"]
+    assert (
+        '"git", "show", f"{source_sha}:{REQUIRED_CHECKS_WORKFLOW}"'
+        in core_sources["state.py"]
+    )
+    assert '"source_sha": source_sha' in core_sources["state.py"]
+    assert '"configuration": "repository-base-ci"' in core_sources["state.py"]
+    assert 'repo_root / "pyproject.toml"' not in core_source
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "jobs:" in ci
     assert "quality:" in ci
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert "[tool.tracequant.lck]" not in pyproject
     assert "required-checks" not in pyproject
-    assert 'repo_root / "pyproject.toml"' not in lck_source
+    assert 'repo_root / "pyproject.toml"' not in core_source
     assert "repository-controlled" in policy
     assert "required-check policy" in policy
     assert "exact trusted base commit" in policy
     assert "mutable checkout" in policy
     assert "canonical formatted candidate" in architecture_delta
     assert "intentionally not frozen in prose" in architecture_delta
-    assert "remote_main_sha" in lck_source
+    assert "remote_main_sha" in core_sources["models.py"]
     assert "local_main_sha" in architecture_delta
     assert "tracking_main_sha" in architecture_delta
     assert "pre-merge" in architecture_delta
