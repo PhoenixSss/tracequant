@@ -101,6 +101,13 @@ Pull requests targeting `main` and pushes to `main` automatically run CI. The wo
 
 Internal datetimes must be timezone-aware and use UTC as the standard timezone. Naive datetimes are explicitly rejected. Time utilities are provided by `tracequant.core.time`.
 
+## Initial domain models
+
+Research code imports the initial immutable market-data value objects from
+`tracequant.domain`: `InstrumentId`, `TimeRange`, and `OHLCVBar`. See
+[Initial public domain models](docs/architecture/domain-models.md) for their UTC,
+half-open interval, validation, serialization, and current compatibility boundaries.
+
 ## Configuration
 
 Application configuration is loaded explicitly with `tracequant.config.load_settings`.
