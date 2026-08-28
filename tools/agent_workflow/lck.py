@@ -4647,8 +4647,18 @@ class MergePreflight:
         self.review_gate = review_gate or ReviewPassGate(resolver)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.last_snapshot: OperationSnapshot | None = None
+        self.last_checks: dict[str, Any] | None = None
+
+    def _capture_checks_from_gate(self) -> None:
+        """Retain a check gate's result when strict evaluation raises."""
+        for attribute in ("last_result", "last_checks"):
+            value = getattr(self.checks_gate, attribute, None)
+            if isinstance(value, Mapping):
+                self.last_checks = dict(value)
+                return
 
     def run(self, task_number: int) -> MergePreflightResult:
+        self.last_checks = None
         snapshot = self.snapshots.acquire(
             task_number,
             operation="merge-preflight",
@@ -4693,7 +4703,12 @@ class MergePreflight:
                 + str(blockers.get("detail") or blockers.get("status"))
             )
         review = self.review_gate.run(task_number, state)
-        checks = self.checks_gate.evaluate(snapshot)
+        try:
+            checks = self.checks_gate.evaluate(snapshot)
+        except BaseException:
+            self._capture_checks_from_gate()
+            raise
+        self.last_checks = dict(checks)
         if checks.get("limitation"):
             raise LckStopError(
                 "Merge Preflight cannot prove required checks: "
@@ -5369,7 +5384,16 @@ class DeliveryCompleter:
         self.last_snapshot: OperationSnapshot | None = None
         self.last_critical_outcome: dict[str, Any] | None = None
         self.last_validation: dict[str, Any] | None = None
+        self.last_checks: dict[str, Any] | None = None
         self.last_effects: list[EffectReceipt] = []
+
+    def _capture_checks_from_gate(self) -> None:
+        """Retain a check gate's result before a later failure is reported."""
+        for attribute in ("last_result", "last_checks"):
+            value = getattr(self.checks_gate, attribute, None)
+            if isinstance(value, Mapping):
+                self.last_checks = dict(value)
+                return
 
     def _run_critical_outcome(
         self,
@@ -5474,6 +5498,7 @@ class DeliveryCompleter:
         self.last_effects = effects
         self.last_critical_outcome = None
         self.last_validation = None
+        self.last_checks = None
         decision = self.eligibility.resolve(
             state,
             phase,
@@ -5584,22 +5609,29 @@ class DeliveryCompleter:
 
         progress.running("checks")
         snapshot_pr = state.open_pr
-        if (
-            isinstance(snapshot_pr, Mapping)
-            and snapshot_pr.get("number") == pr_number
-            and snapshot_pr.get("headRefOid") == head
-            and snapshot_pr.get("baseRefOid") == base_sha
-        ):
-            checks = self.checks_gate.observe(snapshot)
-        else:
-            if not isinstance(state.repository, str):
-                raise LckStopError("repository identity is unavailable for PR checks")
-            checks = self.checks_gate.observe_exact_pr(
-                state.repository,
-                pr_number,
-                expected_head_sha=str(head),
-                expected_base_sha=base_sha,
-            )
+        try:
+            if (
+                isinstance(snapshot_pr, Mapping)
+                and snapshot_pr.get("number") == pr_number
+                and snapshot_pr.get("headRefOid") == head
+                and snapshot_pr.get("baseRefOid") == base_sha
+            ):
+                checks = self.checks_gate.observe(snapshot)
+            else:
+                if not isinstance(state.repository, str):
+                    raise LckStopError(
+                        "repository identity is unavailable for PR checks"
+                    )
+                checks = self.checks_gate.observe_exact_pr(
+                    state.repository,
+                    pr_number,
+                    expected_head_sha=str(head),
+                    expected_base_sha=base_sha,
+                )
+        except BaseException:
+            self._capture_checks_from_gate()
+            raise
+        self.last_checks = dict(checks)
 
         checks_pr = checks.get("pr")
         if not isinstance(checks_pr, Mapping):
@@ -5638,6 +5670,7 @@ class DeliveryCompleter:
         phase: Phase = Phase.DELIVERY_COMPLETE,
         owned_remediation_candidate: bool = False,
     ) -> DeliveryCompletionResult:
+        self.last_checks = None
         if not summary.strip():
             raise LckStopError("Delivery summary must be non-empty")
         operation = (
@@ -6187,6 +6220,7 @@ class RemediationCompleter:
         self.last_snapshot: OperationSnapshot | None = None
         self.last_critical_outcome: dict[str, Any] | None = None
         self.last_validation: dict[str, Any] | None = None
+        self.last_checks: dict[str, Any] | None = None
         self.last_effects: list[EffectReceipt] = []
 
     def _capture_delivery_evidence(self, delivery: Any) -> None:
@@ -6200,6 +6234,9 @@ class RemediationCompleter:
         validation = getattr(delivery, "last_validation", None)
         if isinstance(validation, dict):
             self.last_validation = validation
+        checks = getattr(delivery, "last_checks", None)
+        if isinstance(checks, Mapping):
+            self.last_checks = dict(checks)
         effects = getattr(delivery, "last_effects", None)
         if isinstance(effects, list):
             self.last_effects = effects
@@ -6275,6 +6312,7 @@ class RemediationCompleter:
         summary: str,
         risks: str = "",
     ) -> RemediationCompletionResult:
+        self.last_checks = None
         if self.store.read_review_required(task_number) is not None:
             raise LckStopError(
                 "Remediation STOP: a fresh Independent Review is required after the previous remediation"

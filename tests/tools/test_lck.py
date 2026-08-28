@@ -1414,6 +1414,60 @@ class FakeReviewValidation:
         return {"status": "pass", "phase": "review"}
 
 
+def test_merge_preflight_failure_receipt_preserves_strict_check_evidence(
+    tmp_path: Path,
+) -> None:
+    state = _review_state()
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+
+    class PassingReview:
+        def run(self, _task_number: int, _state: lck.LiveState) -> dict[str, Any]:
+            return {"status": "pass", "review_id": "r" * 32}
+
+    class FailingChecks:
+        last_result: dict[str, Any] | None = None
+
+        def evaluate(self, snapshot: lck.OperationSnapshot) -> dict[str, Any]:
+            pr = snapshot.state.open_pr or {}
+            self.last_result = {
+                "status": "fail",
+                "check_state": "pending",
+                "required": ["quality"],
+                "pr": {
+                    "number": pr["number"],
+                    "head_sha": pr["headRefOid"],
+                    "base_sha": pr["baseRefOid"],
+                },
+            }
+            raise lck.LckStopError("PR checks are pending")
+
+    checks = FailingChecks()
+    handler = lck.MergePreflight(
+        resolver,
+        review_gate=cast(Any, PassingReview()),
+        checks_gate=cast(Any, checks),
+    )
+
+    with pytest.raises(lck.LckStopError, match="PR checks are pending"):
+        handler.run(159)
+
+    assert handler.last_checks == checks.last_result
+    store = lck.AuditReceiptStore(tmp_path)
+    payload = lck._write_failure_receipt(
+        operation="merge-preflight",
+        task_number=159,
+        operation_id="a" * 32,
+        status="stop",
+        code=None,
+        error="PR checks are pending",
+        handler=handler,
+        store=store,
+    )
+    receipt = store.read(payload["receipt_reference"])
+
+    assert receipt["audit"]["checks"] == checks.last_result
+
+
 def _review_guard(
     identity: lck.ReviewIdentity,
     *,
@@ -3316,6 +3370,11 @@ def test_remediation_failure_receipt_preserves_nested_delivery_evidence(
             self.last_snapshot: lck.OperationSnapshot | None = None
             self.last_critical_outcome: dict[str, Any] | None = None
             self.last_validation: dict[str, Any] | None = None
+            self.last_checks: dict[str, Any] | None = {
+                "status": "observed",
+                "check_state": "pending",
+                "pr": {"number": 200, "head_sha": SHA, "base_sha": SHA},
+            }
             self.last_effects: list[lck.EffectReceipt] = []
 
         def complete(self, *_args: Any, **kwargs: Any) -> Any:
@@ -3358,6 +3417,7 @@ def test_remediation_failure_receipt_preserves_nested_delivery_evidence(
     assert handler.last_snapshot is not None
     assert receipt["operation_snapshot"] == handler.last_snapshot.to_dict()
     assert receipt["audit"]["validation"] == failed_validation
+    assert receipt["audit"]["checks"] == handler.last_checks
     assert receipt["audit"]["effects"][0]["effect"] == "commit_current_tree"
 
 

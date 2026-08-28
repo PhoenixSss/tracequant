@@ -623,11 +623,12 @@ class StubChecks:
     def __init__(self, *, fail: str | None = None) -> None:
         self.fail = fail
         self.calls = 0
+        self.last_result: dict[str, Any] | None = None
 
     def _result(self, number: int, head: str, base: str) -> dict[str, Any]:
         if self.fail:
             raise lck.LckStopError(self.fail)
-        return {
+        result = {
             "status": "pass",
             "configuration": "repository",
             "required": ["quality"],
@@ -640,6 +641,8 @@ class StubChecks:
             },
             "pr": {"number": number, "head_sha": head, "base_sha": base},
         }
+        self.last_result = dict(result)
+        return result
 
     def evaluate(self, snapshot: lck.OperationSnapshot) -> dict[str, Any]:
         self.calls += 1
@@ -661,6 +664,7 @@ class StubChecks:
         result["status"] = "observed"
         result["gate"] = "non-blocking"
         result["check_state"] = "pass"
+        self.last_result = dict(result)
         return result
 
     def observe_exact_pr(
@@ -676,6 +680,7 @@ class StubChecks:
         result["status"] = "observed"
         result["gate"] = "non-blocking"
         result["check_state"] = "pass"
+        self.last_result = dict(result)
         return result
 
     def query_exact_pr(
@@ -1822,6 +1827,7 @@ def test_delivery_failure_receipt_preserves_completed_operation_evidence(
 
     runner = FailingFinalRunner()
     resolver = SequenceResolver(tmp_path, runner, [state])
+    checks = StubChecks()
     handler = lck.DeliveryCompleter(
         cast(Any, resolver),
         formal_validation=cast(Any, StubValidation()),
@@ -1829,7 +1835,7 @@ def test_delivery_failure_receipt_preserves_completed_operation_evidence(
         remote_effect=cast(Any, StubEffect("ensure_remote_branch", "created")),
         pr_effect=cast(Any, StubEffect("ensure_open_pr", "created")),
         status_effect=cast(Any, StubEffect("set_review_status", "updated")),
-        checks_gate=cast(Any, StubChecks()),
+        checks_gate=cast(Any, checks),
     )
 
     with pytest.raises(lck.LckStopError, match="local postcondition failed"):
@@ -1856,6 +1862,12 @@ def test_delivery_failure_receipt_preserves_completed_operation_evidence(
     assert receipt["operation_snapshot"] == handler.last_snapshot.to_dict()
     assert receipt["audit"]["critical_outcome"]["status"] == "pass"
     assert receipt["audit"]["validation"]["status"] == "pass"
+    assert receipt["audit"]["checks"] == handler.last_checks
+    assert receipt["audit"]["checks"]["pr"] == {
+        "number": 10,
+        "head_sha": "b" * 40,
+        "base_sha": SHA,
+    }
     assert [item["effect"] for item in receipt["audit"]["effects"]] == [
         "commit_current_tree",
         "ensure_remote_branch",
