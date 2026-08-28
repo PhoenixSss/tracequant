@@ -1179,6 +1179,75 @@ def test_closeout_cleanup_keeps_exact_worktree_safety_precondition(
     assert runner.commands == [("git", "worktree", "list", "--porcelain")]
 
 
+def test_closeout_failure_receipt_preserves_completed_effects(
+    tmp_path: Path,
+) -> None:
+    state = replace(
+        _review_state(),
+        merged_pr={"number": 200},
+    )
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+
+    class Eligible:
+        def resolve(
+            self,
+            _state: lck.LiveState,
+            phase: lck.Phase,
+        ) -> lck.PhaseDecision:
+            return lck.PhaseDecision(phase=phase, eligible=True)
+
+    class Main:
+        def execute(
+            self,
+            _state: lck.LiveState,
+            *,
+            merge_sha: str,
+        ) -> lck.EffectReceipt:
+            return lck.EffectReceipt(
+                "synchronize_main",
+                "synchronized",
+                {"merge_sha": merge_sha},
+            )
+
+    class FailingMetadata:
+        def execute(self, _state: lck.LiveState) -> lck.EffectReceipt:
+            raise lck.LckStopError("metadata convergence failed")
+
+    handler = lck.CloseoutCompleter(
+        resolver,
+        eligibility=cast(Any, Eligible()),
+        main_effect=cast(Any, Main()),
+        metadata_effect=cast(Any, FailingMetadata()),
+    )
+    handler._validate_merged_identity = lambda _state: (SHA, "b" * 40)
+    handler._validate_reviewed_identity = lambda _state, _pr: None
+
+    with pytest.raises(lck.LckStopError, match="metadata convergence failed"):
+        handler.complete(159)
+
+    assert [item.effect for item in handler.last_effects] == ["synchronize_main"]
+    store = lck.AuditReceiptStore(tmp_path)
+    payload = lck._write_failure_receipt(
+        operation="closeout",
+        task_number=159,
+        operation_id="e" * 32,
+        status="stop",
+        code=None,
+        error="metadata convergence failed",
+        handler=handler,
+        store=store,
+    )
+    receipt = store.read(payload["receipt_reference"])
+
+    assert receipt["audit"]["effects"] == [
+        {
+            "effect": "synchronize_main",
+            "action": "synchronized",
+            "details": {"merge_sha": "b" * 40},
+        }
+    ]
+
+
 def _review_identity_value(*, head: str = SHA, base: str = SHA) -> lck.ReviewIdentity:
     return lck.ReviewIdentity(
         task_number=159,
@@ -1492,6 +1561,59 @@ def test_review_prepare_returns_compact_agent_view_and_full_audit_receipt(
     assert receipt["operation_snapshot"] == snapshot.to_dict()
     assert receipt["agent_view"]["review_target"] == payload["review_target"]
     assert receipt["audit"]["review_guard"]["review_id"] == review_id
+
+
+def test_review_prepare_failure_receipt_preserves_validation_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _review_state()
+    identity = _review_identity_value()
+    validation = {
+        "status": "fail",
+        "phase": "review",
+        "commands": [
+            {
+                "command_id": "pytest",
+                "status": "fail",
+                "exit_code": 1,
+                "diagnostic": "review validation failed",
+            }
+        ],
+        "evidence_path": ".workflow.local/lck/review-validation/run",
+    }
+
+    class FailedValidation:
+        def run(self, _root: Path, _base: str, _head: str) -> dict[str, Any]:
+            return validation
+
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
+    handler = lck.ReviewPreparer(
+        resolver,
+        validation=cast(Any, FailedValidation()),
+        checks_gate=cast(Any, FakeReviewChecks()),
+        workspace=cast(Any, FakeReviewWorkspace(tmp_path / "review-root")),
+        store=lck.ReviewInvocationStore(tmp_path),
+    )
+
+    with pytest.raises(lck.LckStopError, match="formal Review validation failed"):
+        handler.prepare(159)
+
+    store = lck.AuditReceiptStore(tmp_path)
+    payload = lck._write_failure_receipt(
+        operation="review-prepare",
+        task_number=159,
+        operation_id="c" * 32,
+        status="stop",
+        code=None,
+        error="formal Review validation failed: fail",
+        handler=handler,
+        store=store,
+    )
+    receipt = store.read(payload["receipt_reference"])
+
+    assert receipt["audit"]["validation"] == validation
 
 
 def test_lck_stop_result_has_structured_receipt_reference(
@@ -2422,6 +2544,74 @@ def test_review_complete_revalidates_current_checks(
 
     assert resolver.calls == 1
     assert store.read_latest_review(159) is None
+
+
+def test_review_complete_failure_receipt_preserves_bound_snapshot_and_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = _review_identity_value()
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    monkeypatch.setattr(lck, "_review_identity", lambda *_args, **_kwargs: identity)
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    store.write_guard(review_id, _review_guard(identity, review_root=review_root))
+
+    class FailingChecks:
+        last_result: dict[str, Any] | None = None
+
+        def evaluate(self, snapshot: lck.OperationSnapshot) -> dict[str, Any]:
+            self.last_result = {
+                "status": "fail",
+                "check_state": "pending",
+                "required": snapshot.required_checks["contexts"]["items"]
+                if snapshot.required_checks is not None
+                else [],
+                "pr": {"number": 200, "head_sha": SHA, "base_sha": SHA},
+            }
+            raise lck.LckStopError("PR checks are pending")
+
+    handler = lck.ReviewCompleter(
+        resolver,
+        checks_gate=cast(Any, FailingChecks()),
+        store=store,
+        workspace=cast(Any, FakeReviewWorkspace(review_root)),
+    )
+
+    with pytest.raises(lck.LckStopError, match="PR checks are pending"):
+        handler.complete(159, review_id, verdict="PASS")
+
+    assert handler.last_snapshot is not None
+    assert handler.last_snapshot.required_checks is not None
+    assert handler.last_snapshot.required_checks["source_sha"] == SHA
+    assert handler.last_snapshot.required_checks["contexts"]["items"] == ["quality"]
+    assert handler.last_checks == {
+        "status": "fail",
+        "check_state": "pending",
+        "required": ["quality"],
+        "pr": {"number": 200, "head_sha": SHA, "base_sha": SHA},
+    }
+
+    audit_store = lck.AuditReceiptStore(tmp_path)
+    payload = lck._write_failure_receipt(
+        operation="review-complete",
+        task_number=159,
+        operation_id="d" * 32,
+        status="stop",
+        code=None,
+        error="PR checks are pending",
+        handler=handler,
+        store=audit_store,
+    )
+    receipt = audit_store.read(payload["receipt_reference"])
+
+    assert receipt["operation_snapshot"]["required_checks"]["source_sha"] == SHA
+    assert receipt["operation_snapshot"]["required_checks"]["contexts"]["items"] == [
+        "quality"
+    ]
+    assert receipt["audit"]["checks"] == handler.last_checks
 
 
 def test_review_fail_is_not_delayed_by_pending_checks(

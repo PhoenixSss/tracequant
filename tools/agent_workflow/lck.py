@@ -3212,8 +3212,10 @@ class ReviewPreparer:
         self.workspace = workspace or ReviewWorkspaceManager(resolver)
         self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.last_snapshot: OperationSnapshot | None = None
+        self.last_validation: dict[str, Any] | None = None
 
     def prepare(self, task_number: int) -> ReviewContext:
+        self.last_validation = None
         if self.store.read_remediation_session(task_number) is not None:
             raise LckStopError(
                 "Review Prepare STOP: a prepared Remediation session must be completed "
@@ -3313,6 +3315,9 @@ class ReviewPreparer:
             validation = self.validation.run(
                 review_root, identity.base_sha, identity.head_sha
             )
+            # Preserve the structured validation result before applying the
+            # pass gate so a rejected Review Prepare has complete evidence.
+            self.last_validation = validation
             mark(
                 "validation-persisted",
                 identity=identity.to_dict(),
@@ -3434,6 +3439,15 @@ class ReviewCompleter:
         self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.workspace = workspace or ReviewWorkspaceManager(resolver)
         self.last_snapshot: OperationSnapshot | None = None
+        self.last_checks: dict[str, Any] | None = None
+
+    def _capture_checks_from_gate(self) -> None:
+        """Retain a check gate's result when strict evaluation raises."""
+        for attribute in ("last_result", "last_checks"):
+            value = getattr(self.checks_gate, attribute, None)
+            if isinstance(value, Mapping):
+                self.last_checks = dict(value)
+                return
 
     @staticmethod
     def _read_findings(path: Path | None, verdict: str) -> str:
@@ -3457,6 +3471,7 @@ class ReviewCompleter:
         verdict: str,
         findings_file: Path | None = None,
     ) -> ReviewCompletionResult:
+        self.last_checks = None
         verdict = verdict.upper()
         if verdict not in {"PASS", "FAIL"}:
             raise LckStopError("Review verdict must be PASS or FAIL")
@@ -3490,6 +3505,7 @@ class ReviewCompleter:
             prepared_checks = guard.get("checks")
             if not isinstance(prepared_checks, Mapping):
                 raise LckStopError("Review invocation has no PR check observation")
+            self.last_checks = dict(prepared_checks)
             prepared_snapshot = guard.get("snapshot")
             if not isinstance(prepared_snapshot, Mapping):
                 raise LckStopError("Review invocation has no sealed operation snapshot")
@@ -3528,9 +3544,22 @@ class ReviewCompleter:
                 completion_snapshot = self.snapshots.bind_required_checks(
                     completion_snapshot, repo_root=review_root
                 )
-                completion_checks = self.checks_gate.evaluate(completion_snapshot)
+                # Binding may return a new immutable snapshot. Publish it
+                # before the strict gate so a later failure receipt contains
+                # the policy bound to this Review Complete operation.
+                self.last_snapshot = completion_snapshot
+                try:
+                    completion_checks = self.checks_gate.evaluate(completion_snapshot)
+                except BaseException:
+                    self._capture_checks_from_gate()
+                    raise
             else:
-                completion_checks = self.checks_gate.observe(completion_snapshot)
+                try:
+                    completion_checks = self.checks_gate.observe(completion_snapshot)
+                except BaseException:
+                    self._capture_checks_from_gate()
+                    raise
+            self.last_checks = dict(completion_checks)
             record = {
                 "schema_version": LCK_SCHEMA_VERSION,
                 "kind": "independent-review-record",
@@ -4247,6 +4276,10 @@ class DeliveryChecksGate:
 
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.runner = resolver.runner
+        self.last_result: dict[str, Any] | None = None
+
+    def _remember_result(self, result: dict[str, Any]) -> None:
+        self.last_result = dict(result)
 
     @staticmethod
     def _required_names(required: Mapping[str, Any]) -> set[str]:
@@ -4292,6 +4325,7 @@ class DeliveryChecksGate:
         required: Mapping[str, Any] | None,
         *,
         require_success: bool = True,
+        capture: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         checks = _normalize_checks(pr.get("statusCheckRollup"))
         required_names = (
@@ -4312,23 +4346,6 @@ class DeliveryChecksGate:
             if observed.get(name) not in {None, "success"}
         }
         missing = required_names - set(observed)
-        if require_success:
-            if failed > 0 or unknown > 0:
-                raise LckStopError("PR checks failed, cancelled, skipped, or unknown")
-            if pending > 0:
-                raise LckStopError(
-                    "PR checks are pending; strict check gate is not satisfied"
-                )
-            if failed_required:
-                raise LckStopError(
-                    "required PR checks are not successful: "
-                    + ", ".join(sorted(failed_required))
-                )
-            if missing:
-                raise LckStopError(
-                    "required PR checks are not present: " + ", ".join(sorted(missing))
-                )
-
         if failed > 0 or failed_required:
             check_state = "failed"
         elif unknown > 0:
@@ -4354,9 +4371,33 @@ class DeliveryChecksGate:
                     "check_state": check_state,
                 }
             )
+        if capture is not None:
+            failed_result = dict(result)
+            if require_success:
+                failed_result["check_state"] = check_state
+                if check_state != "pass":
+                    failed_result["status"] = "fail"
+            capture(failed_result)
+        if require_success:
+            if failed > 0 or unknown > 0:
+                raise LckStopError("PR checks failed, cancelled, skipped, or unknown")
+            if pending > 0:
+                raise LckStopError(
+                    "PR checks are pending; strict check gate is not satisfied"
+                )
+            if failed_required:
+                raise LckStopError(
+                    "required PR checks are not successful: "
+                    + ", ".join(sorted(failed_required))
+                )
+            if missing:
+                raise LckStopError(
+                    "required PR checks are not present: " + ", ".join(sorted(missing))
+                )
         return result
 
     def evaluate(self, snapshot: OperationSnapshot) -> dict[str, Any]:
+        self.last_result = None
         state = snapshot.state
         if state.status is not ResolutionStatus.RESOLVED:
             raise LckStopError(
@@ -4370,10 +4411,16 @@ class DeliveryChecksGate:
         if not isinstance(required, Mapping):
             raise LckStopError("required PR check configuration was not acquired")
         _required_check_contract_for_snapshot(snapshot)
-        return self._evaluate_pr_checks(pr, required, require_success=True)
+        return self._evaluate_pr_checks(
+            pr,
+            required,
+            require_success=True,
+            capture=self._remember_result,
+        )
 
     def observe(self, snapshot: OperationSnapshot) -> dict[str, Any]:
         """Return a bounded check observation without requiring CI success."""
+        self.last_result = None
         state = snapshot.state
         if state.status is not ResolutionStatus.RESOLVED:
             raise LckStopError(
@@ -4383,7 +4430,12 @@ class DeliveryChecksGate:
         pr = state.open_pr
         if not isinstance(pr, Mapping):
             raise LckStopError("PR checks require one OPEN PR in operation snapshot")
-        return self._evaluate_pr_checks(pr, None, require_success=False)
+        return self._evaluate_pr_checks(
+            pr,
+            None,
+            require_success=False,
+            capture=self._remember_result,
+        )
 
     def query_exact_pr(
         self,
@@ -4414,6 +4466,7 @@ class DeliveryChecksGate:
         required_checks: Mapping[str, Any] | None,
         require_success: bool,
     ) -> dict[str, Any]:
+        self.last_result = None
         result = self.runner.run(
             [
                 "gh",
@@ -4447,6 +4500,7 @@ class DeliveryChecksGate:
             value,
             required_checks,
             require_success=require_success,
+            capture=self._remember_result,
         )
 
     def observe_exact_pr(
@@ -5094,6 +5148,7 @@ class CloseoutCompleter:
         self.cleanup_effect = cleanup_effect or CleanupTaskRefsEffect(resolver)
         self.review_store = review_store or ReviewInvocationStore(resolver.repo_root)
         self.last_snapshot: OperationSnapshot | None = None
+        self.last_effects: list[EffectReceipt] = []
 
     @staticmethod
     def _validate_merged_identity(state: LiveState) -> tuple[str, str]:
@@ -5197,6 +5252,10 @@ class CloseoutCompleter:
             )
 
     def complete(self, task_number: int) -> CloseoutResult:
+        effects: list[EffectReceipt] = []
+        # Keep the same list object while effects run so any effect failure
+        # still leaves already-completed effects visible to the failure path.
+        self.last_effects = effects
         snapshot = self.snapshots.acquire(task_number, operation="closeout")
         self.last_snapshot = snapshot
         state = snapshot.state
@@ -5209,7 +5268,6 @@ class CloseoutCompleter:
         if not isinstance(state.merged_pr, Mapping):
             raise LckStopError("Closeout STOP: merged PR identity is unavailable")
         self._validate_reviewed_identity(state, state.merged_pr)
-        effects: list[EffectReceipt] = []
         main = self.main_effect.execute(state, merge_sha=merge_sha)
         effects.append(main)
 
@@ -6647,6 +6705,7 @@ def _write_failure_receipt(
                 getattr(handler, "last_critical_outcome", None)
             ),
             "validation": _jsonable(getattr(handler, "last_validation", None)),
+            "checks": _jsonable(getattr(handler, "last_checks", None)),
             "effects": _jsonable(
                 [
                     item.to_dict() if isinstance(item, EffectReceipt) else item

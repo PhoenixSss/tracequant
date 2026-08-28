@@ -1527,8 +1527,9 @@ def test_strict_checks_gate_stops_on_failed_check(tmp_path: Path) -> None:
     state = _with_checks(base, _checks(category="failed", state_name="FAILURE"))
     resolver = SequenceResolver(tmp_path, CompletionRunner(), [state])
 
+    gate = lck.DeliveryChecksGate(cast(Any, resolver))
     with pytest.raises(lck.LckStopError, match="checks failed"):
-        lck.DeliveryChecksGate(cast(Any, resolver)).evaluate(
+        gate.evaluate(
             _snapshot(
                 state,
                 required={
@@ -1536,6 +1537,9 @@ def test_strict_checks_gate_stops_on_failed_check(tmp_path: Path) -> None:
                 },
             )
         )
+    assert gate.last_result is not None
+    assert gate.last_result["status"] == "fail"
+    assert gate.last_result["check_state"] == "failed"
     assert resolver.calls == 0
 
 
