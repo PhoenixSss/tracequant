@@ -31,6 +31,12 @@ def test_instrument_rejects_invalid_values(invalid_value: str) -> None:
         InstrumentId(invalid_value)
 
 
+@pytest.mark.parametrize("invalid_value", ["ß", "ſ"])
+def test_instrument_rejects_non_ascii_before_uppercase(invalid_value: str) -> None:
+    with pytest.raises(ValueError, match="ASCII"):
+        InstrumentId(invalid_value)
+
+
 def test_time_range_normalizes_non_utc_aware_values(
     time_range_factory: TimeRangeFactory,
 ) -> None:

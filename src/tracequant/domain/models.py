@@ -82,9 +82,14 @@ class InstrumentId:
     def __post_init__(self) -> None:
         if not isinstance(self.value, str):
             raise TypeError("instrument value must be a string")
-        normalized = self.value.strip().upper()
-        if not normalized:
+        stripped = self.value.strip()
+        if not stripped:
             raise DomainValidationError("instrument value must not be empty")
+        if not stripped.isascii():
+            raise DomainValidationError(
+                "instrument value must contain only ASCII uppercase letters and digits"
+            )
+        normalized = stripped.upper()
         if len(normalized) > _MAX_INSTRUMENT_LENGTH:
             raise DomainValidationError(
                 f"instrument value must be at most {_MAX_INSTRUMENT_LENGTH} characters"
