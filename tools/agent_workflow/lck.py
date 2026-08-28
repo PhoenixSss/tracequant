@@ -15,7 +15,6 @@ import argparse
 import copy
 import fcntl
 import hashlib
-import json
 import os
 import re
 import shutil
@@ -264,10 +263,258 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+@dataclass(frozen=True)
+class AuditReceiptReference:
+    """Stable, bounded locator for one operation-owned audit receipt."""
+
+    operation_id: str
+    path: str
+    sha256: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "operation_id": self.operation_id,
+            "path": self.path,
+            "sha256": self.sha256,
+        }
+
+
+class AuditReceiptStore:
+    """Persist complete operation evidence below the ignored LCK runtime root.
+
+    Agent-facing results contain only a compact view and this reference.  The
+    receipt is deliberately content-addressed in its reference and refuses to
+    silently overwrite an existing operation with a different payload.
+    """
+
+    _OPERATION = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    _ID = re.compile(r"^[0-9a-f]{32}$")
+
+    def __init__(self, repo_root: Path) -> None:
+        self.repo_root = repo_root.resolve()
+        self.root = self.repo_root / ".workflow.local" / "lck" / "audit-receipts"
+
+    def receipt_path(self, task_number: int, operation: str, operation_id: str) -> Path:
+        operation = operation.strip().casefold()
+        if self._OPERATION.fullmatch(operation) is None:
+            raise LckStopError("invalid LCK audit receipt operation")
+        if self._ID.fullmatch(operation_id) is None:
+            raise LckStopError("invalid LCK audit receipt operation id")
+        if not isinstance(task_number, int) or isinstance(task_number, bool):
+            raise LckStopError("invalid LCK audit receipt Task number")
+        return self.root / operation / f"task-{task_number}-{operation_id}.json"
+
+    def reference_for(
+        self, task_number: int, operation: str, operation_id: str, sha256: str
+    ) -> AuditReceiptReference:
+        path = self.receipt_path(task_number, operation, operation_id)
+        return AuditReceiptReference(
+            operation_id=operation_id,
+            path=path.relative_to(self.repo_root).as_posix(),
+            sha256=sha256,
+        )
+
+    def write(
+        self,
+        task_number: int,
+        operation: str,
+        operation_id: str,
+        payload: Mapping[str, Any],
+    ) -> AuditReceiptReference:
+        path = self.receipt_path(task_number, operation, operation_id)
+        normalized = cast(dict[str, Any], _jsonable(payload))
+        digest = sha256_json(normalized)
+        if path.exists():
+            existing = read_json_file(path)
+            if existing != normalized:
+                raise LckStopError(
+                    "existing LCK audit receipt does not match this operation"
+                )
+        else:
+            atomic_write_json(path, normalized)
+        return self.reference_for(task_number, operation, operation_id, digest)
+
+    def existing_reference(
+        self, task_number: int, operation: str, operation_id: str
+    ) -> AuditReceiptReference | None:
+        """Return the reference for an existing, identity-matching receipt."""
+        path = self.receipt_path(task_number, operation, operation_id)
+        if not path.exists():
+            return None
+        existing = read_json_file(path)
+        if (
+            not isinstance(existing, dict)
+            or existing.get("kind") != "lck-audit-receipt"
+            or existing.get("operation") != operation
+            or existing.get("operation_id") != operation_id
+            or existing.get("task_number") != task_number
+        ):
+            raise LckStopError("existing LCK audit receipt identity is invalid")
+        return self.reference_for(
+            task_number,
+            operation,
+            operation_id,
+            sha256_json(existing),
+        )
+
+    def read(self, reference: Mapping[str, Any]) -> dict[str, Any]:
+        path_value = reference.get("path")
+        expected_digest = reference.get("sha256")
+        operation_id = reference.get("operation_id")
+        if (
+            not isinstance(path_value, str)
+            or not isinstance(expected_digest, str)
+            or not isinstance(operation_id, str)
+            or self._ID.fullmatch(operation_id) is None
+        ):
+            raise LckStopError("LCK audit receipt reference is malformed")
+        path = (self.repo_root / path_value).resolve()
+        try:
+            path.relative_to(self.root)
+        except ValueError as exc:
+            raise LckStopError(
+                "LCK audit receipt reference escapes its owned root"
+            ) from exc
+        if not path.name.endswith(f"-{operation_id}.json"):
+            raise LckStopError(
+                "LCK audit receipt reference identity does not match its path"
+            )
+        value = read_json_file(path)
+        if (
+            not isinstance(value, dict)
+            or value.get("operation_id") != operation_id
+            or sha256_json(value) != expected_digest
+        ):
+            raise LckStopError("LCK audit receipt digest does not match its reference")
+        return value
+
+
 def _items(value: Any) -> list[Any]:
     if isinstance(value, Mapping) and isinstance(value.get("items"), list):
         return list(value["items"])
     return []
+
+
+def _pr_agent_view(value: Any) -> dict[str, Any] | None:
+    """Keep only the identity needed to reason about a current PR."""
+    if not isinstance(value, Mapping):
+        return None
+    result: dict[str, Any] = {}
+    for output, candidates in (
+        ("number", ("number",)),
+        ("url", ("url",)),
+        ("state", ("state",)),
+        ("is_draft", ("isDraft", "is_draft")),
+        ("base_branch", ("baseRefName", "base_branch")),
+        ("base_sha", ("baseRefOid", "base_sha")),
+        ("head_branch", ("headRefName", "head_branch")),
+        ("head_sha", ("headRefOid", "head_sha")),
+    ):
+        for candidate in candidates:
+            if candidate in value and value[candidate] is not None:
+                result[output] = value[candidate]
+                break
+    return result or None
+
+
+def _checks_agent_view(value: Any) -> dict[str, Any]:
+    """Summarize checks without copying observed runs or command diagnostics."""
+    if not isinstance(value, Mapping):
+        return {"status": "unknown"}
+    result: dict[str, Any] = {}
+    for key in ("status", "check_state", "configuration", "limitation"):
+        item = value.get(key)
+        if item is not None:
+            result[key] = item
+    pr = _pr_agent_view(value.get("pr"))
+    if pr is not None:
+        result["pr"] = pr
+    required = value.get("required")
+    if isinstance(required, list):
+        result["required_count"] = len(required)
+    observed = value.get("observed")
+    if isinstance(observed, Mapping):
+        result["observed_count"] = len(observed)
+    for key in ("failed", "pending", "success", "skipped_or_unknown", "all_success"):
+        item = value.get(key)
+        if item is not None:
+            result[key] = item
+    return result
+
+
+def _validation_agent_view(value: Any) -> dict[str, Any]:
+    """Summarize validation identity and outcome, leaving diagnostics in Receipt."""
+    if not isinstance(value, Mapping):
+        return {"status": "unknown"}
+    result: dict[str, Any] = {}
+    for key in (
+        "status",
+        "validated_base_sha",
+        "validated_head_sha",
+        "profile",
+        "profile_version",
+    ):
+        item = value.get(key)
+        if item is not None:
+            result[key] = item
+    commands = value.get("commands")
+    if isinstance(commands, list):
+        result["command_count"] = len(commands)
+        failed = next(
+            (
+                item
+                for item in commands
+                if isinstance(item, Mapping) and item.get("status") == "fail"
+            ),
+            None,
+        )
+        if isinstance(failed, Mapping):
+            result["failed_command"] = {
+                key: failed[key] for key in ("command_id", "exit_code") if key in failed
+            }
+    return result
+
+
+def _critical_outcome_agent_view(value: Any) -> dict[str, Any]:
+    """Summarize the formal Critical Outcome gate."""
+    if not isinstance(value, Mapping):
+        return {"status": "unknown"}
+    result: dict[str, Any] = {}
+    for key in ("status", "verification_test", "exit_code"):
+        item = value.get(key)
+        if item is not None:
+            result[key] = item
+    contract = value.get("contract")
+    if isinstance(contract, Mapping):
+        verification_test = contract.get("verification_test")
+        if verification_test is not None:
+            result.setdefault("verification_test", verification_test)
+    return result
+
+
+def _effect_agent_view(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, EffectReceipt):
+            result.append({"effect": item.effect, "action": item.action})
+        elif isinstance(item, Mapping):
+            compact = {key: item[key] for key in ("effect", "action") if key in item}
+            if compact:
+                result.append(compact)
+    return result
+
+
+def _issue_agent_view(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    result: dict[str, Any] = {}
+    for key in ("number", "title", "url", "state", "project_status"):
+        item = value.get(key)
+        if item is not None:
+            result[key] = item
+    return result or None
 
 
 def _branch_matches_task(branch: str, task_number: int) -> bool:
@@ -425,6 +672,34 @@ class LiveState:
                 }
             ),
         )
+
+    def agent_view(self) -> dict[str, Any]:
+        """Return the compact result intended for the invoking Agent."""
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "kind": "lck-agent-view",
+            "operation": "status",
+            "task_number": self.task_number,
+            "repository": self.repository,
+            "status": self.status,
+            "issue": _issue_agent_view(self.issue),
+            "target_branch": self.target_branch,
+            "task_branch": {
+                "local": self.local_task_branch,
+                "local_head_sha": self.local_task_head,
+                "remote": self.remote_task_branch,
+                "remote_head_sha": self.remote_task_oid,
+            },
+            "pr": _pr_agent_view(self.open_pr or self.merged_pr),
+            "checks": _checks_agent_view(self.checks),
+            "cleanup": _jsonable(self.cleanup),
+            "stop_reasons": list(self.stop_reasons),
+            "next_action": (
+                "inspect receipt and resolve STOP reasons"
+                if self.status is ResolutionStatus.STOP
+                else "use the phase-specific LCK operation for the next lifecycle action"
+            ),
+        }
 
 
 @dataclass(frozen=True)
@@ -1500,6 +1775,7 @@ class DeliveryPreparer:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
         self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.last_snapshot: OperationSnapshot | None = None
 
     def _run_git(self, args: Sequence[str], command_id: str) -> None:
         result = self.resolver.runner.run(
@@ -1538,6 +1814,7 @@ class DeliveryPreparer:
             task_number,
             operation=Phase.DELIVERY_PREPARE.value,
         )
+        self.last_snapshot = snapshot
         state = snapshot.state
         decision = self.eligibility.resolve(state, Phase.DELIVERY_PREPARE)
         if not decision.eligible:
@@ -1624,8 +1901,10 @@ class FormalValidationGate:
 
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.resolver = resolver
+        self.last_payload: dict[str, Any] | None = None
 
     def run(self, base_sha: str) -> dict[str, Any]:
+        self.last_payload = None
         if not is_sha(base_sha):
             raise LckStopError("formal validation base SHA is unavailable")
         tool = (
@@ -1671,6 +1950,10 @@ class FormalValidationGate:
                 raise LckStopError(str(exc)) from exc
             if not isinstance(payload, dict):
                 raise LckStopError("formal Delivery validation result is not an object")
+            # Keep the structured result available to the owning phase before
+            # applying the gate.  A failed validation is still the evidence
+            # needed by the failure Receipt.
+            self.last_payload = payload
             if result.returncode != 0 or payload.get("status") != "pass":
                 raise LckStopError(
                     "formal Delivery validation failed: "
@@ -2928,8 +3211,11 @@ class ReviewPreparer:
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.workspace = workspace or ReviewWorkspaceManager(resolver)
         self.store = store or ReviewInvocationStore(resolver.repo_root)
+        self.last_snapshot: OperationSnapshot | None = None
+        self.last_validation: dict[str, Any] | None = None
 
     def prepare(self, task_number: int) -> ReviewContext:
+        self.last_validation = None
         if self.store.read_remediation_session(task_number) is not None:
             raise LckStopError(
                 "Review Prepare STOP: a prepared Remediation session must be completed "
@@ -2985,6 +3271,7 @@ class ReviewPreparer:
                 task_number,
                 operation="review-prepare",
             )
+            self.last_snapshot = snapshot
             state = snapshot.state
             decision = self.eligibility.resolve(state, Phase.REVIEW_PREPARE)
             if not decision.eligible:
@@ -3028,6 +3315,9 @@ class ReviewPreparer:
             validation = self.validation.run(
                 review_root, identity.base_sha, identity.head_sha
             )
+            # Preserve the structured validation result before applying the
+            # pass gate so a rejected Review Prepare has complete evidence.
+            self.last_validation = validation
             mark(
                 "validation-persisted",
                 identity=identity.to_dict(),
@@ -3148,6 +3438,16 @@ class ReviewCompleter:
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.workspace = workspace or ReviewWorkspaceManager(resolver)
+        self.last_snapshot: OperationSnapshot | None = None
+        self.last_checks: dict[str, Any] | None = None
+
+    def _capture_checks_from_gate(self) -> None:
+        """Retain a check gate's result when strict evaluation raises."""
+        for attribute in ("last_result", "last_checks"):
+            value = getattr(self.checks_gate, attribute, None)
+            if isinstance(value, Mapping):
+                self.last_checks = dict(value)
+                return
 
     @staticmethod
     def _read_findings(path: Path | None, verdict: str) -> str:
@@ -3171,6 +3471,7 @@ class ReviewCompleter:
         verdict: str,
         findings_file: Path | None = None,
     ) -> ReviewCompletionResult:
+        self.last_checks = None
         verdict = verdict.upper()
         if verdict not in {"PASS", "FAIL"}:
             raise LckStopError("Review verdict must be PASS or FAIL")
@@ -3204,6 +3505,7 @@ class ReviewCompleter:
             prepared_checks = guard.get("checks")
             if not isinstance(prepared_checks, Mapping):
                 raise LckStopError("Review invocation has no PR check observation")
+            self.last_checks = dict(prepared_checks)
             prepared_snapshot = guard.get("snapshot")
             if not isinstance(prepared_snapshot, Mapping):
                 raise LckStopError("Review invocation has no sealed operation snapshot")
@@ -3214,6 +3516,7 @@ class ReviewCompleter:
                 task_number,
                 operation="review-complete",
             )
+            self.last_snapshot = completion_snapshot
             state = completion_snapshot.state
             decision = self.eligibility.resolve(state, Phase.REVIEW_COMPLETE)
             if not decision.eligible:
@@ -3241,9 +3544,22 @@ class ReviewCompleter:
                 completion_snapshot = self.snapshots.bind_required_checks(
                     completion_snapshot, repo_root=review_root
                 )
-                completion_checks = self.checks_gate.evaluate(completion_snapshot)
+                # Binding may return a new immutable snapshot. Publish it
+                # before the strict gate so a later failure receipt contains
+                # the policy bound to this Review Complete operation.
+                self.last_snapshot = completion_snapshot
+                try:
+                    completion_checks = self.checks_gate.evaluate(completion_snapshot)
+                except BaseException:
+                    self._capture_checks_from_gate()
+                    raise
             else:
-                completion_checks = self.checks_gate.observe(completion_snapshot)
+                try:
+                    completion_checks = self.checks_gate.observe(completion_snapshot)
+                except BaseException:
+                    self._capture_checks_from_gate()
+                    raise
+            self.last_checks = dict(completion_checks)
             record = {
                 "schema_version": LCK_SCHEMA_VERSION,
                 "kind": "independent-review-record",
@@ -3960,6 +4276,10 @@ class DeliveryChecksGate:
 
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.runner = resolver.runner
+        self.last_result: dict[str, Any] | None = None
+
+    def _remember_result(self, result: dict[str, Any]) -> None:
+        self.last_result = dict(result)
 
     @staticmethod
     def _required_names(required: Mapping[str, Any]) -> set[str]:
@@ -4005,6 +4325,7 @@ class DeliveryChecksGate:
         required: Mapping[str, Any] | None,
         *,
         require_success: bool = True,
+        capture: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         checks = _normalize_checks(pr.get("statusCheckRollup"))
         required_names = (
@@ -4025,23 +4346,6 @@ class DeliveryChecksGate:
             if observed.get(name) not in {None, "success"}
         }
         missing = required_names - set(observed)
-        if require_success:
-            if failed > 0 or unknown > 0:
-                raise LckStopError("PR checks failed, cancelled, skipped, or unknown")
-            if pending > 0:
-                raise LckStopError(
-                    "PR checks are pending; strict check gate is not satisfied"
-                )
-            if failed_required:
-                raise LckStopError(
-                    "required PR checks are not successful: "
-                    + ", ".join(sorted(failed_required))
-                )
-            if missing:
-                raise LckStopError(
-                    "required PR checks are not present: " + ", ".join(sorted(missing))
-                )
-
         if failed > 0 or failed_required:
             check_state = "failed"
         elif unknown > 0:
@@ -4067,9 +4371,33 @@ class DeliveryChecksGate:
                     "check_state": check_state,
                 }
             )
+        if capture is not None:
+            failed_result = dict(result)
+            if require_success:
+                failed_result["check_state"] = check_state
+                if check_state != "pass":
+                    failed_result["status"] = "fail"
+            capture(failed_result)
+        if require_success:
+            if failed > 0 or unknown > 0:
+                raise LckStopError("PR checks failed, cancelled, skipped, or unknown")
+            if pending > 0:
+                raise LckStopError(
+                    "PR checks are pending; strict check gate is not satisfied"
+                )
+            if failed_required:
+                raise LckStopError(
+                    "required PR checks are not successful: "
+                    + ", ".join(sorted(failed_required))
+                )
+            if missing:
+                raise LckStopError(
+                    "required PR checks are not present: " + ", ".join(sorted(missing))
+                )
         return result
 
     def evaluate(self, snapshot: OperationSnapshot) -> dict[str, Any]:
+        self.last_result = None
         state = snapshot.state
         if state.status is not ResolutionStatus.RESOLVED:
             raise LckStopError(
@@ -4083,10 +4411,16 @@ class DeliveryChecksGate:
         if not isinstance(required, Mapping):
             raise LckStopError("required PR check configuration was not acquired")
         _required_check_contract_for_snapshot(snapshot)
-        return self._evaluate_pr_checks(pr, required, require_success=True)
+        return self._evaluate_pr_checks(
+            pr,
+            required,
+            require_success=True,
+            capture=self._remember_result,
+        )
 
     def observe(self, snapshot: OperationSnapshot) -> dict[str, Any]:
         """Return a bounded check observation without requiring CI success."""
+        self.last_result = None
         state = snapshot.state
         if state.status is not ResolutionStatus.RESOLVED:
             raise LckStopError(
@@ -4096,7 +4430,12 @@ class DeliveryChecksGate:
         pr = state.open_pr
         if not isinstance(pr, Mapping):
             raise LckStopError("PR checks require one OPEN PR in operation snapshot")
-        return self._evaluate_pr_checks(pr, None, require_success=False)
+        return self._evaluate_pr_checks(
+            pr,
+            None,
+            require_success=False,
+            capture=self._remember_result,
+        )
 
     def query_exact_pr(
         self,
@@ -4127,6 +4466,7 @@ class DeliveryChecksGate:
         required_checks: Mapping[str, Any] | None,
         require_success: bool,
     ) -> dict[str, Any]:
+        self.last_result = None
         result = self.runner.run(
             [
                 "gh",
@@ -4160,6 +4500,7 @@ class DeliveryChecksGate:
             value,
             required_checks,
             require_success=require_success,
+            capture=self._remember_result,
         )
 
     def observe_exact_pr(
@@ -4270,6 +4611,7 @@ class MergePreflightResult:
     checks: Mapping[str, Any]
     blockers: Mapping[str, Any]
     mergeability: str
+    operation_snapshot: OperationSnapshot | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -4304,13 +4646,25 @@ class MergePreflight:
         self.snapshots = OperationSnapshotBuilder(resolver)
         self.review_gate = review_gate or ReviewPassGate(resolver)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
+        self.last_snapshot: OperationSnapshot | None = None
+        self.last_checks: dict[str, Any] | None = None
+
+    def _capture_checks_from_gate(self) -> None:
+        """Retain a check gate's result when strict evaluation raises."""
+        for attribute in ("last_result", "last_checks"):
+            value = getattr(self.checks_gate, attribute, None)
+            if isinstance(value, Mapping):
+                self.last_checks = dict(value)
+                return
 
     def run(self, task_number: int) -> MergePreflightResult:
+        self.last_checks = None
         snapshot = self.snapshots.acquire(
             task_number,
             operation="merge-preflight",
             include_required_checks=True,
         )
+        self.last_snapshot = snapshot
         state = snapshot.state
         if state.status is not ResolutionStatus.RESOLVED:
             raise LckStopError("Merge Preflight STOP: " + "; ".join(state.stop_reasons))
@@ -4349,7 +4703,12 @@ class MergePreflight:
                 + str(blockers.get("detail") or blockers.get("status"))
             )
         review = self.review_gate.run(task_number, state)
-        checks = self.checks_gate.evaluate(snapshot)
+        try:
+            checks = self.checks_gate.evaluate(snapshot)
+        except BaseException:
+            self._capture_checks_from_gate()
+            raise
+        self.last_checks = dict(checks)
         if checks.get("limitation"):
             raise LckStopError(
                 "Merge Preflight cannot prove required checks: "
@@ -4370,6 +4729,7 @@ class MergePreflight:
             checks=checks,
             blockers=blockers,
             mergeability=mergeability,
+            operation_snapshot=snapshot,
         )
 
 
@@ -4802,6 +5162,8 @@ class CloseoutCompleter:
         self.metadata_effect = metadata_effect or CloseoutMetadataEffect(resolver)
         self.cleanup_effect = cleanup_effect or CleanupTaskRefsEffect(resolver)
         self.review_store = review_store or ReviewInvocationStore(resolver.repo_root)
+        self.last_snapshot: OperationSnapshot | None = None
+        self.last_effects: list[EffectReceipt] = []
 
     @staticmethod
     def _validate_merged_identity(state: LiveState) -> tuple[str, str]:
@@ -4905,7 +5267,12 @@ class CloseoutCompleter:
             )
 
     def complete(self, task_number: int) -> CloseoutResult:
+        effects: list[EffectReceipt] = []
+        # Keep the same list object while effects run so any effect failure
+        # still leaves already-completed effects visible to the failure path.
+        self.last_effects = effects
         snapshot = self.snapshots.acquire(task_number, operation="closeout")
+        self.last_snapshot = snapshot
         state = snapshot.state
         decision = self.eligibility.resolve(state, Phase.CLOSEOUT)
         if not decision.eligible:
@@ -4916,7 +5283,6 @@ class CloseoutCompleter:
         if not isinstance(state.merged_pr, Mapping):
             raise LckStopError("Closeout STOP: merged PR identity is unavailable")
         self._validate_reviewed_identity(state, state.merged_pr)
-        effects: list[EffectReceipt] = []
         main = self.main_effect.execute(state, merge_sha=merge_sha)
         effects.append(main)
 
@@ -5015,6 +5381,19 @@ class DeliveryCompleter:
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.require_existing_open_pr = require_existing_open_pr
         self.candidate_recorder = candidate_recorder
+        self.last_snapshot: OperationSnapshot | None = None
+        self.last_critical_outcome: dict[str, Any] | None = None
+        self.last_validation: dict[str, Any] | None = None
+        self.last_checks: dict[str, Any] | None = None
+        self.last_effects: list[EffectReceipt] = []
+
+    def _capture_checks_from_gate(self) -> None:
+        """Retain a check gate's result before a later failure is reported."""
+        for attribute in ("last_result", "last_checks"):
+            value = getattr(self.checks_gate, attribute, None)
+            if isinstance(value, Mapping):
+                self.last_checks = dict(value)
+                return
 
     def _run_critical_outcome(
         self,
@@ -5037,12 +5416,25 @@ class DeliveryCompleter:
         except CriticalOutcomeError as exc:
             raise LckStopError(f"Critical Outcome contract invalid: {exc}") from exc
         payload = result.to_dict()
+        self.last_critical_outcome = payload
         if result.status != "pass":
             raise LckStopError(
                 "Critical Outcome FAIL: "
                 f"{contract.verification_test} exited {result.exit_code}"
             )
         return payload
+
+    def _run_formal_validation(self, base_sha: str) -> dict[str, Any]:
+        """Retain a parsed validation payload when the gate rejects it."""
+        try:
+            validation = self.formal_validation.run(base_sha)
+        except BaseException:
+            payload = getattr(self.formal_validation, "last_payload", None)
+            if isinstance(payload, dict):
+                self.last_validation = payload
+            raise
+        self.last_validation = validation
+        return validation
 
     def _has_task_diff(self, base_sha: str) -> bool:
         result = self.resolver.runner.run(
@@ -5102,6 +5494,11 @@ class DeliveryCompleter:
     ) -> DeliveryCompletionResult:
         state = snapshot.state
         task_number = state.task_number
+        effects: list[EffectReceipt] = []
+        self.last_effects = effects
+        self.last_critical_outcome = None
+        self.last_validation = None
+        self.last_checks = None
         decision = self.eligibility.resolve(
             state,
             phase,
@@ -5133,7 +5530,6 @@ class DeliveryCompleter:
                     "resolved Task branch/base"
                 )
 
-        effects: list[EffectReceipt] = []
         if state.git.get("clean") is True:
             progress.running("revalidating-candidate")
             if not self._has_task_diff(base_sha):
@@ -5144,7 +5540,7 @@ class DeliveryCompleter:
             progress.running("critical-outcome")
             critical = self._run_critical_outcome(state, progress=progress)
             progress.running("formal-validation")
-            validation = self.formal_validation.run(base_sha)
+            validation = self._run_formal_validation(base_sha)
             validated_head = state.local_task_head
             if not is_sha(validated_head):
                 raise LckStopError("current Task head is unavailable")
@@ -5166,7 +5562,7 @@ class DeliveryCompleter:
             progress.running("critical-outcome")
             critical = self._run_critical_outcome(state, progress=progress)
             progress.running("formal-validation")
-            validation = self.formal_validation.run(base_sha)
+            validation = self._run_formal_validation(base_sha)
             self.commit_effect.verify_tree_unchanged(
                 validated_tree,
                 expected_head_sha=state.local_task_head,
@@ -5213,22 +5609,29 @@ class DeliveryCompleter:
 
         progress.running("checks")
         snapshot_pr = state.open_pr
-        if (
-            isinstance(snapshot_pr, Mapping)
-            and snapshot_pr.get("number") == pr_number
-            and snapshot_pr.get("headRefOid") == head
-            and snapshot_pr.get("baseRefOid") == base_sha
-        ):
-            checks = self.checks_gate.observe(snapshot)
-        else:
-            if not isinstance(state.repository, str):
-                raise LckStopError("repository identity is unavailable for PR checks")
-            checks = self.checks_gate.observe_exact_pr(
-                state.repository,
-                pr_number,
-                expected_head_sha=str(head),
-                expected_base_sha=base_sha,
-            )
+        try:
+            if (
+                isinstance(snapshot_pr, Mapping)
+                and snapshot_pr.get("number") == pr_number
+                and snapshot_pr.get("headRefOid") == head
+                and snapshot_pr.get("baseRefOid") == base_sha
+            ):
+                checks = self.checks_gate.observe(snapshot)
+            else:
+                if not isinstance(state.repository, str):
+                    raise LckStopError(
+                        "repository identity is unavailable for PR checks"
+                    )
+                checks = self.checks_gate.observe_exact_pr(
+                    state.repository,
+                    pr_number,
+                    expected_head_sha=str(head),
+                    expected_base_sha=base_sha,
+                )
+        except BaseException:
+            self._capture_checks_from_gate()
+            raise
+        self.last_checks = dict(checks)
 
         checks_pr = checks.get("pr")
         if not isinstance(checks_pr, Mapping):
@@ -5267,6 +5670,7 @@ class DeliveryCompleter:
         phase: Phase = Phase.DELIVERY_COMPLETE,
         owned_remediation_candidate: bool = False,
     ) -> DeliveryCompletionResult:
+        self.last_checks = None
         if not summary.strip():
             raise LckStopError("Delivery summary must be non-empty")
         operation = (
@@ -5282,6 +5686,7 @@ class DeliveryCompleter:
                 task_number,
                 operation=phase.value,
             )
+            self.last_snapshot = snapshot
             if snapshot.state.task_number != task_number:
                 raise LckStopError("operation snapshot belongs to another Task")
             result = self._complete_from_snapshot(
@@ -5430,6 +5835,7 @@ class RemediationPreparer:
         self.snapshots = OperationSnapshotBuilder(resolver)
         self.eligibility = eligibility or PhaseEligibilityResolver()
         self.store = store or ReviewInvocationStore(resolver.repo_root)
+        self.last_snapshot: OperationSnapshot | None = None
 
     def _run_git(self, args: Sequence[str], command_id: str) -> None:
         result = self.resolver.runner.run(["git", *args], command_id=command_id)
@@ -5481,6 +5887,7 @@ class RemediationPreparer:
             task_number,
             operation=Phase.REMEDIATION_PREPARE.value,
         )
+        self.last_snapshot = snapshot
         state = snapshot.state
         decision = self.eligibility.resolve(state, Phase.REMEDIATION_PREPARE)
         if not decision.eligible:
@@ -5609,6 +6016,7 @@ class RemediationNoChangeCompleter:
         self.snapshots = OperationSnapshotBuilder(resolver)
         self.eligibility = eligibility or PhaseEligibilityResolver()
         self.store = store or ReviewInvocationStore(resolver.repo_root)
+        self.last_snapshot: OperationSnapshot | None = None
 
     @staticmethod
     def _session_identity(
@@ -5676,6 +6084,7 @@ class RemediationNoChangeCompleter:
             snapshot = self.snapshots.acquire(
                 task_number, operation=Phase.REMEDIATION_NO_CHANGE.value
             )
+            self.last_snapshot = snapshot
             decision = self.eligibility.resolve(
                 snapshot.state, Phase.REMEDIATION_NO_CHANGE
             )
@@ -5712,6 +6121,7 @@ class RemediationNoChangeCompleter:
         snapshot = self.snapshots.acquire(
             task_number, operation=Phase.REMEDIATION_NO_CHANGE.value
         )
+        self.last_snapshot = snapshot
         decision = self.eligibility.resolve(snapshot.state, Phase.REMEDIATION_NO_CHANGE)
         if not decision.eligible:
             raise LckStopError(
@@ -5807,6 +6217,29 @@ class RemediationCompleter:
         self.eligibility = eligibility or PhaseEligibilityResolver()
         self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
+        self.last_snapshot: OperationSnapshot | None = None
+        self.last_critical_outcome: dict[str, Any] | None = None
+        self.last_validation: dict[str, Any] | None = None
+        self.last_checks: dict[str, Any] | None = None
+        self.last_effects: list[EffectReceipt] = []
+
+    def _capture_delivery_evidence(self, delivery: Any) -> None:
+        """Expose nested Delivery evidence to the outer failure receipt."""
+        snapshot = getattr(delivery, "last_snapshot", None)
+        if isinstance(snapshot, OperationSnapshot):
+            self.last_snapshot = snapshot
+        critical = getattr(delivery, "last_critical_outcome", None)
+        if isinstance(critical, dict):
+            self.last_critical_outcome = critical
+        validation = getattr(delivery, "last_validation", None)
+        if isinstance(validation, dict):
+            self.last_validation = validation
+        checks = getattr(delivery, "last_checks", None)
+        if isinstance(checks, Mapping):
+            self.last_checks = dict(checks)
+        effects = getattr(delivery, "last_effects", None)
+        if isinstance(effects, list):
+            self.last_effects = effects
 
     def _owned_candidate_recovery(
         self,
@@ -5879,6 +6312,7 @@ class RemediationCompleter:
         summary: str,
         risks: str = "",
     ) -> RemediationCompletionResult:
+        self.last_checks = None
         if self.store.read_review_required(task_number) is not None:
             raise LckStopError(
                 "Remediation STOP: a fresh Independent Review is required after the previous remediation"
@@ -5907,6 +6341,7 @@ class RemediationCompleter:
             task_number,
             operation=Phase.REMEDIATION_COMPLETE.value,
         )
+        self.last_snapshot = snapshot
         state = snapshot.state
         owned_candidate = False
         pr_head = state.open_pr.get("headRefOid") if state.open_pr else None
@@ -5950,21 +6385,27 @@ class RemediationCompleter:
                 candidate_tree_oid=tree_oid,
             )
 
-        delivery = DeliveryCompleter(
+        delivery_completer = DeliveryCompleter(
             self.resolver,
             pr_effect=cast(Any, ReuseExistingOpenPrEffect(self.resolver)),
             checks_gate=self.checks_gate,
             require_existing_open_pr=True,
             candidate_recorder=record_candidate,
-        ).complete(
-            task_number,
-            commit_message=commit_message,
-            summary=summary,
-            risks=risks,
-            operation_snapshot=snapshot,
-            phase=Phase.REMEDIATION_COMPLETE,
-            owned_remediation_candidate=owned_candidate,
         )
+        try:
+            delivery = delivery_completer.complete(
+                task_number,
+                commit_message=commit_message,
+                summary=summary,
+                risks=risks,
+                operation_snapshot=snapshot,
+                phase=Phase.REMEDIATION_COMPLETE,
+                owned_remediation_candidate=owned_candidate,
+            )
+        except BaseException:
+            self._capture_delivery_evidence(delivery_completer)
+            raise
+        self._capture_delivery_evidence(delivery_completer)
         if delivery.head_sha == start_head:
             raise LckStopError(
                 "Remediation Complete did not produce a new head; fresh Review boundary cannot advance"
@@ -5976,6 +6417,389 @@ class RemediationCompleter:
             review_id=review_id,
             delivery=delivery,
         )
+
+
+def _delivery_pr_agent_view(effects: Any) -> dict[str, Any] | None:
+    if not isinstance(effects, (list, tuple)):
+        return None
+    for item in reversed(effects):
+        details: Mapping[str, Any] | None = None
+        if isinstance(item, EffectReceipt):
+            details = item.details
+        elif isinstance(item, Mapping) and isinstance(item.get("details"), Mapping):
+            details = cast(Mapping[str, Any], item["details"])
+        if details is not None and "number" in details:
+            return {
+                key: details[key]
+                for key in ("number", "url", "base_sha", "head_sha")
+                if key in details
+            }
+    return None
+
+
+def _agent_view_for_result(value: Any) -> dict[str, Any]:
+    """Convert one internal LCK result into the bounded Agent-facing view."""
+    if isinstance(value, LiveState):
+        return value.agent_view()
+    if isinstance(value, DeliveryContext):
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "kind": "lck-agent-view",
+            "operation": "delivery-prepare",
+            "task_number": value.task_number,
+            "repository": value.repository,
+            "status": "READY_FOR_DELIVERY",
+            "branch": value.branch,
+            "base_sha": value.base_sha,
+            "action": value.action,
+            "task_contract": _jsonable(_task_contract_from_state(value.state)),
+            "eligibility": {
+                "eligible": value.eligibility.eligible,
+                "reasons": list(value.eligibility.reasons),
+            },
+            "human_boundary": "implement the Task before LCK Delivery Complete",
+            "next_action": "implement the Task and run LCK Delivery Complete",
+        }
+    if isinstance(value, ReviewContext):
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "kind": "lck-agent-view",
+            "operation": "review-prepare",
+            "status": "READY_FOR_SEMANTIC_REVIEW",
+            "task_number": value.identity.task_number,
+            "review_id": value.review_id,
+            "task_contract": _jsonable(value.task_contract),
+            "review_target": value.identity.to_dict(),
+            "checks": _checks_agent_view(value.checks),
+            "validation": _validation_agent_view(value.validation),
+            "review_root": str(value.review_root),
+            "workspace_mode": "implementation-read-only",
+            "agent_role": ["Inspect", "Reason", "Judge", "Report"],
+            "mechanical_authority": "live Git/GitHub state resolved by LCK",
+            "human_boundary": "semantic Review must be completed before Review Complete",
+            "next_action": "perform an independent semantic Review, then run Review Complete",
+        }
+    if isinstance(value, ReviewCompletionResult):
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "kind": "lck-agent-view",
+            "operation": "review-complete",
+            "task_number": value.task_number,
+            "review_id": value.review_id,
+            "verdict": value.verdict,
+            "status": value.status,
+            "review_target": value.identity.to_dict(),
+            "human_boundary": (
+                "STOP; run deterministic Merge Preflight before any manual merge"
+                if value.verdict == "PASS"
+                else "STOP; Human must explicitly choose remediation, redesign, or abandon"
+            ),
+            "next_action": (
+                "run LCK Merge Preflight"
+                if value.verdict == "PASS"
+                else "stop; Human must explicitly choose remediation, redesign, or abandon"
+            ),
+        }
+    if isinstance(value, DeliveryCompletionResult):
+        base_sha = _authoritative_remote_main_sha(value.operation_snapshot.state.git)
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "kind": "lck-agent-view",
+            "operation": "delivery-complete",
+            "task_number": value.task_number,
+            "status": value.status,
+            "branch": value.branch,
+            "base_sha": base_sha,
+            "head_sha": value.head_sha,
+            "pr": _delivery_pr_agent_view(value.effects),
+            "critical_outcome": _critical_outcome_agent_view(value.critical_outcome),
+            "validation": _validation_agent_view(value.validation),
+            "checks": _checks_agent_view(value.checks),
+            "effects": _effect_agent_view(value.effects),
+            "human_boundary": "Independent Review must be started separately",
+            "next_action": "start an independent Review in a fresh invocation",
+        }
+    if isinstance(value, MergePreflightResult):
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "kind": "lck-agent-view",
+            "operation": "merge-preflight",
+            "task_number": value.task_number,
+            "status": value.status,
+            "pr": _pr_agent_view(value.pr),
+            "review": {
+                key: value.review[key]
+                for key in ("status", "review_id", "identity")
+                if key in value.review
+            },
+            "checks": _checks_agent_view(value.checks),
+            "blockers": {
+                key: value.blockers[key]
+                for key in ("status", "detail", "count")
+                if key in value.blockers
+            },
+            "mergeability": value.mergeability,
+            "human_boundary": "STOP — maintainer must perform the manual Squash Merge; LCK has no auto-merge path",
+            "next_action": "maintainer must perform the manual Squash Merge",
+        }
+    if isinstance(value, CloseoutResult):
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "kind": "lck-agent-view",
+            "operation": "closeout",
+            "task_number": value.task_number,
+            "status": value.status,
+            "business_delivery": value.business_delivery,
+            "cleanup": value.cleanup,
+            "effects": _effect_agent_view(value.effects),
+            "automatic_merge": False,
+            "manual_issue_close": False,
+            "next_action": "stop; closeout is complete"
+            if value.cleanup == "COMPLETE"
+            else "resolve pending closeout cleanup",
+        }
+    if isinstance(value, RemediationContext):
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "kind": "lck-agent-view",
+            "operation": "remediation-prepare",
+            "task_number": value.task_number,
+            "review_id": value.review_id,
+            "status": "READY_FOR_REMEDIATION",
+            "action": value.action,
+            "findings": value.findings,
+            "findings_source": value.findings_source,
+            "task_contract": _jsonable(value.task_contract),
+            "live_target": {
+                "pr_number": (value.state.open_pr or {}).get("number"),
+                "base_sha": _pr_base_sha(value.state.open_pr),
+                "head_sha": _pr_head_sha(value.state.open_pr),
+                "branch": value.state.target_branch,
+            },
+            "next_action": "repair the implementation and run Remediation Complete",
+        }
+    if isinstance(value, RemediationNoChangeResult):
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "kind": "lck-agent-view",
+            "operation": "remediation-no-change",
+            "task_number": value.task_number,
+            "review_id": value.review_id,
+            "status": "NO_IMPLEMENTATION_CHANGE",
+            "head_sha": value.head_sha,
+            "pr_number": value.pr_number,
+            "base_sha": value.base_sha,
+            "summary": value.summary,
+            "candidate_changed": False,
+            "fresh_review_required": False,
+            "session_released": True,
+            "replayed": value.replayed,
+            "human_boundary": "STOP — continue external acceptance work on the unchanged head",
+            "next_action": "continue external acceptance work on the unchanged head",
+        }
+    if isinstance(value, RemediationCompletionResult):
+        delivery = value.delivery
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "kind": "lck-agent-view",
+            "operation": "remediation-complete",
+            "task_number": value.task_number,
+            "review_id": value.review_id,
+            "status": "READY_FOR_NEW_REVIEW",
+            "head_sha": delivery.head_sha,
+            "critical_outcome": _critical_outcome_agent_view(delivery.critical_outcome),
+            "validation": _validation_agent_view(delivery.validation),
+            "checks": _checks_agent_view(delivery.checks),
+            "effects": _effect_agent_view(delivery.effects),
+            "human_boundary": "STOP — a new Independent Review must be started explicitly in a fresh invocation",
+            "next_action": "start a new independent Review in a fresh invocation",
+        }
+    raise LckStopError(f"unsupported LCK result type: {type(value).__name__}")
+
+
+def _audit_payload_for_result(
+    value: Any,
+    *,
+    store: AuditReceiptStore,
+) -> dict[str, Any]:
+    """Build the complete receipt payload without using it as Agent output."""
+    payload = value.to_dict()
+    if isinstance(value, LiveState):
+        state_payload = dict(payload)
+        payload["operation_snapshot"] = {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "operation": "status",
+            "state": state_payload,
+        }
+    elif isinstance(value, ReviewContext):
+        guard = ReviewInvocationStore(store.repo_root).read_guard(value.review_id)
+        payload["review_guard"] = guard
+        payload["operation_snapshot"] = guard.get("snapshot")
+    elif isinstance(value, ReviewCompletionResult):
+        if value.record_path.exists():
+            record = read_json_file(value.record_path)
+            payload["review_record"] = record
+            if isinstance(record, Mapping):
+                payload["operation_snapshot"] = record.get("completion_snapshot")
+    elif isinstance(value, MergePreflightResult):
+        if value.operation_snapshot is not None:
+            payload["operation_snapshot"] = value.operation_snapshot.to_dict()
+    return cast(dict[str, Any], _jsonable(payload))
+
+
+def _result_operation_id(value: Any, fallback: str) -> str:
+    for attribute in ("review_id",):
+        candidate = getattr(value, attribute, None)
+        if isinstance(candidate, str) and AuditReceiptStore._ID.fullmatch(candidate):
+            return candidate
+    return fallback
+
+
+def _write_success_receipt(
+    value: Any,
+    *,
+    operation: str,
+    task_number: int,
+    operation_id: str,
+    store: AuditReceiptStore,
+) -> dict[str, Any]:
+    agent_view = cast(dict[str, Any], _jsonable(_agent_view_for_result(value)))
+    if isinstance(value, RemediationNoChangeResult) and value.replayed:
+        existing = store.existing_reference(task_number, operation, operation_id)
+        if existing is not None:
+            agent_view["receipt_reference"] = existing.to_dict()
+            return agent_view
+    audit_payload = _audit_payload_for_result(value, store=store)
+    receipt_agent_view = dict(agent_view)
+    if isinstance(value, RemediationNoChangeResult):
+        # ``replayed`` describes this CLI invocation, not the durable operation.
+        # Keep the original operation receipt immutable across valid replays.
+        receipt_agent_view["replayed"] = False
+        audit_payload = dict(audit_payload)
+        audit_payload["replayed"] = False
+    receipt_payload = {
+        "schema_version": LCK_SCHEMA_VERSION,
+        "kind": "lck-audit-receipt",
+        "operation": operation,
+        "operation_id": operation_id,
+        "task_number": task_number,
+        "outcome": {"status": agent_view.get("status")},
+        "agent_view": receipt_agent_view,
+        "operation_snapshot": audit_payload.get("operation_snapshot"),
+        "audit": audit_payload,
+    }
+    reference = store.write(
+        task_number,
+        operation,
+        operation_id,
+        receipt_payload,
+    )
+    agent_view["receipt_reference"] = reference.to_dict()
+    return agent_view
+
+
+def _write_failure_receipt(
+    *,
+    operation: str,
+    task_number: int,
+    operation_id: str,
+    status: str,
+    code: str | None,
+    error: str,
+    handler: Any,
+    store: AuditReceiptStore,
+) -> dict[str, Any]:
+    snapshot = getattr(handler, "last_snapshot", None)
+    snapshot_payload = (
+        snapshot.to_dict() if isinstance(snapshot, OperationSnapshot) else None
+    )
+    detail = {
+        "status": status,
+        "code": code,
+        "error": safe_text(error, limit=2000),
+    }
+    next_action = _failure_next_action(status)
+    agent_view = {
+        "schema_version": LCK_SCHEMA_VERSION,
+        "kind": "lck-agent-view",
+        "operation": operation,
+        "task_number": task_number,
+        **detail,
+        "next_action": next_action,
+    }
+    receipt_payload = {
+        "schema_version": LCK_SCHEMA_VERSION,
+        "kind": "lck-audit-receipt",
+        "operation": operation,
+        "operation_id": operation_id,
+        "task_number": task_number,
+        "outcome": detail,
+        "agent_view": agent_view,
+        "operation_snapshot": snapshot_payload,
+        "audit": {
+            "outcome": detail,
+            "operation_snapshot": snapshot_payload,
+            "critical_outcome": _jsonable(
+                getattr(handler, "last_critical_outcome", None)
+            ),
+            "validation": _jsonable(getattr(handler, "last_validation", None)),
+            "checks": _jsonable(getattr(handler, "last_checks", None)),
+            "effects": _jsonable(
+                [
+                    item.to_dict() if isinstance(item, EffectReceipt) else item
+                    for item in getattr(handler, "last_effects", [])
+                ]
+            ),
+        },
+    }
+    reference = store.write(
+        task_number,
+        operation,
+        operation_id,
+        receipt_payload,
+    )
+    view = cast(dict[str, Any], dict(agent_view))
+    view["receipt_reference"] = reference.to_dict()
+    return cast(dict[str, Any], _jsonable(view))
+
+
+def _failure_next_action(status: str) -> str:
+    return (
+        "start a fresh Review Prepare for the current target"
+        if status == "stale"
+        else "inspect the receipt and resolve the STOP condition"
+    )
+
+
+def _failure_fallback(
+    *,
+    operation: str,
+    task_number: int,
+    operation_id: str,
+    status: str,
+    code: str | None,
+    error: str,
+    receipt_error: WorkflowToolError,
+    store: AuditReceiptStore,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": LCK_SCHEMA_VERSION,
+        "kind": "lck-agent-view",
+        "operation": operation,
+        "task_number": task_number,
+        "status": status,
+        "code": code,
+        "error": safe_text(error, limit=2000),
+        "receipt_error": safe_text(str(receipt_error), limit=1000),
+        "next_action": _failure_next_action(status),
+    }
+    try:
+        reference = store.existing_reference(task_number, operation, operation_id)
+    except WorkflowToolError:
+        reference = None
+    if reference is not None:
+        payload["receipt_reference"] = reference.to_dict()
+    return payload
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -6039,90 +6863,167 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _cli_operation(args: argparse.Namespace) -> str:
+    if args.command == "status":
+        return "status"
+    if args.command == "delivery":
+        return f"delivery-{args.delivery_command}"
+    if args.command == "review":
+        return f"review-{args.review_command}"
+    if args.command == "remediation":
+        return f"remediation-{args.remediation_command}"
+    if args.command in {"merge", "merge-preflight"}:
+        return "merge-preflight"
+    if args.command == "closeout":
+        return "closeout"
+    return "unknown"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     resolver = LiveStateResolver(
         args.repo_root,
         repository=args.repository,
     )
+    operation = _cli_operation(args)
+    task_number = args.task
+    operation_id = uuid.uuid4().hex
+    receipt_store = AuditReceiptStore(resolver.repo_root)
+    handler: Any = resolver
+
+    def emit_success(value: Any) -> int:
+        nonlocal operation_id
+        operation_id = _result_operation_id(value, operation_id)
+        print_json(
+            _write_success_receipt(
+                value,
+                operation=operation,
+                task_number=task_number,
+                operation_id=operation_id,
+                store=receipt_store,
+            ),
+            pretty=True,
+        )
+        if isinstance(value, LiveState) and value.status is ResolutionStatus.STOP:
+            return 2
+        return 0
+
     try:
         if args.command == "status":
-            state = resolver.resolve(args.task)
-            print_json(state.to_dict(), pretty=True)
-            return 0 if state.status is ResolutionStatus.RESOLVED else 2
+            return emit_success(resolver.resolve(task_number))
         if args.command == "delivery" and args.delivery_command == "prepare":
-            context = DeliveryPreparer(resolver).prepare(args.task)
-            print_json(context.to_dict(), pretty=True)
-            return 0
+            handler = DeliveryPreparer(resolver)
+            return emit_success(handler.prepare(task_number))
         if args.command == "delivery" and args.delivery_command == "complete":
-            result = DeliveryCompleter(resolver).complete(
-                args.task,
-                commit_message=args.commit_message,
-                summary=args.summary,
-                risks=args.risks,
+            handler = DeliveryCompleter(resolver)
+            return emit_success(
+                handler.complete(
+                    task_number,
+                    commit_message=args.commit_message,
+                    summary=args.summary,
+                    risks=args.risks,
+                )
             )
-            print_json(result.to_dict(), pretty=True)
-            return 0
         if args.command == "review" and args.review_command == "prepare":
-            context = ReviewPreparer(resolver).prepare(args.task)
-            print_json(context.to_dict(), pretty=True)
-            return 0
+            handler = ReviewPreparer(resolver)
+            return emit_success(handler.prepare(task_number))
         if args.command == "review" and args.review_command == "complete":
-            result = ReviewCompleter(resolver).complete(
-                args.task,
-                args.review_id,
-                verdict=args.verdict,
-                findings_file=args.findings_file,
+            handler = ReviewCompleter(resolver)
+            return emit_success(
+                handler.complete(
+                    task_number,
+                    args.review_id,
+                    verdict=args.verdict,
+                    findings_file=args.findings_file,
+                )
             )
-            print_json(result.to_dict(), pretty=True)
-            return 0
         if args.command == "remediation" and args.remediation_command == "prepare":
-            context = RemediationPreparer(resolver).prepare(
-                args.task,
-                args.review_id,
-                findings_file=args.findings_file,
+            handler = RemediationPreparer(resolver)
+            return emit_success(
+                handler.prepare(
+                    task_number,
+                    args.review_id,
+                    findings_file=args.findings_file,
+                )
             )
-            print_json(context.to_dict(), pretty=True)
-            return 0
         if args.command == "remediation" and args.remediation_command == "no-change":
-            result = RemediationNoChangeCompleter(resolver).complete(
-                args.task,
-                args.review_id,
-                summary=args.summary,
+            handler = RemediationNoChangeCompleter(resolver)
+            return emit_success(
+                handler.complete(
+                    task_number,
+                    args.review_id,
+                    summary=args.summary,
+                )
             )
-            print_json(result.to_dict(), pretty=True)
-            return 0
         if args.command == "remediation" and args.remediation_command == "complete":
-            result = RemediationCompleter(resolver).complete(
-                args.task,
-                args.review_id,
-                commit_message=args.commit_message,
-                summary=args.summary,
-                risks=args.risks,
+            handler = RemediationCompleter(resolver)
+            return emit_success(
+                handler.complete(
+                    task_number,
+                    args.review_id,
+                    commit_message=args.commit_message,
+                    summary=args.summary,
+                    risks=args.risks,
+                )
             )
-            print_json(result.to_dict(), pretty=True)
-            return 0
         if (
             args.command == "merge" and args.merge_command == "preflight"
         ) or args.command == "merge-preflight":
-            result = MergePreflight(resolver).run(args.task)
-            print_json(result.to_dict(), pretty=True)
-            return 0
+            handler = MergePreflight(resolver)
+            return emit_success(handler.run(task_number))
         if args.command == "closeout":
-            result = CloseoutCompleter(resolver).complete(args.task)
-            print_json(result.to_dict(), pretty=True)
-            return 0
+            handler = CloseoutCompleter(resolver)
+            return emit_success(handler.complete(task_number))
         raise LckStopError("unsupported LCK command")
     except ReviewStaleError as exc:
-        print(
-            json.dumps(
-                {"status": "stale", "code": exc.code, "error": str(exc)},
-                ensure_ascii=False,
+        try:
+            payload = _write_failure_receipt(
+                operation=operation,
+                task_number=task_number,
+                operation_id=operation_id,
+                status="stale",
+                code=exc.code,
+                error=str(exc),
+                handler=handler,
+                store=receipt_store,
             )
-        )
+        except WorkflowToolError as receipt_error:
+            payload = _failure_fallback(
+                operation=operation,
+                task_number=task_number,
+                operation_id=operation_id,
+                status="stale",
+                code=exc.code,
+                error=str(exc),
+                receipt_error=receipt_error,
+                store=receipt_store,
+            )
+        print_json(payload)
         return 3
     except WorkflowToolError as exc:
-        print(json.dumps({"status": "stop", "error": str(exc)}, ensure_ascii=False))
+        try:
+            payload = _write_failure_receipt(
+                operation=operation,
+                task_number=task_number,
+                operation_id=operation_id,
+                status="stop",
+                code=None,
+                error=str(exc),
+                handler=handler,
+                store=receipt_store,
+            )
+        except WorkflowToolError as receipt_error:
+            payload = _failure_fallback(
+                operation=operation,
+                task_number=task_number,
+                operation_id=operation_id,
+                status="stop",
+                code=None,
+                error=str(exc),
+                receipt_error=receipt_error,
+                store=receipt_store,
+            )
+        print_json(payload)
         return 2
 
 

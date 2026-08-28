@@ -123,6 +123,11 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
 - 每个 authoritative operation 在入口绑定一个稳定的 fact profile，并在 operation snapshot
   中记录 profile 与 acquired facts。Delivery Prepare 直接返回同一次 fresh acquisition 绑定的
   完整 Task Contract；semantic caller 不应为同一 operation 再查询 Task body。
+- LCK 最终 stdout 是紧凑的 `lck-agent-view`，只保留当前调用方判断状态与下一动作所需的
+  authoritative identity、result summary 和 `receipt_reference`。完整 operation snapshot、fact
+  acquisition、validation/effect/postcondition evidence 与诊断日志保存在
+  `.workflow.local/lck/audit-receipts/` 下的 operation-owned Audit Receipt；STOP、FAIL、stale
+  等结果同样使用结构化 Agent View 和 Receipt，不以 progress stderr 代替 lifecycle result。
 - Initial Delivery 的 lifecycle mechanics（workspace prepare、commit validated tree、
   remote synchronization、OPEN PR resolve/create、Project Status → Review）由 LCK
   deterministic control 执行；Agent/Skill 不提供 branch/SHA/PR/refspec authority。

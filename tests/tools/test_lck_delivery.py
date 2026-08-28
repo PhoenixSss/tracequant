@@ -429,9 +429,12 @@ def test_formal_validation_gate_fails_closed(
     resolver = lck.LiveStateResolver(
         tmp_path, runner=cast(Any, runner), repository="owner/repo"
     )
+    gate = lck.FormalValidationGate(resolver)
 
     with pytest.raises(lck.LckStopError, match="formal Delivery validation failed"):
-        lck.FormalValidationGate(resolver).run(SHA)
+        gate.run(SHA)
+
+    assert gate.last_payload == {"status": status}
 
 
 @pytest.mark.parametrize("mutation", ["merged", "invalid-target"])
@@ -620,11 +623,12 @@ class StubChecks:
     def __init__(self, *, fail: str | None = None) -> None:
         self.fail = fail
         self.calls = 0
+        self.last_result: dict[str, Any] | None = None
 
     def _result(self, number: int, head: str, base: str) -> dict[str, Any]:
         if self.fail:
             raise lck.LckStopError(self.fail)
-        return {
+        result = {
             "status": "pass",
             "configuration": "repository",
             "required": ["quality"],
@@ -637,6 +641,8 @@ class StubChecks:
             },
             "pr": {"number": number, "head_sha": head, "base_sha": base},
         }
+        self.last_result = dict(result)
+        return result
 
     def evaluate(self, snapshot: lck.OperationSnapshot) -> dict[str, Any]:
         self.calls += 1
@@ -658,6 +664,7 @@ class StubChecks:
         result["status"] = "observed"
         result["gate"] = "non-blocking"
         result["check_state"] = "pass"
+        self.last_result = dict(result)
         return result
 
     def observe_exact_pr(
@@ -673,6 +680,7 @@ class StubChecks:
         result["status"] = "observed"
         result["gate"] = "non-blocking"
         result["check_state"] = "pass"
+        self.last_result = dict(result)
         return result
 
     def query_exact_pr(
@@ -1168,11 +1176,13 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
     assert exit_code == 0, output
     assert payload["status"] == "READY_FOR_REVIEW"
     assert payload["human_boundary"] == "Independent Review must be started separately"
+    assert "operation_snapshot" not in payload
+    receipt = lck.AuditReceiptStore(tmp_path).read(payload["receipt_reference"])
     assert (
-        payload["operation_snapshot"]["operation"] == lck.Phase.DELIVERY_COMPLETE.value
+        receipt["operation_snapshot"]["operation"] == lck.Phase.DELIVERY_COMPLETE.value
     )
     assert (
-        payload["operation_snapshot"]["state"]["issue"]["project_status"]
+        receipt["operation_snapshot"]["state"]["issue"]["project_status"]
         == "In Progress"
     )
     assert payload["effects"][-1]["effect"] == "set_review_status"
@@ -1522,8 +1532,9 @@ def test_strict_checks_gate_stops_on_failed_check(tmp_path: Path) -> None:
     state = _with_checks(base, _checks(category="failed", state_name="FAILURE"))
     resolver = SequenceResolver(tmp_path, CompletionRunner(), [state])
 
+    gate = lck.DeliveryChecksGate(cast(Any, resolver))
     with pytest.raises(lck.LckStopError, match="checks failed"):
-        lck.DeliveryChecksGate(cast(Any, resolver)).evaluate(
+        gate.evaluate(
             _snapshot(
                 state,
                 required={
@@ -1531,6 +1542,9 @@ def test_strict_checks_gate_stops_on_failed_check(tmp_path: Path) -> None:
                 },
             )
         )
+    assert gate.last_result is not None
+    assert gate.last_result["status"] == "fail"
+    assert gate.last_result["check_state"] == "failed"
     assert resolver.calls == 0
 
 
@@ -1651,17 +1665,18 @@ def test_delivery_complete_critical_outcome_failure_blocks_commit_and_remote(
     resolver = SequenceResolver(tmp_path, runner, [pre])
     commit = StubCommit(dirty=True)
     remote = StubEffect("ensure_remote_branch", "created")
+    handler = lck.DeliveryCompleter(
+        cast(Any, resolver),
+        formal_validation=cast(Any, StubValidation()),
+        commit_effect=cast(Any, commit),
+        remote_effect=cast(Any, remote),
+        pr_effect=cast(Any, StubEffect("ensure_open_pr", "created")),
+        status_effect=cast(Any, StubEffect("set_review_status", "updated")),
+        checks_gate=cast(Any, StubChecks()),
+    )
 
     with pytest.raises(lck.LckStopError, match="Critical Outcome FAIL"):
-        lck.DeliveryCompleter(
-            cast(Any, resolver),
-            formal_validation=cast(Any, StubValidation()),
-            commit_effect=cast(Any, commit),
-            remote_effect=cast(Any, remote),
-            pr_effect=cast(Any, StubEffect("ensure_open_pr", "created")),
-            status_effect=cast(Any, StubEffect("set_review_status", "updated")),
-            checks_gate=cast(Any, StubChecks()),
-        ).complete(
+        handler.complete(
             160,
             commit_message="Implement LCK Delivery cutover",
             summary="Move initial Delivery mechanics into LCK.",
@@ -1669,6 +1684,196 @@ def test_delivery_complete_critical_outcome_failure_blocks_commit_and_remote(
 
     assert commit.calls == ["stage_candidate_tree"]
     assert remote.calls == 0
+
+    store = lck.AuditReceiptStore(tmp_path)
+    payload = lck._write_failure_receipt(
+        operation="delivery-complete",
+        task_number=160,
+        operation_id="c" * 32,
+        status="stop",
+        code=None,
+        error="Critical Outcome FAIL: test exited 1",
+        handler=handler,
+        store=store,
+    )
+    receipt = store.read(payload["receipt_reference"])
+
+    assert handler.last_critical_outcome is not None
+    assert receipt["audit"]["critical_outcome"]["status"] == "fail"
+    assert receipt["audit"]["critical_outcome"]["exit_code"] == 1
+    assert receipt["audit"]["critical_outcome"]["summary"] == "1 failed"
+
+
+def test_delivery_failure_receipt_preserves_failed_formal_validation_payload(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "test_critical_path.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("def test_critical_path(): pass\n", encoding="utf-8")
+    state = _live_state(
+        head="d" * 40,
+        clean=False,
+        project_status="In Progress",
+        open_pr=None,
+        remote_oid=None,
+    )
+    validation_payload = {
+        "schema_version": 1,
+        "operation": "workflow-validation",
+        "run_id": "val-delivery-receipt",
+        "phase": "delivery",
+        "base_sha": SHA,
+        "status": "fail",
+        "command_count": 1,
+        "passed": 0,
+        "failed": 1,
+        "commands": [
+            {
+                "command_id": "pytest",
+                "status": "fail",
+                "exit_code": 1,
+                "duration_ms": 37,
+                "summary": "1 failed",
+                "log_path": ".agents/validation.local/pytest.log",
+                "diagnostic": "assertion failed",
+            }
+        ],
+        "limitations": [],
+        "output_dir": ".agents/validation.local",
+    }
+
+    class FailingFormalValidationRunner(CompletionRunner):
+        def run(
+            self,
+            argv: list[str] | tuple[str, ...],
+            *,
+            command_id: str,
+            **kwargs: Any,
+        ) -> CommandResult:
+            if command_id == "lck-formal-delivery-validation":
+                command = tuple(str(item) for item in argv)
+                self.commands.append(command)
+                return CommandResult(
+                    command_id,
+                    command,
+                    1,
+                    json.dumps(validation_payload),
+                    "",
+                )
+            return super().run(argv, command_id=command_id, **kwargs)
+
+    runner = FailingFormalValidationRunner()
+    resolver = SequenceResolver(tmp_path, runner, [state])
+    handler = lck.DeliveryCompleter(
+        cast(Any, resolver),
+        formal_validation=cast(Any, lck.FormalValidationGate(resolver)),
+        commit_effect=cast(Any, StubCommit(dirty=True)),
+        remote_effect=cast(Any, StubEffect("ensure_remote_branch", "created")),
+        pr_effect=cast(Any, StubEffect("ensure_open_pr", "created")),
+        status_effect=cast(Any, StubEffect("set_review_status", "updated")),
+        checks_gate=cast(Any, StubChecks()),
+    )
+
+    with pytest.raises(lck.LckStopError, match="formal Delivery validation failed"):
+        handler.complete(
+            160,
+            commit_message="Implement LCK Delivery cutover",
+            summary="Move initial Delivery mechanics into LCK.",
+        )
+
+    store = lck.AuditReceiptStore(tmp_path)
+    payload = lck._write_failure_receipt(
+        operation="delivery-complete",
+        task_number=160,
+        operation_id="e" * 32,
+        status="stop",
+        code=None,
+        error="formal Delivery validation failed: fail",
+        handler=handler,
+        store=store,
+    )
+    receipt = store.read(payload["receipt_reference"])
+
+    assert receipt["audit"]["validation"] == validation_payload
+
+
+def test_delivery_failure_receipt_preserves_completed_operation_evidence(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "test_critical_path.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("def test_critical_path(): pass\n", encoding="utf-8")
+    head = "b" * 40
+    state = _live_state(
+        head=head,
+        clean=True,
+        project_status="In Progress",
+        open_pr=None,
+        remote_oid=None,
+    )
+
+    class FailingFinalRunner(CompletionRunner):
+        def run(
+            self,
+            argv: list[str] | tuple[str, ...],
+            *,
+            command_id: str,
+            **kwargs: Any,
+        ) -> CommandResult:
+            result = super().run(argv, command_id=command_id, **kwargs)
+            if tuple(argv[:2]) == ("git", "status"):
+                return CommandResult(command_id, tuple(argv), 0, " M candidate\n", "")
+            return result
+
+    runner = FailingFinalRunner()
+    resolver = SequenceResolver(tmp_path, runner, [state])
+    checks = StubChecks()
+    handler = lck.DeliveryCompleter(
+        cast(Any, resolver),
+        formal_validation=cast(Any, StubValidation()),
+        commit_effect=cast(Any, StubCommit(dirty=False)),
+        remote_effect=cast(Any, StubEffect("ensure_remote_branch", "created")),
+        pr_effect=cast(Any, StubEffect("ensure_open_pr", "created")),
+        status_effect=cast(Any, StubEffect("set_review_status", "updated")),
+        checks_gate=cast(Any, checks),
+    )
+
+    with pytest.raises(lck.LckStopError, match="local postcondition failed"):
+        handler.complete(
+            160,
+            commit_message="Implement LCK Delivery cutover",
+            summary="Move initial Delivery mechanics into LCK.",
+        )
+
+    store = lck.AuditReceiptStore(tmp_path)
+    payload = lck._write_failure_receipt(
+        operation="delivery-complete",
+        task_number=160,
+        operation_id="d" * 32,
+        status="stop",
+        code=None,
+        error="Delivery local postcondition failed",
+        handler=handler,
+        store=store,
+    )
+    receipt = store.read(payload["receipt_reference"])
+
+    assert handler.last_snapshot is not None
+    assert receipt["operation_snapshot"] == handler.last_snapshot.to_dict()
+    assert receipt["audit"]["critical_outcome"]["status"] == "pass"
+    assert receipt["audit"]["validation"]["status"] == "pass"
+    assert receipt["audit"]["checks"] == handler.last_checks
+    assert receipt["audit"]["checks"]["pr"] == {
+        "number": 10,
+        "head_sha": "b" * 40,
+        "base_sha": SHA,
+    }
+    assert [item["effect"] for item in receipt["audit"]["effects"]] == [
+        "commit_current_tree",
+        "ensure_remote_branch",
+        "ensure_open_pr",
+        "set_review_status",
+    ]
 
 
 def test_delivery_complete_freezes_authority_for_the_operation(tmp_path: Path) -> None:

@@ -71,6 +71,12 @@ Contract、validation、checks 和 isolated `review_root`。Formal validation FA
 丢失时仍能从 marker + guard 判断 ownership；后续 Prepare 只有在 owner 已退出且
 handoff 的 clone/guard 不完整时才回收其 LCK-owned state。
 
+LCK 的最终 stdout 是紧凑的 `lck-agent-view`，并提供 `receipt_reference`；Review Prepare
+仍直接提供完整 Task Contract 与 sealed review target 所需的最小输入。完整 operation
+snapshot、guard、validation/check evidence 和诊断信息保存在 ignored
+`.workflow.local/lck/audit-receipts/` Receipt 中，progress heartbeat 仍只写 stderr，不能
+成为第二个 lifecycle result。
+
 ## 4. Fresh semantic context and read-only workspace
 
 LCK 在系统临时目录创建 reviewed head 的 detached standalone clone；它通过本地 clone
