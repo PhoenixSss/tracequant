@@ -46,6 +46,7 @@ See [Repository structure](docs/architecture/repository-structure.md) for bounda
 ## Documentation
 
 - [Technical baseline](docs/architecture/technical-baseline.md): current approved technology choices and architecture boundaries.
+- [Initial domain models](docs/architecture/domain-models.md): public Research MVP market-data models, validation, serialization, and test-factory boundaries.
 - [Project roadmap](docs/planning/project-roadmap.md): current four-stage plan, Issue navigation, dependencies, and implementation entry point.
 - [Planning baseline v1.0](docs/planning/quant-system-planning-baseline-v1.0.md): historical planning snapshot retained for context and decision history.
 - [Deep research report](docs/research/deep-research-report.md): historical broad research on markets, strategies, data, backtesting, and operations.
