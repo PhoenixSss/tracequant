@@ -1901,8 +1901,10 @@ class FormalValidationGate:
 
     def __init__(self, resolver: LiveStateResolver) -> None:
         self.resolver = resolver
+        self.last_payload: dict[str, Any] | None = None
 
     def run(self, base_sha: str) -> dict[str, Any]:
+        self.last_payload = None
         if not is_sha(base_sha):
             raise LckStopError("formal validation base SHA is unavailable")
         tool = (
@@ -1948,6 +1950,10 @@ class FormalValidationGate:
                 raise LckStopError(str(exc)) from exc
             if not isinstance(payload, dict):
                 raise LckStopError("formal Delivery validation result is not an object")
+            # Keep the structured result available to the owning phase before
+            # applying the gate.  A failed validation is still the evidence
+            # needed by the failure Receipt.
+            self.last_payload = payload
             if result.returncode != 0 or payload.get("status") != "pass":
                 raise LckStopError(
                     "formal Delivery validation failed: "
@@ -5328,12 +5334,25 @@ class DeliveryCompleter:
         except CriticalOutcomeError as exc:
             raise LckStopError(f"Critical Outcome contract invalid: {exc}") from exc
         payload = result.to_dict()
+        self.last_critical_outcome = payload
         if result.status != "pass":
             raise LckStopError(
                 "Critical Outcome FAIL: "
                 f"{contract.verification_test} exited {result.exit_code}"
             )
         return payload
+
+    def _run_formal_validation(self, base_sha: str) -> dict[str, Any]:
+        """Retain a parsed validation payload when the gate rejects it."""
+        try:
+            validation = self.formal_validation.run(base_sha)
+        except BaseException:
+            payload = getattr(self.formal_validation, "last_payload", None)
+            if isinstance(payload, dict):
+                self.last_validation = payload
+            raise
+        self.last_validation = validation
+        return validation
 
     def _has_task_diff(self, base_sha: str) -> bool:
         result = self.resolver.runner.run(
@@ -5437,10 +5456,8 @@ class DeliveryCompleter:
             validated_tree = self.commit_effect.current_head_tree()
             progress.running("critical-outcome")
             critical = self._run_critical_outcome(state, progress=progress)
-            self.last_critical_outcome = critical
             progress.running("formal-validation")
-            validation = self.formal_validation.run(base_sha)
-            self.last_validation = validation
+            validation = self._run_formal_validation(base_sha)
             validated_head = state.local_task_head
             if not is_sha(validated_head):
                 raise LckStopError("current Task head is unavailable")
@@ -5461,10 +5478,8 @@ class DeliveryCompleter:
             validated_tree = self.commit_effect.stage_candidate_tree()
             progress.running("critical-outcome")
             critical = self._run_critical_outcome(state, progress=progress)
-            self.last_critical_outcome = critical
             progress.running("formal-validation")
-            validation = self.formal_validation.run(base_sha)
-            self.last_validation = validation
+            validation = self._run_formal_validation(base_sha)
             self.commit_effect.verify_tree_unchanged(
                 validated_tree,
                 expected_head_sha=state.local_task_head,

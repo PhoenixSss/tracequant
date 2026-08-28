@@ -3108,6 +3108,18 @@ def test_remediation_failure_receipt_preserves_nested_delivery_evidence(
             "authority": "test",
         },
     )
+    failed_validation = {
+        "status": "fail",
+        "commands": [
+            {
+                "command_id": "pytest",
+                "exit_code": 1,
+                "log_path": ".agents/validation.local/pytest.log",
+                "duration_ms": 23,
+                "diagnostic": "assertion failed",
+            }
+        ],
+    }
 
     class FailingDeliveryCompleter:
         def __init__(self, *_args: Any, **_kwargs: Any) -> None:
@@ -3119,7 +3131,7 @@ def test_remediation_failure_receipt_preserves_nested_delivery_evidence(
         def complete(self, *_args: Any, **kwargs: Any) -> Any:
             self.last_snapshot = kwargs["operation_snapshot"]
             self.last_critical_outcome = {"status": "pass"}
-            self.last_validation = {"status": "pass", "command_count": 6}
+            self.last_validation = failed_validation
             self.last_effects = [
                 lck.EffectReceipt(
                     "commit_current_tree",
@@ -3155,7 +3167,7 @@ def test_remediation_failure_receipt_preserves_nested_delivery_evidence(
 
     assert handler.last_snapshot is not None
     assert receipt["operation_snapshot"] == handler.last_snapshot.to_dict()
-    assert receipt["audit"]["validation"]["command_count"] == 6
+    assert receipt["audit"]["validation"] == failed_validation
     assert receipt["audit"]["effects"][0]["effect"] == "commit_current_tree"
 
 
