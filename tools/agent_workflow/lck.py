@@ -334,6 +334,29 @@ class AuditReceiptStore:
             atomic_write_json(path, normalized)
         return self.reference_for(task_number, operation, operation_id, digest)
 
+    def existing_reference(
+        self, task_number: int, operation: str, operation_id: str
+    ) -> AuditReceiptReference | None:
+        """Return the reference for an existing, identity-matching receipt."""
+        path = self.receipt_path(task_number, operation, operation_id)
+        if not path.exists():
+            return None
+        existing = read_json_file(path)
+        if (
+            not isinstance(existing, dict)
+            or existing.get("kind") != "lck-audit-receipt"
+            or existing.get("operation") != operation
+            or existing.get("operation_id") != operation_id
+            or existing.get("task_number") != task_number
+        ):
+            raise LckStopError("existing LCK audit receipt identity is invalid")
+        return self.reference_for(
+            task_number,
+            operation,
+            operation_id,
+            sha256_json(existing),
+        )
+
     def read(self, reference: Mapping[str, Any]) -> dict[str, Any]:
         path_value = reference.get("path")
         expected_digest = reference.get("sha256")
@@ -5280,6 +5303,9 @@ class DeliveryCompleter:
         self.require_existing_open_pr = require_existing_open_pr
         self.candidate_recorder = candidate_recorder
         self.last_snapshot: OperationSnapshot | None = None
+        self.last_critical_outcome: dict[str, Any] | None = None
+        self.last_validation: dict[str, Any] | None = None
+        self.last_effects: list[EffectReceipt] = []
 
     def _run_critical_outcome(
         self,
@@ -5367,6 +5393,10 @@ class DeliveryCompleter:
     ) -> DeliveryCompletionResult:
         state = snapshot.state
         task_number = state.task_number
+        effects: list[EffectReceipt] = []
+        self.last_effects = effects
+        self.last_critical_outcome = None
+        self.last_validation = None
         decision = self.eligibility.resolve(
             state,
             phase,
@@ -5398,7 +5428,6 @@ class DeliveryCompleter:
                     "resolved Task branch/base"
                 )
 
-        effects: list[EffectReceipt] = []
         if state.git.get("clean") is True:
             progress.running("revalidating-candidate")
             if not self._has_task_diff(base_sha):
@@ -5408,8 +5437,10 @@ class DeliveryCompleter:
             validated_tree = self.commit_effect.current_head_tree()
             progress.running("critical-outcome")
             critical = self._run_critical_outcome(state, progress=progress)
+            self.last_critical_outcome = critical
             progress.running("formal-validation")
             validation = self.formal_validation.run(base_sha)
+            self.last_validation = validation
             validated_head = state.local_task_head
             if not is_sha(validated_head):
                 raise LckStopError("current Task head is unavailable")
@@ -5430,8 +5461,10 @@ class DeliveryCompleter:
             validated_tree = self.commit_effect.stage_candidate_tree()
             progress.running("critical-outcome")
             critical = self._run_critical_outcome(state, progress=progress)
+            self.last_critical_outcome = critical
             progress.running("formal-validation")
             validation = self.formal_validation.run(base_sha)
+            self.last_validation = validation
             self.commit_effect.verify_tree_unchanged(
                 validated_tree,
                 expected_head_sha=state.local_task_head,
@@ -6078,6 +6111,25 @@ class RemediationCompleter:
         self.eligibility = eligibility or PhaseEligibilityResolver()
         self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
+        self.last_snapshot: OperationSnapshot | None = None
+        self.last_critical_outcome: dict[str, Any] | None = None
+        self.last_validation: dict[str, Any] | None = None
+        self.last_effects: list[EffectReceipt] = []
+
+    def _capture_delivery_evidence(self, delivery: Any) -> None:
+        """Expose nested Delivery evidence to the outer failure receipt."""
+        snapshot = getattr(delivery, "last_snapshot", None)
+        if isinstance(snapshot, OperationSnapshot):
+            self.last_snapshot = snapshot
+        critical = getattr(delivery, "last_critical_outcome", None)
+        if isinstance(critical, dict):
+            self.last_critical_outcome = critical
+        validation = getattr(delivery, "last_validation", None)
+        if isinstance(validation, dict):
+            self.last_validation = validation
+        effects = getattr(delivery, "last_effects", None)
+        if isinstance(effects, list):
+            self.last_effects = effects
 
     def _owned_candidate_recovery(
         self,
@@ -6178,6 +6230,7 @@ class RemediationCompleter:
             task_number,
             operation=Phase.REMEDIATION_COMPLETE.value,
         )
+        self.last_snapshot = snapshot
         state = snapshot.state
         owned_candidate = False
         pr_head = state.open_pr.get("headRefOid") if state.open_pr else None
@@ -6221,21 +6274,27 @@ class RemediationCompleter:
                 candidate_tree_oid=tree_oid,
             )
 
-        delivery = DeliveryCompleter(
+        delivery_completer = DeliveryCompleter(
             self.resolver,
             pr_effect=cast(Any, ReuseExistingOpenPrEffect(self.resolver)),
             checks_gate=self.checks_gate,
             require_existing_open_pr=True,
             candidate_recorder=record_candidate,
-        ).complete(
-            task_number,
-            commit_message=commit_message,
-            summary=summary,
-            risks=risks,
-            operation_snapshot=snapshot,
-            phase=Phase.REMEDIATION_COMPLETE,
-            owned_remediation_candidate=owned_candidate,
         )
+        try:
+            delivery = delivery_completer.complete(
+                task_number,
+                commit_message=commit_message,
+                summary=summary,
+                risks=risks,
+                operation_snapshot=snapshot,
+                phase=Phase.REMEDIATION_COMPLETE,
+                owned_remediation_candidate=owned_candidate,
+            )
+        except BaseException:
+            self._capture_delivery_evidence(delivery_completer)
+            raise
+        self._capture_delivery_evidence(delivery_completer)
         if delivery.head_sha == start_head:
             raise LckStopError(
                 "Remediation Complete did not produce a new head; fresh Review boundary cannot advance"
@@ -6494,7 +6553,19 @@ def _write_success_receipt(
     store: AuditReceiptStore,
 ) -> dict[str, Any]:
     agent_view = cast(dict[str, Any], _jsonable(_agent_view_for_result(value)))
+    if isinstance(value, RemediationNoChangeResult) and value.replayed:
+        existing = store.existing_reference(task_number, operation, operation_id)
+        if existing is not None:
+            agent_view["receipt_reference"] = existing.to_dict()
+            return agent_view
     audit_payload = _audit_payload_for_result(value, store=store)
+    receipt_agent_view = dict(agent_view)
+    if isinstance(value, RemediationNoChangeResult):
+        # ``replayed`` describes this CLI invocation, not the durable operation.
+        # Keep the original operation receipt immutable across valid replays.
+        receipt_agent_view["replayed"] = False
+        audit_payload = dict(audit_payload)
+        audit_payload["replayed"] = False
     receipt_payload = {
         "schema_version": LCK_SCHEMA_VERSION,
         "kind": "lck-audit-receipt",
@@ -6502,7 +6573,7 @@ def _write_success_receipt(
         "operation_id": operation_id,
         "task_number": task_number,
         "outcome": {"status": agent_view.get("status")},
-        "agent_view": agent_view,
+        "agent_view": receipt_agent_view,
         "operation_snapshot": audit_payload.get("operation_snapshot"),
         "audit": audit_payload,
     }
@@ -6536,11 +6607,7 @@ def _write_failure_receipt(
         "code": code,
         "error": safe_text(error, limit=2000),
     }
-    next_action = (
-        "start a fresh Review Prepare for the current target"
-        if status == "stale"
-        else "inspect the receipt and resolve the STOP condition"
-    )
+    next_action = _failure_next_action(status)
     agent_view = {
         "schema_version": LCK_SCHEMA_VERSION,
         "kind": "lck-agent-view",
@@ -6558,7 +6625,20 @@ def _write_failure_receipt(
         "outcome": detail,
         "agent_view": agent_view,
         "operation_snapshot": snapshot_payload,
-        "audit": {"outcome": detail, "operation_snapshot": snapshot_payload},
+        "audit": {
+            "outcome": detail,
+            "operation_snapshot": snapshot_payload,
+            "critical_outcome": _jsonable(
+                getattr(handler, "last_critical_outcome", None)
+            ),
+            "validation": _jsonable(getattr(handler, "last_validation", None)),
+            "effects": _jsonable(
+                [
+                    item.to_dict() if isinstance(item, EffectReceipt) else item
+                    for item in getattr(handler, "last_effects", [])
+                ]
+            ),
+        },
     }
     reference = store.write(
         task_number,
@@ -6566,9 +6646,48 @@ def _write_failure_receipt(
         operation_id,
         receipt_payload,
     )
-    view = dict(agent_view)
+    view = cast(dict[str, Any], dict(agent_view))
     view["receipt_reference"] = reference.to_dict()
     return cast(dict[str, Any], _jsonable(view))
+
+
+def _failure_next_action(status: str) -> str:
+    return (
+        "start a fresh Review Prepare for the current target"
+        if status == "stale"
+        else "inspect the receipt and resolve the STOP condition"
+    )
+
+
+def _failure_fallback(
+    *,
+    operation: str,
+    task_number: int,
+    operation_id: str,
+    status: str,
+    code: str | None,
+    error: str,
+    receipt_error: WorkflowToolError,
+    store: AuditReceiptStore,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": LCK_SCHEMA_VERSION,
+        "kind": "lck-agent-view",
+        "operation": operation,
+        "task_number": task_number,
+        "status": status,
+        "code": code,
+        "error": safe_text(error, limit=2000),
+        "receipt_error": safe_text(str(receipt_error), limit=1000),
+        "next_action": _failure_next_action(status),
+    }
+    try:
+        reference = store.existing_reference(task_number, operation, operation_id)
+    except WorkflowToolError:
+        reference = None
+    if reference is not None:
+        payload["receipt_reference"] = reference.to_dict()
+    return payload
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -6757,16 +6876,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 store=receipt_store,
             )
         except WorkflowToolError as receipt_error:
-            payload = {
-                "schema_version": LCK_SCHEMA_VERSION,
-                "kind": "lck-agent-view",
-                "operation": operation,
-                "task_number": task_number,
-                "status": "stale",
-                "code": exc.code,
-                "error": safe_text(str(exc), limit=2000),
-                "receipt_error": safe_text(str(receipt_error), limit=1000),
-            }
+            payload = _failure_fallback(
+                operation=operation,
+                task_number=task_number,
+                operation_id=operation_id,
+                status="stale",
+                code=exc.code,
+                error=str(exc),
+                receipt_error=receipt_error,
+                store=receipt_store,
+            )
         print_json(payload)
         return 3
     except WorkflowToolError as exc:
@@ -6782,15 +6901,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 store=receipt_store,
             )
         except WorkflowToolError as receipt_error:
-            payload = {
-                "schema_version": LCK_SCHEMA_VERSION,
-                "kind": "lck-agent-view",
-                "operation": operation,
-                "task_number": task_number,
-                "status": "stop",
-                "error": safe_text(str(exc), limit=2000),
-                "receipt_error": safe_text(str(receipt_error), limit=1000),
-            }
+            payload = _failure_fallback(
+                operation=operation,
+                task_number=task_number,
+                operation_id=operation_id,
+                status="stop",
+                code=None,
+                error=str(exc),
+                receipt_error=receipt_error,
+                store=receipt_store,
+            )
         print_json(payload)
         return 2
 

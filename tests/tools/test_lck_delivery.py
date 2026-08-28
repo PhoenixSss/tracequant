@@ -1673,6 +1673,78 @@ def test_delivery_complete_critical_outcome_failure_blocks_commit_and_remote(
     assert remote.calls == 0
 
 
+def test_delivery_failure_receipt_preserves_completed_operation_evidence(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "test_critical_path.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("def test_critical_path(): pass\n", encoding="utf-8")
+    head = "b" * 40
+    state = _live_state(
+        head=head,
+        clean=True,
+        project_status="In Progress",
+        open_pr=None,
+        remote_oid=None,
+    )
+
+    class FailingFinalRunner(CompletionRunner):
+        def run(
+            self,
+            argv: list[str] | tuple[str, ...],
+            *,
+            command_id: str,
+            **kwargs: Any,
+        ) -> CommandResult:
+            result = super().run(argv, command_id=command_id, **kwargs)
+            if tuple(argv[:2]) == ("git", "status"):
+                return CommandResult(command_id, tuple(argv), 0, " M candidate\n", "")
+            return result
+
+    runner = FailingFinalRunner()
+    resolver = SequenceResolver(tmp_path, runner, [state])
+    handler = lck.DeliveryCompleter(
+        cast(Any, resolver),
+        formal_validation=cast(Any, StubValidation()),
+        commit_effect=cast(Any, StubCommit(dirty=False)),
+        remote_effect=cast(Any, StubEffect("ensure_remote_branch", "created")),
+        pr_effect=cast(Any, StubEffect("ensure_open_pr", "created")),
+        status_effect=cast(Any, StubEffect("set_review_status", "updated")),
+        checks_gate=cast(Any, StubChecks()),
+    )
+
+    with pytest.raises(lck.LckStopError, match="local postcondition failed"):
+        handler.complete(
+            160,
+            commit_message="Implement LCK Delivery cutover",
+            summary="Move initial Delivery mechanics into LCK.",
+        )
+
+    store = lck.AuditReceiptStore(tmp_path)
+    payload = lck._write_failure_receipt(
+        operation="delivery-complete",
+        task_number=160,
+        operation_id="d" * 32,
+        status="stop",
+        code=None,
+        error="Delivery local postcondition failed",
+        handler=handler,
+        store=store,
+    )
+    receipt = store.read(payload["receipt_reference"])
+
+    assert handler.last_snapshot is not None
+    assert receipt["operation_snapshot"] == handler.last_snapshot.to_dict()
+    assert receipt["audit"]["critical_outcome"]["status"] == "pass"
+    assert receipt["audit"]["validation"]["status"] == "pass"
+    assert [item["effect"] for item in receipt["audit"]["effects"]] == [
+        "commit_current_tree",
+        "ensure_remote_branch",
+        "ensure_open_pr",
+        "set_review_status",
+    ]
+
+
 def test_delivery_complete_freezes_authority_for_the_operation(tmp_path: Path) -> None:
     target = tmp_path / "tests" / "test_critical_path.py"
     target.parent.mkdir(parents=True)

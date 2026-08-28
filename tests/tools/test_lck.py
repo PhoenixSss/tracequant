@@ -1525,6 +1525,62 @@ def test_lck_stop_result_has_structured_receipt_reference(
     assert receipt["agent_view"]["error"] == "live state is unavailable"
 
 
+def test_remediation_no_change_cli_replay_reuses_audit_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state = _review_state()
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": review_id,
+            "start_head_sha": SHA,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "f" * 64,
+            "findings_source": "local-review-record",
+            "authority": "test",
+        },
+    )
+    monkeypatch.setattr(
+        lck,
+        "LiveStateResolver",
+        lambda _root, repository=None: resolver,
+    )
+    argv = [
+        "--repo-root",
+        str(tmp_path),
+        "remediation",
+        "no-change",
+        "159",
+        "--review-id",
+        review_id,
+        "--summary",
+        "No implementation change required.",
+    ]
+
+    first_exit = lck.main(argv)
+    first = json.loads(capsys.readouterr().out)
+    second_exit = lck.main(argv)
+    second = json.loads(capsys.readouterr().out)
+
+    assert first_exit == second_exit == 0
+    assert first["replayed"] is False
+    assert second["replayed"] is True
+    assert first["receipt_reference"] == second["receipt_reference"]
+    assert second["next_action"]
+    receipt = lck.AuditReceiptStore(tmp_path).read(second["receipt_reference"])
+    assert receipt["agent_view"]["replayed"] is False
+    assert receipt["audit"]["replayed"] is False
+
+
 def test_review_prepare_allows_pending_checks_for_parallel_semantic_review(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3027,6 +3083,80 @@ def test_remediation_complete_uses_prepared_session_without_review_record(
     required = store.read_review_required(159)
     assert required is not None
     assert required["remediated_head"] == repaired_head
+
+
+def test_remediation_failure_receipt_preserves_nested_delivery_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _review_state(clean=False)
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    store = lck.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_remediation_session(
+        159,
+        {
+            "schema_version": lck.LCK_SCHEMA_VERSION,
+            "kind": "remediation-session",
+            "task_number": 159,
+            "review_id": review_id,
+            "start_head_sha": SHA,
+            "pr_number": 200,
+            "base_sha": SHA,
+            "findings_sha256": "f" * 64,
+            "findings_source": "local-review-record",
+            "authority": "test",
+        },
+    )
+
+    class FailingDeliveryCompleter:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            self.last_snapshot: lck.OperationSnapshot | None = None
+            self.last_critical_outcome: dict[str, Any] | None = None
+            self.last_validation: dict[str, Any] | None = None
+            self.last_effects: list[lck.EffectReceipt] = []
+
+        def complete(self, *_args: Any, **kwargs: Any) -> Any:
+            self.last_snapshot = kwargs["operation_snapshot"]
+            self.last_critical_outcome = {"status": "pass"}
+            self.last_validation = {"status": "pass", "command_count": 6}
+            self.last_effects = [
+                lck.EffectReceipt(
+                    "commit_current_tree",
+                    "committed",
+                    {"head_sha": "b" * 40},
+                )
+            ]
+            raise lck.LckStopError("remote branch effect failed")
+
+    monkeypatch.setattr(lck, "DeliveryCompleter", FailingDeliveryCompleter)
+    handler = lck.RemediationCompleter(resolver, store=store)
+
+    with pytest.raises(lck.LckStopError, match="remote branch effect failed"):
+        handler.complete(
+            159,
+            review_id,
+            commit_message="repair",
+            summary="repair",
+        )
+
+    audit_store = lck.AuditReceiptStore(tmp_path)
+    payload = lck._write_failure_receipt(
+        operation="remediation-complete",
+        task_number=159,
+        operation_id="e" * 32,
+        status="stop",
+        code=None,
+        error="remote branch effect failed",
+        handler=handler,
+        store=audit_store,
+    )
+    receipt = audit_store.read(payload["receipt_reference"])
+
+    assert handler.last_snapshot is not None
+    assert receipt["operation_snapshot"] == handler.last_snapshot.to_dict()
+    assert receipt["audit"]["validation"]["command_count"] == 6
+    assert receipt["audit"]["effects"][0]["effect"] == "commit_current_tree"
 
 
 def test_remediation_no_change_closes_prepared_session_without_new_head(
