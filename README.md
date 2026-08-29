@@ -1,188 +1,281 @@
 # TraceQuant
 
-An auditable research-to-live quantitative trading system for cryptocurrency perpetual futures.
+TraceQuant is intended to become an auditable research-to-live quantitative
+trading system for cryptocurrency perpetual futures. The current repository is
+the Research MVP foundation: it contains a small, validated Python package and
+the engineering documentation around it. It does not contain a trading system
+or an executable strategy yet.
 
-## Initial scope
+## Current capability and boundary
 
-- Exchange: Binance
-- Markets: USD-margined perpetual futures
-- Initial instruments: BTC and ETH USDT/USDC perpetual contracts
-- Decision horizon: approximately 15 minutes to 4 hours
-- Research focus:
-  - multi-factor signals;
-  - machine-learning filters;
-  - cost-aware backtesting;
-  - maker-preferred execution;
-  - strict risk control and auditability.
+The currently implemented public package is `tracequant` under `src/`:
 
-## Development principles
+- `tracequant.config`: explicit, immutable application settings and a
+  representation-safe `SecretValue` helper;
+- `tracequant.logging`: explicit JSON console/file logging and recursive
+  redaction of known sensitive fields;
+- `tracequant.core.time`: timezone-aware UTC validation, conversion, parsing,
+  and formatting;
+- `tracequant.domain`: the initial immutable `InstrumentId`, `TimeRange`, and
+  `OHLCVBar` models with validation and JSON-compatible serialization.
 
-- Correctness before performance.
-- Research before live trading.
-- Gross and net results must be reported separately.
-- Fees, funding, slippage, missed fills, and execution delay must be modeled.
-- Strategy, risk, execution, and exchange connectivity must remain separated.
-- Live trading must be disabled by default.
-- All implementation work is tracked through GitHub Issues and Pull Requests.
+The `apps/`, `packages/`, and `deploy/` directories currently establish future
+boundaries through small README files. They are not implemented product
+packages. There is currently no exchange client, market-data ingestion,
+database, data pipeline, feature or label pipeline, backtester, strategy,
+machine-learning model, order or account service, risk engine, live runtime,
+or multi-exchange implementation.
 
-## Repository structure
-
-TraceQuant is a modular monorepo. The current bootstrap package remains in `src/tracequant/` while product boundaries are established before implementation is moved into them.
-
-- `apps/research/`: research-facing orchestration.
-- `apps/runtime/`: Shadow, Demo, and Live runtime entry points.
-- `apps/console/`: future operator UI/control-plane boundary.
-- `packages/contracts/`: stable cross-boundary schemas and interfaces.
-- `packages/domain/`: core domain models and invariants.
-- `packages/adapters/`: exchange, storage, database, filesystem, and vendor integrations.
-- `deploy/research|staging|live/`: environment-specific deployment assets.
-- `src/tracequant/`: currently implemented bootstrap Python package.
-- `tests/`: unit, integration, and regression tests.
-- `docs/`: architecture, research reports, risk rules, ADRs, and workflow documentation.
-- `.github/`: Issue templates, Pull Request template, and CI workflows.
-
-See [Repository structure](docs/architecture/repository-structure.md) for boundary rules and future extraction criteria.
-
-## Documentation
-
-- [Technical baseline](docs/architecture/technical-baseline.md): current approved technology choices and architecture boundaries.
-- [Initial domain models](docs/architecture/domain-models.md): public Research MVP market-data models, validation, serialization, and test-factory boundaries.
-- [Project roadmap](docs/planning/project-roadmap.md): current four-stage plan, Issue navigation, dependencies, and implementation entry point.
-- [Planning baseline v1.0](docs/planning/quant-system-planning-baseline-v1.0.md): historical planning snapshot retained for context and decision history.
-- [Deep research report](docs/research/deep-research-report.md): historical broad research on markets, strategies, data, backtesting, and operations.
-- [Deep research report 2](docs/research/deep-research-report-2.md): historical follow-up research used to refine the technical direction.
-- [Technical roadmap research](docs/research/technical-roadmap-research.md): historical comparative research behind the selected implementation route.
-- [WSL2 Codex environment](docs/workflows/wsl2-codex-environment/README.md): reproducible WSL2 setup, diagnostics, approval boundaries, rollback, and troubleshooting.
-- [Historical WSL2 GitHub evidence runner archive](docs/workflows/wsl2-github-evidence-runner/README.md): frozen pre-LCK publication evidence only; the executable Task lifecycle Runner, profiles, and Rules were removed during LCK v1 cutover.
-
-## Current status
-
-The project is in its initial planning and repository setup stage. No live-trading capability has been implemented.
+“Research MVP” therefore means a reliable foundation for later research work,
+not a claim that research, backtesting, Demo, or Live trading is available.
 
 ## Development environment
 
-Python 3.13 and [uv](https://docs.astral.sh/uv/) are required. The repository `.python-version` pins the project environment to Python 3.13, matching CI and the supported TraceQuant runtime baseline. Create or update the local environment with:
+Use a clean checkout with:
+
+- Python `3.13` (`>=3.13,<3.14`), as pinned by `.python-version` and CI;
+- uv `0.12.1`, the version used by the repository workflow;
+- Git and a supported shell.
+
+uv creates and manages the project environment. No manual virtual-environment
+activation is required:
 
 ```console
 uv sync --locked --dev
+uv run --frozen python -c "import tracequant; print(tracequant.__name__)"
 ```
 
-Verify that the project package is importable with:
+The first command is the clean-install command. It uses `uv.lock`; do not
+replace it with an unlocked install when reproducing CI.
 
-```console
-uv run python -c "import tracequant; print(tracequant.__name__)"
+### Environment variables
+
+The committed [`.env.example`](.env.example) lists the current variable
+contract. The application does not automatically read `.env`, `.env.*`, or
+`.env.example`. Copying `.env.example` is only a reference operation; values
+must be exported, supplied by IDE/env-file tooling, or passed explicitly to
+`load_settings`.
+
+For a POSIX shell (Linux/macOS/WSL):
+
+```sh
+export TRACEQUANT_ENV=development
+export TRACEQUANT_LOG_FORMAT=json
+uv run --frozen pytest
 ```
 
-Run the test suite with:
+For Windows PowerShell:
 
-```console
-uv run pytest
+```powershell
+$env:TRACEQUANT_ENV = "development"
+$env:TRACEQUANT_LOG_FORMAT = "json"
+uv run --frozen pytest
 ```
 
-Run lint and formatting checks with:
+PowerShell uses `$env:NAME = "value"`, while POSIX shells use `export
+NAME=value`. `uv run` works without activating `.venv` on either platform.
+When setting `TRACEQUANT_LOG_DIR`, use the host platform's path syntax, such as
+`logs/app` on POSIX or `logs\app` on Windows. Keep repository text files UTF-8
+with LF line endings; check a change with `git diff --check`.
 
-```console
-uv run ruff check .
-uv run ruff format --check .
-```
+### Canonical quality commands
 
-Run strict type checking with:
+These are the one set of local commands corresponding to the current CI
+workflow (`.github/workflows/ci.yml`):
 
-```console
-uv run mypy src tests
-```
+| Purpose | Command |
+| --- | --- |
+| Install locked development dependencies | `uv sync --locked --dev` |
+| Tests | `uv run --frozen pytest` |
+| Ruff lint | `uv run --frozen ruff check .` |
+| Ruff format check | `uv run --frozen ruff format --check .` |
+| Strict type check | `uv run --frozen mypy src tests` |
 
-For the supported VS Code Remote WSL + Codex environment, including pinned uv, GitHub CLI authentication, proxy behavior, diagnostics, and rollback, see [the WSL2 environment guide](docs/workflows/wsl2-codex-environment/README.md).
+CI also runs `uv lock --check` after syncing dependencies. It runs the same
+pytest, Ruff, and mypy commands shown above for pull requests targeting `main`
+and pushes to `main`. Do not introduce a second command set in another guide.
 
-## Continuous integration
-
-Pull requests targeting `main` and pushes to `main` automatically run CI. The workflow runs pytest, Ruff lint, Ruff format checking, and mypy. Use the equivalent local commands in the existing Development environment section above.
-
-## UTC time handling
-
-Internal datetimes must be timezone-aware and use UTC as the standard timezone. Naive datetimes are explicitly rejected. Time utilities are provided by `tracequant.core.time`.
-
-## Configuration
-
-Application configuration is loaded explicitly with `tracequant.config.load_settings`.
-Importing the module does not read environment variables, parse `.env` files, create
-directories, or cache a global settings singleton.
-
-Supported environment variables:
-
-- `TRACEQUANT_ENV`: required; one of `development`, `test`, or `production`.
-- `TRACEQUANT_LOG_LEVEL`: optional; one of `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`; defaults to `INFO`.
-- `TRACEQUANT_LOG_FORMAT`: optional; one of `text` or `json`; defaults to `json`. Logging currently supports `json`.
-- `TRACEQUANT_LOG_DIR`: optional; empty or unset disables file logging.
-
-Loading priority is:
+## Repository layout
 
 ```text
-explicit load_settings arguments
-> process environment variables
-> defaults
+src/tracequant/                 implemented bootstrap package
+  config.py                     explicit settings loading
+  logging.py                    structured JSON logging
+  core/time.py                  UTC utilities
+  domain/models.py              initial domain models
+tests/                          package and workflow tests
+  fixtures/domain.py            deterministic domain factories, test-only
+apps/                           future research/runtime/console boundaries
+packages/                       future contracts/domain/adapters boundaries
+deploy/                         future environment-specific deployment assets
+docs/                           architecture, development, research, workflow docs
+.env.example                    documented environment-variable names
+pyproject.toml                  package and tool configuration
+uv.lock                         locked dependency resolution
 ```
 
-Use `.env.example` as the committed variable list and copy values into your shell,
-IDE, or env-file tooling when needed. Local `.env` and `.env.*` files remain ignored
-by Git and are not read automatically by this project.
+The `tests/tools/` subtree tests the repository workflow tooling. It is not a
+runtime dependency of `tracequant`. The intended boundaries and dependency
+direction are described in [Repository structure](docs/architecture/repository-structure.md).
 
-Tests can construct isolated settings directly:
+## Public API quick start
+
+### Configuration
+
+Loading is explicit. The `environ` argument makes a deterministic isolated
+mapping useful in tests; omitting it reads the process environment at call
+time:
+
+```python
+from tracequant.config import Environment, Settings, load_settings
+
+settings = load_settings(environ={"TRACEQUANT_ENV": "development"})
+assert settings == Settings(environment=Environment.DEVELOPMENT)
+```
+
+Explicit arguments take precedence over environment values, which take
+precedence over defaults. `TRACEQUANT_ENV` is required. Importing the config
+module does not read environment values, load dotenv files, create directories,
+or create a global settings object.
+
+### Structured logging
+
+Configure logging explicitly after loading settings:
 
 ```python
 from tracequant.config import Environment, Settings
+from tracequant.logging import configure_logging
 
-settings = Settings(environment=Environment.TEST)
+settings = Settings(environment=Environment.DEVELOPMENT)
+configure_logging(settings)
 ```
 
-`SecretValue` provides redacted `repr` and `str` output for future sensitive fields.
-It is a display-safety boundary only, not encryption, a secrets manager, or a system
-keyring. Current configuration scope does not include exchange credentials, account
-settings, databases, trading modes, structured logging setup, or automatic log
-directory creation.
+The current logging implementation emits one-line JSON records to stderr. It
+can additionally append to `tracequant.jsonl` below an explicitly configured
+directory. It only accepts `LogFormat.JSON`; although the configuration parser
+accepts both `text` and `json` as values for `TRACEQUANT_LOG_FORMAT`, passing
+`LogFormat.TEXT` to `configure_logging` raises `LoggingConfigError`. Use JSON
+for the current logging path.
 
-## Structured logging
+Known sensitive mapping keys are redacted case-insensitively, and
+`SecretValue` is representation-safe. This is not encryption or a secret
+manager, and redaction cannot reliably detect a credential manually
+concatenated into a free-text message. Never put credentials in log messages.
 
-Applications configure logging explicitly with `tracequant.logging.configure_logging(settings)`.
-Importing the logging module does not configure handlers, create directories, or open
-files. Modules should continue to use `logging.getLogger(__name__)`.
+### UTC time
 
-JSON log records are single-line UTF-8 objects with stable `timestamp`, `level`,
-`logger`, and `message` fields. Timestamps are timezone-aware UTC ISO 8601 strings.
-When `settings.log_dir` is set, the exact directory is created and logs are appended
-to `tracequant.jsonl`; when it is empty or unset, only console logging is enabled.
+All domain timestamps must be timezone-aware. Utilities accept aware non-UTC
+values and normalize them to UTC; naive values are rejected:
 
-Known sensitive keys are redacted case-insensitively in structured fields and
-exception output: `password`, `secret`, `token`, `api_key`, `apikey`,
-`authorization`, and `cookie`. This boundary does not guarantee detection of secrets
-that callers manually concatenate into free-text messages, so callers must not place
-raw credentials in log messages.
+```python
+from datetime import UTC, datetime
 
-## Agent workflow evidence and validation
+from tracequant.core.time import format_utc, parse_utc
 
-Repository workflow Skills use LCK for lifecycle mechanics and the fixed
-Validation Runner for deterministic validation summaries:
-
-```text
-tools/agent_workflow/lck.py
-tools/agent_workflow/wsl2_validation_runner.py
+when = datetime(2024, 2, 29, 23, 45, tzinfo=UTC)
+assert format_utc(when) == "2024-02-29T23:45:00Z"
+assert parse_utc("2024-02-29T23:45:00Z") == when
 ```
 
-Local outputs are stored only in Git-ignored directories:
+### Initial domain models
 
-```text
-.agents/evidence.local/
-.agents/validation.local/
+The public import path is:
+
+```python
+import json
+from datetime import UTC, datetime
+
+from tracequant.domain import InstrumentId, OHLCVBar
+
+bar = OHLCVBar(
+    instrument=InstrumentId("BTCUSDT"),
+    start=datetime(2024, 2, 29, 23, 45, tzinfo=UTC),
+    end=datetime(2024, 3, 1, 0, 0, tzinfo=UTC),
+    open=100.0,
+    high=110.0,
+    low=90.0,
+    close=105.0,
+    volume=12.5,
+)
+json.dumps(bar.to_dict(), allow_nan=False)
 ```
 
-See `.agents/policies/workflow-evidence.md`. These tools do not replace semantic
-review, independent PR review, manual Merge, or Feature closeout.
+Models are immutable and validate their inputs. `InstrumentId` is a trimmed,
+ASCII uppercase letters-and-digits identifier of at most 32 characters;
+`TimeRange` is a UTC half-open interval; and `OHLCVBar` contains finite float
+OHLCV values with non-negative volume and consistent high/low bounds. These
+models intentionally do not represent venues, order books, orders, accounts,
+timeframes, persistence schemas, or exchange metadata. See [Initial public
+domain models](docs/architecture/domain-models.md) for the full boundary.
 
-- [LCK v1 Design Charter](docs/workflows/LCK-v1-Design-Charter.md): live-state Task lifecycle authority and phase boundaries.
-- [Agent workflow Skills](docs/workflows/agent-skills.md): current Codex/Claude Skills, source-of-truth ownership, and validation entry points.
-- [Validation Runner](docs/workflows/wsl2-validation-runner/README.md): fixed validation profiles, compact artifacts, exact argv, and process cleanup.
-- [Task Skill runner migration](docs/workflows/task-skill-runner-migration/README.md): historical migration record only; not an operational guide.
+### Shared test fixtures
+
+Reusable deterministic factories belong to `tests/fixtures/domain.py`, not to
+the production package. `tests/conftest.py` exposes them as function-scoped
+pytest fixtures:
+
+```python
+from fixtures.domain import BarFactory
+
+
+def test_example_bar(bar_factory: BarFactory) -> None:
+    bar = bar_factory()
+    assert str(bar.instrument) == "BTCUSDT"
+```
+
+Use explicit symbols, UTC timestamps, and prices when those values matter to a
+test. The fixed factory defaults are test conveniences and are not production
+data or runtime configuration.
+
+## Security and known limitations
+
+- Live trading is disabled because no trading runtime exists. Do not add real
+  exchange credentials or API keys to the repository, examples, issues, or
+  logs. Local `.env` files, keys, logs, databases, and research data are
+  ignored by Git, but ignoring a file is not a substitute for secret hygiene.
+- The current configuration only covers environment name, log level, log
+  format, and an optional log directory. It has no exchange credentials,
+  account, database, trading-mode, or automatic log-setup fields.
+- File logging is an explicit logging setup action. An empty or unset
+  `TRACEQUANT_LOG_DIR` disables it; a non-empty path is created by
+  `configure_logging`, not by importing a module. The current logger writes
+  JSON only and appends to one file named `tracequant.jsonl`.
+- UTC utilities reject naive datetimes, but callers still own the boundary
+  validation for external data. Domain serialization is explicit and
+  JSON-compatible; it is not a versioned external storage contract. OHLCV
+  numeric fields require finite Python `float` values, while zero and negative
+  prices are currently allowed at this initial boundary.
+- The shared fixtures cover only the initial domain models. They do not model
+  exchange responses, missing or duplicated market data, fills, accounts, or
+  production state.
+- The current repository does not provide database storage, raw/canonical data
+  layers, factors, labels, backtesting, model training, execution, risk
+  decisions, monitoring, or multi-exchange adapters. Those are future Issues,
+  not available capabilities.
+- Documentation and Agent workflow controls have separate responsibilities.
+  LCK and the Validation Runner describe repository lifecycle mechanics; they
+  do not add business or trading functionality. See the [WSL2 Codex environment
+  guide](docs/workflows/wsl2-codex-environment/README.md) only when working in
+  that specific environment.
+
+## Documentation map
+
+- [Technical baseline](docs/architecture/technical-baseline.md): current
+  implementation facts and explicitly deferred research/trading architecture.
+- [Repository structure](docs/architecture/repository-structure.md): current
+  tree, dependency direction, and future boundary rules.
+- [Initial public domain models](docs/architecture/domain-models.md): model
+  invariants, serialization, and test-factory boundary.
+- [Project roadmap](docs/planning/project-roadmap.md): planning and Issue
+  navigation, not proof that planned capabilities are implemented.
+- [Issue workflow](docs/development/issue-workflow.md): repository lifecycle
+  semantics for implementation work.
+- [Agent workflow Skills](docs/workflows/agent-skills.md): current workflow
+  controls, separate from the business architecture.
+- [WSL2 Codex environment](docs/workflows/wsl2-codex-environment/README.md):
+  environment-specific setup and diagnostics.
 
 ## License
 
-TraceQuant is publicly accessible but is not currently distributed under an open-source license. All rights are reserved. See `LICENSE`.
+TraceQuant is publicly accessible but is not currently distributed under an
+open-source license. See [LICENSE](LICENSE).
