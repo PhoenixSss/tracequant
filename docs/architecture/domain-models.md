@@ -1,29 +1,96 @@
 # Initial public domain models
 
-TraceQuant's Research MVP exposes its first internal public domain models from:
+The current Research MVP foundation exposes three immutable value models from
+one public import path:
 
 ```python
-from tracequant.domain import InstrumentId, OHLCVBar, TimeRange
+from tracequant.domain import DomainValidationError, InstrumentId, OHLCVBar, TimeRange
 ```
 
-`InstrumentId` normalizes a single-market symbol to at most 32 trimmed ASCII uppercase
-letters and digits. `TimeRange` represents a timezone-aware UTC half-open interval
-`[start, end)`. `OHLCVBar` binds an instrument and interval to finite `float` OHLCV
-values, a non-negative volume, and consistent high/low bounds. Aware non-UTC inputs
-follow the existing `tracequant.core.time` contract and are normalized to UTC; naive
-datetimes are rejected.
+These are internal Python interfaces for the current repository. They are not
+an exchange schema, an order/account model, or a promise of long-term external
+serialization compatibility.
 
-Each immutable model provides explicit `to_dict` and `from_dict` methods. Their output
-contains only stable public values, uses the project's UTC ISO 8601 format, and can be
-handled directly by Python's standard `json` module. These are internal Research MVP
-interfaces, not a promise of long-term external serialization compatibility.
+## Invariants
 
-Prices are intentionally allowed to be zero or negative at this boundary. These models
-do not model venues, market types, base/quote parsing, tick or lot sizes, timeframes,
-trade counts, VWAP, exchange metadata, orders, accounts, or persistence schemas.
+| Model | Current contract |
+| --- | --- |
+| `InstrumentId` | Trims surrounding whitespace, normalizes to ASCII uppercase letters and digits, and rejects empty values or values longer than 32 characters. |
+| `TimeRange` | Contains `start` and `end` as a timezone-aware UTC half-open interval `[start, end)`, with `start < end`. Aware non-UTC values are normalized to UTC; naive values are rejected. |
+| `OHLCVBar` | Binds an `InstrumentId` to a `TimeRange` and finite Python `float` OHLCV values. Volume is non-negative; `high` is not below open/low/close and `low` is not above open/high/close. |
 
-Tests keep one-off values in their owning test module. Deterministic constructors that
-are genuinely reused across modules live in `tests/fixtures/domain.py`; `conftest.py`
-only exposes those small factories as function-scoped pytest fixtures. Callers should
-override business-significant symbols, times, and prices explicitly rather than hide
-them behind a larger fixture platform.
+`OHLCVBar` currently allows zero and negative prices. That is an intentional
+boundary decision for this initial model, not a complete venue or instrument
+validation policy. The models do not represent venues, market types, quote/base
+assets, tick or lot sizes, timeframes, trade counts, VWAP, funding, mark/index
+prices, exchange metadata, orders, accounts, persistence, or risk decisions.
+
+Validation failures are `ValueError` subclasses. `DomainValidationError` is
+exported for callers that need to distinguish domain invariant failures from
+ordinary type errors.
+
+## Serialization
+
+Each model has explicit `to_dict()` and `from_dict()` methods. The output uses
+only JSON-compatible strings and finite floats:
+
+- `InstrumentId.to_dict()` returns its string value;
+- `TimeRange.to_dict()` returns exact `start` and `end` fields;
+- `OHLCVBar.to_dict()` returns exact instrument, interval, and OHLCV fields;
+- deserialization rejects missing, extra, or incorrectly typed fields;
+- datetime strings use the UTC ISO 8601 form with a `Z` suffix.
+
+The following deterministic example uses the current public API:
+
+```python
+import json
+from datetime import UTC, datetime
+
+from tracequant.domain import InstrumentId, OHLCVBar
+
+bar = OHLCVBar(
+    instrument=InstrumentId("BTCUSDT"),
+    start=datetime(2024, 2, 29, 23, 45, tzinfo=UTC),
+    end=datetime(2024, 3, 1, 0, 0, tzinfo=UTC),
+    open=100.0,
+    high=110.0,
+    low=90.0,
+    close=105.0,
+    volume=12.5,
+)
+payload = bar.to_dict()
+json.dumps(payload, allow_nan=False)
+assert OHLCVBar.from_dict(payload) == bar
+```
+
+Serialization is a validated interchange helper for the current package. It
+does not define a versioned database schema, a canonical exchange-data schema,
+or a persistence strategy.
+
+## UTC boundary
+
+`tracequant.core.time` is the shared boundary for `ensure_aware`, `to_utc`,
+`parse_utc`, and `format_utc`. Domain constructors normalize aware values and
+reject naive values; callers remain responsible for validating external event
+time semantics before constructing a model. No domain model consults the
+machine's local timezone.
+
+## Test-factory boundary
+
+One-off values stay in the owning test. Deterministic factories reused across
+domain tests live in `tests/fixtures/domain.py`:
+
+- `make_instrument(value="BTCUSDT")`;
+- `make_time_range(start=..., end=...)`;
+- `make_bar(instrument=..., start=..., end=..., open=..., high=..., low=...,
+  close=..., volume=...)`.
+
+The default range is the fixed UTC interval
+`2024-02-29T23:45:00Z` to `2024-03-01T00:00:00Z`, and default prices/volume are
+fixed constants. `tests/conftest.py` exposes these callables as function-scoped
+`instrument_factory`, `time_range_factory`, and `bar_factory` fixtures.
+
+Fixtures import the production models so tests can construct valid values, but
+production modules never import fixtures. The factories are not a data source,
+runtime dependency, exchange simulator, or substitute for future market-data
+fixtures.
