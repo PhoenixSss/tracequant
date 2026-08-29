@@ -22,7 +22,7 @@ Python standard library
 ├── tracequant.core.time
 └── tracequant.logging ──> config + core.time
 
-core.time ──> tracequant.domain.models
+tracequant.domain.models ──> tracequant.core.time
 ```
 
 The public foundation consists of:
@@ -202,8 +202,9 @@ not be presented as trading functionality.
 
 ## 9. Placeholder and stub audit
 
-The repository was searched for `TODO`, `FIXME`, `NotImplementedError`,
-`pass`, `placeholder`, and `stub`, with matches classified by context:
+The tracked repository was searched for `TODO`, `FIXME`, `NotImplementedError`,
+`pass`, `placeholder`, and `stub` (excluding `.git` and ignored local
+workflow artifacts), with matches classified by context:
 
 - `src/tracequant/` contains no matching unfinished-work marker. The current
   production package has no undocumented code placeholder.
@@ -215,11 +216,24 @@ The repository was searched for `TODO`, `FIXME`, `NotImplementedError`,
   `pass` in exception cleanup/no-op branches and use `pass` as a serialized
   status value. These are workflow-tool implementation details, not business
   module stubs.
+- The active workflow Skills in `.agents/skills/` and `.claude/skills/` use
+  `pass`/`PASS` for lifecycle outcomes and review protocol language; the
+  feature-audit Skill also uses `placeholder` when describing a finding to
+  inspect. These are workflow instructions and review vocabulary, not product
+  implementation stubs.
+- `AGENTS.md`, `.agents/policies/`, and `docs/development/` use `pass`/`PASS`
+  as governance, validation, and lifecycle terminology. These matches state
+  protocol outcomes or constraints and do not identify unfinished runtime
+  work.
 - `.github/ISSUE_TEMPLATE/*.yml` uses `placeholder` as GitHub form-field UI
   metadata. It is not application code.
-- Historical workflow reports, publication registers, and templates contain
-  `placeholder`/`FILL_ME` as explicitly historical or template status values.
-  They are not current implementation evidence and must not be read as product
+- `docs/workflows/task-workflow-architecture-audit.md` uses `placeholder` for
+  unavailable historical Task #86 evidence and `pass`/`PASS` for audit status
+  and protocol outcomes. It is a workflow audit record, not product code.
+- Other `docs/workflows/` reports, evidence records, publication registers,
+  and templates use `pass`/`PASS` as validation or protocol status values and
+  `placeholder`/`FILL_ME` as explicitly historical or template values. They
+  are not current implementation evidence and must not be read as product
   functionality.
 
 No current production data, research, execution, or risk capability is being

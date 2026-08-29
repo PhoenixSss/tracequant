@@ -52,7 +52,7 @@ Python standard library
 └── tracequant.logging ──> tracequant.config
                          └> tracequant.core.time
 
-tracequant.core.time ──> tracequant.domain.models
+tracequant.domain.models ──> tracequant.core.time
 
 tests ──> tracequant public APIs
 tests ──> tests/fixtures/domain.py ──> tracequant.domain
@@ -60,8 +60,8 @@ tests ──> tests/fixtures/domain.py ──> tracequant.domain
 
 The diagram is an import graph, not a claim that fixtures are part of the
 runtime. The responsibility layers can be read as configuration and time
-primitives supporting logging and domain models, with test factories as a
-separate test-support layer.
+primitives supporting logging, while domain models depend on the UTC
+primitives; test factories remain a separate test-support layer.
 
 ### Allowed boundaries
 
