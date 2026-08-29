@@ -7,6 +7,7 @@ from typing import Any
 from workflow_common import is_sha
 from workflow_evidence import _formal_blockers_gate
 
+from .issue_profiles import LeafIssueKind, resolve_issue_profile
 from .models import (
     LiveState,
     Phase,
@@ -23,6 +24,7 @@ class PhaseDecision:
     eligible: bool
     reasons: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
+    issue_profile: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -30,6 +32,7 @@ class PhaseDecision:
             "eligible": self.eligible,
             "reasons": list(self.reasons),
             "capabilities": list(self.capabilities),
+            "issue_profile": self.issue_profile,
         }
 
 
@@ -46,6 +49,10 @@ class PhaseEligibilityResolver:
         reasons = list(state.stop_reasons)
         issue = state.issue
         relationships = state.relationships
+        profile_resolution = resolve_issue_profile(
+            issue if isinstance(issue, Mapping) else None
+        )
+        issue_profile = profile_resolution.to_dict()
         if state.status is not ResolutionStatus.RESOLVED:
             reasons.append("live state resolution stopped")
         if state.repository is None:
@@ -53,6 +60,11 @@ class PhaseEligibilityResolver:
         if not isinstance(issue, Mapping):
             reasons.append("Task metadata is unavailable")
         else:
+            profile = profile_resolution.profile
+            if not profile_resolution.resolved:
+                reasons.append(profile_resolution.error_message)
+            elif profile is not None and not profile.lifecycle_enabled:
+                reasons.append(profile_resolution.error_message)
             issue_state = str(issue.get("state", "")).upper()
             if phase is not Phase.CLOSEOUT and issue_state != "OPEN":
                 reasons.append("Task is not OPEN")
@@ -68,12 +80,6 @@ class PhaseEligibilityResolver:
                         "lifecycle labels must be exactly ['codex:ready']: "
                         f"{sorted(lifecycle_labels) or 'none'}"
                     )
-                issue_type = relationships.get("issue_type")
-                is_task = "type:task" in labels or (
-                    isinstance(issue_type, str) and issue_type.casefold() == "task"
-                )
-                if not is_task:
-                    reasons.append("target Issue is not a type:task")
             project = issue.get("project_status")
             allowed_projects = {
                 Phase.DELIVERY_PREPARE: {"Ready", "In Progress"},
@@ -100,23 +106,29 @@ class PhaseEligibilityResolver:
             if project not in allowed_projects:
                 reasons.append("Project Status is unavailable or unknown")
             if phase in {Phase.DELIVERY_PREPARE, Phase.DELIVERY_COMPLETE}:
-                critical = issue.get("critical_outcome")
                 if (
-                    not isinstance(critical, Mapping)
-                    or critical.get("status") != "valid"
+                    profile is not None
+                    and profile.issue_kind is LeafIssueKind.TASK
+                    and profile.requires_critical_outcome
                 ):
-                    detail = (
-                        critical.get("detail")
-                        if isinstance(critical, Mapping)
-                        else "contract unavailable"
-                    )
-                    reasons.append(f"Critical Outcome contract invalid: {detail}")
+                    critical = issue.get("critical_outcome")
+                    if (
+                        not isinstance(critical, Mapping)
+                        or critical.get("status") != "valid"
+                    ):
+                        detail = (
+                            critical.get("detail")
+                            if isinstance(critical, Mapping)
+                            else "contract unavailable"
+                        )
+                        reasons.append(f"Critical Outcome contract invalid: {detail}")
 
         blocker_gate = _formal_blockers_gate(relationships)
         if blocker_gate.get("status") != "pass":
             detail = blocker_gate.get("detail") or "formal blocker gate did not pass"
             reasons.append(f"formal blocker gate: {detail}")
 
+        capabilities: tuple[str, ...] = ()
         if phase is Phase.DELIVERY_PREPARE:
             if state.merged is True:
                 reasons.append("Task already has a merged PR")
@@ -234,4 +246,5 @@ class PhaseEligibilityResolver:
             eligible=not reasons,
             reasons=tuple(dict.fromkeys(reasons)),
             capabilities=capabilities,
+            issue_profile=issue_profile,
         )

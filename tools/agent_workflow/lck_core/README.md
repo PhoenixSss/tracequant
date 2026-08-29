@@ -5,7 +5,8 @@ maintainer or reviewer can start with the responsibility that owns the behavior.
 
 | Concern | Start here | Typical companion modules |
 | --- | --- | --- |
-| contracts, immutable state/result models | `models.py` | — |
+| leaf Issue type/profile contract and routing | `issue_profiles.py` | `models.py`, `eligibility.py` |
+| contracts, immutable state/result models | `models.py` | `issue_profiles.py` |
 | live Git/GitHub facts, Fact Profiles, operation snapshots | `state.py` | `models.py` |
 | lifecycle admission / eligibility | `eligibility.py` | `state.py` |
 | formal validation and required-check gates | `validation.py` | `state.py` |
@@ -34,6 +35,7 @@ plus at most its direct companion modules before broad repository searches.
 The former mixed `tests/tools/test_lck.py` suite is responsibility-owned too:
 
 - `test_lck_state.py` — live-state, Fact Profiles, resolver query contracts.
+- `test_lck_issue_profiles.py` — canonical leaf Issue type/profile resolution.
 - `test_lck_prepare.py` — prepare/admission and eligibility behavior.
 - `test_lck_review.py` — Review workspace, Review Complete, Merge Preflight.
 - `test_lck_remediation.py` — remediation sessions and partial-effect recovery.

@@ -544,6 +544,7 @@ def test_resolver_recovers_deleted_noncanonical_branch_from_closing_pr(
         "number": 162,
         "title": "[Task] 将 Merge Preflight、Closeout 与 Recovery 迁移至 LCK",
         "state": "CLOSED",
+        "labels": {"items": ["type:task"]},
         "issue_closure": {
             "evidence_status": "complete",
             "closed_by_pull_requests": {
