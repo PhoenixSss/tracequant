@@ -77,6 +77,11 @@ snapshot、guard、validation/check evidence 和诊断信息保存在 ignored
 `.workflow.local/lck/audit-receipts/` Receipt 中，progress heartbeat 仍只写 stderr，不能
 成为第二个 lifecycle result。
 
+Review Prepare 的 formal validation 是 exact reviewed head 的 authoritative mechanical
+validation。Semantic Reviewer 应消费 Prepare 返回的 validation/check evidence，不默认重跑
+pytest、Ruff、mypy、lock 或 Skill validator 等等价 suite。这里的 independent 指
+**independent semantic judgement**，不是 duplicate mechanical validation。
+
 ## 4. Fresh semantic context and read-only workspace
 
 LCK 在系统临时目录创建 reviewed head 的 detached standalone clone；它通过本地 clone
@@ -96,6 +101,10 @@ remediation rationale 或 persuasive framing 当作 evidence。
 Review Agent 可以读取完整 effective diff、相关 unchanged code、tests、docs、config
 和 public interfaces；必须逐项判断 Acceptance Criteria、正确性、failure paths、
 安全边界与回归风险。
+对 tests 的检查是读取 test source、判断 coverage 与 failure semantics。sealed `review_root`
+是 immutable review evidence artifact，不是 executable development workspace。若 LCK 已提供的
+validation/check evidence 无法支持某项 requirement 判断，Reviewer 必须报告明确的
+validation/evidence gap，而不是在 sealed clone 中自行执行 suite 创建替代 validation authority。
 Review Prepare 不等待 CI checks 进入终态；semantic Review 可以与 CI 并行。Checks
 success 只在 Review Complete 与后续 Merge Preflight 的 fresh gate 中决定是否可进入
 人工合并边界。

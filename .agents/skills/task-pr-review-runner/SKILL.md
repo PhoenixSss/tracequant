@@ -69,8 +69,12 @@ uv run --frozen python tools/agent_workflow/lck.py review prepare <TASK>
 
 Proceed only on `READY_FOR_SEMANTIC_REVIEW`. Use the returned `review_id`, current
 Task Contract, current review target, validation/check state, and `review_root`.
-The `review_root` is a detached, clean, implementation-read-only standalone temporary
-clone for the live-resolved head. The source tracked tree and source Git metadata remain
+Before sealing, Review Prepare has already run and persisted the authoritative
+formal Review validation for the exact reviewed head. Consume that returned
+validation/check evidence; do not independently reproduce it. The `review_root`
+is a detached, clean, implementation-read-only standalone temporary clone for the
+live-resolved head and an immutable review evidence artifact, not an executable
+development workspace. The source tracked tree and source Git metadata remain
 read-only; only ignored LCK operation/evidence state may be written outside the clone.
 Review Prepare may begin while CI checks are pending or have failed; check success
 is revalidated as a fresh gate by Review Complete and Merge Preflight.
@@ -93,10 +97,18 @@ Read the complete effective diff and necessary related code. Build an independen
 coverage/evidence matrix. The current Task Contract, effective diff, and necessary related
 code are the default semantic context. Comments, Parent/Epic bodies, and other hierarchy
 or history are not default Review input; expand only when the current Task explicitly
-references them or a concrete ambiguity/dependency requires it. Check correctness, failure
-behavior, tests, docs/config/public interfaces, and workflow/security boundaries when
-applicable. Delivery conclusions, old Review verdicts, and old remediation rationale are
-not evidence.
+references them or a concrete ambiguity/dependency requires it. Inspect correctness,
+failure behavior, test source, coverage, and failure semantics, docs/config/public
+interfaces, and workflow/security boundaries when applicable. Inspecting tests means
+reading their source and judging semantic coverage; do not execute pytest, Ruff, mypy,
+lock checks, Skill validators, or an equivalent formal validation suite in the sealed
+`review_root`. Delivery conclusions, old Review verdicts, and old remediation rationale
+are not evidence.
+
+If the LCK-supplied validation/check evidence is insufficient to judge a Task
+requirement, report a specific **validation/evidence gap**. Do not create substitute
+validation authority by rerunning a suite in the sealed clone. The independence of
+Review is independent semantic judgement, not duplicate mechanical validation.
 
 Findings use Blocking, High, Medium, Low, Nit. Blocking/High/Medium defects or unmet
 Task requirements produce FAIL. When the unmet requirement is provider-attributed,

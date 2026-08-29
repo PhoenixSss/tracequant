@@ -51,6 +51,31 @@ Historical Evidence snapshots may locate audit material, but they must not
 select or authorize a current Task target. A targeted validation profile is not
 CI-equivalent.
 
+## Authority consumption
+
+For LCK-managed phases, consume the bounded LCK result for facts and validation
+owned by that operation instead of independently reproducing the same mechanical
+work. Additional checks or evidence expansion require a concrete diagnostic or
+audit trigger; precaution, Task importance, or a desire for a more complete
+report is not sufficient.
+
+This boundary applies in particular to three normal paths:
+
+- Delivery uses targeted development feedback until the candidate is
+  targeted-ready, then enters LCK Delivery Complete for authoritative Critical
+  Outcome and formal validation rather than pre-running an equivalent full suite.
+- Review Prepare runs and persists formal Review validation for the exact
+  reviewed head before sealing the clone. Semantic Review consumes that evidence
+  and inspects tests as source/coverage; the sealed `review_root` is evidence, not
+  a workspace for rerunning the validation suite.
+- A terminal successful Closeout reports from compact `lck-agent-view` and stops.
+  `receipt_reference` is an on-demand audit pointer, not a default dereference
+  instruction.
+
+When bounded evidence is genuinely insufficient, report the gap or expand only
+the referenced evidence needed for the current diagnosis. Such supplemental work
+is non-authoritative unless LCK itself defines it as part of the operation.
+
 ## Execution identity
 
 Use the Skill and Runner explicitly invoked from the current repository. Do not
