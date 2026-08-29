@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final, cast
 
 from workflow_common import WorkflowToolError, is_sha
+
+from .issue_profiles import TASK_PROFILE, canonical_branch_for_profile
 
 BASE_BRANCH: Final = "main"
 REQUIRED_CHECKS_WORKFLOW: Final = ".github/workflows/ci.yml"
@@ -181,14 +182,7 @@ def canonical_task_branch(task_number: int, title: str) -> str:
     keeps the branch stable for mixed-language titles without trusting a
     branch name supplied by an Agent.
     """
-    title_without_prefix = re.sub(r"^\s*\[[^]]+\]\s*", "", title)
-    normalized = unicodedata.normalize("NFKD", title_without_prefix)
-    ascii_title = normalized.encode("ascii", "ignore").decode("ascii")
-    words = re.findall(r"[a-zA-Z0-9]+", ascii_title.casefold())
-    slug = "-".join(words[:12]).strip("-")
-    if not slug:
-        slug = "task"
-    return f"task/{task_number}-{slug}"
+    return canonical_branch_for_profile(TASK_PROFILE, task_number, title)
 
 
 def _jsonable(value: Any) -> Any:
@@ -388,7 +382,7 @@ def _pr_base_sha(pr: Mapping[str, Any] | None) -> str | None:
 
 @dataclass(frozen=True)
 class LiveState:
-    """Current mechanical facts acquired from Git and GitHub."""
+    """Current mechanical facts acquired from Git and GitHub for one Issue."""
 
     task_number: int
     repository: str | None
@@ -410,6 +404,7 @@ class LiveState:
     warnings: tuple[Mapping[str, Any], ...] = ()
     merged_pr: Mapping[str, Any] | None = None
     task_contract: Mapping[str, Any] | None = None
+    issue_profile: Mapping[str, Any] | None = None
 
     @property
     def project_status(self) -> str | None:
@@ -451,6 +446,7 @@ class LiveState:
                         if isinstance(self.task_contract, Mapping)
                         else None
                     ),
+                    "issue_profile": self.issue_profile,
                     "relationships": self.relationships,
                     "git": self.git,
                     "target_branch": self.target_branch,
@@ -481,6 +477,7 @@ class LiveState:
             "repository": self.repository,
             "status": self.status,
             "issue": _issue_agent_view(self.issue),
+            "issue_profile": self.issue_profile,
             "target_branch": self.target_branch,
             "task_branch": {
                 "local": self.local_task_branch,

@@ -24,6 +24,7 @@ from workflow_evidence import (
     _repository_slug,
 )
 
+from .issue_profiles import canonical_branch_for_profile, resolve_issue_profile
 from .models import (
     _DIAGNOSTIC_FACT_PROFILE,
     BASE_BRANCH,
@@ -295,6 +296,11 @@ class LiveStateResolver:
         else:
             reasons.append("repository identity unavailable")
 
+        profile_resolution = resolve_issue_profile(issue)
+        issue_profile = profile_resolution.to_dict()
+        if not profile_resolution.resolved:
+            reasons.append(profile_resolution.error_message)
+
         git: Mapping[str, Any]
         if profile.include_git:
             if profile.include_workspace_inventory:
@@ -345,7 +351,15 @@ class LiveStateResolver:
             reasons.append("remote Task branch facts unavailable")
         title = issue.get("title") if isinstance(issue, Mapping) else None
         title_text = title if isinstance(title, str) else f"Task {task_number}"
-        canonical = canonical_task_branch(task_number, title_text)
+        canonical = (
+            canonical_branch_for_profile(
+                profile_resolution.profile,
+                task_number,
+                title_text,
+            )
+            if profile_resolution.profile is not None
+            else canonical_task_branch(task_number, title_text)
+        )
         candidates = sorted(local_branches | set(remote_branches))
         if len(candidates) > 1:
             reasons.append(f"multiple Task branch candidates: {candidates}")
@@ -512,6 +526,7 @@ class LiveStateResolver:
             stop_reasons=tuple(reasons),
             warnings=tuple(warnings),
             merged_pr=merged_pr,
+            issue_profile=issue_profile,
         )
 
 
