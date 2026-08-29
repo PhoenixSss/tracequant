@@ -1,0 +1,68 @@
+name: Documentation
+description: 用于新增、修正或收敛文档事实，不改变系统运行行为。
+title: "[Documentation] "
+labels:
+  - "type:documentation"
+  - "codex:needs-spec"
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Documentation 是 documentation leaf work item，遵循 Minimum sufficient specification。
+        正文只描述本次文档变化特有且完成工作所必需的信息；Parent、blocked-by 和 Project metadata 使用 GitHub native state，不复制通用 workflow、标准 CI 或 repository-wide rules。
+        Documentation 用于新增、修正或收敛文档事实；如果工作需要修改 runtime、业务源码、测试、CI、Agent control behavior 或其它系统行为，应重新分类为 Task / Bug 或拆分新的 implementation leaf。
+        文件扩展名本身不能决定工作是否属于 Documentation。
+        如果文档成立需要修改系统行为、源码、测试或控制流程，应拆分为 Task 或 Bug，而不是扩大 Documentation 的范围。
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: Documentation Goal
+      description: 说明本次需要新增、修正或收敛什么文档事实，以及完成后读者应能正确理解什么。
+      placeholder: |
+        更新……
+    validations:
+      required: true
+
+  - type: textarea
+    id: requirements
+    attributes:
+      label: Requirements
+      description: 只写本次文档变更特有的内容要求、事实边界和必要一致性要求；不要复制 Parent、架构全文、通用文档规则或标准验证流程。
+      placeholder: |
+        - ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance Criteria
+      description: 使用可明确判断的文档结果定义完成，例如内容准确、一致、链接有效或旧描述已被替换；不要填写通用 CI、PR 或 workflow checklist。
+      placeholder: |
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional documentation context
+      description: 可选。仅补充当前 Documentation 独有且确有必要的信息，例如事实来源、范围边界、重要约束、References 或标准检查之外的特殊验证；不要为了模板完整填写 N/A。
+      placeholder: |
+        仅在需要时填写，例如：
+
+        ### Sources / References
+        - ...
+
+        ### Scope Boundary / Non-goals
+        - ...
+
+        ### Constraints / Decisions
+        - ...
+
+        ### Documentation-specific Verification
+        - ...
+    validations:
+      required: false
