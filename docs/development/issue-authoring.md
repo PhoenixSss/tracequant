@@ -1,7 +1,7 @@
 # Issue Authoring (Issue Specification v2)
 
-本文件定义 TraceQuant 的 Issue Specification v2：五类 Issue（Epic / Feature / Task /
-Bug / Research）的职责、正文结构、authoring 规则和信息所有权。它与
+本文件定义 TraceQuant 的 Issue Specification v2：六类 Issue（Epic / Feature / Task /
+Bug / Documentation / Research）的职责、正文结构、authoring 规则和信息所有权。它与
 `.github/ISSUE_TEMPLATE/*.yml` 保持一致，是创建和迁移 Issue 的唯一 authoring 参考。
 
 > **核心原则：Minimum sufficient specification。**
@@ -22,13 +22,14 @@ Feature
 Leaf work item
 ├── Task      → implementation contract
 ├── Bug       → defect contract
+├── Documentation → documentation fact contract
 └── Research  → evidence / decision contract
 ```
 
-- Task、Bug、Research 是不同 work kind，但处于相同 leaf-work 层级，可作为 Feature 的
-  Sub-issue。
-- 少数情况下 Bug / Research 可直接挂在 Epic 下，但不是默认结构。
-- **不得**把五种类型理解为五个互斥层级。
+- Task、Bug、Documentation、Research 是不同 work kind，但处于相同 leaf-work 层级，可作为
+  Feature 的 Sub-issue。
+- 少数情况下 Bug / Documentation / Research 可直接挂在 Epic 下，但不是默认结构。
+- **不得**把六种类型理解为六个互斥层级。
 - 普通实现工作默认保持 `1 Task ≈ 1 PR ≈ 1 main squash commit`。
 
 ## 2. 信息所有权
@@ -47,6 +48,7 @@ Leaf work item
 | Behavioral capability | Feature |
 | Implementation contract | Task |
 | Defect contract | Bug |
+| Documentation fact contract | Documentation |
 | Evidence / decision investigation | Research |
 | Current Issue specification | Issue body |
 | Discussion / change history | Issue comments |
@@ -61,7 +63,7 @@ Leaf work item
 Issue body 中不得复制 repository-wide rules、标准验证、Git/PR workflow、Project
 metadata 或完整 Parent specification。
 
-## 3. 五类 Issue 的职责与正文结构
+## 3. 六类 Issue 的职责与正文结构
 
 ### Epic — outcome + boundaries
 
@@ -134,6 +136,22 @@ OPTIONAL：`Impact`、`Environment`、`Logs / Screenshots`、
 - Environment / Logs 非普适字段，均为 optional，不强迫填写 `N/A`。
 - Acceptance Criteria 描述恢复后的 contract，而不是简单“错误消失”。
 
+### Documentation — documentation fact contract（独立 Form，本身就是 leaf work item）
+
+> 用于新增、修正或收敛文档事实，完成后不改变系统运行行为。
+
+REQUIRED：`Documentation Goal`、`Requirements`、`Acceptance Criteria`
+OPTIONAL：`Additional documentation context`
+
+- Documentation Form 只收集完成本次文档变化所必需的最小信息；Sources / References、
+  Scope Boundary / Non-goals、Constraints / Decisions 和 documentation-specific
+  verification 仅在确有必要时通过 optional context 补充，不要求填写 `N/A`。
+- 如果工作需要修改 runtime、业务源码、测试、CI、Agent control behavior 或其它系统
+  行为，应重新分类为 Task / Bug，或拆分新的 implementation leaf，不得扩大 Documentation
+  范围。
+- 行为型 `.md`、policy、Agent instruction 或其它文件不会仅因文件扩展名而成为
+  Documentation；类型由工作是否改变文档事实与系统行为决定。
+
 ### Research — evidence / decision contract
 
 > 适用于 technical selection、exchange/API investigation、architecture spike、
@@ -172,6 +190,7 @@ state transition、regression condition。
 | Feature | REQUIRED |
 | Task | OPTIONAL（存在明显 scope-creep 风险时填写） |
 | Bug | OPTIONAL |
+| Documentation | OPTIONAL（仅在确有必要时通过 Additional documentation context 说明） |
 | Research | REQUIRED |
 
 不得为了模板完整强迫填写 `None` / `N/A` / `无`。
@@ -190,7 +209,7 @@ standard validation     → CI / repository rules
 branch / PR / Squash workflow → development docs / Ruleset
 ```
 
-标题前缀 `[Epic] / [Feature] / [Task] / [Bug] / [Research]` 和 `type:*` labels
+标题前缀 `[Epic] / [Feature] / [Task] / [Bug] / [Documentation] / [Research]` 和 `type:*` labels
 保留（personal account 下 native Issue Types 不可用，前缀对 notification、PR
 reference 和 plain-text Agent input 有辨识价值）。
 
@@ -207,7 +226,7 @@ reference 和 plain-text Agent input 有辨识价值）。
 1. Platform / maintainer / security hard boundaries
 2. Repository hard invariants and active durable decisions
    (applicable AGENTS.md, active architecture contracts, accepted ADRs)
-3. Current leaf Issue body (Task / Bug / Research)
+3. Current leaf Issue body (Task / Bug / Documentation / Research)
 4. Parent Feature current specification
 5. Parent Epic current outcome / constraints
 6. General conventions / background docs
@@ -277,7 +296,7 @@ observable behavior、meaningful edge cases、acceptance、important scope bound
 
 - `AGENTS.md` — repository hard safety、agent routing、issue-driven workflow。
 - `CLAUDE.md` — Claude Code 开发命令与架构上下文。
-- `.github/ISSUE_TEMPLATE/*.yml` — 五类 Issue Form 的字段定义（本文档的机器可执行
+- `.github/ISSUE_TEMPLATE/*.yml` — 六类 Issue Form 的字段定义（本文档的机器可执行
   对应物）。
 - `docs/architecture/*` — 稳定架构不变量。
 - `docs/development/*` — 可复用开发工作流（本文件即其一）。
