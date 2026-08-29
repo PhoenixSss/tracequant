@@ -156,12 +156,14 @@ Delivery Complete merely as a precaution or to "confirm" the candidate. The
 formal full Delivery validation is intentionally reserved for LCK Delivery
 Complete.
 
-A broader or full validation run is allowed only for a concrete diagnostic
-reason, such as a targeted failure indicating a cross-module regression, a
-change that spans global infrastructure, or an explicit maintainer request.
-Record and treat that run as diagnostic information only: it does not replace
-LCK's Critical Outcome verifier or formal validation, authorize commit/push/PR
-effects, or advance lifecycle state.
+A broader or full validation run is allowed only when concrete evidence requires
+diagnostic expansion, such as a targeted failure indicating a cross-module
+regression, an unresolved concern tied to observed behavior, or an explicit
+maintainer request. Task importance, broad scope, or a global-infrastructure
+classification alone is not a diagnostic trigger. Record and treat any broader
+run as diagnostic information only: it does not replace LCK's Critical Outcome
+verifier or formal validation, authorize commit/push/PR effects, or advance
+lifecycle state.
 
 During implementation, use a matching targeted Validation profile when useful:
 
@@ -175,6 +177,15 @@ Delivery authorization and do not weaken tests to obtain a pass. Any full
 validation performed for diagnosis remains non-authoritative; LCK Delivery
 Complete must still run its own Critical Outcome and formal Delivery validation
 and bind the exact validated tree before commit.
+
+Once change-relevant validation passes, known Task Contract gaps are closed,
+and no unresolved failure, finding, or concrete diagnostic concern remains,
+the candidate is **targeted-ready**. Proceed to LCK Delivery Complete. Do not
+insert precautionary repository-wide pytest/static validation, a second broad
+self-review, or status-only checking between targeted-ready and LCK merely to
+confirm the candidate. A newly observed failure/finding or an explicit
+maintainer request may reopen diagnostic work; that work remains
+non-authoritative.
 
 Before completion, inspect the complete workspace diff semantically. Remove or
 repair unrelated, generated, secret-bearing, or prohibited changes. The

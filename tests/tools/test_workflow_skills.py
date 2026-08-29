@@ -239,6 +239,11 @@ def test_delivery_skill_reserves_full_validation_for_lck_complete() -> None:
         assert "merely as a precaution" in implementation
         assert "concrete diagnostic" in implementation
         assert "explicit maintainer request" in implementation
+        assert "global-infrastructure" in implementation
+        assert "alone is not a diagnostic trigger" in implementation
+        assert "targeted-ready" in implementation
+        assert "precautionary repository-wide" in implementation
+        assert "status-only checking" in implementation
         assert "does not replace" in implementation
         assert "Critical Outcome verifier" in implementation
         assert "Critical Outcome and formal Delivery validation" in implementation
@@ -336,10 +341,63 @@ def test_review_skill_keeps_semantic_coverage_without_mechanical_handoff_matrix(
     text = ACTIVE_SKILLS["task-pr-review-runner"].read_text(encoding="utf-8")
     assert "AC\ncoverage/evidence matrix" in text
     assert "complete effective diff" in text
-    assert "Check correctness, failure" in text
-    assert "behavior, tests, docs/config/public interfaces" in text
+    assert "Inspect correctness" in text
+    assert "test source, coverage, and failure semantics" in text
     assert "Historical Skill matches source commit blob" not in text
     assert "All target Skills are canonical-state" not in text
+
+
+def test_task_skills_enforce_lck_authority_consumption_boundaries() -> None:
+    delivery_agent, delivery_claude = _dual_skill("task-delivery-runner")
+    review_agent, review_claude = _dual_skill("task-pr-review-runner")
+    closeout_agent, closeout_claude = _dual_skill("task-closeout")
+
+    assert _without_route_contract(delivery_agent) == delivery_claude
+    assert _without_route_contract(review_agent) == review_claude
+    assert _without_route_contract(closeout_agent) == closeout_claude
+
+    delivery = " ".join(delivery_agent.split())
+    for phrase in (
+        "targeted-ready",
+        "global-infrastructure classification alone is not a diagnostic trigger",
+        "Do not insert precautionary repository-wide pytest/static validation",
+        "A newly observed failure/finding or an explicit maintainer request",
+        "remains non-authoritative",
+    ):
+        assert phrase in delivery
+
+    review = " ".join(review_agent.split())
+    for phrase in (
+        "authoritative formal Review validation for the exact reviewed head",
+        "immutable review evidence artifact, not an executable development workspace",
+        "test source, coverage, and failure semantics",
+        "do not execute pytest, Ruff, mypy, lock checks, Skill validators",
+        "validation/evidence gap",
+        "not duplicate mechanical validation",
+    ):
+        assert phrase in review
+
+    closeout = " ".join(closeout_agent.split())
+    for phrase in (
+        "`receipt_reference` is a pointer, not an instruction to read",
+        "terminal success with Business Delivery `COMPLETE`, Cleanup `COMPLETE`",
+        "Do not follow `receipt_reference`",
+        "partial/unknown state",
+        "explicit maintainer request for audit details",
+        "Exact merge/branch/worktree audit details are not required",
+    ):
+        assert phrase in closeout
+
+    policy = (ROOT / ".agents/policies/workflow-evidence.md").read_text(
+        encoding="utf-8"
+    )
+    workflow = (ROOT / "docs/development/issue-workflow.md").read_text(encoding="utf-8")
+    review_doc = (ROOT / "docs/development/pr-review.md").read_text(encoding="utf-8")
+    assert "## Authority consumption" in policy
+    assert "receipt_reference` is an on-demand audit pointer" in policy
+    assert "candidate 进入 targeted-ready" in workflow
+    assert "independent semantic judgement" in review_doc
+    assert "immutable review evidence artifact" in review_doc
 
 
 def test_closeout_and_feature_audit_keep_manual_gates() -> None:

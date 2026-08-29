@@ -128,6 +128,11 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
   acquisition、validation/effect/postcondition evidence 与诊断日志保存在
   `.workflow.local/lck/audit-receipts/` 下的 operation-owned Audit Receipt；STOP、FAIL、stale
   等结果同样使用结构化 Agent View 和 Receipt，不以 progress stderr 代替 lifecycle result。
+- 对 LCK-owned mechanical facts / validation / lifecycle result，后续 Agent 默认消费当前
+  operation 的 bounded result，而不是为了 precaution、再次确认或报告完整性重新执行、重新
+  推导或展开完整审计证据。额外 diagnostic / audit expansion 必须有具体 failure、finding、
+  unresolved concern、anomaly、信息缺口或 maintainer 显式请求作为 trigger；补充结果仍不得
+  替代 LCK authority。
 - Initial Delivery 的 lifecycle mechanics（workspace prepare、commit validated tree、
   remote synchronization、OPEN PR resolve/create、Project Status → Review）由 LCK
   deterministic control 执行；Agent/Skill 不提供 branch/SHA/PR/refspec authority。
@@ -148,6 +153,10 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
 - 实现只处理当前 leaf Task；不进行无关重构。Targeted validation during implementation is
   development feedback only. Final Delivery authorization is owned by LCK, which runs the
   Critical Outcome and formal validation before committing the exact validated tree.
+- 当 change-relevant targeted validation 已通过、已知 Task Contract gap 已关闭且不存在新的
+  failure / finding / concrete diagnostic concern 时，candidate 进入 targeted-ready，应直接
+  调用 LCK Delivery Complete。Task scope 广、重要或属于 infrastructure 本身不足以触发一次
+  precautionary repository-wide validation。
 - Within one `delivery complete` invocation, the observed Task body, `origin/main`, Task
   branch and committed head are ephemeral preconditions. If they change before a later
   side effect, LCK stops and the next invocation reacquires/revalidates current facts; no
@@ -183,6 +192,11 @@ shared semantics 由 `docs/development/pr-review.md` 权威定义：
 fresh session、strict read-only、head lock、independent judgement、
 no Delivery mechanical authority inheritance、LCK live target resolution、
 Review Prepare/Complete operation-boundary stale guard、PASS / FAIL、new head → fresh re-review。
+
+Review Prepare 在 sealed handoff 前已经对 exact reviewed head 执行并持久化 formal Review
+validation。Independent Review 的独立性是 semantic judgement；Reviewer 消费该 validation/check
+evidence 并审阅 test source / coverage / failure semantics，不在 sealed review artifact 中重跑
+等价正式 validation。证据不足时报告 validation/evidence gap，而不是创建替代 authority。
 
 本文件只声明其在 lifecycle 中的位置：Review 可在 CI checks 运行期间与其并行，
 但 Review Complete 的 PASS 与 maintainer merge 前的 Merge Preflight 都必须
@@ -266,6 +280,11 @@ Closeout 仅在 maintainer 已人工 Squash Merge 后执行：
 
 Closeout 不 repair 代码、不手动 close Issue、不清理无关 branch、
 不评估 Feature completion。
+
+正常 terminal success（Business Delivery = COMPLETE、Cleanup = COMPLETE、`next_action`
+要求 stop）直接以 compact `lck-agent-view` 作为报告来源并停止。`receipt_reference` 是按需
+Audit pointer，不是默认读取指令；只有 STOP、PENDING/partial/unknown、effect anomaly、Agent
+View 信息不足或 maintainer 明确要求 merge identity / exact cleanup proof 等审计细节时才展开。
 
 ## 14. Feature Completion
 

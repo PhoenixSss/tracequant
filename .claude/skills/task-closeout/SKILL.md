@@ -84,6 +84,23 @@ and clean only the verified Task branch after head/tree/worktree proof. LCK
 never manually closes the Issue, uses force push, resets, deletes unrelated
 branches, or assesses Feature completion.
 
+### Result-consumption boundary
+
+The final compact `lck-agent-view` is the normal reporting authority for the
+Closeout invocation. `receipt_reference` is a pointer, not an instruction to
+read. When the Agent View reports terminal success with Business Delivery
+`COMPLETE`, Cleanup `COMPLETE`, and `next_action` directing the Agent to stop,
+report from that compact result and stop. Do not follow `receipt_reference` or
+open the successful Audit Receipt merely to restate merge identity, exact
+branch/worktree actions, or make the report more complete.
+
+Expand the Audit Receipt only when the current result has a concrete need for
+diagnosis or audit: STOP, Cleanup `PENDING`, partial/unknown state, an effect
+anomaly, an Agent View that is insufficient to determine the current outcome,
+or an explicit maintainer request for audit details such as merge identity or
+exact cleanup proof. Read only the evidence needed for that question; the
+Receipt remains audit evidence and is not a second lifecycle result.
+
 ## Recovery and reporting
 
 The same closeout command is the cleanup-only recovery entry when only the
@@ -91,8 +108,9 @@ exact verified Task refs remain. Reacquire live facts; do not reconstruct state
 from an old report. Stop and surface facts when the unique safe action cannot
 be proved.
 
-Report the canonical Task/PR, merge identity, Business Delivery, Cleanup,
-metadata, main synchronization, exact branch/worktree actions, preserved
-limitations, and actions not performed. Explicitly state that no merge,
-manual Issue close, repair commit, unrelated cleanup, or Feature completion
-occurred.
+For a normal terminal success, report the Task, Business Delivery, Cleanup,
+the bounded effect summary and limitations already present in the Agent View,
+plus the actions not performed. Exact merge/branch/worktree audit details are
+not required in the normal success report; provide them only when an allowed
+Audit Receipt trigger above applies. Explicitly state that no merge, manual
+Issue close, repair commit, unrelated cleanup, or Feature completion occurred.
