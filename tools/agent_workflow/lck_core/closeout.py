@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 from project_status import set_project_status_with_runner
 from research_policy import (
@@ -12,7 +12,7 @@ from research_policy import (
     require_typed_research_outcome,
 )
 from workflow_common import WorkflowToolError, is_sha, read_json_text, safe_text
-from workflow_evidence import _find_project_field, _find_project_status
+from workflow_evidence import _find_project_status
 
 from .eligibility import PhaseEligibilityResolver
 from .issue_profiles import LeafIssueKind, resolve_issue_profile
@@ -56,6 +56,49 @@ def _pending_receipt(
     if details:
         payload.update(details)
     return EffectReceipt(effect=effect, action=action, details=payload)
+
+
+CANONICAL_PROJECT_NUMBER: Final = 1
+RESEARCH_OUTCOME_QUERY: Final = r"""
+query($owner:String!, $projectNumber:Int!) {
+  user(login:$owner) {
+    projectV2(number:$projectNumber) {
+      items(first:100) {
+        nodes {
+          content {
+            ... on Issue {
+              number
+              repository { nameWithOwner }
+            }
+          }
+          fieldValueByName(name:"Research Outcome") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name }
+          }
+        }
+        pageInfo { hasNextPage }
+      }
+    }
+  }
+  organization(login:$owner) {
+    projectV2(number:$projectNumber) {
+      items(first:100) {
+        nodes {
+          content {
+            ... on Issue {
+              number
+              repository { nameWithOwner }
+            }
+          }
+          fieldValueByName(name:"Research Outcome") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name }
+          }
+        }
+        pageInfo { hasNextPage }
+      }
+    }
+  }
+}
+"""
 
 
 class MainSynchronizationEffect:
@@ -277,18 +320,23 @@ class ResearchOutcomeEffect:
         self.resolver = resolver
 
     def _query_outcome(self, repository: str, task_number: int) -> str | None:
+        owner, separator, _name = repository.partition("/")
+        if not separator or not owner:
+            return None
         result = self.resolver.runner.run(
             [
                 "gh",
-                "issue",
-                "view",
-                str(task_number),
-                "--repo",
-                repository,
-                "--json",
-                "projectItems",
+                "api",
+                "graphql",
+                "-f",
+                f"query={' '.join(RESEARCH_OUTCOME_QUERY.split())}",
+                "-F",
+                f"owner={owner}",
+                "-F",
+                f"projectNumber={CANONICAL_PROJECT_NUMBER}",
             ],
             command_id="lck-research-outcome-postcondition",
+            retries=1,
         )
         if result.returncode != 0 or not result.stdout.strip():
             return None
@@ -297,7 +345,42 @@ class ResearchOutcomeEffect:
         )
         if not isinstance(value, Mapping):
             return None
-        return _find_project_field(value.get("projectItems"), RESEARCH_OUTCOME_FIELD)
+        if value.get("errors"):
+            return None
+        data = value.get("data")
+        if not isinstance(data, Mapping):
+            return None
+        for scope in ("user", "organization"):
+            owner_data = data.get(scope)
+            if not isinstance(owner_data, Mapping):
+                continue
+            project = owner_data.get("projectV2")
+            if not isinstance(project, Mapping):
+                continue
+            items = project.get("items")
+            if not isinstance(items, Mapping):
+                continue
+            nodes = items.get("nodes")
+            if not isinstance(nodes, list):
+                continue
+            for item in nodes:
+                if not isinstance(item, Mapping):
+                    continue
+                content = item.get("content")
+                if not isinstance(content, Mapping):
+                    continue
+                content_repository = content.get("repository")
+                if (
+                    content.get("number") != task_number
+                    or not isinstance(content_repository, Mapping)
+                    or content_repository.get("nameWithOwner") != repository
+                ):
+                    continue
+                field_value = item.get("fieldValueByName")
+                if not isinstance(field_value, Mapping):
+                    return None
+                return safe_text(field_value.get("name"))
+        return None
 
     @staticmethod
     def _validate_binding(
@@ -723,6 +806,16 @@ class CloseoutCompleter:
         if not isinstance(raw_identity, Mapping):
             raise LckStopError("Closeout STOP: Review PASS identity is unavailable")
         reviewed = _identity_from_mapping(raw_identity)
+        current_contract = state.task_contract
+        current_body_sha256 = (
+            current_contract.get("body_sha256")
+            if isinstance(current_contract, Mapping)
+            else None
+        )
+        if current_body_sha256 != reviewed.task_body_sha256:
+            raise LckStopError(
+                "Closeout STOP: Review PASS is stale: Task Contract changed"
+            )
         if (
             reviewed.task_number != state.task_number
             or reviewed.pr_number != merged_pr.get("number")

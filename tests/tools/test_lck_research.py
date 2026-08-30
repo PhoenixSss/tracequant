@@ -215,14 +215,43 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
             if command[:3] == ("gh", "project", "item-edit"):
                 self.project_writes += 1
                 return CommandResult(command_id, command, 0, "", "")
-            if command[:3] == ("gh", "issue", "view"):
+            if command[:3] == ("gh", "api", "graphql"):
                 return CommandResult(
                     command_id,
                     command,
                     0,
-                    '{"projectItems":[{"fieldValues":[{"name":"IMPLEMENT",'
-                    '"field":{"name":"Research Outcome"}}]}]}\n',
+                    json.dumps(
+                        {
+                            "data": {
+                                "user": {
+                                    "projectV2": {
+                                        "items": {
+                                            "nodes": [
+                                                {
+                                                    "content": {
+                                                        "number": 199,
+                                                        "repository": {
+                                                            "nameWithOwner": "owner/repo"
+                                                        },
+                                                    },
+                                                    "fieldValueByName": {
+                                                        "name": "IMPLEMENT"
+                                                    },
+                                                }
+                                            ],
+                                            "pageInfo": {"hasNextPage": False},
+                                        }
+                                    }
+                                },
+                                "organization": None,
+                            }
+                        }
+                    ),
                     "",
+                )
+            if command[:3] == ("gh", "issue", "view"):
+                raise AssertionError(
+                    "Research Outcome must use the Project GraphQL query"
                 )
             raise AssertionError(f"unsupported lifecycle command: {command}")
 
