@@ -73,6 +73,28 @@ def test_parser_rejects_duplicate_critical_outcome_headings_across_levels() -> N
         parse_critical_outcome(body)
 
 
+def test_parser_ignores_fenced_critical_outcome_heading() -> None:
+    body = """### Objective
+Do one thing.
+
+```markdown
+## Critical Outcome
+Caller: fake
+Capability: fake
+Observable result: fake
+Verification test: tests/tools/test_lck.py::test_fake
+```
+
+### Critical Outcome
+Caller: real
+Capability: bounded effect
+Observable result: observable result
+Verification test: tests/tools/test_lck.py::test_canonical_branch_is_derived_from_current_issue_title
+"""
+
+    assert parse_critical_outcome(body).caller == "real"
+
+
 def test_parser_accepts_markdown_bullet_and_bold_labels() -> None:
     body = """### Critical Outcome
 - **Caller:** CLI

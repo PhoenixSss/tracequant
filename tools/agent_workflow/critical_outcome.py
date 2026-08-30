@@ -14,10 +14,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
+from markdown_sections import extract_markdown_sections
 from workflow_common import CommandRunner, ProgressReporter, safe_text
 
-_SECTION_HEADING: Final = re.compile(r"^#{1,6}\s+Critical Outcome\s*$", re.IGNORECASE)
-_NEXT_HEADING: Final = re.compile(r"^#{1,6}\s+")
 _FIELD_LINE: Final = re.compile(
     r"^\s*(?:[-*+]\s*)?(?:\*\*)?"
     r"(?P<key>Caller|Capability|Observable result|Verification test)"
@@ -84,21 +83,18 @@ def parse_critical_outcome(body: str | None) -> CriticalOutcomeContract:
     if not isinstance(body, str) or not body.strip():
         raise CriticalOutcomeError("Task body is unavailable")
 
-    lines = body.splitlines()
-    section_starts = [
-        index
-        for index, line in enumerate(lines)
-        if _SECTION_HEADING.fullmatch(line.strip())
-    ]
-    if len(section_starts) != 1:
+    sections = tuple(
+        section
+        for section in extract_markdown_sections(body)
+        if section.name.casefold() == "critical outcome"
+    )
+    if len(sections) != 1:
         raise CriticalOutcomeError(
             "Task body must contain exactly one level 1-6 'Critical Outcome' section"
         )
 
     values: dict[str, str] = {}
-    for raw in lines[section_starts[0] + 1 :]:
-        if _NEXT_HEADING.match(raw.strip()):
-            break
+    for raw in sections[0].content.splitlines():
         match = _FIELD_LINE.fullmatch(raw)
         if match is None:
             continue
