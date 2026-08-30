@@ -8,6 +8,7 @@ facts; it never interprets Issue content as a command or execution plan.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -95,6 +96,28 @@ _VAGUE_VALUES: Final = frozenset(
         "works as expected",
     }
 )
+_NON_REPRODUCIBLE_EVIDENCE_VALUES: Final = frozenset(
+    {
+        "cannot reproduce",
+        "cannot reproduce in current environment",
+        "not reproducible",
+        "not reproducible in current environment",
+        "unable to reproduce",
+        "无法复现",
+        "无法在当前环境复现",
+        "当前环境无法复现",
+        "暂时无法复现",
+        "暂时无法在当前环境复现",
+    }
+)
+_FORM_PLACEHOLDER_RE: Final = re.compile(
+    r"^(?:实际发生|正确行为应为|复现步骤或证据)\s*:\s*(?:[.…]+)?$",
+    re.IGNORECASE,
+)
+_CHECKBOX_PLACEHOLDER_RE: Final = re.compile(
+    r"^(?:[-*]\s*)?\[\s*(?:x| )?\s*\]\s*(?:[.…]+)?$",
+    re.IGNORECASE,
+)
 
 
 def _default_bug_template_path() -> Path:
@@ -175,11 +198,33 @@ def _section_details(body: str) -> tuple[tuple[str, str], ...]:
 
 
 def _is_placeholder(content: str) -> bool:
-    normalized = " ".join(content.split()).casefold()
+    normalized = unicodedata.normalize("NFKC", " ".join(content.split())).casefold()
     if normalized in _PLACEHOLDER_VALUES or normalized in _VAGUE_VALUES:
         return True
+    if _FORM_PLACEHOLDER_RE.fullmatch(normalized):
+        return True
     # Markdown checkboxes with no actual criterion are not acceptance evidence.
-    return bool(re.fullmatch(r"(?:[-*]\s*)?\[\s*[xX ]?\s*\]", normalized))
+    lines = [line.strip() for line in content.splitlines() if line.strip()]
+    return bool(lines) and all(
+        _CHECKBOX_PLACEHOLDER_RE.fullmatch(
+            unicodedata.normalize("NFKC", line).casefold()
+        )
+        for line in lines
+    )
+
+
+def _is_non_reproducible_evidence(content: str) -> bool:
+    """Reject evidence that only says the defect cannot currently be reproduced."""
+
+    normalized = unicodedata.normalize("NFKC", " ".join(content.split())).casefold()
+    if normalized in _NON_REPRODUCIBLE_EVIDENCE_VALUES:
+        return True
+    form_prefix = "复现步骤或证据:"
+    return (
+        normalized.startswith(form_prefix)
+        and normalized.removeprefix(form_prefix).strip()
+        in _NON_REPRODUCIBLE_EVIDENCE_VALUES
+    )
 
 
 def _insufficient_sections(
@@ -192,7 +237,13 @@ def _insufficient_sections(
     insufficient: list[str] = []
     for heading, content in sections:
         label = required_keys.get(heading.casefold())
-        if label is not None and _is_placeholder(content):
+        if label is not None and (
+            _is_placeholder(content)
+            or (
+                label.casefold() == "reproduction / evidence"
+                and _is_non_reproducible_evidence(content)
+            )
+        ):
             insufficient.append(label)
     return tuple(insufficient)
 

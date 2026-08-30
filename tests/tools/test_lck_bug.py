@@ -24,6 +24,7 @@ from bug_policy import (  # type: ignore[import-not-found]  # noqa: E402
     is_valid_bug_contract,
 )
 from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
+    closeout as lck_closeout,
     eligibility as lck_eligibility,
     issue_profiles as lck_profiles,
     models as lck_models,
@@ -31,6 +32,7 @@ from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
 )
 from lck_test_support import (  # noqa: E402
     FakeRunner,
+    StaticResolver,
     _install_facts,
     _issue,
     _relationships,
@@ -191,6 +193,52 @@ def test_bug_contract_is_bound_to_form_and_fails_closed_on_ambiguous_evidence(
     assert any("duplicate sections: Expected" in reason for reason in decision.reasons)
 
 
+def _body_with_section_content(body: str, section: str, content: str) -> str:
+    marker = f"### {section}\n\n"
+    start = body.index(marker) + len(marker)
+    end = body.find("\n### ", start)
+    if end < 0:
+        end = len(body)
+    return body[:start] + content.strip() + "\n\n" + body[end + 1 :]
+
+
+@pytest.mark.parametrize(
+    ("section", "placeholder"),
+    [
+        ("Observed", "实际发生：\n..."),
+        ("Expected", "正确行为应为：\n..."),
+        ("Reproduction / Evidence", "复现步骤或证据：\n无法在当前环境复现"),
+        ("Acceptance Criteria", "- [ ] ..."),
+    ],
+)
+def test_bug_form_placeholders_stop_before_delivery_admission(
+    monkeypatch: pytest.MonkeyPatch,
+    section: str,
+    placeholder: str,
+) -> None:
+    body = _body_with_section_content(BUG_BODY, section, placeholder)
+    contract = bug_contract_snapshot(body)
+
+    assert contract["status"] == BugPolicyStatus.RECLASSIFICATION_REQUIRED.value
+    assert section in contract["insufficient_sections"]
+
+    issue = _bug_issue()
+    issue.update({"body": body, "bug_contract": contract})
+    fake = FakeRunner(branch="main")
+    _install_facts(
+        monkeypatch,
+        fake,
+        issue=issue,
+        relationships=_relationships(issue_type="Bug"),
+    )
+    decision = lck_eligibility.PhaseEligibilityResolver().resolve(
+        _resolver(fake).resolve(159), lck_models.Phase.DELIVERY_PREPARE
+    )
+
+    assert not decision.eligible
+    assert any("Bug defect contract invalid" in reason for reason in decision.reasons)
+
+
 def test_bug_review_stales_when_candidate_head_changes() -> None:
     reviewed = _review_identity_value()
     state = _review_state()
@@ -250,3 +298,98 @@ def test_bug_branch_namespace_isolated_from_task_aliases() -> None:
         159,
         lck_profiles.TASK_PROFILE,
     )
+
+
+def test_bug_closeout_uses_shared_path_for_merged_bug_branch() -> None:
+    state = _review_state()
+    bug_branch = "bug/159-enable-implementation-bearing-bug-workflow"
+    bug_contract = bug_contract_snapshot(BUG_BODY)
+    issue = dict(state.issue)
+    issue.update(
+        {
+            "state": "CLOSED",
+            "labels": {"items": ["type:bug"]},
+            "project_status": "Done",
+            "body": BUG_BODY,
+            "bug_contract": bug_contract,
+            "critical_outcome": None,
+            "issue_closure": {
+                "evidence_status": "complete",
+                "status": "closed-by-pr",
+                "closer_repository": "owner/repo",
+                "closer_number": 200,
+            },
+        }
+    )
+    merged_pr = {
+        "number": 200,
+        "state": "MERGED",
+        "baseRefName": "main",
+        "baseRefOid": "a" * 40,
+        "headRefName": bug_branch,
+        "headRefOid": "a" * 40,
+        "mergeCommit": {"oid": "b" * 40},
+        "mergedAt": "2026-08-23T00:00:00Z",
+        "closingIssuesReferences": [{"number": 159}],
+    }
+    task_contract = dict(cast(dict[str, Any], state.task_contract))
+    task_contract.update(
+        {"body": BUG_BODY, "bug_contract": bug_contract, "critical_outcome": None}
+    )
+    bug_state = replace(
+        state,
+        issue=issue,
+        relationships=_relationships(issue_type="Bug"),
+        target_branch=bug_branch,
+        local_task_branch=bug_branch,
+        local_task_head="a" * 40,
+        remote_task_branch=bug_branch,
+        remote_task_oid="a" * 40,
+        open_pr=None,
+        merged_pr_numbers=(200,),
+        merged=True,
+        merged_pr=merged_pr,
+        task_contract=task_contract,
+    )
+
+    class FixedEffect:
+        def __init__(self, effect: str, action: str) -> None:
+            self.receipt = lck_models.EffectReceipt(
+                effect=effect, action=action, details={}
+            )
+
+        def execute(self, *_args: Any, **_kwargs: Any) -> lck_models.EffectReceipt:
+            return self.receipt
+
+    class ReviewStore:
+        def read_latest_review(self, _task_number: int) -> dict[str, Any]:
+            return {"task_number": 159, "review_id": "bug-review", "verdict": "PASS"}
+
+        def read_record(self, _task_number: int, _review_id: str) -> dict[str, Any]:
+            return {
+                "task_number": 159,
+                "review_id": "bug-review",
+                "verdict": "PASS",
+                "status": "READY_FOR_MERGE_PREFLIGHT",
+                "identity": {
+                    "task_number": 159,
+                    "pr_number": 200,
+                    "base_sha": "a" * 40,
+                    "head_sha": "a" * 40,
+                    "task_body_sha256": issue["body_sha256"],
+                    "merge_base_sha": "a" * 40,
+                    "effective_diff_sha256": "e" * 64,
+                    "changed_files": [],
+                },
+            }
+
+    result = lck_closeout.CloseoutCompleter(
+        StaticResolver(Path.cwd(), bug_state),
+        main_effect=FixedEffect("synchronize_main", "synchronized"),
+        metadata_effect=FixedEffect("converge_task_metadata", "already-converged"),
+        cleanup_effect=FixedEffect("cleanup_task_refs", "already-clean"),
+        review_store=ReviewStore(),
+    ).complete(159)
+
+    assert result.business_delivery == "COMPLETE"
+    assert result.cleanup == "COMPLETE"
