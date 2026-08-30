@@ -21,6 +21,17 @@ from documentation_policy import (
     DOCUMENTATION_TEMPLATE_PATH,
     documentation_contract_snapshot,
 )
+from research_policy import (
+    RESEARCH_OUTCOME_FIELD,
+    RESEARCH_TEMPLATE_PATH,
+    ResearchPolicyError,
+    architecture_decision_is_consistent,
+    decision_contract_snapshot,
+    is_implementation_outcome,
+    is_valid_research_contract,
+    parse_research_outcome,
+    research_contract_snapshot,
+)
 from workflow_common import (
     CommandResult,
     CommandRunner,
@@ -44,6 +55,7 @@ EVIDENCE_ROOT: Final = ".agents/evidence.local"
 SNAPSHOT_SUBDIR: Final = "snapshots"
 MAX_CHILDREN: Final = 50
 MAX_FILES: Final = 100
+CANONICAL_PROJECT_NUMBER: Final = 1
 
 RELATIONSHIPS_QUERY: Final = r"""
 query($owner:String!, $name:String!, $number:Int!) {
@@ -52,6 +64,8 @@ query($owner:String!, $name:String!, $number:Int!) {
       number
       title
       state
+      body
+      labels(first:100) { nodes { name } pageInfo { hasNextPage } }
       issueType { name }
       parent { number title state }
       subIssues(first:100) {
@@ -59,16 +73,71 @@ query($owner:String!, $name:String!, $number:Int!) {
           number
           title
           state
-          labels(first:20) { nodes { name } }
+          body
+          labels(first:100) { nodes { name } pageInfo { hasNextPage } }
         }
         pageInfo { hasNextPage }
       }
       blockedBy(first:50) {
-        nodes { number title state }
+        nodes {
+          number
+          title
+          state
+          body
+          labels(first:100) { nodes { name } pageInfo { hasNextPage } }
+          projectItems(first:20) {
+            nodes {
+              project {
+                number
+                owner {
+                  ... on User { login }
+                  ... on Organization { login }
+                }
+              }
+              fieldValues(first:20) {
+                nodes {
+                  ... on ProjectV2ItemFieldSingleSelectValue {
+                    name
+                    field { ... on ProjectV2SingleSelectField { name } }
+                  }
+                }
+                pageInfo { hasNextPage }
+              }
+            }
+            pageInfo { hasNextPage }
+          }
+        }
         pageInfo { hasNextPage }
       }
       blocking(first:50) {
-        nodes { number title state }
+        nodes {
+          number
+          title
+          state
+          body
+          labels(first:100) { nodes { name } pageInfo { hasNextPage } }
+          projectItems(first:20) {
+            nodes {
+              project {
+                number
+                owner {
+                  ... on User { login }
+                  ... on Organization { login }
+                }
+              }
+              fieldValues(first:20) {
+                nodes {
+                  ... on ProjectV2ItemFieldSingleSelectValue {
+                    name
+                    field { ... on ProjectV2SingleSelectField { name } }
+                  }
+                }
+                pageInfo { hasNextPage }
+              }
+            }
+            pageInfo { hasNextPage }
+          }
+        }
         pageInfo { hasNextPage }
       }
     }
@@ -474,8 +543,12 @@ def _issue_view_with_contract(
         if isinstance(runner_root, Path)
         else None
     )
+    research_template_path = (
+        runner_root / RESEARCH_TEMPLATE_PATH if isinstance(runner_root, Path) else None
+    )
     is_documentation = "type:documentation" in normalized_labels
     is_task = "type:task" in normalized_labels
+    is_research = "type:research" in normalized_labels
     raw_comments = value.get("comments", [])
     comment_facts: list[dict[str, Any]] = []
     if isinstance(raw_comments, list):
@@ -509,10 +582,20 @@ def _issue_view_with_contract(
             if is_documentation
             else None
         ),
+        "research_contract": (
+            research_contract_snapshot(body, template_path=research_template_path)
+            if is_research
+            else None
+        ),
         "comment_count": len(comment_facts) if include_comments else None,
         "state": safe_text(value.get("state")),
         "labels": bounded_list(sorted(normalized_labels)),
         "project_status": _find_project_status(value.get("projectItems")),
+        "research_outcome": (
+            _find_project_field(value.get("projectItems"), RESEARCH_OUTCOME_FIELD)
+            if "type:research" in normalized_labels
+            else None
+        ),
         "url": safe_text(value.get("url")),
         "closed_at": safe_text(value.get("closedAt")),
         "closing_pull_requests": bounded_list(pull_refs),
@@ -530,6 +613,8 @@ def _issue_view_with_contract(
             "body_sha256": issue["body_sha256"],
             "critical_outcome": issue["critical_outcome"],
             "documentation_contract": issue["documentation_contract"],
+            "research_contract": issue["research_contract"],
+            "research_outcome": issue["research_outcome"],
         }
         if include_contract and body is not None
         else None
@@ -569,6 +654,91 @@ def _find_project_status(value: Any) -> str | None:
             if result:
                 return result
     return None
+
+
+def _find_project_field(value: Any, field_name: str) -> str | None:
+    """Find a named Project single-select value in bounded GitHub JSON."""
+
+    if isinstance(value, Mapping):
+        field = value.get("field")
+        if isinstance(field, Mapping) and field.get("name") == field_name:
+            for key in ("name", "value", "text"):
+                candidate = value.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    return safe_text(candidate)
+        for key, nested in value.items():
+            if str(key).casefold() == field_name.casefold():
+                if isinstance(nested, str) and nested.strip():
+                    return safe_text(nested)
+                if isinstance(nested, Mapping):
+                    for candidate_key in ("name", "value", "text"):
+                        candidate = nested.get(candidate_key)
+                        if isinstance(candidate, str) and candidate.strip():
+                            return safe_text(candidate)
+            result = _find_project_field(nested, field_name)
+            if result is not None:
+                return result
+    elif isinstance(value, list):
+        for nested in value:
+            result = _find_project_field(nested, field_name)
+            if result is not None:
+                return result
+    return None
+
+
+def _canonical_research_outcome(
+    project_items: Any,
+    *,
+    repository: str,
+) -> str | None:
+    """Read Research Outcome only from the repository owner's canonical Project."""
+
+    if not isinstance(project_items, Mapping):
+        return None
+    nodes = project_items.get("nodes")
+    page_info = project_items.get("pageInfo")
+    if not isinstance(nodes, list) or not isinstance(page_info, Mapping):
+        return None
+    if page_info.get("hasNextPage") is not False:
+        return None
+    owner, separator, _name = repository.partition("/")
+    if not separator or not owner:
+        return None
+
+    canonical_items: list[Mapping[str, Any]] = []
+    for item in nodes:
+        if not isinstance(item, Mapping):
+            continue
+        project = item.get("project")
+        if not isinstance(project, Mapping):
+            continue
+        project_number = project.get("number")
+        project_owner = project.get("owner")
+        project_owner_login = (
+            project_owner.get("login") if isinstance(project_owner, Mapping) else None
+        )
+        if (
+            isinstance(project_number, int)
+            and not isinstance(project_number, bool)
+            and project_number == CANONICAL_PROJECT_NUMBER
+            and isinstance(project_owner_login, str)
+            and project_owner_login.casefold() == owner.casefold()
+        ):
+            canonical_items.append(item)
+
+    # A missing or duplicate canonical item is not evidence for a blocker gate.
+    if len(canonical_items) != 1:
+        return None
+    field_values = canonical_items[0].get("fieldValues")
+    if not isinstance(field_values, Mapping):
+        return None
+    field_page_info = field_values.get("pageInfo")
+    if (
+        not isinstance(field_page_info, Mapping)
+        or field_page_info.get("hasNextPage") is not False
+    ):
+        return None
+    return _find_project_field(field_values, RESEARCH_OUTCOME_FIELD)
 
 
 def _graphql(
@@ -834,6 +1004,7 @@ def _relationship_snapshot(
                 continue
             labels: list[str] = []
             raw_labels = item.get("labels")
+            labels_complete = False
             if isinstance(raw_labels, dict) and isinstance(
                 raw_labels.get("nodes"), list
             ):
@@ -842,12 +1013,39 @@ def _relationship_snapshot(
                     for label in raw_labels["nodes"]
                     if isinstance(label, dict) and isinstance(label.get("name"), str)
                 ]
+                page = raw_labels.get("pageInfo")
+                labels_complete = (
+                    isinstance(page, dict) and page.get("hasNextPage") is False
+                )
+            body = item.get("body") if isinstance(item.get("body"), str) else None
+            is_research = "type:research" in labels
+            research_outcome = (
+                _canonical_research_outcome(
+                    item.get("projectItems"),
+                    repository=repository,
+                )
+                if is_research
+                else None
+            )
             normalized.append(
                 {
                     "number": item.get("number"),
                     "title": safe_text(item.get("title")),
                     "state": safe_text(item.get("state")),
                     "labels": sorted(labels),
+                    "labels_complete": labels_complete,
+                    "research_contract": (
+                        research_contract_snapshot(body) if is_research else None
+                    ),
+                    "decision_contract": (
+                        decision_contract_snapshot(body, research=True)
+                        if is_research
+                        else None
+                    ),
+                    "research_outcome": safe_text(research_outcome) or None,
+                    "research_outcome_is_canonical": (
+                        research_outcome is not None if is_research else None
+                    ),
                 }
             )
         return normalized
@@ -1164,7 +1362,11 @@ def _issue_gates(
     return gates
 
 
-def _formal_blockers_gate(relationships: Mapping[str, Any]) -> dict[str, Any]:
+def _formal_blockers_gate(
+    relationships: Mapping[str, Any],
+    *,
+    downstream_contract: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     if relationships.get("available") is not True:
         return _gate("unknown", "Relationship facts unavailable")
 
@@ -1188,6 +1390,10 @@ def _formal_blockers_gate(relationships: Mapping[str, Any]) -> dict[str, Any]:
     unresolved = 0
     resolved = 0
     unknown_state = 0
+    research_not_implementation = 0
+    research_contract_unknown = 0
+    architecture_contract_unknown = 0
+    research_outcome_unknown = 0
     for item in items:
         if not isinstance(item, Mapping):
             unknown_state += 1
@@ -1200,14 +1406,77 @@ def _formal_blockers_gate(relationships: Mapping[str, Any]) -> dict[str, Any]:
             if isinstance(number, int) and not isinstance(number, bool):
                 open_numbers.append(number)
         elif normalized_state == "CLOSED":
-            resolved += 1
+            labels = item.get("labels")
+            labels_complete = item.get("labels_complete")
+            if labels_complete is None:
+                # Unit callers may provide the already-normalized legacy
+                # shape. Live GraphQL normalization always supplies this
+                # explicit completeness bit.
+                labels_complete = isinstance(labels, list)
+            if labels_complete is not True or not isinstance(labels, list):
+                unknown_state += 1
+                continue
+            type_labels = [
+                label
+                for label in labels
+                if isinstance(label, str) and label.startswith("type:")
+            ]
+            if len(type_labels) != 1:
+                unknown_state += 1
+                continue
+            if "type:research" not in labels:
+                resolved += 1
+                continue
+            if not is_valid_research_contract(item.get("research_contract")):
+                research_contract_unknown += 1
+                continue
+            outcome_is_canonical = item.get("research_outcome_is_canonical")
+            if outcome_is_canonical is None:
+                # Preserve compatibility for already-normalized unit callers;
+                # live relationship normalization always supplies this bit.
+                outcome_is_canonical = "projectItems" not in item
+            if outcome_is_canonical is not True:
+                research_outcome_unknown += 1
+                continue
+            raw_outcome = item.get("research_outcome")
+            try:
+                outcome = parse_research_outcome(raw_outcome)
+            except ResearchPolicyError:
+                unknown_state += 1
+                continue
+            if outcome.value == "ARCHITECTURE DECISION":
+                if not architecture_decision_is_consistent(
+                    item.get("decision_contract"), downstream_contract
+                ):
+                    architecture_contract_unknown += 1
+                else:
+                    resolved += 1
+            elif is_implementation_outcome(outcome):
+                resolved += 1
+            else:
+                research_not_implementation += 1
         else:
             unknown_state += 1
 
-    if unresolved:
+    if unresolved or research_not_implementation:
         return _gate(
             "fail",
-            f"unresolved={unresolved}, resolved={resolved}, open={open_numbers[:10]}",
+            "unresolved="
+            f"{unresolved + research_not_implementation}, resolved={resolved}, "
+            f"open={open_numbers[:10]}, research_not_implementation={research_not_implementation}",
+        )
+    if (
+        research_contract_unknown
+        or architecture_contract_unknown
+        or research_outcome_unknown
+    ):
+        return _gate(
+            "unknown",
+            "research decision evidence unavailable: "
+            f"research_contract_unknown={research_contract_unknown}, "
+            f"architecture_contract_unknown={architecture_contract_unknown}, "
+            f"research_outcome_unknown={research_outcome_unknown}, "
+            f"resolved={resolved}, total={count}",
         )
     if truncated:
         return _gate(

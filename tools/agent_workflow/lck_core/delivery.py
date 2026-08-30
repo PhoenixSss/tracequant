@@ -41,6 +41,7 @@ from .validation import (
     DeliveryChecksGate,
     DocumentationValidationGate,
     FormalValidationGate,
+    ResearchValidationGate,
 )
 
 
@@ -203,6 +204,7 @@ class DeliveryCompletionResult:
     checks: Mapping[str, Any]
     effects: tuple[EffectReceipt, ...]
     operation_snapshot: OperationSnapshot
+    research_artifact: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -215,6 +217,7 @@ class DeliveryCompletionResult:
             "critical_outcome": _jsonable(self.critical_outcome),
             "validation": _jsonable(self.validation),
             "checks": _jsonable(self.checks),
+            "research_artifact": _jsonable(self.research_artifact),
             "effects": [item.to_dict() for item in self.effects],
             "operation_snapshot": self.operation_snapshot.to_dict(),
             "human_boundary": "Independent Review must be started separately",
@@ -243,6 +246,7 @@ class DeliveryCompleter:
         status_effect: SetReviewStatusEffect | None = None,
         checks_gate: DeliveryChecksGate | None = None,
         documentation_validation: DocumentationValidationGate | None = None,
+        research_validation: ResearchValidationGate | None = None,
         require_existing_open_pr: bool = False,
         candidate_recorder: Callable[[str, str], None] | None = None,
     ) -> None:
@@ -258,11 +262,15 @@ class DeliveryCompleter:
         self.documentation_validation = (
             documentation_validation or DocumentationValidationGate(resolver)
         )
+        self.research_validation = research_validation or ResearchValidationGate(
+            resolver
+        )
         self.require_existing_open_pr = require_existing_open_pr
         self.candidate_recorder = candidate_recorder
         self.last_snapshot: OperationSnapshot | None = None
         self.last_critical_outcome: dict[str, Any] | None = None
         self.last_documentation_validation: dict[str, Any] | None = None
+        self.last_research_validation: dict[str, Any] | None = None
         self.last_validation: dict[str, Any] | None = None
         self.last_checks: dict[str, Any] | None = None
         self.last_effects: list[EffectReceipt] = []
@@ -322,16 +330,33 @@ class DeliveryCompleter:
         base_sha: str,
         *,
         progress: ProgressReporter,
+        include_index: bool = False,
+        head_sha: str | None = None,
     ) -> dict[str, Any] | None:
         profile_resolution = resolve_issue_profile(state.issue)
         profile = profile_resolution.profile
         if profile is None or not profile_resolution.resolved:
             raise LckStopError("current leaf Issue workflow profile is unavailable")
         self.last_documentation_validation = None
+        self.last_research_validation = None
         if profile.issue_kind is LeafIssueKind.DOCUMENTATION:
             progress.running("documentation-policy")
             policy = self.documentation_validation.run(base_sha)
             self.last_documentation_validation = policy
+        elif profile.issue_kind is LeafIssueKind.RESEARCH:
+            progress.running("research-artifact-policy")
+            try:
+                policy = self.research_validation.run(
+                    base_sha,
+                    head_sha=head_sha,
+                    include_index=include_index,
+                )
+            except LckStopError:
+                self.last_research_validation = getattr(
+                    self.research_validation, "last_result", None
+                )
+                raise
+            self.last_research_validation = policy
         if profile.requires_critical_outcome:
             progress.running("critical-outcome")
             return self._run_critical_outcome(state, progress=progress)
@@ -445,6 +470,7 @@ class DeliveryCompleter:
                 state,
                 base_sha,
                 progress=progress,
+                head_sha=state.local_task_head,
             )
             progress.running("formal-validation")
             validation = self._run_formal_validation(base_sha)
@@ -474,6 +500,8 @@ class DeliveryCompleter:
                 state,
                 base_sha,
                 progress=progress,
+                include_index=True,
+                head_sha=state.local_task_head,
             )
             progress.running("formal-validation")
             validation = self._run_formal_validation(base_sha)
@@ -575,6 +603,7 @@ class DeliveryCompleter:
             checks=checks,
             effects=tuple(effects),
             operation_snapshot=snapshot,
+            research_artifact=self.last_research_validation,
         )
 
     def complete(

@@ -396,6 +396,26 @@ def test_remediation_no_change_cli_replay_reuses_audit_receipt(
     assert receipt["audit"]["replayed"] is False
 
 
+def test_closeout_agent_view_does_not_stop_when_research_outcome_is_pending() -> None:
+    result = lck_closeout.CloseoutResult(
+        task_number=159,
+        status="BUSINESS_DELIVERY_COMPLETE",
+        business_delivery="PENDING",
+        cleanup="COMPLETE",
+        effects=(),
+        operation_snapshot=lck_models.OperationSnapshot(
+            operation="closeout",
+            state=_review_state(),
+        ),
+        research_outcome=None,
+    )
+
+    view = lck_receipts._agent_view_for_result(result)
+
+    assert "Research Outcome" in view["next_action"]
+    assert view["next_action"] != "stop; closeout is complete"
+
+
 def test_review_complete_failure_receipt_preserves_bound_snapshot_and_checks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

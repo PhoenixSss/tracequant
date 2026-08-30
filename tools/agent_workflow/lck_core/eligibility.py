@@ -8,6 +8,7 @@ from documentation_policy import (
     documentation_contract_snapshot,
     is_valid_documentation_contract,
 )
+from research_policy import is_valid_research_contract, research_contract_snapshot
 from workflow_common import is_sha
 from workflow_evidence import _formal_blockers_gate
 
@@ -98,6 +99,18 @@ class PhaseEligibilityResolver:
                         documentation_contract.get("detail") or "contract is invalid"
                     )
                     reasons.append(f"Documentation contract invalid: {detail}")
+            elif profile_resolution.profile is not None and (
+                profile_resolution.profile.issue_kind is LeafIssueKind.RESEARCH
+            ):
+                research_contract = issue.get("research_contract")
+                if not isinstance(research_contract, Mapping):
+                    body = issue.get("body")
+                    research_contract = research_contract_snapshot(
+                        body if isinstance(body, str) else None
+                    )
+                if not is_valid_research_contract(research_contract):
+                    detail = research_contract.get("detail") or "contract is invalid"
+                    reasons.append(f"Research contract invalid: {detail}")
             project = issue.get("project_status")
             allowed_projects = {
                 Phase.DELIVERY_PREPARE: {"Ready", "In Progress"},
@@ -141,7 +154,13 @@ class PhaseEligibilityResolver:
                         )
                         reasons.append(f"Critical Outcome contract invalid: {detail}")
 
-        blocker_gate = _formal_blockers_gate(relationships)
+        downstream_contract = (
+            state.task_contract if isinstance(state.task_contract, Mapping) else issue
+        )
+        blocker_gate = _formal_blockers_gate(
+            relationships,
+            downstream_contract=downstream_contract,
+        )
         if blocker_gate.get("status") != "pass":
             detail = blocker_gate.get("detail") or "formal blocker gate did not pass"
             reasons.append(f"formal blocker gate: {detail}")
@@ -185,8 +204,11 @@ class PhaseEligibilityResolver:
                 reasons.append("Delivery Complete requires a current local Task head")
             if state.open_pr is not None and state.open_pr.get("isDraft") is not False:
                 reasons.append("Delivery Complete cannot continue with a Draft OPEN PR")
-            capabilities = (
-                (
+            if (
+                profile_resolution.profile is not None
+                and profile_resolution.profile.issue_kind is LeafIssueKind.DOCUMENTATION
+            ):
+                capabilities = (
                     "validate_documentation_candidate",
                     "run_formal_validation",
                     "commit_current_tree",
@@ -194,9 +216,20 @@ class PhaseEligibilityResolver:
                     "ensure_open_pr",
                     "set_review_status",
                 )
-                if profile_resolution.profile is not None
-                and profile_resolution.profile.issue_kind is LeafIssueKind.DOCUMENTATION
-                else (
+            elif (
+                profile_resolution.profile is not None
+                and profile_resolution.profile.issue_kind is LeafIssueKind.RESEARCH
+            ):
+                capabilities = (
+                    "validate_research_artifact",
+                    "run_formal_validation",
+                    "commit_current_tree",
+                    "ensure_remote_branch",
+                    "ensure_open_pr",
+                    "set_review_status",
+                )
+            else:
+                capabilities = (
                     "verify_critical_outcome",
                     "run_formal_validation",
                     "commit_current_tree",
@@ -204,7 +237,6 @@ class PhaseEligibilityResolver:
                     "ensure_open_pr",
                     "set_review_status",
                 )
-            )
         elif phase in {Phase.REVIEW_PREPARE, Phase.REVIEW_COMPLETE}:
             if state.open_pr is None:
                 reasons.append("no current OPEN PR")
@@ -263,6 +295,17 @@ class PhaseEligibilityResolver:
                 ):
                     capabilities = (
                         "validate_documentation_candidate",
+                        "run_formal_validation",
+                        "commit_current_tree",
+                        "ensure_remote_branch",
+                        "reuse_open_pr",
+                    )
+                elif (
+                    profile_resolution.profile is not None
+                    and profile_resolution.profile.issue_kind is LeafIssueKind.RESEARCH
+                ):
+                    capabilities = (
+                        "validate_research_artifact",
                         "run_formal_validation",
                         "commit_current_tree",
                         "ensure_remote_branch",

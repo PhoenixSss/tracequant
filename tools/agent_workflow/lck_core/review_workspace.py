@@ -12,9 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, cast
 
+from research_policy import ResearchPolicyError, research_artifact_binding
 from workflow_common import WorkflowToolError, atomic_write_json, is_sha, read_json_file
 
 from .effective_diff import calculate_effective_diff
+from .issue_profiles import LeafIssueKind, resolve_issue_profile
 from .models import (
     LCK_SCHEMA_VERSION,
     LckStopError,
@@ -56,9 +58,10 @@ class ReviewIdentity:
     merge_base_sha: str
     effective_diff_sha256: str
     changed_files: tuple[str, ...]
+    research_artifact: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "task_number": self.task_number,
             "pr_number": self.pr_number,
             "base_sha": self.base_sha,
@@ -68,6 +71,9 @@ class ReviewIdentity:
             "effective_diff_sha256": self.effective_diff_sha256,
             "changed_files": list(self.changed_files),
         }
+        if self.research_artifact is not None:
+            result["research_artifact"] = dict(self.research_artifact)
+        return result
 
 
 def _review_target_refs(
@@ -119,6 +125,25 @@ def _review_identity(
         command_id_prefix="lck-review",
         cwd=repo_root,
     )
+    research_artifact = None
+    profile = resolve_issue_profile(state.issue).profile
+    if profile is not None and profile.issue_kind is LeafIssueKind.RESEARCH:
+        try:
+            research_artifact = research_artifact_binding(
+                repo_root,
+                task_number=target.task_number,
+                pr_number=target.pr_number,
+                base_sha=target.base_sha,
+                head_sha=target.head_sha,
+                task_body_sha256=target.task_body_sha256,
+                merge_base_sha=effective_diff.merge_base_sha,
+                effective_diff_sha256=effective_diff.effective_diff_sha256,
+                changed_files=effective_diff.changed_files,
+            )
+        except ResearchPolicyError as exc:
+            raise LckStopError(
+                f"Research artifact policy rejected the Review target: {exc}"
+            ) from exc
     return ReviewIdentity(
         task_number=target.task_number,
         pr_number=target.pr_number,
@@ -128,6 +153,7 @@ def _review_identity(
         merge_base_sha=effective_diff.merge_base_sha,
         effective_diff_sha256=effective_diff.effective_diff_sha256,
         changed_files=effective_diff.changed_files,
+        research_artifact=research_artifact,
     )
 
 
@@ -873,6 +899,11 @@ def _identity_from_mapping(value: Mapping[str, Any]) -> ReviewIdentity:
         item = fields[name]
         if not isinstance(item, str) or re.fullmatch(r"[0-9a-f]{64}", item) is None:
             raise LckStopError(f"Review invocation identity has invalid {name}")
+    raw_research_artifact = value.get("research_artifact")
+    if raw_research_artifact is not None and not isinstance(
+        raw_research_artifact, Mapping
+    ):
+        raise LckStopError("Review invocation identity has invalid Research artifact")
     return ReviewIdentity(
         task_number=cast(int, fields["task_number"]),
         pr_number=cast(int, fields["pr_number"]),
@@ -882,6 +913,11 @@ def _identity_from_mapping(value: Mapping[str, Any]) -> ReviewIdentity:
         merge_base_sha=cast(str, fields["merge_base_sha"]),
         effective_diff_sha256=cast(str, fields["effective_diff_sha256"]),
         changed_files=tuple(changed),
+        research_artifact=(
+            dict(raw_research_artifact)
+            if isinstance(raw_research_artifact, Mapping)
+            else None
+        ),
     )
 
 
@@ -955,8 +991,9 @@ def _assert_review_applicable(start: ReviewIdentity, current: ReviewIdentity) ->
         current.merge_base_sha != start.merge_base_sha
         or current.effective_diff_sha256 != start.effective_diff_sha256
         or current.changed_files != start.changed_files
+        or current.research_artifact != start.research_artifact
     ):
         raise ReviewStaleError(
             "REVIEW_STALE_DIFF",
-            "effective diff changed during this Review invocation",
+            "effective diff or Research artifact changed during this Review invocation",
         )

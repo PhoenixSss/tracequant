@@ -41,6 +41,7 @@ def _state(
         "title": "[Task] closeout",
         "state": issue_state,
         "labels": {"items": ["type:task", "codex:ready"]},
+        "body_sha256": "d" * 64,
         "project_status": "Done",
         "issue_closure": {
             "evidence_status": "complete",
@@ -96,6 +97,12 @@ def _state(
         cleanup={
             "business_delivery": "complete",
             "cleanup": "pending",
+        },
+        task_contract={
+            "number": 162,
+            "title": "[Task] closeout",
+            "body": "Task Contract",
+            "body_sha256": "d" * 64,
         },
     )
 
@@ -444,6 +451,25 @@ def test_closeout_requires_reviewed_head_identity() -> None:
         lck_closeout.CloseoutCompleter(
             cast(Any, StaticResolver(state)),
             review_store=cast(Any, StaticReviewStore(head_sha="c" * 40)),
+        ).complete(162)
+
+
+def test_closeout_rejects_stale_task_contract_identity() -> None:
+    state = _state()
+    stale = replace(
+        state,
+        task_contract={
+            **cast(dict[str, Any], state.task_contract),
+            "body_sha256": "f" * 64,
+        },
+    )
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="Review PASS is stale: Task Contract changed",
+    ):
+        lck_closeout.CloseoutCompleter(
+            cast(Any, StaticResolver(stale)),
+            review_store=cast(Any, StaticReviewStore()),
         ).complete(162)
 
 

@@ -143,6 +143,13 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
   deterministic control 执行；Agent/Skill 不提供 branch/SHA/PR/refspec authority。
 - Documentation 使用独立的 `documentation/<Issue>-<slug>` branch namespace；Task 的
   `task/`、历史 Task aliases 与其匹配规则保持不变。
+- Research leaf 使用独立的 `research/<Issue>-<slug>` branch namespace；v1 只接受
+  `docs/research/**` 下可版本化的仓库产物。Research 不要求 Critical Outcome，Delivery
+  只执行 Research artifact policy 与正式 validation；产物必须在 Review 中绑定当前
+  Issue、PR、base/head、effective diff 与 artifact digest。
+- Research Review PASS 必须携带四个精确值之一：`IMPLEMENT`、`DO NOT IMPLEMENT`、
+  `NEEDS MORE EVIDENCE`、`ARCHITECTURE DECISION`。后两者是成功的 Research 结果，不能
+  被误报为 lifecycle failure；Closeout 在合并后写入并确认 Project 的 `Research Outcome`。
 - 一次 Initial Delivery 覆盖：LCK Delivery Prepare → semantic implementation / targeted
   development validation → LCK Delivery Complete → Critical Outcome → formal validation →
   commit validated tree → ensure remote branch → ensure OPEN PR → observe current CI checks
@@ -207,8 +214,11 @@ evidence 并审阅 test source / coverage / failure semantics，不在 sealed re
 
 本文件只声明其在 lifecycle 中的位置：Review 可在 CI checks 运行期间与其并行，
 但 Review Complete 的 PASS 与 maintainer merge 前的 Merge Preflight 都必须
-基于各自 fresh authority 验证 checks 通过；Review FAIL 必须先 STOP，只有
-Human 显式发起后才进入 remediation（§10）。
+  基于各自 fresh authority 验证 checks 通过；Review FAIL 必须先 STOP，只有
+  Human 显式发起后才进入 remediation（§10）。
+
+对于 Research leaf，Review identity 还必须包含当前仓库产物的路径、digest、decision
+candidate 与 effective diff 绑定；Review Complete PASS 缺少 typed outcome 时 fail closed。
 
 ## 9. Human Gate
 
@@ -278,7 +288,9 @@ Closeout 仅在 maintainer 已人工 Squash Merge 后执行：
    uv run --frozen python tools/agent_workflow/lck.py closeout <TASK>
    从当前 Git / GitHub facts 重新求解 merge identity（reviewed head == 实际 merged head）；
 2. 将 Business Delivery 与 Cleanup 分离：merged PR 可立即得到
-   Business Delivery = COMPLETE，cleanup 失败只产生 Cleanup = PENDING；
+   Business Delivery = COMPLETE，cleanup 失败只产生 Cleanup = PENDING。Research 的
+   `Research Outcome` 写入与 postcondition 也必须完成；DO NOT IMPLEMENT 与
+   NEEDS MORE EVIDENCE 仍然是 Business Delivery 的成功结果；
 3. 收敛 Issue / Project lifecycle（state、Status、labels）并同步 canonical
    `main`；
 4. 仅在 head/tree/worktree proof 完整时删除已验证的 Task branch，识别

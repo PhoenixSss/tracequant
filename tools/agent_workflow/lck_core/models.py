@@ -307,7 +307,14 @@ def _issue_agent_view(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
     result: dict[str, Any] = {}
-    for key in ("number", "title", "url", "state", "project_status"):
+    for key in (
+        "number",
+        "title",
+        "url",
+        "state",
+        "project_status",
+        "research_outcome",
+    ):
         item = value.get(key)
         if item is not None:
             result[key] = item
@@ -467,6 +474,12 @@ class LiveState:
                             ),
                             "documentation_contract": self.task_contract.get(
                                 "documentation_contract"
+                            ),
+                            "research_contract": self.task_contract.get(
+                                "research_contract"
+                            ),
+                            "research_outcome": self.task_contract.get(
+                                "research_outcome"
                             ),
                         }
                         if isinstance(self.task_contract, Mapping)

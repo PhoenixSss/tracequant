@@ -130,7 +130,7 @@ DOCUMENTATION_PROFILE: Final = _profile(
 RESEARCH_PROFILE: Final = _profile(
     LeafIssueKind.RESEARCH,
     requires_critical_outcome=False,
-    lifecycle_enabled=False,
+    lifecycle_enabled=True,
     branch_namespace="research/",
 )
 
