@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import yaml
+from markdown_sections import extract_markdown_sections
 
 BUG_TEMPLATE_PATH: Final = Path(".github/ISSUE_TEMPLATE/bug.yml")
 BUG_POLICY_ID: Final = "repository-bug-defect-contract-v1"
@@ -64,7 +65,6 @@ class BugContract:
         }
 
 
-_SECTION_RE: Final = re.compile(r"^###\s+(.+?)\s*$", re.MULTILINE)
 _PLACEHOLDER_VALUES: Final = frozenset(
     {
         "...",
@@ -182,21 +182,6 @@ def bug_template_contract(
     return BugTemplateContract(tuple(field_ids), tuple(section_labels))
 
 
-def _section_details(body: str) -> tuple[tuple[str, str], ...]:
-    matches = tuple(_SECTION_RE.finditer(body))
-    return tuple(
-        (
-            " ".join(match.group(1).split()),
-            body[
-                match.end() : matches[index + 1].start()
-                if index + 1 < len(matches)
-                else None
-            ].strip(),
-        )
-        for index, match in enumerate(matches)
-    )
-
-
 def _is_placeholder(content: str) -> bool:
     normalized = unicodedata.normalize("NFKC", " ".join(content.split())).casefold()
     if normalized in _PLACEHOLDER_VALUES or normalized in _VAGUE_VALUES:
@@ -270,7 +255,12 @@ def bug_contract_snapshot(
             detail="Bug body is unavailable",
         ).to_dict()
 
-    sections = _section_details(body)
+    sections = tuple(
+        (section.name, section.content)
+        for section in extract_markdown_sections(
+            body, canonical_names=template.section_labels
+        )
+    )
     section_keys = tuple(section.casefold() for section, _content in sections)
     required_keys = tuple(section.casefold() for section in template.section_labels)
     missing = tuple(

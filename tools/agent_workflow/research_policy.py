@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import yaml
+from markdown_sections import extract_markdown_sections
 from workflow_common import sha256_json
 
 RESEARCH_POLICY_ID: Final = "repository-research-artifact-v1"
@@ -183,24 +184,6 @@ def research_template_contract(
     return ResearchTemplateContract(tuple(field_ids), tuple(section_labels))
 
 
-_SECTION_RE: Final = re.compile(r"^###\s+(.+?)\s*$", re.MULTILINE)
-
-
-def _section_details(body: str) -> tuple[tuple[str, str], ...]:
-    matches = tuple(_SECTION_RE.finditer(body))
-    return tuple(
-        (
-            " ".join(match.group(1).split()),
-            body[
-                match.end() : matches[index + 1].start()
-                if index + 1 < len(matches)
-                else None
-            ].strip(),
-        )
-        for index, match in enumerate(matches)
-    )
-
-
 def research_contract_snapshot(
     body: str | None,
     *,
@@ -223,7 +206,12 @@ def research_contract_snapshot(
             detail="Research body is unavailable",
         ).to_dict()
 
-    section_details = _section_details(body)
+    section_details = tuple(
+        (section.name, section.content)
+        for section in extract_markdown_sections(
+            body, canonical_names=template.section_labels
+        )
+    )
     section_keys = tuple(section.casefold() for section, _content in section_details)
     required_keys = tuple(section.casefold() for section in template.section_labels)
     missing = tuple(
@@ -305,7 +293,14 @@ def decision_contract_snapshot(
 
     if not isinstance(body, str) or not body.strip():
         return {"status": "unknown", "detail": "decision contract body unavailable"}
-    sections = _section_details(body)
+    sections = tuple(
+        (section.name, section.content)
+        for section in extract_markdown_sections(
+            body,
+            canonical_names=tuple(_DECISION_CONTRACT_HEADINGS)
+            + ("Expected Outcome / Artifact",),
+        )
+    )
     selected: tuple[str, str] | None = None
     for heading, content in sections:
         if heading.casefold() in _DECISION_CONTRACT_HEADINGS:

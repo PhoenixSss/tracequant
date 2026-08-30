@@ -892,6 +892,19 @@ def test_architecture_decision_requires_matching_downstream_contract() -> None:
     assert research_decision["status"] == "pass"
 
     assert architecture_decision_is_consistent(research_decision, downstream)
+    downstream_with_context = {
+        "body": """### Decision Contract
+
+Adopt the repository-backed workflow contract and record the resulting ADR.
+
+### Acceptance Criteria
+
+- The downstream issue records the implementation criteria.
+""",
+    }
+    assert architecture_decision_is_consistent(
+        research_decision, downstream_with_context
+    )
     assert not architecture_decision_is_consistent(
         research_decision,
         {"body": "### Decision Contract\n\nAn unrelated decision.\n"},

@@ -6,7 +6,6 @@ Issue-provided documentation context is never interpreted as a command plan.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -14,6 +13,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import yaml
+from markdown_sections import extract_markdown_sections
 
 
 class DocumentationPolicyStatus(StrEnum):
@@ -23,8 +23,6 @@ class DocumentationPolicyStatus(StrEnum):
 
 DOCUMENTATION_POLICY_ID: Final = "repository-documentation-safe-v1"
 DOCUMENTATION_TEMPLATE_PATH: Final = Path(".github/ISSUE_TEMPLATE/documentation.yml")
-_SECTION_RE: Final = re.compile(r"^###\s+(.+?)\s*$", re.MULTILINE)
-
 # Documentation deliberately has a narrow path allow-list.  Workflow and
 # development-policy prose is excluded because changing it changes the
 # repository's control contract even when the file happens to end in .md.
@@ -165,21 +163,6 @@ def documentation_template_contract(
     return DocumentationTemplateContract(tuple(field_ids), tuple(section_labels))
 
 
-def _section_details(body: str) -> tuple[tuple[str, str], ...]:
-    matches = tuple(_SECTION_RE.finditer(body))
-    return tuple(
-        (
-            " ".join(match.group(1).split()),
-            body[
-                match.end() : matches[index + 1].start()
-                if index + 1 < len(matches)
-                else None
-            ].strip(),
-        )
-        for index, match in enumerate(matches)
-    )
-
-
 def documentation_contract_snapshot(
     body: str | None,
     *,
@@ -202,7 +185,12 @@ def documentation_contract_snapshot(
             detail="Documentation body is unavailable",
         ).to_dict()
 
-    section_details = _section_details(body)
+    section_details = tuple(
+        (section.name, section.content)
+        for section in extract_markdown_sections(
+            body, canonical_names=template.section_labels
+        )
+    )
     section_keys = tuple(section.casefold() for section, _content in section_details)
     required_keys = tuple(section.casefold() for section in template.section_labels)
     missing = tuple(
