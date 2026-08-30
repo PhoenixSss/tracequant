@@ -73,6 +73,20 @@ def test_parser_rejects_duplicate_critical_outcome_headings_across_levels() -> N
         parse_critical_outcome(body)
 
 
+def test_parser_does_not_absorb_fields_from_a_later_issue_section() -> None:
+    body = """### Critical Outcome
+Caller: task-delivery-runner initial Delivery
+Capability: LCK owns deterministic Delivery completion
+Observable result: validated Task head is committed, pushed and attached to one OPEN PR
+
+### Acceptance Criteria
+Verification test: tests/tools/test_lck.py::test_canonical_branch_is_derived_from_current_issue_title
+"""
+
+    with pytest.raises(CriticalOutcomeError, match="missing required fields"):
+        parse_critical_outcome(body)
+
+
 def test_parser_ignores_fenced_critical_outcome_heading() -> None:
     body = """### Objective
 Do one thing.

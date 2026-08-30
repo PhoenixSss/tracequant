@@ -124,7 +124,7 @@ criterion
     assert sections[0].content == "introductory evidence"
 
 
-def test_named_sections_keep_noncanonical_nested_headings_as_content() -> None:
+def test_named_sections_keep_deeper_noncanonical_headings_as_content() -> None:
     sections = extract_markdown_sections(
         """# Observed
 
@@ -139,6 +139,26 @@ expected behavior
 
     assert [section.name for section in sections] == ["Observed", "Expected"]
     assert sections[0].content == "#### Confirmed regression\nevidence"
+
+
+def test_named_sections_use_peer_noncanonical_headings_as_boundaries() -> None:
+    sections = extract_markdown_sections(
+        """### Observed
+
+observed content
+
+### Optional Context
+
+context must not be part of Observed
+
+### Expected
+expected behavior
+""",
+        canonical_names=("Observed", "Expected"),
+    )
+
+    assert [section.name for section in sections] == ["Observed", "Expected"]
+    assert sections[0].content == "observed content"
 
 
 @pytest.mark.parametrize("profile", ("bug", "documentation", "research"))
@@ -198,3 +218,25 @@ def test_typed_contracts_fail_closed_for_duplicate_missing_and_fenced_sections(
     assert snapshot(duplicate)["status"] == "reclassification_required"
     assert snapshot(missing)["status"] == "reclassification_required"
     assert snapshot(fenced)["status"] == "reclassification_required"
+
+
+@pytest.mark.parametrize("profile", ("bug", "documentation", "research"))
+def test_typed_contracts_do_not_absorb_optional_context_after_empty_section(
+    profile: str,
+) -> None:
+    headings = SECTION_BODIES[profile]
+    body = "\n\n".join(
+        f"### {heading}\n\n{f'content for {heading}' if index < len(headings) - 1 else ''}"
+        for index, heading in enumerate(headings)
+    )
+    body += "\n\n### Optional Context\n\ncontext must not satisfy a required section"
+    snapshots = {
+        "bug": bug_contract_snapshot,
+        "documentation": documentation_contract_snapshot,
+        "research": research_contract_snapshot,
+    }
+
+    contract = snapshots[profile](body)
+
+    assert contract["status"] == "reclassification_required"
+    assert contract["empty_sections"] == [headings[-1]]

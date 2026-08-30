@@ -58,8 +58,9 @@ def extract_markdown_sections(
     Only ATX headings with one to six markers are recognized.  Plain text,
     headings indented as code, and headings inside backtick/tilde fences are
     deliberately excluded.  Contract callers may provide canonical section
-    names so non-canonical nested headings remain content while canonical
-    sections still end at the next canonical heading regardless of level.
+    names to select sections after boundaries have been computed.  Canonical
+    headings are peer section boundaries regardless of level; non-canonical
+    headings retain normal Markdown hierarchy boundaries.
     """
     lines = body.splitlines()
     sections: list[tuple[int, str, int]] = []
@@ -87,21 +88,29 @@ def extract_markdown_sections(
             )
         )
 
-    if canonical_names is not None:
-        canonical_keys = {" ".join(name.split()).casefold() for name in canonical_names}
-        sections = [
-            section for section in sections if section[1].casefold() in canonical_keys
-        ]
-
+    canonical_keys = (
+        {" ".join(name.split()).casefold() for name in canonical_names}
+        if canonical_names is not None
+        else None
+    )
     extracted: list[MarkdownSection] = []
     for position, (line_index, name, level) in enumerate(sections):
-        # Contract heading levels are presentation only.  A later canonical
-        # section may use a deeper level than the current one, so hierarchy
-        # based boundaries would incorrectly absorb it into the current
-        # section and hide empty or placeholder content.
-        next_line_index = (
-            sections[position + 1][0] if position + 1 < len(sections) else len(lines)
-        )
+        next_line_index = len(lines)
+        for next_position in range(position + 1, len(sections)):
+            candidate_line_index, candidate_name, candidate_level = sections[
+                next_position
+            ]
+            candidate_is_canonical = (
+                canonical_keys is not None
+                and candidate_name.casefold() in canonical_keys
+            )
+            if (
+                canonical_keys is None
+                or candidate_is_canonical
+                or candidate_level <= level
+            ):
+                next_line_index = candidate_line_index
+                break
         extracted.append(
             MarkdownSection(
                 name=name,
@@ -109,4 +118,8 @@ def extract_markdown_sections(
                 content="\n".join(lines[line_index + 1 : next_line_index]).strip(),
             )
         )
-    return tuple(extracted)
+    if canonical_keys is None:
+        return tuple(extracted)
+    return tuple(
+        section for section in extracted if section.name.casefold() in canonical_keys
+    )
