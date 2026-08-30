@@ -85,7 +85,9 @@ def parse_critical_outcome(body: str | None) -> CriticalOutcomeContract:
 
     sections = tuple(
         section
-        for section in extract_markdown_sections(body)
+        for section in extract_markdown_sections(
+            body, canonical_names=("Critical Outcome",)
+        )
         if section.name.casefold() == "critical outcome"
     )
     if len(sections) != 1:

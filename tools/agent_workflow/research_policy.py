@@ -207,7 +207,10 @@ def research_contract_snapshot(
         ).to_dict()
 
     section_details = tuple(
-        (section.name, section.content) for section in extract_markdown_sections(body)
+        (section.name, section.content)
+        for section in extract_markdown_sections(
+            body, canonical_names=template.section_labels
+        )
     )
     section_keys = tuple(section.casefold() for section, _content in section_details)
     required_keys = tuple(section.casefold() for section in template.section_labels)
@@ -291,7 +294,12 @@ def decision_contract_snapshot(
     if not isinstance(body, str) or not body.strip():
         return {"status": "unknown", "detail": "decision contract body unavailable"}
     sections = tuple(
-        (section.name, section.content) for section in extract_markdown_sections(body)
+        (section.name, section.content)
+        for section in extract_markdown_sections(
+            body,
+            canonical_names=tuple(_DECISION_CONTRACT_HEADINGS)
+            + ("Expected Outcome / Artifact",),
+        )
     )
     selected: tuple[str, str] | None = None
     for heading, content in sections:

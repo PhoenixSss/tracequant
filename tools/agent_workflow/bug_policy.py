@@ -256,7 +256,10 @@ def bug_contract_snapshot(
         ).to_dict()
 
     sections = tuple(
-        (section.name, section.content) for section in extract_markdown_sections(body)
+        (section.name, section.content)
+        for section in extract_markdown_sections(
+            body, canonical_names=template.section_labels
+        )
     )
     section_keys = tuple(section.casefold() for section, _content in sections)
     required_keys = tuple(section.casefold() for section in template.section_labels)

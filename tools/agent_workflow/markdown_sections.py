@@ -8,6 +8,7 @@ sections.
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Final
 
@@ -47,12 +48,18 @@ def _is_fence_close(line: str, opening_marker: str) -> bool:
     return marker[0] == opening_marker[0] and len(marker) >= len(opening_marker)
 
 
-def extract_markdown_sections(body: str) -> tuple[MarkdownSection, ...]:
+def extract_markdown_sections(
+    body: str,
+    *,
+    canonical_names: Collection[str] | None = None,
+) -> tuple[MarkdownSection, ...]:
     """Extract real H1-H6 sections while ignoring fenced code blocks.
 
     Only ATX headings with one to six markers are recognized.  Plain text,
     headings indented as code, and headings inside backtick/tilde fences are
-    deliberately excluded.
+    deliberately excluded.  Contract callers may provide canonical section
+    names so non-canonical nested headings remain content while canonical
+    sections still end at the next canonical heading regardless of level.
     """
     lines = body.splitlines()
     sections: list[tuple[int, str, int]] = []
@@ -80,16 +87,21 @@ def extract_markdown_sections(body: str) -> tuple[MarkdownSection, ...]:
             )
         )
 
+    if canonical_names is not None:
+        canonical_keys = {" ".join(name.split()).casefold() for name in canonical_names}
+        sections = [
+            section for section in sections if section[1].casefold() in canonical_keys
+        ]
+
     extracted: list[MarkdownSection] = []
     for position, (line_index, name, level) in enumerate(sections):
-        next_line_index = len(lines)
-        for next_position in range(position + 1, len(sections)):
-            candidate_line_index, _candidate_name, candidate_level = sections[
-                next_position
-            ]
-            if candidate_level <= level:
-                next_line_index = candidate_line_index
-                break
+        # Contract heading levels are presentation only.  A later canonical
+        # section may use a deeper level than the current one, so hierarchy
+        # based boundaries would incorrectly absorb it into the current
+        # section and hide empty or placeholder content.
+        next_line_index = (
+            sections[position + 1][0] if position + 1 < len(sections) else len(lines)
+        )
         extracted.append(
             MarkdownSection(
                 name=name,

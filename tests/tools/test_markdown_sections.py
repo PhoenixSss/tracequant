@@ -103,7 +103,7 @@ content
     assert [section.name for section in sections] == ["Other"]
 
 
-def test_parent_section_includes_nested_subsections() -> None:
+def test_sections_end_at_next_heading_regardless_of_level() -> None:
     sections = extract_markdown_sections(
         """### Reproduction / Evidence
 introductory evidence
@@ -113,11 +113,69 @@ nested evidence
 
 ### Acceptance Criteria
 criterion
-"""
+        """
     )
 
-    assert sections[0].content == (
-        "introductory evidence\n\n#### Confirmed regression\nnested evidence"
+    assert [(section.name, section.level) for section in sections] == [
+        ("Reproduction / Evidence", 3),
+        ("Confirmed regression", 4),
+        ("Acceptance Criteria", 3),
+    ]
+    assert sections[0].content == "introductory evidence"
+
+
+def test_named_sections_keep_noncanonical_nested_headings_as_content() -> None:
+    sections = extract_markdown_sections(
+        """# Observed
+
+#### Confirmed regression
+evidence
+
+### Expected
+expected behavior
+""",
+        canonical_names=("Observed", "Expected"),
+    )
+
+    assert [section.name for section in sections] == ["Observed", "Expected"]
+    assert sections[0].content == "#### Confirmed regression\nevidence"
+
+
+@pytest.mark.parametrize("profile", ("bug", "documentation", "research"))
+def test_typed_contracts_accept_mixed_heading_levels(profile: str) -> None:
+    headings = SECTION_BODIES[profile]
+    levels = (1, 3, 2, 6, 4, 5)
+    body = "\n\n".join(
+        f"{'#' * levels[index]} {heading}\n\ncontent for {heading}"
+        for index, heading in enumerate(headings)
+    )
+    snapshots = {
+        "bug": bug_contract_snapshot,
+        "documentation": documentation_contract_snapshot,
+        "research": research_contract_snapshot,
+    }
+
+    assert snapshots[profile](body)["status"] == "pass"
+
+
+@pytest.mark.parametrize("first_content", ("", "..."))
+def test_bug_contract_rejects_mixed_level_empty_or_placeholder_first_section(
+    first_content: str,
+) -> None:
+    body = "\n\n".join(
+        (
+            f"{'#' * level} {heading}\n\n{first_content if index == 0 else f'valid {heading}'}"
+        )
+        for index, (heading, level) in enumerate(
+            zip(SECTION_BODIES["bug"], (1, 3, 2, 6), strict=True)
+        )
+    )
+
+    contract = bug_contract_snapshot(body)
+
+    assert contract["status"] == "reclassification_required"
+    assert "Observed" in (
+        contract["empty_sections"] + contract["insufficient_sections"]
     )
 
 
