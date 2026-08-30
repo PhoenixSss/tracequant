@@ -124,7 +124,7 @@ BUG_PROFILE: Final = _profile(
 DOCUMENTATION_PROFILE: Final = _profile(
     LeafIssueKind.DOCUMENTATION,
     requires_critical_outcome=False,
-    lifecycle_enabled=False,
+    lifecycle_enabled=True,
     branch_namespace="documentation/",
 )
 RESEARCH_PROFILE: Final = _profile(

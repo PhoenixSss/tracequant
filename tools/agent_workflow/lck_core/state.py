@@ -24,7 +24,12 @@ from workflow_evidence import (
     _repository_slug,
 )
 
-from .issue_profiles import canonical_branch_for_profile, resolve_issue_profile
+from .issue_profiles import (
+    LeafIssueKind,
+    LeafIssueWorkflowProfile,
+    canonical_branch_for_profile,
+    resolve_issue_profile,
+)
 from .models import (
     _DIAGNOSTIC_FACT_PROFILE,
     BASE_BRANCH,
@@ -40,6 +45,7 @@ from .models import (
     _branch_matches_task,
     _pr_base_sha,
     _remote_refs,
+    branch_matches_profile,
     canonical_task_branch,
     fact_profile_for_operation,
 )
@@ -79,7 +85,13 @@ class LiveStateResolver:
         *,
         include_local: bool = True,
         include_remote: bool = True,
+        profile: LeafIssueWorkflowProfile | None = None,
     ) -> tuple[set[str], dict[str, str], bool]:
+        matcher = (
+            (lambda branch: branch_matches_profile(branch, task_number, profile))
+            if profile is not None
+            else (lambda branch: _branch_matches_task(branch, task_number))
+        )
         local_lines = (
             self._git_lines(
                 ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
@@ -89,11 +101,7 @@ class LiveStateResolver:
             if include_local
             else []
         )
-        local = {
-            branch
-            for branch in local_lines
-            if _branch_matches_task(branch, task_number)
-        }
+        local = {branch for branch in local_lines if matcher(branch)}
         if not include_remote:
             return local, {}, True
         remote_result = self.runner.run(
@@ -105,11 +113,7 @@ class LiveStateResolver:
             warnings.append(command_warning(remote_result))
             return local, {}, False
         remote_all = _remote_refs(remote_result.stdout)
-        remote = {
-            branch: oid
-            for branch, oid in remote_all.items()
-            if _branch_matches_task(branch, task_number)
-        }
+        remote = {branch: oid for branch, oid in remote_all.items() if matcher(branch)}
         return local, remote, True
 
     def _recover_merged_pr_branch(
@@ -118,6 +122,7 @@ class LiveStateResolver:
         repository: str,
         issue: Mapping[str, Any] | None,
         warnings: list[dict[str, Any]],
+        profile: LeafIssueWorkflowProfile | None = None,
     ) -> tuple[str | None, Mapping[str, Any] | None, str | None]:
         """Recover a deleted Task ref from authoritative closing-PR facts."""
         if not isinstance(issue, Mapping):
@@ -223,7 +228,17 @@ class LiveStateResolver:
             value.get("number") != pr_number
             or str(value.get("state", "")).upper() != "MERGED"
             or value.get("baseRefName") != BASE_BRANCH
-            or not _branch_matches_task(str(value.get("headRefName", "")), task_number)
+            or not (
+                branch_matches_profile(
+                    str(value.get("headRefName", "")),
+                    task_number,
+                    profile,
+                )
+                if profile is not None
+                else _branch_matches_task(
+                    str(value.get("headRefName", "")), task_number
+                )
+            )
         ):
             return (
                 None,
@@ -333,18 +348,41 @@ class LiveStateResolver:
         if relationships.get("available") is not True:
             reasons.append("Task relationship facts unavailable")
         branch_warning_count = len(warnings)
+        branch_profile = profile_resolution.profile
         if profile.include_local_task_branches and profile.include_remote_task_branches:
-            local_branches, remote_branches, remote_available = self._task_branches(
-                task_number,
-                warnings,
-            )
+            if (
+                branch_profile is None
+                or branch_profile.issue_kind is LeafIssueKind.TASK
+            ):
+                local_branches, remote_branches, remote_available = self._task_branches(
+                    task_number,
+                    warnings,
+                )
+            else:
+                local_branches, remote_branches, remote_available = self._task_branches(
+                    task_number,
+                    warnings,
+                    profile=branch_profile,
+                )
         else:
-            local_branches, remote_branches, remote_available = self._task_branches(
-                task_number,
-                warnings,
-                include_local=profile.include_local_task_branches,
-                include_remote=profile.include_remote_task_branches,
-            )
+            if (
+                branch_profile is not None
+                and branch_profile.issue_kind is not LeafIssueKind.TASK
+            ):
+                local_branches, remote_branches, remote_available = self._task_branches(
+                    task_number,
+                    warnings,
+                    include_local=profile.include_local_task_branches,
+                    include_remote=profile.include_remote_task_branches,
+                    profile=branch_profile,
+                )
+            else:
+                local_branches, remote_branches, remote_available = self._task_branches(
+                    task_number,
+                    warnings,
+                    include_local=profile.include_local_task_branches,
+                    include_remote=profile.include_remote_task_branches,
+                )
         if len(warnings) > branch_warning_count:
             reasons.append("Task branch inventory contains unavailable facts")
         if not remote_available:
@@ -373,6 +411,7 @@ class LiveStateResolver:
                     repository,
                     issue,
                     warnings,
+                    branch_profile,
                 )
             )
             if recovery_reason:

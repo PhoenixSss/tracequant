@@ -41,7 +41,7 @@ def test_leaf_issue_profile_resolution_is_exact_and_fail_closed() -> None:
     profiles = {
         "type:task": ("task", True, "task/", True),
         "type:bug": ("bug", False, "bug/", False),
-        "type:documentation": ("documentation", False, "documentation/", False),
+        "type:documentation": ("documentation", False, "documentation/", True),
         "type:research": ("research", False, "research/", False),
     }
 
@@ -88,7 +88,7 @@ def test_leaf_issue_profile_resolution_is_exact_and_fail_closed() -> None:
     assert resolution.profile is lck_profiles.TASK_PROFILE
 
 
-@pytest.mark.parametrize("label", ["type:bug", "type:documentation", "type:research"])
+@pytest.mark.parametrize("label", ["type:bug", "type:research"])
 def test_unenabled_leaf_profiles_return_typed_terminal_status(
     monkeypatch: pytest.MonkeyPatch,
     label: str,

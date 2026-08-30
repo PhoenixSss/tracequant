@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from critical_outcome import critical_outcome_snapshot
+from documentation_policy import documentation_contract_snapshot
 from workflow_common import (
     CommandResult,
     CommandRunner,
@@ -464,6 +465,8 @@ def _issue_view_with_contract(
                 }
             )
     body = value.get("body") if isinstance(value.get("body"), str) else None
+    is_documentation = "type:documentation" in normalized_labels
+    is_task = "type:task" in normalized_labels
     raw_comments = value.get("comments", [])
     comment_facts: list[dict[str, Any]] = []
     if isinstance(raw_comments, list):
@@ -491,7 +494,10 @@ def _issue_view_with_contract(
         "content_sha256": sha256_json(content_facts),
         "body_sha256": sha256_json({"body": body}),
         "body_characters": len(body) if body is not None else None,
-        "critical_outcome": critical_outcome_snapshot(body),
+        "critical_outcome": critical_outcome_snapshot(body) if is_task else None,
+        "documentation_contract": (
+            documentation_contract_snapshot(body) if is_documentation else None
+        ),
         "comment_count": len(comment_facts) if include_comments else None,
         "state": safe_text(value.get("state")),
         "labels": bounded_list(sorted(normalized_labels)),
@@ -512,6 +518,7 @@ def _issue_view_with_contract(
             "body": body,
             "body_sha256": issue["body_sha256"],
             "critical_outcome": issue["critical_outcome"],
+            "documentation_contract": issue["documentation_contract"],
         }
         if include_contract and body is not None
         else None

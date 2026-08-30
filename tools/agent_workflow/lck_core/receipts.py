@@ -504,6 +504,9 @@ def _write_failure_receipt(
             "critical_outcome": _jsonable(
                 getattr(handler, "last_critical_outcome", None)
             ),
+            "documentation_policy": _jsonable(
+                getattr(handler, "last_documentation_validation", None)
+            ),
             "validation": _jsonable(getattr(handler, "last_validation", None)),
             "checks": _jsonable(getattr(handler, "last_checks", None)),
             "effects": _jsonable(

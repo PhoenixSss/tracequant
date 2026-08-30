@@ -7,6 +7,11 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Final
 
+from documentation_policy import (
+    DocumentationChangeResult,
+    DocumentationPolicyStatus,
+    evaluate_documentation_changes,
+)
 from workflow_common import (
     ProgressReporter,
     WorkflowToolError,
@@ -29,6 +34,12 @@ from .state import (
     _required_check_contract,
     _required_check_contract_for_snapshot,
 )
+
+
+class DocumentationReclassificationRequired(LckStopError):
+    """The candidate is outside the Documentation profile's safe scope."""
+
+    code = "DOCUMENTATION_RECLASSIFICATION_REQUIRED"
 
 
 class FormalValidationGate:
@@ -98,6 +109,38 @@ class FormalValidationGate:
             reporter.failed("formal-validation")
             raise
         reporter.completed("formal-validation")
+        return payload
+
+
+class DocumentationValidationGate:
+    """Apply the fixed repository-owned Documentation change policy."""
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+        self.last_result: dict[str, Any] | None = None
+
+    def run(self, base_sha: str) -> dict[str, Any]:
+        if not is_sha(base_sha):
+            raise LckStopError("Documentation validation base SHA is unavailable")
+        result = self.resolver.runner.run(
+            ["git", "diff", "--name-only", base_sha, "--"],
+            command_id="lck-documentation-changed-files",
+        )
+        if result.returncode != 0:
+            raise LckStopError(
+                "Documentation changed-file inventory is unavailable: "
+                + (result.stderr.strip() or result.stdout.strip())
+            )
+        changed_files = tuple(line for line in result.stdout.splitlines() if line)
+        policy: DocumentationChangeResult = evaluate_documentation_changes(
+            changed_files
+        )
+        payload = policy.to_dict()
+        self.last_result = payload
+        if policy.status is not DocumentationPolicyStatus.PASS:
+            raise DocumentationReclassificationRequired(
+                "DOCUMENTATION_RECLASSIFICATION_REQUIRED: " + policy.detail
+            )
         return payload
 
 

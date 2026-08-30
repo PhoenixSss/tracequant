@@ -173,6 +173,11 @@ Merge Preflight operation 才能进入人工合并边界。
 Review Complete fresh identity 与 sealed reviewed target 一致，current applicable checks
 仍通过。
 
+对于 Documentation leaf，semantic Review 还必须依据当前 Documentation contract 检查
+事实准确性、范围、一致性与 artifact correctness；LCK 已在 Delivery / Review 边界执行
+repository-owned typed safe-change policy，禁止把 runtime、tests、CI、Agent control 或
+workflow-policy 修改伪装成文档变化，也不要求不存在的 Critical Outcome evidence。
+
 Review Complete 返回：
 
 ```text
@@ -290,7 +295,7 @@ LCK 复用 Initial Delivery 已迁移的 bounded effects：
 
 ```text
 reacquire live facts
-→ Critical Outcome
+→ Documentation policy (Documentation) / Critical Outcome (Task)
 → formal Delivery validation
 → commit exact validated repair tree
 → ensure remote Task branch
