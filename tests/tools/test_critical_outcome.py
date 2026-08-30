@@ -42,6 +42,37 @@ def test_parse_critical_outcome_contract() -> None:
     assert contract.verification_test.startswith("tests/tools/test_lck.py::")
 
 
+@pytest.mark.parametrize("heading_level", range(1, 7))
+def test_parser_accepts_all_standard_markdown_heading_levels(
+    heading_level: int,
+) -> None:
+    body = _body().replace(
+        "### Critical Outcome",
+        f"{'#' * heading_level} Critical Outcome",
+    )
+
+    assert parse_critical_outcome(body).capability == (
+        "LCK owns deterministic Delivery completion"
+    )
+
+
+def test_parser_rejects_plain_text_critical_outcome_marker() -> None:
+    body = _body().replace("### Critical Outcome", "Critical Outcome")
+
+    with pytest.raises(CriticalOutcomeError, match="exactly one"):
+        parse_critical_outcome(body)
+
+
+def test_parser_rejects_duplicate_critical_outcome_headings_across_levels() -> None:
+    body = _body().replace(
+        "### Acceptance Criteria",
+        "## Critical Outcome\n\n### Acceptance Criteria",
+    )
+
+    with pytest.raises(CriticalOutcomeError, match="exactly one"):
+        parse_critical_outcome(body)
+
+
 def test_parser_accepts_markdown_bullet_and_bold_labels() -> None:
     body = """### Critical Outcome
 - **Caller:** CLI
