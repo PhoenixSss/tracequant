@@ -16,7 +16,7 @@ from typing import Any, Final
 
 from workflow_common import CommandRunner, ProgressReporter, safe_text
 
-_SECTION_HEADING: Final = re.compile(r"^###\s+Critical Outcome\s*$", re.IGNORECASE)
+_SECTION_HEADING: Final = re.compile(r"^#{1,6}\s+Critical Outcome\s*$", re.IGNORECASE)
 _NEXT_HEADING: Final = re.compile(r"^#{1,6}\s+")
 _FIELD_LINE: Final = re.compile(
     r"^\s*(?:[-*+]\s*)?(?:\*\*)?"
@@ -76,7 +76,7 @@ def _normalize_key(value: str) -> str:
 
 
 def parse_critical_outcome(body: str | None) -> CriticalOutcomeContract:
-    """Parse the single required ``### Critical Outcome`` section.
+    """Parse the single required Markdown ``Critical Outcome`` section.
 
     The section uses four one-line fields so the semantic contract remains
     human-readable while the verification target stays machine-checkable.
@@ -92,7 +92,7 @@ def parse_critical_outcome(body: str | None) -> CriticalOutcomeContract:
     ]
     if len(section_starts) != 1:
         raise CriticalOutcomeError(
-            "Task body must contain exactly one '### Critical Outcome' section"
+            "Task body must contain exactly one level 1-6 'Critical Outcome' section"
         )
 
     values: dict[str, str] = {}
