@@ -1416,6 +1416,14 @@ def _formal_blockers_gate(
             if labels_complete is not True or not isinstance(labels, list):
                 unknown_state += 1
                 continue
+            type_labels = [
+                label
+                for label in labels
+                if isinstance(label, str) and label.startswith("type:")
+            ]
+            if len(type_labels) != 1:
+                unknown_state += 1
+                continue
             if "type:research" not in labels:
                 resolved += 1
                 continue

@@ -809,6 +809,51 @@ def test_research_policy_reclassifies_changes_outside_repository_artifacts() -> 
     assert result.disallowed_files == ("src/tracequant/runtime.py",)
 
 
+@pytest.mark.parametrize("symlink_kind", ["file", "directory"])
+def test_research_policy_rejects_symlinked_artifacts(
+    tmp_path: Path,
+    symlink_kind: str,
+) -> None:
+    research_root = tmp_path / "docs" / "research"
+    research_root.mkdir(parents=True)
+    target_root = tmp_path / "src"
+    target_root.mkdir()
+    if symlink_kind == "file":
+        target = target_root / "runtime.md"
+        target.write_text("Research Outcome: IMPLEMENT\n", encoding="utf-8")
+        link = research_root / "report.md"
+        link.symlink_to(target)
+        changed_files = ("docs/research/report.md",)
+    else:
+        target = target_root / "reports"
+        target.mkdir()
+        (target / "report.md").write_text(
+            "Research Outcome: IMPLEMENT\n", encoding="utf-8"
+        )
+        link = research_root / "reports"
+        link.symlink_to(target, target_is_directory=True)
+        changed_files = ("docs/research/reports/report.md",)
+
+    result = evaluate_research_changes(changed_files, repo_root=tmp_path)
+
+    assert result.status.value == "reclassification_required"
+    assert result.disallowed_files == changed_files
+    assert "symlink" in result.detail
+
+    with pytest.raises(ResearchPolicyError, match="symlinks"):
+        research_artifact_binding(
+            tmp_path,
+            task_number=199,
+            pr_number=299,
+            base_sha=SHA,
+            head_sha=SHA,
+            task_body_sha256=DIGEST,
+            merge_base_sha=SHA,
+            effective_diff_sha256=DIGEST,
+            changed_files=changed_files,
+        )
+
+
 def test_research_contract_is_bound_to_the_issue_form() -> None:
     template = research_template_contract(ROOT / ".github/ISSUE_TEMPLATE/research.yml")
     assert template.field_ids == (
@@ -977,3 +1022,27 @@ def test_closed_research_blocker_without_outcome_fails_closed() -> None:
     )
 
     assert result["status"] == "unknown"
+
+
+def test_closed_blocker_with_multiple_type_labels_fails_closed() -> None:
+    result = _formal_blockers_gate(
+        {
+            "available": True,
+            "blocked_by": {
+                "items": [
+                    {
+                        "number": 198,
+                        "state": "CLOSED",
+                        "labels": ["type:research", "type:task"],
+                        "research_contract": research_contract_snapshot(RESEARCH_BODY),
+                        "research_outcome": "IMPLEMENT",
+                    }
+                ],
+                "count": 1,
+                "truncated": False,
+            },
+        }
+    )
+
+    assert result["status"] == "unknown"
+    assert "unknown_state=1" in result["detail"]

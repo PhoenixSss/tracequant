@@ -399,24 +399,81 @@ def _is_allowed_artifact(path: str) -> bool:
     )
 
 
+def _resolve_research_artifact_path(repo_root: Path, relative: str) -> Path:
+    """Resolve an artifact only when its complete path stays in the namespace."""
+
+    root = repo_root.resolve()
+    candidate = root / relative
+    current = root
+    try:
+        for part in Path(relative).parts:
+            current /= part
+            if current.is_symlink():
+                raise ResearchPolicyError(
+                    f"Research artifacts must not use symlinks: {relative}"
+                )
+        resolved = candidate.resolve()
+        artifact_root = (root / RESEARCH_ARTIFACT_PREFIX.rstrip("/")).resolve()
+        resolved.relative_to(artifact_root)
+    except ResearchPolicyError:
+        raise
+    except (OSError, RuntimeError) as exc:
+        raise ResearchPolicyError(
+            f"Research artifact path cannot be inspected: {relative}"
+        ) from exc
+    except ValueError as exc:
+        raise ResearchPolicyError(
+            f"Research artifact path resolves outside docs/research/: {relative}"
+        ) from exc
+    return resolved
+
+
+def _artifact_path_policy_error(repo_root: Path, relative: str) -> str | None:
+    try:
+        _resolve_research_artifact_path(repo_root, relative)
+    except ResearchPolicyError as exc:
+        return str(exc)
+    return None
+
+
 def evaluate_research_changes(
     changed_files: Iterable[str],
+    *,
+    repo_root: Path | None = None,
 ) -> ResearchChangeResult:
-    """Allow only versioned, non-executable Research artifacts."""
+    """Allow only versioned, non-executable Research artifacts.
+
+    ``repo_root`` is required for callers that will read the artifacts.  When
+    provided, the complete path is checked without following symlinks and its
+    resolved target must remain under ``docs/research/``.
+    """
 
     normalized = tuple(sorted({path.strip() for path in changed_files if path.strip()}))
-    disallowed = tuple(path for path in normalized if not _is_allowed_artifact(path))
+    path_errors = {
+        path: _artifact_path_policy_error(repo_root, path)
+        for path in normalized
+        if repo_root is not None and _is_allowed_artifact(path)
+    }
+    disallowed = tuple(
+        path
+        for path in normalized
+        if not _is_allowed_artifact(path) or path_errors.get(path) is not None
+    )
     if disallowed:
+        detail = (
+            "Research candidate exceeds the repository-owned artifact policy; "
+            "reclassification or split required for: " + ", ".join(disallowed)
+        )
+        reasons = tuple(path_errors[path] for path in disallowed if path in path_errors)
+        if reasons:
+            detail += "; " + "; ".join(reasons)
         return ResearchChangeResult(
             ResearchPolicyStatus.RECLASSIFICATION_REQUIRED,
             RESEARCH_POLICY_ID,
             normalized,
             artifact_files=tuple(path for path in normalized if path not in disallowed),
             disallowed_files=disallowed,
-            detail=(
-                "Research candidate exceeds the repository-owned artifact policy; "
-                "reclassification or split required for: " + ", ".join(disallowed)
-            ),
+            detail=detail,
         )
     if not normalized:
         return ResearchChangeResult(
@@ -468,13 +525,7 @@ def _artifact_digests(
 ) -> list[dict[str, str]]:
     digests: list[dict[str, str]] = []
     for relative in artifact_files:
-        path = (repo_root / relative).resolve()
-        try:
-            path.relative_to(repo_root.resolve())
-        except ValueError as exc:
-            raise ResearchPolicyError(
-                "Research artifact path escapes repository root"
-            ) from exc
+        path = _resolve_research_artifact_path(repo_root, relative)
         if not path.is_file():
             raise ResearchPolicyError(f"Research artifact is unavailable: {relative}")
         try:
@@ -494,20 +545,14 @@ def research_artifact_outcome(
 ) -> ResearchOutcome | None:
     """Read an optional typed outcome declaration from the artifact set."""
 
-    policy = evaluate_research_changes(artifact_files)
+    policy = evaluate_research_changes(artifact_files, repo_root=repo_root)
     if policy.status is not ResearchPolicyStatus.PASS:
         raise ResearchPolicyError(
             policy.detail or "Research artifact policy rejected the candidate"
         )
     declared: list[ResearchOutcome] = []
     for relative in policy.artifact_files:
-        path = (repo_root / relative).resolve()
-        try:
-            path.relative_to(repo_root.resolve())
-        except ValueError as exc:
-            raise ResearchPolicyError(
-                "Research artifact path escapes repository root"
-            ) from exc
+        path = _resolve_research_artifact_path(repo_root, relative)
         if not path.is_file():
             raise ResearchPolicyError(f"Research artifact is unavailable: {relative}")
         try:
@@ -541,7 +586,7 @@ def research_artifact_binding(
 ) -> dict[str, Any]:
     """Bind a Research decision candidate to exact artifact and diff identity."""
 
-    policy = evaluate_research_changes(changed_files)
+    policy = evaluate_research_changes(changed_files, repo_root=repo_root)
     if policy.status is not ResearchPolicyStatus.PASS:
         raise ResearchPolicyError(
             policy.detail or "Research artifact policy rejected the candidate"
@@ -551,7 +596,9 @@ def research_artifact_binding(
     declared: list[ResearchOutcome] = []
     for item in artifact_digests:
         try:
-            text = (repo_root / item["path"]).read_text(encoding="utf-8")
+            text = _resolve_research_artifact_path(repo_root, item["path"]).read_text(
+                encoding="utf-8"
+            )
         except (OSError, UnicodeDecodeError) as exc:
             raise ResearchPolicyError(
                 f"Research artifact cannot be read: {item['path']}"

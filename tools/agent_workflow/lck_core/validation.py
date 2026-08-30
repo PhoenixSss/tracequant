@@ -190,7 +190,9 @@ class ResearchValidationGate:
             cwd=self.resolver.repo_root,
             include_index=include_index,
         )
-        policy = evaluate_research_changes(effective_diff.changed_files)
+        policy = evaluate_research_changes(
+            effective_diff.changed_files, repo_root=self.resolver.repo_root
+        )
         payload = policy.to_dict()
         payload["effective_diff"] = {
             "merge_base_sha": effective_diff.merge_base_sha,
