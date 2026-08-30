@@ -3,13 +3,18 @@ from __future__ import annotations
 import hashlib
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
 from documentation_policy import (
     DocumentationPolicyStatus,
     evaluate_documentation_changes,
+)
+from research_policy import (
+    ResearchPolicyError,
+    bind_research_outcome,
+    require_typed_research_outcome,
 )
 from workflow_common import ProgressReporter, is_sha, safe_text
 from workflow_evidence import _formal_blockers_gate
@@ -347,6 +352,7 @@ class ReviewCompletionResult:
             "verdict": self.verdict,
             "status": self.status,
             "review_target": self.identity.to_dict(),
+            "research_artifact": _jsonable(self.identity.research_artifact),
             "record_path": str(self.record_path),
             "human_boundary": human_boundary,
             "automatic_remediation": False,
@@ -412,6 +418,7 @@ class ReviewCompleter:
         *,
         verdict: str,
         findings_file: Path | None = None,
+        research_outcome: str | None = None,
     ) -> ReviewCompletionResult:
         self.last_checks = None
         self.last_documentation_validation = None
@@ -484,6 +491,35 @@ class ReviewCompleter:
             )
             _assert_review_applicable(reviewed_identity, current_identity)
             profile = resolve_issue_profile(state.issue).profile
+            research_artifact = current_identity.research_artifact
+            if profile is not None and profile.issue_kind is LeafIssueKind.RESEARCH:
+                if verdict == "PASS":
+                    if not isinstance(research_artifact, Mapping):
+                        raise LckStopError(
+                            "Research Review Complete requires a reviewed artifact binding"
+                        )
+                    try:
+                        if research_outcome is not None:
+                            research_artifact = bind_research_outcome(
+                                research_artifact, research_outcome
+                            )
+                        require_typed_research_outcome(research_artifact)
+                    except ResearchPolicyError as exc:
+                        raise LckStopError(
+                            f"Research Review Complete requires a typed outcome: {exc}"
+                        ) from exc
+                    current_identity = replace(
+                        current_identity, research_artifact=research_artifact
+                    )
+                elif research_outcome is not None:
+                    try:
+                        bind_research_outcome(research_artifact or {}, research_outcome)
+                    except ResearchPolicyError as exc:
+                        raise LckStopError(f"invalid Research Outcome: {exc}") from exc
+            elif research_outcome is not None:
+                raise LckStopError(
+                    "--research-outcome is supported only for type:research Issues"
+                )
             if (
                 profile is not None
                 and profile.issue_kind is LeafIssueKind.DOCUMENTATION
@@ -525,7 +561,13 @@ class ReviewCompleter:
                     if verdict == "PASS"
                     else "STOP_REQUIRED"
                 ),
-                "identity": reviewed_identity.to_dict(),
+                "identity": current_identity.to_dict(),
+                "research_artifact": _jsonable(current_identity.research_artifact),
+                "research_outcome": (
+                    current_identity.research_artifact.get("outcome")
+                    if isinstance(current_identity.research_artifact, Mapping)
+                    else None
+                ),
                 "findings": findings,
                 "findings_sha256": hashlib.sha256(findings.encode("utf-8")).hexdigest(),
                 "validation": validation,
@@ -548,7 +590,7 @@ class ReviewCompleter:
                 task_number=task_number,
                 verdict=verdict,
                 status=cast(str, record["status"]),
-                identity=reviewed_identity,
+                identity=current_identity,
                 record_path=record_path,
             )
         except ReviewStaleError:

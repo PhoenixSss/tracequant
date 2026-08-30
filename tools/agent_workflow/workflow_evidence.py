@@ -21,6 +21,12 @@ from documentation_policy import (
     DOCUMENTATION_TEMPLATE_PATH,
     documentation_contract_snapshot,
 )
+from research_policy import (
+    RESEARCH_OUTCOME_FIELD,
+    ResearchPolicyError,
+    is_implementation_outcome,
+    parse_research_outcome,
+)
 from workflow_common import (
     CommandResult,
     CommandRunner,
@@ -64,11 +70,45 @@ query($owner:String!, $name:String!, $number:Int!) {
         pageInfo { hasNextPage }
       }
       blockedBy(first:50) {
-        nodes { number title state }
+        nodes {
+          number
+          title
+          state
+          labels(first:20) { nodes { name } }
+          projectItems(first:20) {
+            nodes {
+              fieldValues(first:20) {
+                nodes {
+                  ... on ProjectV2ItemFieldSingleSelectValue {
+                    name
+                    field { ... on ProjectV2SingleSelectField { name } }
+                  }
+                }
+              }
+            }
+          }
+        }
         pageInfo { hasNextPage }
       }
       blocking(first:50) {
-        nodes { number title state }
+        nodes {
+          number
+          title
+          state
+          labels(first:20) { nodes { name } }
+          projectItems(first:20) {
+            nodes {
+              fieldValues(first:20) {
+                nodes {
+                  ... on ProjectV2ItemFieldSingleSelectValue {
+                    name
+                    field { ... on ProjectV2SingleSelectField { name } }
+                  }
+                }
+              }
+            }
+          }
+        }
         pageInfo { hasNextPage }
       }
     }
@@ -513,6 +553,11 @@ def _issue_view_with_contract(
         "state": safe_text(value.get("state")),
         "labels": bounded_list(sorted(normalized_labels)),
         "project_status": _find_project_status(value.get("projectItems")),
+        "research_outcome": (
+            _find_project_field(value.get("projectItems"), RESEARCH_OUTCOME_FIELD)
+            if "type:research" in normalized_labels
+            else None
+        ),
         "url": safe_text(value.get("url")),
         "closed_at": safe_text(value.get("closedAt")),
         "closing_pull_requests": bounded_list(pull_refs),
@@ -530,6 +575,7 @@ def _issue_view_with_contract(
             "body_sha256": issue["body_sha256"],
             "critical_outcome": issue["critical_outcome"],
             "documentation_contract": issue["documentation_contract"],
+            "research_outcome": issue["research_outcome"],
         }
         if include_contract and body is not None
         else None
@@ -567,6 +613,36 @@ def _find_project_status(value: Any) -> str | None:
         for nested in value:
             result = _find_project_status(nested)
             if result:
+                return result
+    return None
+
+
+def _find_project_field(value: Any, field_name: str) -> str | None:
+    """Find a named Project single-select value in bounded GitHub JSON."""
+
+    if isinstance(value, Mapping):
+        field = value.get("field")
+        if isinstance(field, Mapping) and field.get("name") == field_name:
+            for key in ("name", "value", "text"):
+                candidate = value.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    return safe_text(candidate)
+        for key, nested in value.items():
+            if str(key).casefold() == field_name.casefold():
+                if isinstance(nested, str) and nested.strip():
+                    return safe_text(nested)
+                if isinstance(nested, Mapping):
+                    for candidate_key in ("name", "value", "text"):
+                        candidate = nested.get(candidate_key)
+                        if isinstance(candidate, str) and candidate.strip():
+                            return safe_text(candidate)
+            result = _find_project_field(nested, field_name)
+            if result is not None:
+                return result
+    elif isinstance(value, list):
+        for nested in value:
+            result = _find_project_field(nested, field_name)
+            if result is not None:
                 return result
     return None
 
@@ -848,6 +924,13 @@ def _relationship_snapshot(
                     "title": safe_text(item.get("title")),
                     "state": safe_text(item.get("state")),
                     "labels": sorted(labels),
+                    "research_outcome": safe_text(
+                        item.get("research_outcome")
+                        or _find_project_field(
+                            item.get("projectItems"), RESEARCH_OUTCOME_FIELD
+                        )
+                    )
+                    or None,
                 }
             )
         return normalized
@@ -1188,6 +1271,7 @@ def _formal_blockers_gate(relationships: Mapping[str, Any]) -> dict[str, Any]:
     unresolved = 0
     resolved = 0
     unknown_state = 0
+    research_not_implementation = 0
     for item in items:
         if not isinstance(item, Mapping):
             unknown_state += 1
@@ -1200,14 +1284,30 @@ def _formal_blockers_gate(relationships: Mapping[str, Any]) -> dict[str, Any]:
             if isinstance(number, int) and not isinstance(number, bool):
                 open_numbers.append(number)
         elif normalized_state == "CLOSED":
-            resolved += 1
+            labels = item.get("labels")
+            labels = labels if isinstance(labels, list) else []
+            if "type:research" not in labels:
+                resolved += 1
+                continue
+            raw_outcome = item.get("research_outcome")
+            try:
+                outcome = parse_research_outcome(raw_outcome)
+            except ResearchPolicyError:
+                unknown_state += 1
+                continue
+            if is_implementation_outcome(outcome):
+                resolved += 1
+            else:
+                research_not_implementation += 1
         else:
             unknown_state += 1
 
-    if unresolved:
+    if unresolved or research_not_implementation:
         return _gate(
             "fail",
-            f"unresolved={unresolved}, resolved={resolved}, open={open_numbers[:10]}",
+            "unresolved="
+            f"{unresolved + research_not_implementation}, resolved={resolved}, "
+            f"open={open_numbers[:10]}, research_not_implementation={research_not_implementation}",
         )
     if truncated:
         return _gate(

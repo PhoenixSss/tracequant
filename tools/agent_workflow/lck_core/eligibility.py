@@ -185,8 +185,11 @@ class PhaseEligibilityResolver:
                 reasons.append("Delivery Complete requires a current local Task head")
             if state.open_pr is not None and state.open_pr.get("isDraft") is not False:
                 reasons.append("Delivery Complete cannot continue with a Draft OPEN PR")
-            capabilities = (
-                (
+            if (
+                profile_resolution.profile is not None
+                and profile_resolution.profile.issue_kind is LeafIssueKind.DOCUMENTATION
+            ):
+                capabilities = (
                     "validate_documentation_candidate",
                     "run_formal_validation",
                     "commit_current_tree",
@@ -194,9 +197,20 @@ class PhaseEligibilityResolver:
                     "ensure_open_pr",
                     "set_review_status",
                 )
-                if profile_resolution.profile is not None
-                and profile_resolution.profile.issue_kind is LeafIssueKind.DOCUMENTATION
-                else (
+            elif (
+                profile_resolution.profile is not None
+                and profile_resolution.profile.issue_kind is LeafIssueKind.RESEARCH
+            ):
+                capabilities = (
+                    "validate_research_artifact",
+                    "run_formal_validation",
+                    "commit_current_tree",
+                    "ensure_remote_branch",
+                    "ensure_open_pr",
+                    "set_review_status",
+                )
+            else:
+                capabilities = (
                     "verify_critical_outcome",
                     "run_formal_validation",
                     "commit_current_tree",
@@ -204,7 +218,6 @@ class PhaseEligibilityResolver:
                     "ensure_open_pr",
                     "set_review_status",
                 )
-            )
         elif phase in {Phase.REVIEW_PREPARE, Phase.REVIEW_COMPLETE}:
             if state.open_pr is None:
                 reasons.append("no current OPEN PR")
@@ -263,6 +276,17 @@ class PhaseEligibilityResolver:
                 ):
                     capabilities = (
                         "validate_documentation_candidate",
+                        "run_formal_validation",
+                        "commit_current_tree",
+                        "ensure_remote_branch",
+                        "reuse_open_pr",
+                    )
+                elif (
+                    profile_resolution.profile is not None
+                    and profile_resolution.profile.issue_kind is LeafIssueKind.RESEARCH
+                ):
+                    capabilities = (
+                        "validate_research_artifact",
                         "run_formal_validation",
                         "commit_current_tree",
                         "ensure_remote_branch",

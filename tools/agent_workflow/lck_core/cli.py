@@ -55,6 +55,7 @@ def _build_parser() -> argparse.ArgumentParser:
     review_complete.add_argument("--review-id", required=True)
     review_complete.add_argument("--verdict", required=True, choices=("PASS", "FAIL"))
     review_complete.add_argument("--findings-file", type=Path)
+    review_complete.add_argument("--research-outcome")
 
     remediation = commands.add_parser("remediation")
     remediation_commands = remediation.add_subparsers(
@@ -160,6 +161,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.review_id,
                     verdict=args.verdict,
                     findings_file=args.findings_file,
+                    research_outcome=args.research_outcome,
                 )
             )
         if args.command == "remediation" and args.remediation_command == "prepare":

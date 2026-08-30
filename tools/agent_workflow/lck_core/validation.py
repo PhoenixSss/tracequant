@@ -12,6 +12,12 @@ from documentation_policy import (
     DocumentationPolicyStatus,
     evaluate_documentation_changes,
 )
+from research_policy import (
+    ResearchPolicyError,
+    ResearchPolicyStatus,
+    evaluate_research_changes,
+    research_artifact_outcome,
+)
 from workflow_common import (
     ProgressReporter,
     WorkflowToolError,
@@ -41,6 +47,18 @@ class DocumentationReclassificationRequired(LckStopError):
     """The candidate is outside the Documentation profile's safe scope."""
 
     code = "DOCUMENTATION_RECLASSIFICATION_REQUIRED"
+
+
+class ResearchReclassificationRequired(LckStopError):
+    """The candidate is outside the Research artifact policy."""
+
+    code = "RESEARCH_RECLASSIFICATION_REQUIRED"
+
+
+class ResearchOutcomeRequired(LckStopError):
+    """A Research decision boundary has no typed outcome."""
+
+    code = "RESEARCH_OUTCOME_REQUIRED"
 
 
 class FormalValidationGate:
@@ -144,6 +162,55 @@ class DocumentationValidationGate:
         if policy.status is not DocumentationPolicyStatus.PASS:
             raise DocumentationReclassificationRequired(
                 "DOCUMENTATION_RECLASSIFICATION_REQUIRED: " + policy.detail
+            )
+        return payload
+
+
+class ResearchValidationGate:
+    """Apply the repository-owned Research artifact policy to one candidate."""
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+        self.last_result: dict[str, Any] | None = None
+
+    def run(
+        self,
+        base_sha: str,
+        *,
+        head_sha: str | None = None,
+        include_index: bool = False,
+    ) -> dict[str, Any]:
+        if not is_sha(base_sha):
+            raise LckStopError("Research validation base SHA is unavailable")
+        effective_diff = calculate_effective_diff(
+            self.resolver.runner,
+            base_sha=base_sha,
+            head_ref="HEAD" if include_index else (head_sha or ""),
+            command_id_prefix="lck-research",
+            cwd=self.resolver.repo_root,
+            include_index=include_index,
+        )
+        policy = evaluate_research_changes(effective_diff.changed_files)
+        payload = policy.to_dict()
+        payload["effective_diff"] = {
+            "merge_base_sha": effective_diff.merge_base_sha,
+            "effective_diff_sha256": effective_diff.effective_diff_sha256,
+            "source": "index" if include_index else "head",
+        }
+        try:
+            artifact_outcome = research_artifact_outcome(
+                self.resolver.repo_root, policy.artifact_files
+            )
+        except ResearchPolicyError as exc:
+            raise ResearchReclassificationRequired(str(exc)) from exc
+        payload["artifact_outcome"] = (
+            artifact_outcome.value if artifact_outcome is not None else None
+        )
+        self.last_result = payload
+        if policy.status is not ResearchPolicyStatus.PASS:
+            raise ResearchReclassificationRequired(
+                "RESEARCH_RECLASSIFICATION_REQUIRED: "
+                + (policy.detail or "Research artifact policy rejected the candidate")
             )
         return payload
 
