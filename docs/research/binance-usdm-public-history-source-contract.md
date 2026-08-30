@@ -2,8 +2,8 @@
 
 > 研究结论：**ARCHITECTURE DECISION**
 >
-> 核验日期：2026-08-31（UTC）；Binance REST probe 的 `serverTime` 为
-> `2026-08-30T11:30:01.759Z`。Binance 的对象、symbol、接口行为和发布政策可能变化；
+> 核验日期：2026-08-31（UTC）；本次 bounded probe 的 Binance REST `serverTime` 为
+> `2026-08-30T18:34:10.408Z`。Binance 的对象、symbol、接口行为和发布政策可能变化；
 > 本报告冻结的是当前可重复观察到的 contract，不是永久不变的交易所事实。
 
 ## 1. 决策摘要
@@ -12,16 +12,18 @@ Feature #11 首版应采用“双层 source policy”：
 
 1. 对已关闭且已发布的历史区间，优先使用 Binance Data Collection 的完整 ZIP
    object；大区间按月度 object，最近已关闭日期按日度 object。
-2. 对当前未发布日期、月度 object 尚未出现的月份、archive 首个 partial day，或
-   已确认的 archive 缺口，使用对应 USDⓈ-M REST endpoint 的有界分页结果补采。
+2. 对当前未发布日期、月度 object 尚未出现的月份或 archive 首个 partial day，使用
+   对应 USDⓈ-M REST endpoint 的有界分页结果补采；已确认的 archive 缺口只有在该
+   data family/instrument 的 REST 边界已被 probe 覆盖时才可补采，否则必须保留
+   `rest_boundary_unknown` 并进入显式 gap/fail handling。
 3. 不把 REST 请求区间当作 Raw object identity，也不把 archive 的日期文件名当作
    “整日完整”的证明；两者都必须保留实际响应/文件 SHA-256、请求参数和观测时间。
 4. archive 缺失、checksum 不匹配、REST 空响应和网络/上游错误是不同状态。不得
    静默把其中一种转换成另一种；无法完整满足请求时必须产生显式 gap 或 fail-closed。
 
 首批四类数据均有官方 REST endpoint。1m contract/mark/index kline 的 archive
-同时有 daily 与 monthly；settled funding-rate archive 当前只有 monthly，REST 是
-其 daily/current 补采路径。
+同时有 daily 与 monthly；settled funding-rate archive 当前只有 monthly，REST 可作为
+其 daily/current 补采路径，但本次 probe 没有证明 funding 的最早 REST 历史边界。
 
 ## 2. 核验方法与官方来源
 
@@ -36,8 +38,9 @@ Feature #11 首版应采用“双层 source policy”：
 - [Data Collection](https://data.binance.vision/) 及其 S3 listing。示例 listing：[`BTCUSDT` monthly 1m klines](https://s3-ap-northeast-1.amazonaws.com/data.binance.vision?prefix=data/futures/um/monthly/klines/BTCUSDT/1m/)。
 
 重复 probe 使用 `GET /fapi/v1/exchangeInfo`、四个 market-data endpoint、对象
-`HEAD`/`GET`、S3 prefix listing，并下载了少量 ZIP 到临时目录检查成员名、CSV header、
-首尾记录和 checksum。没有调用私有 API、API key 或交易接口。
+`HEAD`/`GET`、S3 prefix listing，并下载了边界代表 ZIP 到临时目录检查成员名、CSV
+header、首尾记录和 checksum。每个请求的参数、HTTP 状态、响应/ZIP digest 以及
+16 个 data family/instrument 单元的边界摘要保存在 [probe manifest](./binance-usdm-public-history-probe-manifest.json)。没有调用私有 API、API key 或交易接口。
 
 ## 3. 当前 instrument 状态
 
@@ -59,7 +62,7 @@ Feature #11 首版应采用“双层 source policy”：
 
 | 数据族 | BTCUSDT | ETHUSDT | BTCUSDC | ETHUSDC |
 |---|---|---|---|---|
-| 1m contract kline | M 2020-01→2026-07；D 2019-12-31（1,439 行，首行 00:01）→2026-08-29 | M 2020-01→2026-07；D 2019-12-31（1,439 行，首行 00:01）→2026-08-29 | M 2024-01→2026-07；D 2024-01-04（689 行，首行 12:31）→2026-08-29 | M 2024-01→2026-07；D 2024-01-04（684 行，首行 12:36）→2026-08-29 |
+| 1m contract kline | M 2020-01→2026-07；D 2019-12-31（1,440 行，首行 00:00）→2026-08-29 | M 2020-01→2026-07；D 2019-12-31（1,440 行，首行 00:00）→2026-08-29 | M 2024-01→2026-07；D 2024-01-04（689 行，首行 12:31）→2026-08-29 | M 2024-01→2026-07；D 2024-01-04（684 行，首行 12:36）→2026-08-29 |
 | 1m mark-price kline | M 2020-01→2026-07；D 2019-12-23（722 行，首行 11:58）→2026-08-29 | M 2020-01→2026-07；D 2019-12-23（722 行，首行 11:58）→2026-08-29 | M 2024-01→2026-07；D 2024-01-03（1,440 行）→2026-08-29 | M 2024-01→2026-07；D 2024-01-03（1,440 行）→2026-08-29 |
 | 1m index-price kline | M 2020-01→2026-07；D 2019-12-23（722 行，首行 11:58）→2026-08-29 | M 2020-01→2026-07；D 2019-12-23（722 行，首行 11:58）→2026-08-29 | M 2024-01→2026-07；D 2024-01-03（1,440 行）→2026-08-29 | M 2024-01→2026-07；D 2024-01-03（1,440 行）→2026-08-29 |
 | settled funding rate | M 2020-01→2026-07；无 daily object | M 2020-01→2026-07；无 daily object | M 2024-01→2026-07；无 daily object | M 2024-01→2026-07；无 daily object |
@@ -76,18 +79,37 @@ Feature #11 首版应采用“双层 source policy”：
   ETH index rows；这证明 index pair history 不能直接解释为对应 USDC perpetual
   已在那些日期可交易。
 
+### REST 历史边界 probe
+
+manifest 的 `rest_probes` 包含四个 data family 与四个 instrument 的全部 16 个
+单元。每个单元保存一个 `startTime=0,endTime=serverTime,limit=1` 的
+`earliest` probe 和一个 `endTime=serverTime,limit=1` 的 `latest` probe，包括
+normalized URL、HTTP 状态、响应 SHA-256、返回行数和首行时间。
+
+- contract、mark、index 的 probe 都返回一行，因此报告可以记录“最早/最新观测行”，
+  但这仍不是已经证明无缺口的全历史边界；完整性仍需按 object/page 连续性检查。
+- funding 的 `startTime=0` probe 对四个 instrument 都返回与 latest probe 相同的
+  最近记录（`fundingTime=1788105600001`）。因此四个 funding 单元的
+  `boundary_status` 都是 `earliest_unknown_latest_observed`，不得把该响应写成最早
+  历史记录。
+- REST fallback 只允许覆盖 manifest 已记录的 observed range，并且仍需保存新的
+  page digest；range 之外或 boundary status 为 `unknown` 时，必须产生
+  `rest_boundary_unknown`，不能用 REST 伪装修复 archive gap。
+
 ## 4. Source matrix：schema、边界与 endpoint
 
 | 数据族 | 官方 archive object | archive schema（实际 CSV header） | REST endpoint | REST response |
 |---|---|---|---|---|
 | Contract kline | `data/futures/um/{daily,monthly}/klines/{SYMBOL}/1m/{SYMBOL}-1m-...zip` | `open_time,open,high,low,close,volume,close_time,quote_volume,count,taker_buy_volume,taker_buy_quote_volume,ignore` | `/fapi/v1/klines?symbol=...&interval=1m` | 12-element array；contract volume、quote volume、trade count、taker volumes 有业务语义 |
-| Mark-price kline | `data/futures/um/{daily,monthly}/markPriceKlines/{SYMBOL}/1m/{SYMBOL}-1m-...zip` | 同样的 12 列名；实际 1m 样本中 volume/quote/taker 字段为 `0`，count 为 `60` | `/fapi/v1/markPriceKlines?symbol=...&interval=1m` | 12-element array；`[0..4]` 是 mark OHLC，`[5]`、`[7]`、`[8]`、`[9..11]` 是 Ignore，占位字段 |
-| Index-price kline | `data/futures/um/{daily,monthly}/indexPriceKlines/{SYMBOL}/1m/{SYMBOL}-1m-...zip` | 同样的 12 列名；1m 样本为 price OHLC + 零/占位字段 | `/fapi/v1/indexPriceKlines?pair=...&interval=1m` | 12-element array；语义同 mark kline，但输入参数是 `pair` |
+| Mark-price kline | `data/futures/um/{daily,monthly}/markPriceKlines/{SYMBOL}/1m/{SYMBOL}-1m-...zip` | 同样的 12 列名；实际 1m 样本中 volume/quote/taker 字段为 `0`，archive 的 `count=60` 是非语义占位值，不是成交笔数 | `/fapi/v1/markPriceKlines?symbol=...&interval=1m` | 12-element array；`[0..4]` 是 mark OHLC，`[5]`、`[7]`、`[8]`、`[9..11]` 是 Ignore，占位字段 |
+| Index-price kline | `data/futures/um/{daily,monthly}/indexPriceKlines/{SYMBOL}/1m/{SYMBOL}-1m-...zip` | 同样的 12 列名；1m 样本为 price OHLC + 零/占位字段；archive 的 `count` 同样非语义，不是成交笔数 | `/fapi/v1/indexPriceKlines?pair=...&interval=1m` | 12-element array；语义同 mark kline，但输入参数是 `pair` |
 | Settled funding rate | `data/futures/um/monthly/fundingRate/{SYMBOL}/{SYMBOL}-fundingRate-YYYY-MM.zip` | `calc_time,funding_interval_hours,last_funding_rate` | `/fapi/v1/fundingRate?symbol=...` | object：`symbol,fundingRate,fundingTime,markPrice,rateType` |
 
-所有 futures 时间戳 probe 都是 Unix milliseconds。2026-08-29 的 1m daily kline
+所有 futures 时间戳 probe 都是 Unix milliseconds。当前样本的 1m daily kline
 样本有 1,440 行，open time 为 `[00:00, 24:00)` 的每分钟网格，close time 为每个
-分钟的最后 1ms；首个历史 object 可以是 partial day。Funding archive 的 2026-07
+分钟的最后 1ms；首个历史 object 可以是 partial day。manifest 还记录到部分早期
+monthly/contract members 没有 CSV header，而较新的 members 有 header；parser 必须
+按实际 member 检测并记录 schema，不得把第一条数据误当 header。Funding archive 的 2026-07
 BTCUSDT 样本为 93 行、8 小时一条，`calc_time` / `last_funding_rate` 与同时间的
 REST `fundingTime` / `fundingRate` probe 相符，但 archive 不含 REST 的 markPrice、
 rateType 和 symbol 字段，不能把两者当作同一 schema。
@@ -114,6 +136,9 @@ rateType 和 symbol 字段，不能把两者当作同一 schema。
 - 不带时间的 kline 请求返回最近 kline；funding 不带时间时返回最近记录。最新
   未关闭 candle 不应被当作已冻结历史；应保存抓取时刻并在后续重采时按新 digest
   形成新 snapshot。
+
+每个 REST 边界结果的可复现参数、观测时间和响应 digest 见 [probe manifest](./binance-usdm-public-history-probe-manifest.json)；其中 `startTime=0` 只表示该次
+bounded request 的返回，不自动表示全历史最早边界。
 
 ## 5. Archive 发布、checksum 与修订
 
@@ -161,7 +186,8 @@ objects：
 requested [start, end)
   -> closed monthly objects for full covered months
   -> daily objects for remaining closed days
-  -> bounded REST pages for unpublished/partial/gap intervals
+  -> bounded REST pages only inside a proven per-cell observed range
+  -> explicit gap when the REST boundary is unknown or outside the range
 ```
 
 每个 object 的 manifest 至少记录 `object_key`、source URL、取得时间、HTTP metadata、
@@ -187,22 +213,24 @@ limit；请求区间只是 provenance，不是稳定内容身份。同一请求�
 | 场景 | 首选来源 | 处理规则 |
 |---|---|---|
 | 大区间回填、完整已关闭月份 | monthly archive | 逐 object listing、下载、checksum、schema/timestamp 校验；缺 object 不得用空文件代替 |
-| 月份边缘的已关闭日期、月度尚未发布 | daily archive（contract/mark/index） | 只选已存在的 UTC 日 object；funding 没有 daily archive，直接使用 REST |
+| 月份边缘的已关闭日期、月度尚未发布 | daily archive（contract/mark/index） | 只选已存在的 UTC 日 object；funding 没有 daily archive，只有在该 instrument 的 observed REST range 覆盖请求时才使用 REST，否则保留 gap/probe |
 | 当前日、未关闭 candle、当前 funding month | REST | `[start,end)` 转成 `startTime=start,endTime=end-1`，按 cursor 分页；保存每个 page 的请求和 digest |
 | archive 首个 partial day | REST 补齐或保留显式 partial | 先用实际 row time 判断覆盖；不得因为文件存在就声称整日完整 |
-| archive 中已确认的 row gap/duplicate | REST bounded supplement | REST 结果作为不同 source provenance；合并前按 dataset-specific key 去重并保留冲突；REST 为空时产生 gap |
-| object 404，但按发布日历应已可用 | REST 仅作为显式 fallback | 记录 `archive_unavailable`；REST 能补齐则标记 fallback，不能补齐则 completeness fail/gap |
+| archive 中已确认的 row gap/duplicate | REST bounded supplement（仅当 gap 在该 cell 的 observed REST range 内） | REST 结果作为不同 source provenance；合并前按 dataset-specific key 去重并保留冲突；range 外或 REST 为空时产生 `rest_boundary_unknown`/gap |
+| object 404，但按发布日历应已可用 | REST 仅作为显式、有边界证据的 fallback | 记录 `archive_unavailable`；只有请求范围落在该 cell 的 observed REST range 内才可标记 fallback，否则 completeness fail/gap |
 | checksum mismatch、ZIP 损坏或 schema 不符 | fail-closed | quarantine archive；不得静默用另一来源伪装成 archive 修复。若业务允许 REST 补采，也必须作为独立 source 记录 |
 | REST 200 `[]` | 不自动 fallback | 区分“请求范围为空/该 instrument 无历史”与网络/上游错误；对要求完整的区间产生显式 gap |
 | REST 429/5xx/超时 | 有界重试后 fail/gap | 错误分类必须保留；不能把未取得的数据变成零值或空成功 |
 
-archive 与 REST 有重叠时，历史冻结优先 archive，REST 主要承担 unpublished/current
-和 gap handling；不因为两者重叠就静默选择“看起来更完整”的一方。
+archive 与 REST 有重叠时，历史冻结优先 archive，REST 主要承担 published-boundary
+已知的 unpublished/current 和 gap handling；不因为两者重叠就静默选择“看起来更完整”
+的一方。对 boundary unknown 的单元，REST 只能在新 probe 建立边界后使用。
 
 ## 8. 对后续实现 Task 的硬约束
 
 1. market 固定为 `um`；contract、mark、index、funding 四个 data family 必须有
-   独立 source type，不能用一个 generic kline parser 把 placeholder 当成交量。
+   独立 source type，不能用一个 generic kline parser 把 placeholder 当成交量。Mark/index
+   archive CSV 的 `count`（包括观察到的 `60`）必须映射为 ignore/null，不得暴露为 trade count。
 2. 内部时间接口使用 timezone-aware UTC 和 `[start,end)`；上游 API 的 inclusive
    endTime 只在 adapter 边界转换一次。Raw 保留原始毫秒值。
 3. `fundingRate` archive 的 `calc_time`、`funding_interval_hours`、
@@ -214,8 +242,9 @@ archive 与 REST 有重叠时，历史冻结优先 archive，REST 主要承担 u
    out-of-order；文件名和 HTTP 200 不足以证明完整覆盖。
 6. Raw object 的 bytes、upstream checksum、response body 和 source metadata 保持
    immutable；archive 同 key 的替换必须形成可审计的新版本/冲突。
-7. 任何 source fallback、gap、空响应、checksum mismatch、上游错误都进入 manifest
-   状态，不能转换为零值、成功但少数据，或没有 provenance 的拼接结果。
+7. 任何 source fallback、gap、`rest_boundary_unknown`、空响应、checksum mismatch、
+   上游错误都进入 manifest 状态，不能转换为零值、成功但少数据，或没有 provenance
+   的拼接结果。
 8. Funding archive 当前没有 daily 发布 object；不要实现一个假定其存在的
    `daily/fundingRate` 路径。运行时先 listing/HEAD，再决定等待、REST 补采或 gap。
 
@@ -230,9 +259,10 @@ archive 与 REST 有重叠时，历史冻结优先 archive，REST 主要承担 u
 - Kline 文档对 contract/mark/index 的 `startTime`/`endTime` 参数没有像 funding
   文档一样完整声明 inclusive 文字；本报告的 `[start,end)` adapter 规则来自实际
   boundary probe，后续必须保留回归 probe。
-- 用 `startTime=0` 探测 funding 的“最早记录”不应作为边界 authority；有无 endTime、
-  limit 和服务端窗口会影响结果。funding 边界应以 archive listing + 有界 historical
-  query + 实际返回校验共同确定。
+- manifest 证明了 16 个 REST 单元的 bounded observed rows，但没有证明全历史边界或
+  无缺口。尤其用 `startTime=0` 探测 funding 的结果对四个 instrument 都落在最近窗口，
+  因此 funding earliest boundary 仍是 `unknown`；后续只能以 archive listing + 有界
+  historical query + 实际返回校验共同确定。
 - 本次只做了小范围 row/schema/checksum probe，没有完成四个 instrument、四个 data
   family 全历史的缺口统计。因此后续实现必须把全量连续性检查作为数据质量门禁，不能
   将本报告的 coverage range 解释为无缺口保证。
@@ -240,7 +270,7 @@ archive 与 REST 有重叠时，历史冻结优先 archive，REST 主要承担 u
 ## 10. 结论
 
 结论为 **ARCHITECTURE DECISION**：Feature #11 后续实现可以直接按本报告的
-archive-first、REST-supplement、content-addressed Raw、显式 gap/fallback policy
-拆分 Task，不需要重新猜测四类 Binance USDⓈ-M source 的基本路径和时间语义；但
-“完整历史无缺口”仍不是本研究声称已经证明的事实，必须由实现期的 manifest 和
-连续性校验逐对象证明。
+archive-first、bounded REST-supplement、content-addressed Raw、显式
+gap/fallback policy 拆分 Task；但 REST 的 observed row 不是全历史边界证明，funding
+earliest boundary 明确为 unknown，“完整历史无缺口”也不是本研究声称已经证明的事实，
+必须由实现期的 manifest 和连续性校验逐对象证明。
