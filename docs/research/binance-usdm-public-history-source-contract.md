@@ -1,9 +1,11 @@
 # Binance USDⓈ-M 公共历史数据 source contract
 
+Research Outcome: ARCHITECTURE DECISION
+
 > 研究结论：**ARCHITECTURE DECISION**
 >
-> 核验日期：2026-08-31（UTC）；本次 bounded probe 的 Binance REST `serverTime` 为
-> `2026-08-30T18:34:10.408Z`。Binance 的对象、symbol、接口行为和发布政策可能变化；
+> 核验日期：2026-08-30（UTC）；本次 bounded probe 的 Binance REST `serverTime` 为
+> `1788089401759`（响应时间 `2026-08-30T19:13:30.161454Z`）。Binance 的对象、symbol、接口行为和发布政策可能变化；
 > 本报告冻结的是当前可重复观察到的 contract，不是永久不变的交易所事实。
 
 ## 1. 决策摘要
@@ -39,13 +41,20 @@ Feature #11 首版应采用“双层 source policy”：
 
 重复 probe 使用 `GET /fapi/v1/exchangeInfo`、四个 market-data endpoint、对象
 `HEAD`/`GET`、S3 prefix listing，并下载了边界代表 ZIP 到临时目录检查成员名、CSV
-header、首尾记录和 checksum。每个请求的参数、HTTP 状态、响应/ZIP digest 以及
-16 个 data family/instrument 单元的边界摘要保存在 [probe manifest](./binance-usdm-public-history-probe-manifest.json)。没有调用私有 API、API key 或交易接口。
+header、首尾记录和 checksum。每个语义请求的精确 URL、HTTP 状态、响应 digest、
+bounded sample 和观测时间，以及 16 个 data family/instrument 单元的边界摘要保存在
+[probe manifest](./binance-usdm-public-history-probe-manifest.json)；归档的 listing、
+404、HTTP metadata 和 `.CHECKSUM` 也保存在同一 manifest。没有调用私有 API、API key
+或交易接口。
 
 ## 3. 当前 instrument 状态
 
 `GET /fapi/v1/exchangeInfo` 的当前快照对四个首批 instrument 均返回
 `status=TRADING`、`contractType=PERPETUAL`：
+
+该响应的 exact request、HTTP 200、response SHA-256、`serverTime` 以及四个 symbol
+的 bounded projection 保存在 manifest 的 `rest_semantics.exchange_info`；
+因此下表是该快照的观察结果，而不是仅由文档推导的当前状态。
 
 | Instrument | quote / margin | onboardDate (UTC) | 当前状态 |
 |---|---|---:|---|
@@ -84,7 +93,9 @@ header、首尾记录和 checksum。每个请求的参数、HTTP 状态、响应
 manifest 的 `rest_probes` 包含四个 data family 与四个 instrument 的全部 16 个
 单元。每个单元保存一个 `startTime=0,endTime=serverTime,limit=1` 的
 `earliest` probe 和一个 `endTime=serverTime,limit=1` 的 `latest` probe，包括
-normalized URL、HTTP 状态、响应 SHA-256、返回行数和首行时间。
+normalized 请求模板、HTTP 状态、响应 SHA-256、返回行数和首行时间。另一个
+`rest_semantics.semantic_probes` 数组保存语义边界 probe 的 exact URL、状态、digest、
+sample 和观测时间。
 
 - contract、mark、index 的 probe 都返回一行，因此报告可以记录“最早/最新观测行”，
   但这仍不是已经证明无缺口的全历史边界；完整性仍需按 object/page 连续性检查。
@@ -98,7 +109,7 @@ normalized URL、HTTP 状态、响应 SHA-256、返回行数和首行时间。
 
 ## 4. Source matrix：schema、边界与 endpoint
 
-| 数据族 | 官方 archive object | archive schema（实际 CSV header） | REST endpoint | REST response |
+| 数据族 | 官方 archive object | archive schema（逻辑列布局；物理 header 见 manifest） | REST endpoint | REST response |
 |---|---|---|---|---|
 | Contract kline | `data/futures/um/{daily,monthly}/klines/{SYMBOL}/1m/{SYMBOL}-1m-...zip` | `open_time,open,high,low,close,volume,close_time,quote_volume,count,taker_buy_volume,taker_buy_quote_volume,ignore` | `/fapi/v1/klines?symbol=...&interval=1m` | 12-element array；contract volume、quote volume、trade count、taker volumes 有业务语义 |
 | Mark-price kline | `data/futures/um/{daily,monthly}/markPriceKlines/{SYMBOL}/1m/{SYMBOL}-1m-...zip` | 同样的 12 列名；实际 1m 样本中 volume/quote/taker 字段为 `0`，archive 的 `count=60` 是非语义占位值，不是成交笔数 | `/fapi/v1/markPriceKlines?symbol=...&interval=1m` | 12-element array；`[0..4]` 是 mark OHLC，`[5]`、`[7]`、`[8]`、`[9..11]` 是 Ignore，占位字段 |
@@ -138,24 +149,37 @@ rateType 和 symbol 字段，不能把两者当作同一 schema。
   形成新 snapshot。
 
 每个 REST 边界结果的可复现参数、观测时间和响应 digest 见 [probe manifest](./binance-usdm-public-history-probe-manifest.json)；其中 `startTime=0` 只表示该次
-bounded request 的返回，不自动表示全历史最早边界。
+bounded request 的返回，不自动表示全历史最早边界。`rest_semantics.semantic_probes` 还保存了
+一个代表性 contract-kline 的 `endTime` 包含边界（`...1719999` 与 `...1720000`）、
+`limit=1501` 拒绝、三类 kline 分页 cursor、四个 endpoint 的未来空区间，以及 funding
+最新结果；每条都保留 exact URL、状态、response SHA-256、首/尾 sample 和观测时间。
 
 ## 5. Archive 发布、checksum 与修订
 
 Public Data README 声明：新 daily 数据在次日可用，新 monthly 数据在每月第一个
 星期一可用；每个 ZIP 同目录有 `.CHECKSUM`。本次观察到：
 
+本次 archive evidence 的 exact request 和结果保存在 manifest 的
+`archive_observations`：16 个 monthly prefix listing probe 覆盖四个 instrument 与
+四个 data family；四个 daily funding prefix 返回空 listing；16 个最新 archive
+object probe 保存 `HEAD` 的 HTTP status、`Last-Modified`、`Content-Length`、对应
+`.CHECKSUM` 的 status/digest/declared SHA-256；三类 kline 的四个 instrument 的
+2026-08-30 missing-object probe 也逐一保存为 HTTP 404。listing probe 使用
+`max-keys=2`，所以 `key_count`/`is_truncated` 是 bounded existence evidence，不是
+完整对象数量统计；首个/最新对象的 row coverage 仍由 `archive_probes` 保存。
+
 - `BTCUSDT-1m-2026-08-29.zip` 的 `Last-Modified` 为
   `2026-08-30T08:41:07Z`；同日 mark/index object 也已发布。
-- `...-2026-08-30.zip` 对四个 instrument 的三类 kline 都是 404；monthly
+- `...-2026-08-30.zip` 对四个 instrument 的三类 kline 都是 404；这 12 个 exact
+  `HEAD` 请求在 manifest 的 `missing_object_probes` 中逐一保存；monthly
   `...-2026-08.zip` 也尚未出现。
-- 四个 data family、四个 instrument 的 1m monthly prefix 都同时列出 ZIP 与
-  `.CHECKSUM`；funding-rate prefix 也如此，但没有任何 daily funding-rate
-  object。
+- 四个 data family、四个 instrument 的 1m monthly prefix 都返回包含 ZIP 与
+  `.CHECKSUM` 的 listing；funding-rate monthly prefix 也如此，但四个 daily
+  funding-rate prefix 的 bounded listing 均为空。
 
 代表性 ZIP 下载后的 SHA-256 与官方 `.CHECKSUM` 完全相同：
 
-| object | SHA-256 |
+| object | ZIP SHA-256（与 `.CHECKSUM` declared value 相等） |
 |---|---|
 | [BTCUSDT daily contract kline](https://data.binance.vision/data/futures/um/daily/klines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip) | `41e554b2a312bfadb74e4865c5cbef8dd401586c7d973c623d0915869eb81ebc` |
 | [BTCUSDT daily mark kline](https://data.binance.vision/data/futures/um/daily/markPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip) | `2146dff9db1e1ddc3af33f00696f735d0076174602e659377532db817860f4ac` |
@@ -163,9 +187,10 @@ Public Data README 声明：新 daily 数据在次日可用，新 monthly 数据
 | [BTCUSDT monthly funding rate](https://data.binance.vision/data/futures/um/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2026-07.zip) | `e36fcc66f493d7d9ec348c852fc22e9f318c79cf7adae17398a3994ae0adc41e` |
 
 README 还明确写出 archived files 可能因发现问题而在以后更新，并提供 replacement
-update changelog。S3 listing 也显示旧 object 的 `Last-Modified` 发生在其数据月份
-之后，例如 BTCUSDT 2022-01 monthly kline 在 2023-12 被修改、2022-05 object 在
-2024-08 被修改。因此：
+update changelog。S3 `HEAD` metadata 的 bounded probe 也显示旧 object 的
+`Last-Modified` 发生在其数据月份之后：BTCUSDT 2022-01 monthly kline 为
+`2023-12-18T13:44:21Z`，2022-05 object 为 `2024-08-20T18:09:41Z`；对应 object
+key、status、size 和 observation time 保存在 manifest 的 `replacement_probes`。因此：
 
 - `object_key` 不能单独充当不可变身份；Raw identity 至少为
   `(source, market=um, family, instrument/pair, interval, object_key, upstream_sha256)`。
@@ -263,7 +288,7 @@ archive 与 REST 有重叠时，历史冻结优先 archive，REST 主要承担 p
   无缺口。尤其用 `startTime=0` 探测 funding 的结果对四个 instrument 都落在最近窗口，
   因此 funding earliest boundary 仍是 `unknown`；后续只能以 archive listing + 有界
   historical query + 实际返回校验共同确定。
-- 本次只做了小范围 row/schema/checksum probe，没有完成四个 instrument、四个 data
+- 本次只做了 bounded row/schema/checksum/listing probe，没有完成四个 instrument、四个 data
   family 全历史的缺口统计。因此后续实现必须把全量连续性检查作为数据质量门禁，不能
   将本报告的 coverage range 解释为无缺口保证。
 
