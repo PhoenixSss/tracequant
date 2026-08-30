@@ -318,9 +318,13 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "effects": _effect_agent_view(value.effects),
             "automatic_merge": False,
             "manual_issue_close": False,
-            "next_action": "stop; closeout is complete"
-            if value.cleanup == "COMPLETE"
-            else "resolve pending closeout cleanup",
+            "next_action": (
+                "stop; closeout is complete"
+                if value.business_delivery == "COMPLETE" and value.cleanup == "COMPLETE"
+                else "resolve pending Research Outcome and closeout effects"
+                if value.business_delivery != "COMPLETE"
+                else "resolve pending closeout cleanup"
+            ),
         }
     if isinstance(value, RemediationContext):
         return {

@@ -17,11 +17,13 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final
 
+import yaml
 from workflow_common import sha256_json
 
 RESEARCH_POLICY_ID: Final = "repository-research-artifact-v1"
 RESEARCH_ARTIFACT_PREFIX: Final = "docs/research/"
 RESEARCH_OUTCOME_FIELD: Final = "Research Outcome"
+RESEARCH_TEMPLATE_PATH: Final = Path(".github/ISSUE_TEMPLATE/research.yml")
 
 
 class ResearchOutcome(StrEnum):
@@ -60,6 +62,40 @@ class ResearchPolicyStatus(StrEnum):
 
 
 @dataclass(frozen=True)
+class ResearchTemplateContract:
+    """The required sections declared by the repository Research Issue Form."""
+
+    field_ids: tuple[str, ...]
+    section_labels: tuple[str, ...]
+
+
+class ResearchTemplateError(ValueError):
+    """The repository-owned Research Issue form is not usable."""
+
+
+@dataclass(frozen=True)
+class ResearchContract:
+    status: ResearchPolicyStatus
+    required_sections: tuple[str, ...] = ()
+    missing_sections: tuple[str, ...] = ()
+    duplicate_sections: tuple[str, ...] = ()
+    empty_sections: tuple[str, ...] = ()
+    template_path: str = RESEARCH_TEMPLATE_PATH.as_posix()
+    detail: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status.value,
+            "required_sections": list(self.required_sections),
+            "missing_sections": list(self.missing_sections),
+            "duplicate_sections": list(self.duplicate_sections),
+            "empty_sections": list(self.empty_sections),
+            "template_path": self.template_path,
+            **({"detail": self.detail} if self.detail else {}),
+        }
+
+
+@dataclass(frozen=True)
 class ResearchChangeResult:
     status: ResearchPolicyStatus
     policy_id: str
@@ -79,6 +115,245 @@ class ResearchChangeResult:
         if self.detail:
             result["detail"] = self.detail
         return result
+
+
+def _default_research_template_path() -> Path:
+    return Path(__file__).resolve().parents[2] / RESEARCH_TEMPLATE_PATH
+
+
+def research_template_contract(
+    template_path: Path | None = None,
+) -> ResearchTemplateContract:
+    """Load required Research fields from the formal Issue form."""
+
+    path = template_path or _default_research_template_path()
+    try:
+        parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ResearchTemplateError(
+            f"cannot read {RESEARCH_TEMPLATE_PATH.as_posix()}: {exc}"
+        ) from exc
+    if not isinstance(parsed, Mapping) or not isinstance(parsed.get("body"), list):
+        raise ResearchTemplateError(
+            f"{RESEARCH_TEMPLATE_PATH.as_posix()} must define a body list"
+        )
+
+    field_ids: list[str] = []
+    section_labels: list[str] = []
+    for field in parsed["body"]:
+        if not isinstance(field, Mapping):
+            raise ResearchTemplateError("Research form body item is invalid")
+        validations = field.get("validations")
+        if (
+            not isinstance(validations, Mapping)
+            or validations.get("required") is not True
+        ):
+            continue
+        if field.get("type") != "textarea":
+            raise ResearchTemplateError(
+                "required Research fields must be textarea sections"
+            )
+        field_id = field.get("id")
+        attributes = field.get("attributes")
+        label = attributes.get("label") if isinstance(attributes, Mapping) else None
+        if (
+            not isinstance(field_id, str)
+            or not field_id.strip()
+            or not isinstance(label, str)
+            or not label.strip()
+        ):
+            raise ResearchTemplateError(
+                "required Research textarea must have an id and label"
+            )
+        normalized_id = field_id.strip()
+        normalized_label = " ".join(label.split())
+        if normalized_id in field_ids or normalized_label.casefold() in {
+            item.casefold() for item in section_labels
+        }:
+            raise ResearchTemplateError(
+                "required Research fields must have unique ids and labels"
+            )
+        field_ids.append(normalized_id)
+        section_labels.append(normalized_label)
+
+    if not section_labels:
+        raise ResearchTemplateError(
+            f"{RESEARCH_TEMPLATE_PATH.as_posix()} has no required sections"
+        )
+    return ResearchTemplateContract(tuple(field_ids), tuple(section_labels))
+
+
+_SECTION_RE: Final = re.compile(r"^###\s+(.+?)\s*$", re.MULTILINE)
+
+
+def _section_details(body: str) -> tuple[tuple[str, str], ...]:
+    matches = tuple(_SECTION_RE.finditer(body))
+    return tuple(
+        (
+            " ".join(match.group(1).split()),
+            body[
+                match.end() : matches[index + 1].start()
+                if index + 1 < len(matches)
+                else None
+            ].strip(),
+        )
+        for index, match in enumerate(matches)
+    )
+
+
+def research_contract_snapshot(
+    body: str | None,
+    *,
+    template_path: Path | None = None,
+) -> dict[str, Any]:
+    """Return a bounded typed snapshot of the Research Issue Form contract."""
+
+    try:
+        template = research_template_contract(template_path)
+    except ResearchTemplateError as exc:
+        return ResearchContract(
+            ResearchPolicyStatus.RECLASSIFICATION_REQUIRED,
+            detail=f"Research template contract unavailable: {exc}",
+        ).to_dict()
+
+    if not isinstance(body, str) or not body.strip():
+        return ResearchContract(
+            ResearchPolicyStatus.RECLASSIFICATION_REQUIRED,
+            required_sections=template.section_labels,
+            detail="Research body is unavailable",
+        ).to_dict()
+
+    section_details = _section_details(body)
+    section_keys = tuple(section.casefold() for section, _content in section_details)
+    required_keys = tuple(section.casefold() for section in template.section_labels)
+    missing = tuple(
+        required
+        for required, key in zip(template.section_labels, required_keys, strict=True)
+        if key not in section_keys
+    )
+    duplicates = tuple(
+        required
+        for required, key in zip(template.section_labels, required_keys, strict=True)
+        if section_keys.count(key) > 1
+    )
+    empty = tuple(
+        required
+        for required, key in zip(template.section_labels, required_keys, strict=True)
+        if any(
+            section.casefold() == key and not content
+            for section, content in section_details
+        )
+    )
+    if missing or duplicates or empty:
+        parts: list[str] = []
+        if missing:
+            parts.append("missing sections: " + ", ".join(missing))
+        if duplicates:
+            parts.append("duplicate sections: " + ", ".join(duplicates))
+        if empty:
+            parts.append("empty sections: " + ", ".join(empty))
+        return ResearchContract(
+            ResearchPolicyStatus.RECLASSIFICATION_REQUIRED,
+            required_sections=template.section_labels,
+            missing_sections=missing,
+            duplicate_sections=duplicates,
+            empty_sections=empty,
+            detail="; ".join(parts),
+        ).to_dict()
+    return ResearchContract(
+        ResearchPolicyStatus.PASS,
+        required_sections=template.section_labels,
+    ).to_dict()
+
+
+def is_valid_research_contract(value: object) -> bool:
+    """Validate the bounded Research contract consumed by LCK eligibility."""
+
+    if not isinstance(value, Mapping):
+        return False
+    try:
+        template = research_template_contract()
+    except ResearchTemplateError:
+        return False
+    return (
+        value.get("status") == ResearchPolicyStatus.PASS.value
+        and value.get("required_sections") == list(template.section_labels)
+        and value.get("missing_sections") == []
+        and value.get("duplicate_sections") == []
+        and value.get("empty_sections") == []
+        and value.get("template_path") == RESEARCH_TEMPLATE_PATH.as_posix()
+    )
+
+
+_DECISION_CONTRACT_HEADINGS: Final = frozenset(
+    {"decision contract", "architecture decision contract", "adr"}
+)
+
+
+def decision_contract_snapshot(
+    body: str | None,
+    *,
+    research: bool = False,
+) -> dict[str, Any]:
+    """Extract the explicit contract that an Architecture Decision authorizes.
+
+    Research uses its required Expected Outcome / Artifact section as the
+    fallback contract. Downstream implementation Issues must opt in with an
+    explicit Decision Contract (or ADR) section, so an empty or unrelated Task
+    body cannot satisfy an Architecture Decision dependency by accident.
+    """
+
+    if not isinstance(body, str) or not body.strip():
+        return {"status": "unknown", "detail": "decision contract body unavailable"}
+    sections = _section_details(body)
+    selected: tuple[str, str] | None = None
+    for heading, content in sections:
+        if heading.casefold() in _DECISION_CONTRACT_HEADINGS:
+            if selected is not None:
+                return {
+                    "status": "unknown",
+                    "detail": "decision contract is duplicated",
+                }
+            selected = (heading, content)
+    if selected is None and research:
+        for heading, content in sections:
+            if heading.casefold() == "expected outcome / artifact":
+                selected = (heading, content)
+                break
+    if selected is None or not selected[1].strip():
+        return {
+            "status": "unknown",
+            "detail": "decision contract is missing or empty",
+        }
+    normalized = " ".join(selected[1].split())
+    return {
+        "status": "pass",
+        "heading": selected[0],
+        "contract_sha256": sha256_json({"contract": normalized}),
+    }
+
+
+def architecture_decision_is_consistent(
+    research_decision: object,
+    downstream_contract: object,
+) -> bool:
+    """Return whether a downstream Issue explicitly matches the decision."""
+
+    if not isinstance(research_decision, Mapping) or not isinstance(
+        downstream_contract, Mapping
+    ):
+        return False
+    if research_decision.get("status") != "pass":
+        return False
+    downstream_decision = downstream_contract.get("decision_contract")
+    if not isinstance(downstream_decision, Mapping):
+        body = downstream_contract.get("body")
+        downstream_decision = decision_contract_snapshot(
+            body if isinstance(body, str) else None
+        )
+    return downstream_decision.get("status") == "pass" and downstream_decision.get(
+        "contract_sha256"
+    ) == research_decision.get("contract_sha256")
 
 
 def parse_research_outcome(value: object) -> ResearchOutcome:

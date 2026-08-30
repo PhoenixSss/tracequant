@@ -24,8 +24,12 @@ from documentation_policy import (
 from research_policy import (
     RESEARCH_OUTCOME_FIELD,
     ResearchPolicyError,
+    architecture_decision_is_consistent,
+    decision_contract_snapshot,
     is_implementation_outcome,
+    is_valid_research_contract,
     parse_research_outcome,
+    research_contract_snapshot,
 )
 from workflow_common import (
     CommandResult,
@@ -58,6 +62,8 @@ query($owner:String!, $name:String!, $number:Int!) {
       number
       title
       state
+      body
+      labels(first:100) { nodes { name } pageInfo { hasNextPage } }
       issueType { name }
       parent { number title state }
       subIssues(first:100) {
@@ -65,7 +71,8 @@ query($owner:String!, $name:String!, $number:Int!) {
           number
           title
           state
-          labels(first:20) { nodes { name } }
+          body
+          labels(first:100) { nodes { name } pageInfo { hasNextPage } }
         }
         pageInfo { hasNextPage }
       }
@@ -74,7 +81,8 @@ query($owner:String!, $name:String!, $number:Int!) {
           number
           title
           state
-          labels(first:20) { nodes { name } }
+          body
+          labels(first:100) { nodes { name } pageInfo { hasNextPage } }
           projectItems(first:20) {
             nodes {
               fieldValues(first:20) {
@@ -95,7 +103,8 @@ query($owner:String!, $name:String!, $number:Int!) {
           number
           title
           state
-          labels(first:20) { nodes { name } }
+          body
+          labels(first:100) { nodes { name } pageInfo { hasNextPage } }
           projectItems(first:20) {
             nodes {
               fieldValues(first:20) {
@@ -516,6 +525,7 @@ def _issue_view_with_contract(
     )
     is_documentation = "type:documentation" in normalized_labels
     is_task = "type:task" in normalized_labels
+    is_research = "type:research" in normalized_labels
     raw_comments = value.get("comments", [])
     comment_facts: list[dict[str, Any]] = []
     if isinstance(raw_comments, list):
@@ -549,6 +559,11 @@ def _issue_view_with_contract(
             if is_documentation
             else None
         ),
+        "research_contract": (
+            research_contract_snapshot(body, template_path=template_path)
+            if is_research
+            else None
+        ),
         "comment_count": len(comment_facts) if include_comments else None,
         "state": safe_text(value.get("state")),
         "labels": bounded_list(sorted(normalized_labels)),
@@ -575,6 +590,7 @@ def _issue_view_with_contract(
             "body_sha256": issue["body_sha256"],
             "critical_outcome": issue["critical_outcome"],
             "documentation_contract": issue["documentation_contract"],
+            "research_contract": issue["research_contract"],
             "research_outcome": issue["research_outcome"],
         }
         if include_contract and body is not None
@@ -910,6 +926,7 @@ def _relationship_snapshot(
                 continue
             labels: list[str] = []
             raw_labels = item.get("labels")
+            labels_complete = False
             if isinstance(raw_labels, dict) and isinstance(
                 raw_labels.get("nodes"), list
             ):
@@ -918,12 +935,27 @@ def _relationship_snapshot(
                     for label in raw_labels["nodes"]
                     if isinstance(label, dict) and isinstance(label.get("name"), str)
                 ]
+                page = raw_labels.get("pageInfo")
+                labels_complete = (
+                    isinstance(page, dict) and page.get("hasNextPage") is False
+                )
+            body = item.get("body") if isinstance(item.get("body"), str) else None
+            is_research = "type:research" in labels
             normalized.append(
                 {
                     "number": item.get("number"),
                     "title": safe_text(item.get("title")),
                     "state": safe_text(item.get("state")),
                     "labels": sorted(labels),
+                    "labels_complete": labels_complete,
+                    "research_contract": (
+                        research_contract_snapshot(body) if is_research else None
+                    ),
+                    "decision_contract": (
+                        decision_contract_snapshot(body, research=True)
+                        if is_research
+                        else None
+                    ),
                     "research_outcome": safe_text(
                         item.get("research_outcome")
                         or _find_project_field(
@@ -1247,7 +1279,11 @@ def _issue_gates(
     return gates
 
 
-def _formal_blockers_gate(relationships: Mapping[str, Any]) -> dict[str, Any]:
+def _formal_blockers_gate(
+    relationships: Mapping[str, Any],
+    *,
+    downstream_contract: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     if relationships.get("available") is not True:
         return _gate("unknown", "Relationship facts unavailable")
 
@@ -1272,6 +1308,8 @@ def _formal_blockers_gate(relationships: Mapping[str, Any]) -> dict[str, Any]:
     resolved = 0
     unknown_state = 0
     research_not_implementation = 0
+    research_contract_unknown = 0
+    architecture_contract_unknown = 0
     for item in items:
         if not isinstance(item, Mapping):
             unknown_state += 1
@@ -1285,9 +1323,20 @@ def _formal_blockers_gate(relationships: Mapping[str, Any]) -> dict[str, Any]:
                 open_numbers.append(number)
         elif normalized_state == "CLOSED":
             labels = item.get("labels")
-            labels = labels if isinstance(labels, list) else []
+            labels_complete = item.get("labels_complete")
+            if labels_complete is None:
+                # Unit callers may provide the already-normalized legacy
+                # shape. Live GraphQL normalization always supplies this
+                # explicit completeness bit.
+                labels_complete = isinstance(labels, list)
+            if labels_complete is not True or not isinstance(labels, list):
+                unknown_state += 1
+                continue
             if "type:research" not in labels:
                 resolved += 1
+                continue
+            if not is_valid_research_contract(item.get("research_contract")):
+                research_contract_unknown += 1
                 continue
             raw_outcome = item.get("research_outcome")
             try:
@@ -1295,7 +1344,14 @@ def _formal_blockers_gate(relationships: Mapping[str, Any]) -> dict[str, Any]:
             except ResearchPolicyError:
                 unknown_state += 1
                 continue
-            if is_implementation_outcome(outcome):
+            if outcome.value == "ARCHITECTURE DECISION":
+                if not architecture_decision_is_consistent(
+                    item.get("decision_contract"), downstream_contract
+                ):
+                    architecture_contract_unknown += 1
+                else:
+                    resolved += 1
+            elif is_implementation_outcome(outcome):
                 resolved += 1
             else:
                 research_not_implementation += 1
@@ -1308,6 +1364,14 @@ def _formal_blockers_gate(relationships: Mapping[str, Any]) -> dict[str, Any]:
             "unresolved="
             f"{unresolved + research_not_implementation}, resolved={resolved}, "
             f"open={open_numbers[:10]}, research_not_implementation={research_not_implementation}",
+        )
+    if research_contract_unknown or architecture_contract_unknown:
+        return _gate(
+            "unknown",
+            "research decision evidence unavailable: "
+            f"research_contract_unknown={research_contract_unknown}, "
+            f"architecture_contract_unknown={architecture_contract_unknown}, "
+            f"resolved={resolved}, total={count}",
         )
     if truncated:
         return _gate(

@@ -475,6 +475,9 @@ class LiveState:
                             "documentation_contract": self.task_contract.get(
                                 "documentation_contract"
                             ),
+                            "research_contract": self.task_contract.get(
+                                "research_contract"
+                            ),
                             "research_outcome": self.task_contract.get(
                                 "research_outcome"
                             ),

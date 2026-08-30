@@ -771,7 +771,15 @@ class MergePreflight:
         if state.project_status != "Review":
             raise LckStopError("Merge Preflight requires Project Status Review")
 
-        blockers = _formal_blockers_gate(state.relationships)
+        downstream_contract = (
+            state.task_contract
+            if isinstance(state.task_contract, Mapping)
+            else state.issue
+        )
+        blockers = _formal_blockers_gate(
+            state.relationships,
+            downstream_contract=downstream_contract,
+        )
         if blockers.get("status") != "pass":
             raise LckStopError(
                 "Merge Preflight unresolved blockers: "
