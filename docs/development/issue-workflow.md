@@ -120,6 +120,10 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
 - Task `Critical Outcome` 是正式 Delivery gate：LCK 从当前 Task body 读取结构化
   contract，使用固定 pytest verifier 执行真实 supported path。缺失、malformed、unsafe
   target 或 verifier failure 均 fail closed；不得用普通 unit/static check 替代。
+- Bug leaf 使用 `.github/ISSUE_TEMPLATE/bug.yml` 定义的 Observed / Expected /
+  Reproduction-or-Evidence / Acceptance Criteria defect contract；Bug 不要求 Critical
+  Outcome，但缺失、重复、占位或不足以识别缺陷的证据必须在 shared lifecycle admission
+  前 fail closed。Bug 的回归判断绑定当前 candidate head。
 - Documentation leaf 使用 `.github/ISSUE_TEMPLATE/documentation.yml` 定义的
   documentation fact contract，不要求 Critical Outcome，也不生成假的 Critical Outcome
   evidence。它由 repository-owned typed safe-change policy 限制在 README.md 与安全的
@@ -143,6 +147,8 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
   deterministic control 执行；Agent/Skill 不提供 branch/SHA/PR/refspec authority。
 - Documentation 使用独立的 `documentation/<Issue>-<slug>` branch namespace；Task 的
   `task/`、历史 Task aliases 与其匹配规则保持不变。
+- Bug 使用独立的 `bug/<Issue>-<slug>` branch namespace；不会创建 wrapper Task，且与
+  Task、Documentation、Research 的 branch identity 相互隔离。
 - Research leaf 使用独立的 `research/<Issue>-<slug>` branch namespace；v1 只接受
   `docs/research/**` 下可版本化的仓库产物。Research 不要求 Critical Outcome，Delivery
   只执行 Research artifact policy 与正式 validation；产物必须在 Review 中绑定当前

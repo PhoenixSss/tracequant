@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final
 
+from bug_policy import BUG_TEMPLATE_PATH, bug_contract_snapshot, is_valid_bug_contract
 from critical_outcome import critical_outcome_snapshot
 from documentation_policy import (
     DOCUMENTATION_TEMPLATE_PATH,
@@ -543,10 +544,14 @@ def _issue_view_with_contract(
         if isinstance(runner_root, Path)
         else None
     )
+    bug_template_path = (
+        runner_root / BUG_TEMPLATE_PATH if isinstance(runner_root, Path) else None
+    )
     research_template_path = (
         runner_root / RESEARCH_TEMPLATE_PATH if isinstance(runner_root, Path) else None
     )
     is_documentation = "type:documentation" in normalized_labels
+    is_bug = "type:bug" in normalized_labels
     is_task = "type:task" in normalized_labels
     is_research = "type:research" in normalized_labels
     raw_comments = value.get("comments", [])
@@ -577,6 +582,11 @@ def _issue_view_with_contract(
         "body_sha256": sha256_json({"body": body}),
         "body_characters": len(body) if body is not None else None,
         "critical_outcome": critical_outcome_snapshot(body) if is_task else None,
+        "bug_contract": (
+            bug_contract_snapshot(body, template_path=bug_template_path)
+            if is_bug
+            else None
+        ),
         "documentation_contract": (
             documentation_contract_snapshot(body, template_path=template_path)
             if is_documentation
@@ -612,6 +622,7 @@ def _issue_view_with_contract(
             "body": body,
             "body_sha256": issue["body_sha256"],
             "critical_outcome": issue["critical_outcome"],
+            "bug_contract": issue["bug_contract"],
             "documentation_contract": issue["documentation_contract"],
             "research_contract": issue["research_contract"],
             "research_outcome": issue["research_outcome"],
@@ -1018,6 +1029,7 @@ def _relationship_snapshot(
                     isinstance(page, dict) and page.get("hasNextPage") is False
                 )
             body = item.get("body") if isinstance(item.get("body"), str) else None
+            is_bug = "type:bug" in labels
             is_research = "type:research" in labels
             research_outcome = (
                 _canonical_research_outcome(
@@ -1037,6 +1049,7 @@ def _relationship_snapshot(
                     "research_contract": (
                         research_contract_snapshot(body) if is_research else None
                     ),
+                    "bug_contract": (bug_contract_snapshot(body) if is_bug else None),
                     "decision_contract": (
                         decision_contract_snapshot(body, research=True)
                         if is_research
@@ -1394,6 +1407,7 @@ def _formal_blockers_gate(
     research_contract_unknown = 0
     architecture_contract_unknown = 0
     research_outcome_unknown = 0
+    bug_contract_unknown = 0
     for item in items:
         if not isinstance(item, Mapping):
             unknown_state += 1
@@ -1425,6 +1439,11 @@ def _formal_blockers_gate(
                 unknown_state += 1
                 continue
             if "type:research" not in labels:
+                if "type:bug" in labels and not is_valid_bug_contract(
+                    item.get("bug_contract")
+                ):
+                    bug_contract_unknown += 1
+                    continue
                 resolved += 1
                 continue
             if not is_valid_research_contract(item.get("research_contract")):
@@ -1469,6 +1488,7 @@ def _formal_blockers_gate(
         research_contract_unknown
         or architecture_contract_unknown
         or research_outcome_unknown
+        or bug_contract_unknown
     ):
         return _gate(
             "unknown",
@@ -1476,6 +1496,7 @@ def _formal_blockers_gate(
             f"research_contract_unknown={research_contract_unknown}, "
             f"architecture_contract_unknown={architecture_contract_unknown}, "
             f"research_outcome_unknown={research_outcome_unknown}, "
+            f"bug_contract_unknown={bug_contract_unknown}, "
             f"resolved={resolved}, total={count}",
         )
     if truncated:

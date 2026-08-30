@@ -40,7 +40,7 @@ def _issue_with_labels(*labels: str, title: str = "ordinary title") -> dict[str,
 def test_leaf_issue_profile_resolution_is_exact_and_fail_closed() -> None:
     profiles = {
         "type:task": ("task", True, "task/", True),
-        "type:bug": ("bug", False, "bug/", False),
+        "type:bug": ("bug", False, "bug/", True),
         "type:documentation": ("documentation", False, "documentation/", True),
         "type:research": ("research", False, "research/", True),
     }
@@ -88,14 +88,32 @@ def test_leaf_issue_profile_resolution_is_exact_and_fail_closed() -> None:
     assert resolution.profile is lck_profiles.TASK_PROFILE
 
 
-@pytest.mark.parametrize("label", ["type:bug"])
-def test_unenabled_leaf_profiles_return_typed_terminal_status(
+def test_bug_profile_is_enabled_without_a_task_critical_outcome(
     monkeypatch: pytest.MonkeyPatch,
-    label: str,
 ) -> None:
     fake = FakeRunner(branch="main")
     issue = _issue()
-    issue["labels"] = {"items": [label, "codex:ready"]}
+    issue["labels"] = {"items": ["type:bug", "codex:ready"]}
+    issue["body"] = """
+### Observed
+
+The bug workflow is rejected as a non-task issue.
+
+### Expected
+
+An implementation-bearing Bug can use the shared lifecycle directly.
+
+### Reproduction / Evidence
+
+The current profile resolver reports type:bug as disabled.
+
+### Acceptance Criteria
+
+- The Bug profile is eligible without a fabricated Critical Outcome.
+"""
+    from bug_policy import bug_contract_snapshot  # type: ignore[import-not-found]
+
+    issue["bug_contract"] = bug_contract_snapshot(issue["body"])
     _install_facts(
         monkeypatch,
         fake,
@@ -108,16 +126,11 @@ def test_unenabled_leaf_profiles_return_typed_terminal_status(
         state, Phase.DELIVERY_PREPARE
     )
 
-    assert not decision.eligible
-    assert any(
-        f"PROFILE_NOT_ENABLED: workflow profile {label}" in reason
-        for reason in decision.reasons
-    )
-    assert not any(
-        "target Issue is not a type:task" in reason for reason in decision.reasons
-    )
+    assert decision.eligible
+    assert "verify_critical_outcome" not in decision.capabilities
+    assert "prepare_task_workspace" in decision.capabilities
     assert decision.issue_profile is not None
-    assert decision.issue_profile["profile"]["canonical_type_label"] == label
+    assert decision.issue_profile["profile"]["canonical_type_label"] == "type:bug"
 
 
 def test_task_profile_uses_labels_without_issue_type_fallback(

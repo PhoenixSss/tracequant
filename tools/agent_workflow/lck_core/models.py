@@ -313,6 +313,7 @@ def _issue_agent_view(value: Any) -> dict[str, Any] | None:
         "url",
         "state",
         "project_status",
+        "bug_contract",
         "research_outcome",
     ):
         item = value.get(key)
@@ -472,6 +473,7 @@ class LiveState:
                             "critical_outcome": self.task_contract.get(
                                 "critical_outcome"
                             ),
+                            "bug_contract": self.task_contract.get("bug_contract"),
                             "documentation_contract": self.task_contract.get(
                                 "documentation_contract"
                             ),
