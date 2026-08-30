@@ -550,7 +550,12 @@ def research_artifact_binding(
     artifact_digests = _artifact_digests(repo_root, policy.artifact_files)
     declared: list[ResearchOutcome] = []
     for item in artifact_digests:
-        text = (repo_root / item["path"]).read_text(encoding="utf-8")
+        try:
+            text = (repo_root / item["path"]).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ResearchPolicyError(
+                f"Research artifact cannot be read: {item['path']}"
+            ) from exc
         declared.extend(_declared_outcomes(text, path=item["path"]))
     distinct = {item.value for item in declared}
     if len(distinct) > 1:

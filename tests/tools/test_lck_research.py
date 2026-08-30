@@ -45,6 +45,7 @@ from research_policy import (  # type: ignore[import-not-found]  # noqa: E402
 from workflow_evidence import (  # type: ignore[import-not-found]  # noqa: E402
     _formal_blockers_gate,
     _issue_view_with_contract,
+    _relationship_snapshot,
 )
 from workflow_common import CommandResult, sha256_json  # type: ignore[import-not-found]  # noqa: E402
 
@@ -512,6 +513,290 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
         }
     )
     assert blocker_gate["status"] == "pass"
+
+
+def test_research_blocker_uses_only_the_canonical_project_outcome() -> None:
+    class Runner:
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            assert tuple(argv[:3]) == ("gh", "api", "graphql")
+            return CommandResult(
+                command_id,
+                tuple(str(item) for item in argv),
+                0,
+                json.dumps(
+                    {
+                        "data": {
+                            "repository": {
+                                "issue": {
+                                    "number": 300,
+                                    "title": "Research dependency",
+                                    "state": "OPEN",
+                                    "blockedBy": {
+                                        "nodes": [
+                                            {
+                                                "number": 198,
+                                                "title": "Research decision",
+                                                "state": "CLOSED",
+                                                "body": RESEARCH_BODY,
+                                                "labels": {
+                                                    "nodes": [
+                                                        {"name": "type:research"}
+                                                    ],
+                                                    "pageInfo": {"hasNextPage": False},
+                                                },
+                                                "projectItems": {
+                                                    "nodes": [
+                                                        {
+                                                            "project": {
+                                                                "number": 17,
+                                                                "owner": {
+                                                                    "login": "owner"
+                                                                },
+                                                            },
+                                                            "fieldValues": {
+                                                                "nodes": [
+                                                                    {
+                                                                        "name": "IMPLEMENT",
+                                                                        "field": {
+                                                                            "name": "Research Outcome"
+                                                                        },
+                                                                    }
+                                                                ],
+                                                                "pageInfo": {
+                                                                    "hasNextPage": False
+                                                                },
+                                                            },
+                                                        },
+                                                        {
+                                                            "project": {
+                                                                "number": 1,
+                                                                "owner": {
+                                                                    "login": "owner"
+                                                                },
+                                                            },
+                                                            "fieldValues": {
+                                                                "nodes": [
+                                                                    {
+                                                                        "name": "DO NOT IMPLEMENT",
+                                                                        "field": {
+                                                                            "name": "Research Outcome"
+                                                                        },
+                                                                    }
+                                                                ],
+                                                                "pageInfo": {
+                                                                    "hasNextPage": False
+                                                                },
+                                                            },
+                                                        },
+                                                    ],
+                                                    "pageInfo": {"hasNextPage": False},
+                                                },
+                                            }
+                                        ],
+                                        "pageInfo": {"hasNextPage": False},
+                                    },
+                                    "blocking": {
+                                        "nodes": [],
+                                        "pageInfo": {"hasNextPage": False},
+                                    },
+                                    "subIssues": {
+                                        "nodes": [],
+                                        "pageInfo": {"hasNextPage": False},
+                                    },
+                                    "issueType": None,
+                                    "parent": None,
+                                }
+                            }
+                        }
+                    }
+                ),
+                "",
+            )
+
+    relationships = _relationship_snapshot(Runner(), "owner/repo", 300, [])
+    blocker = relationships["blocked_by"]["items"][0]
+
+    assert blocker["research_outcome"] == "DO NOT IMPLEMENT"
+    assert blocker["research_outcome_is_canonical"] is True
+    assert _formal_blockers_gate(relationships)["status"] == "fail"
+
+
+def test_research_outcome_postcondition_paginates_past_first_page() -> None:
+    class Runner:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, ...]] = []
+
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            self.calls.append(command)
+            paged = any(item == "userAfter=cursor-page-1" for item in command)
+            user_items = {
+                "nodes": (
+                    [
+                        {
+                            "content": {
+                                "number": 199,
+                                "repository": {"nameWithOwner": "owner/repo"},
+                            },
+                            "fieldValueByName": {"name": "IMPLEMENT"},
+                        }
+                    ]
+                    if paged
+                    else []
+                ),
+                "pageInfo": (
+                    {"hasNextPage": False}
+                    if paged
+                    else {"hasNextPage": True, "endCursor": "cursor-page-1"}
+                ),
+            }
+            payload = {
+                "data": {
+                    "user": {"projectV2": {"items": user_items}},
+                    "organization": None,
+                }
+            }
+            return CommandResult(command_id, command, 0, json.dumps(payload), "")
+
+    runner = Runner()
+    resolver = type("Resolver", (), {"runner": runner})()
+
+    outcome = lck_closeout.ResearchOutcomeEffect(cast(Any, resolver))._query_outcome(
+        "owner/repo", 199
+    )
+
+    assert outcome == "IMPLEMENT"
+    assert len(runner.calls) == 2
+    assert "userAfter=cursor-page-1" in runner.calls[1]
+
+
+def test_research_artifact_binding_rejects_non_utf8_as_policy_error(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "docs" / "research" / "report.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"Research Outcome: IMPLEMENT\n\xff")
+
+    with pytest.raises(ResearchPolicyError, match="artifact cannot be read"):
+        research_artifact_binding(
+            tmp_path,
+            task_number=199,
+            pr_number=299,
+            base_sha=SHA,
+            head_sha=SHA,
+            task_body_sha256=DIGEST,
+            merge_base_sha=SHA,
+            effective_diff_sha256=DIGEST,
+            changed_files=("docs/research/report.md",),
+        )
+
+
+def test_review_prepare_wraps_non_utf8_artifact_as_structured_stop(
+    tmp_path: Path,
+) -> None:
+    review_root = tmp_path / "review-root"
+    artifact = review_root / "docs" / "research" / "report.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"Research Outcome: IMPLEMENT\n\xff")
+
+    body_sha = sha256_json({"body": RESEARCH_BODY})
+    state = lck_models.LiveState(
+        task_number=199,
+        repository="owner/repo",
+        issue={
+            "number": 199,
+            "title": "[Research] supported workflow",
+            "state": "OPEN",
+            "labels": {"items": ["type:research", "codex:ready"]},
+            "project_status": "Review",
+            "body": RESEARCH_BODY,
+            "body_sha256": body_sha,
+            "research_contract": research_contract_snapshot(RESEARCH_BODY),
+        },
+        relationships={
+            "available": True,
+            "blocked_by": {"items": [], "count": 0, "truncated": False},
+        },
+        git={"branch": "research/199-supported-workflow", "clean": True},
+        target_branch="research/199-supported-workflow",
+        local_task_branch="research/199-supported-workflow",
+        local_task_head=SHA,
+        remote_task_branch="research/199-supported-workflow",
+        remote_task_oid=SHA,
+        open_pr={
+            "number": 299,
+            "state": "OPEN",
+            "isDraft": False,
+            "baseRefOid": SHA,
+            "headRefOid": SHA,
+        },
+        merged_pr_numbers=(),
+        merged=False,
+        checks={},
+        cleanup={},
+        task_contract={
+            "number": 199,
+            "title": "[Research] supported workflow",
+            "body": RESEARCH_BODY,
+            "body_sha256": body_sha,
+        },
+    )
+
+    class Runner:
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            if command[:2] == ("git", "merge-base"):
+                return CommandResult(command_id, command, 0, f"{SHA}\n", "")
+            if command[:2] == ("git", "diff") and "--name-only" in command:
+                return CommandResult(
+                    command_id,
+                    command,
+                    0,
+                    "docs/research/report.md\n",
+                    "",
+                )
+            if command[:2] == ("git", "diff"):
+                return CommandResult(command_id, command, 0, "diff\n", "")
+            raise AssertionError(f"unsupported review command: {command}")
+
+    class Resolver:
+        repo_root = tmp_path
+        runner = Runner()
+
+    class Snapshots:
+        def acquire(self, _task_number: int, *, operation: str) -> Any:
+            assert operation == "review-prepare"
+            return type("Snapshot", (), {"state": state})()
+
+    class Eligible:
+        def resolve(self, _state: Any, phase: lck_models.Phase, **_: Any) -> Any:
+            return lck_eligibility.PhaseDecision(phase=phase, eligible=True)
+
+    workspace = FakeReviewWorkspace(review_root)
+    preparer = lck_review.ReviewPreparer(
+        cast(Any, Resolver()),
+        eligibility=cast(Any, Eligible()),
+        validation=cast(Any, type("Validation", (), {})()),
+        checks_gate=cast(
+            Any,
+            type(
+                "Checks",
+                (),
+                {"observe": lambda self, _snapshot: {"status": "observed"}},
+            )(),
+        ),
+        workspace=cast(Any, workspace),
+        store=lck_review_workspace.ReviewInvocationStore(tmp_path),
+    )
+    preparer.snapshots = cast(Any, Snapshots())
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="Research artifact policy rejected the Review target",
+    ):
+        preparer.prepare(199)
+
+    assert workspace.removed == [review_root]
 
 
 def test_research_policy_reclassifies_changes_outside_repository_artifacts() -> None:

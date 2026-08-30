@@ -12,7 +12,7 @@ from research_policy import (
     require_typed_research_outcome,
 )
 from workflow_common import WorkflowToolError, is_sha, read_json_text, safe_text
-from workflow_evidence import _find_project_status
+from workflow_evidence import CANONICAL_PROJECT_NUMBER, _find_project_status
 
 from .eligibility import PhaseEligibilityResolver
 from .issue_profiles import LeafIssueKind, resolve_issue_profile
@@ -58,12 +58,11 @@ def _pending_receipt(
     return EffectReceipt(effect=effect, action=action, details=payload)
 
 
-CANONICAL_PROJECT_NUMBER: Final = 1
 RESEARCH_OUTCOME_QUERY: Final = r"""
-query($owner:String!, $projectNumber:Int!) {
+query($owner:String!, $projectNumber:Int!, $userAfter:String, $organizationAfter:String) {
   user(login:$owner) {
     projectV2(number:$projectNumber) {
-      items(first:100) {
+      items(first:100, after:$userAfter) {
         nodes {
           content {
             ... on Issue {
@@ -75,13 +74,13 @@ query($owner:String!, $projectNumber:Int!) {
             ... on ProjectV2ItemFieldSingleSelectValue { name }
           }
         }
-        pageInfo { hasNextPage }
+        pageInfo { hasNextPage endCursor }
       }
     }
   }
   organization(login:$owner) {
     projectV2(number:$projectNumber) {
-      items(first:100) {
+      items(first:100, after:$organizationAfter) {
         nodes {
           content {
             ... on Issue {
@@ -93,7 +92,7 @@ query($owner:String!, $projectNumber:Int!) {
             ... on ProjectV2ItemFieldSingleSelectValue { name }
           }
         }
-        pageInfo { hasNextPage }
+        pageInfo { hasNextPage endCursor }
       }
     }
   }
@@ -323,8 +322,15 @@ class ResearchOutcomeEffect:
         owner, separator, _name = repository.partition("/")
         if not separator or not owner:
             return None
-        result = self.resolver.runner.run(
-            [
+        cursors: dict[str, str | None] = {
+            "user": None,
+            "organization": None,
+        }
+        seen_cursors: dict[str, set[str]] = {"user": set(), "organization": set()}
+        complete: set[str] = set()
+
+        while len(complete) < 2:
+            argv = [
                 "gh",
                 "api",
                 "graphql",
@@ -334,52 +340,81 @@ class ResearchOutcomeEffect:
                 f"owner={owner}",
                 "-F",
                 f"projectNumber={CANONICAL_PROJECT_NUMBER}",
-            ],
-            command_id="lck-research-outcome-postcondition",
-            retries=1,
-        )
-        if result.returncode != 0 or not result.stdout.strip():
-            return None
-        value = read_json_text(
-            result.stdout, field="lck-research-outcome-postcondition"
-        )
-        if not isinstance(value, Mapping):
-            return None
-        if value.get("errors"):
-            return None
-        data = value.get("data")
-        if not isinstance(data, Mapping):
-            return None
-        for scope in ("user", "organization"):
-            owner_data = data.get(scope)
-            if not isinstance(owner_data, Mapping):
-                continue
-            project = owner_data.get("projectV2")
-            if not isinstance(project, Mapping):
-                continue
-            items = project.get("items")
-            if not isinstance(items, Mapping):
-                continue
-            nodes = items.get("nodes")
-            if not isinstance(nodes, list):
-                continue
-            for item in nodes:
-                if not isinstance(item, Mapping):
+            ]
+            if cursors["user"] is not None:
+                argv.extend(("-F", f"userAfter={cursors['user']}"))
+            if cursors["organization"] is not None:
+                argv.extend(("-F", f"organizationAfter={cursors['organization']}"))
+            result = self.resolver.runner.run(
+                argv,
+                command_id="lck-research-outcome-postcondition",
+                retries=1,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return None
+            value = read_json_text(
+                result.stdout, field="lck-research-outcome-postcondition"
+            )
+            if not isinstance(value, Mapping) or value.get("errors"):
+                return None
+            data = value.get("data")
+            if not isinstance(data, Mapping):
+                return None
+
+            for scope in ("user", "organization"):
+                if scope in complete:
                     continue
-                content = item.get("content")
-                if not isinstance(content, Mapping):
-                    continue
-                content_repository = content.get("repository")
-                if (
-                    content.get("number") != task_number
-                    or not isinstance(content_repository, Mapping)
-                    or content_repository.get("nameWithOwner") != repository
-                ):
-                    continue
-                field_value = item.get("fieldValueByName")
-                if not isinstance(field_value, Mapping):
+                if scope not in data:
                     return None
-                return safe_text(field_value.get("name"))
+                owner_data = data.get(scope)
+                if owner_data is None:
+                    complete.add(scope)
+                    continue
+                if not isinstance(owner_data, Mapping):
+                    return None
+                project = owner_data.get("projectV2")
+                if project is None:
+                    complete.add(scope)
+                    continue
+                if not isinstance(project, Mapping):
+                    return None
+                items = project.get("items")
+                if not isinstance(items, Mapping):
+                    return None
+                nodes = items.get("nodes")
+                page_info = items.get("pageInfo")
+                if not isinstance(nodes, list) or not isinstance(page_info, Mapping):
+                    return None
+                for item in nodes:
+                    if not isinstance(item, Mapping):
+                        continue
+                    content = item.get("content")
+                    if not isinstance(content, Mapping):
+                        continue
+                    content_repository = content.get("repository")
+                    if (
+                        content.get("number") != task_number
+                        or not isinstance(content_repository, Mapping)
+                        or content_repository.get("nameWithOwner") != repository
+                    ):
+                        continue
+                    field_value = item.get("fieldValueByName")
+                    if not isinstance(field_value, Mapping):
+                        return None
+                    return safe_text(field_value.get("name"))
+                has_next_page = page_info.get("hasNextPage")
+                if has_next_page is False:
+                    complete.add(scope)
+                    continue
+                if has_next_page is not True:
+                    return None
+                end_cursor = page_info.get("endCursor")
+                if not isinstance(end_cursor, str) or not end_cursor:
+                    return None
+                if end_cursor in seen_cursors[scope]:
+                    return None
+                seen_cursors[scope].add(end_cursor)
+                cursors[scope] = end_cursor
         return None
 
     @staticmethod

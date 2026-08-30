@@ -55,6 +55,7 @@ EVIDENCE_ROOT: Final = ".agents/evidence.local"
 SNAPSHOT_SUBDIR: Final = "snapshots"
 MAX_CHILDREN: Final = 50
 MAX_FILES: Final = 100
+CANONICAL_PROJECT_NUMBER: Final = 1
 
 RELATIONSHIPS_QUERY: Final = r"""
 query($owner:String!, $name:String!, $number:Int!) {
@@ -86,6 +87,13 @@ query($owner:String!, $name:String!, $number:Int!) {
           labels(first:100) { nodes { name } pageInfo { hasNextPage } }
           projectItems(first:20) {
             nodes {
+              project {
+                number
+                owner {
+                  ... on User { login }
+                  ... on Organization { login }
+                }
+              }
               fieldValues(first:20) {
                 nodes {
                   ... on ProjectV2ItemFieldSingleSelectValue {
@@ -93,8 +101,10 @@ query($owner:String!, $name:String!, $number:Int!) {
                     field { ... on ProjectV2SingleSelectField { name } }
                   }
                 }
+                pageInfo { hasNextPage }
               }
             }
+            pageInfo { hasNextPage }
           }
         }
         pageInfo { hasNextPage }
@@ -108,6 +118,13 @@ query($owner:String!, $name:String!, $number:Int!) {
           labels(first:100) { nodes { name } pageInfo { hasNextPage } }
           projectItems(first:20) {
             nodes {
+              project {
+                number
+                owner {
+                  ... on User { login }
+                  ... on Organization { login }
+                }
+              }
               fieldValues(first:20) {
                 nodes {
                   ... on ProjectV2ItemFieldSingleSelectValue {
@@ -115,8 +132,10 @@ query($owner:String!, $name:String!, $number:Int!) {
                     field { ... on ProjectV2SingleSelectField { name } }
                   }
                 }
+                pageInfo { hasNextPage }
               }
             }
+            pageInfo { hasNextPage }
           }
         }
         pageInfo { hasNextPage }
@@ -667,6 +686,61 @@ def _find_project_field(value: Any, field_name: str) -> str | None:
     return None
 
 
+def _canonical_research_outcome(
+    project_items: Any,
+    *,
+    repository: str,
+) -> str | None:
+    """Read Research Outcome only from the repository owner's canonical Project."""
+
+    if not isinstance(project_items, Mapping):
+        return None
+    nodes = project_items.get("nodes")
+    page_info = project_items.get("pageInfo")
+    if not isinstance(nodes, list) or not isinstance(page_info, Mapping):
+        return None
+    if page_info.get("hasNextPage") is not False:
+        return None
+    owner, separator, _name = repository.partition("/")
+    if not separator or not owner:
+        return None
+
+    canonical_items: list[Mapping[str, Any]] = []
+    for item in nodes:
+        if not isinstance(item, Mapping):
+            continue
+        project = item.get("project")
+        if not isinstance(project, Mapping):
+            continue
+        project_number = project.get("number")
+        project_owner = project.get("owner")
+        project_owner_login = (
+            project_owner.get("login") if isinstance(project_owner, Mapping) else None
+        )
+        if (
+            isinstance(project_number, int)
+            and not isinstance(project_number, bool)
+            and project_number == CANONICAL_PROJECT_NUMBER
+            and isinstance(project_owner_login, str)
+            and project_owner_login.casefold() == owner.casefold()
+        ):
+            canonical_items.append(item)
+
+    # A missing or duplicate canonical item is not evidence for a blocker gate.
+    if len(canonical_items) != 1:
+        return None
+    field_values = canonical_items[0].get("fieldValues")
+    if not isinstance(field_values, Mapping):
+        return None
+    field_page_info = field_values.get("pageInfo")
+    if (
+        not isinstance(field_page_info, Mapping)
+        or field_page_info.get("hasNextPage") is not False
+    ):
+        return None
+    return _find_project_field(field_values, RESEARCH_OUTCOME_FIELD)
+
+
 def _graphql(
     runner: CommandRunner,
     repository: str,
@@ -945,6 +1019,14 @@ def _relationship_snapshot(
                 )
             body = item.get("body") if isinstance(item.get("body"), str) else None
             is_research = "type:research" in labels
+            research_outcome = (
+                _canonical_research_outcome(
+                    item.get("projectItems"),
+                    repository=repository,
+                )
+                if is_research
+                else None
+            )
             normalized.append(
                 {
                     "number": item.get("number"),
@@ -960,13 +1042,10 @@ def _relationship_snapshot(
                         if is_research
                         else None
                     ),
-                    "research_outcome": safe_text(
-                        item.get("research_outcome")
-                        or _find_project_field(
-                            item.get("projectItems"), RESEARCH_OUTCOME_FIELD
-                        )
-                    )
-                    or None,
+                    "research_outcome": safe_text(research_outcome) or None,
+                    "research_outcome_is_canonical": (
+                        research_outcome is not None if is_research else None
+                    ),
                 }
             )
         return normalized
@@ -1314,6 +1393,7 @@ def _formal_blockers_gate(
     research_not_implementation = 0
     research_contract_unknown = 0
     architecture_contract_unknown = 0
+    research_outcome_unknown = 0
     for item in items:
         if not isinstance(item, Mapping):
             unknown_state += 1
@@ -1342,6 +1422,14 @@ def _formal_blockers_gate(
             if not is_valid_research_contract(item.get("research_contract")):
                 research_contract_unknown += 1
                 continue
+            outcome_is_canonical = item.get("research_outcome_is_canonical")
+            if outcome_is_canonical is None:
+                # Preserve compatibility for already-normalized unit callers;
+                # live relationship normalization always supplies this bit.
+                outcome_is_canonical = "projectItems" not in item
+            if outcome_is_canonical is not True:
+                research_outcome_unknown += 1
+                continue
             raw_outcome = item.get("research_outcome")
             try:
                 outcome = parse_research_outcome(raw_outcome)
@@ -1369,12 +1457,17 @@ def _formal_blockers_gate(
             f"{unresolved + research_not_implementation}, resolved={resolved}, "
             f"open={open_numbers[:10]}, research_not_implementation={research_not_implementation}",
         )
-    if research_contract_unknown or architecture_contract_unknown:
+    if (
+        research_contract_unknown
+        or architecture_contract_unknown
+        or research_outcome_unknown
+    ):
         return _gate(
             "unknown",
             "research decision evidence unavailable: "
             f"research_contract_unknown={research_contract_unknown}, "
             f"architecture_contract_unknown={architecture_contract_unknown}, "
+            f"research_outcome_unknown={research_outcome_unknown}, "
             f"resolved={resolved}, total={count}",
         )
     if truncated:
