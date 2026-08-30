@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import fcntl
-import hashlib
 import os
 import re
 import shutil
@@ -15,6 +14,7 @@ from typing import Any, Final, cast
 
 from workflow_common import WorkflowToolError, atomic_write_json, is_sha, read_json_file
 
+from .effective_diff import calculate_effective_diff
 from .models import (
     LCK_SCHEMA_VERSION,
     LckStopError,
@@ -112,50 +112,22 @@ def _review_identity(
     clone.  The source repository is not required to contain the current PR head.
     """
     target = _review_target_refs(state, task_contract)
-    merge_base = resolver.runner.run(
-        ["git", "merge-base", target.base_sha, target.head_sha],
-        command_id="lck-review-merge-base",
+    effective_diff = calculate_effective_diff(
+        resolver.runner,
+        base_sha=target.base_sha,
+        head_ref=target.head_sha,
+        command_id_prefix="lck-review",
         cwd=repo_root,
     )
-    if merge_base.returncode != 0 or not is_sha(merge_base.stdout.strip()):
-        raise LckStopError("Review effective-diff merge base is unavailable")
-    diff = resolver.runner.run(
-        [
-            "git",
-            "diff",
-            "--binary",
-            "--full-index",
-            "--no-ext-diff",
-            "--no-textconv",
-            f"{target.base_sha}...{target.head_sha}",
-        ],
-        command_id="lck-review-effective-diff",
-        cwd=repo_root,
-    )
-    if diff.returncode != 0:
-        raise LckStopError(
-            "Review effective diff is unavailable: "
-            + (diff.stderr.strip() or f"exit {diff.returncode}")
-        )
-    names = resolver.runner.run(
-        ["git", "diff", "--name-only", f"{target.base_sha}...{target.head_sha}"],
-        command_id="lck-review-changed-files",
-        cwd=repo_root,
-    )
-    if names.returncode != 0:
-        raise LckStopError("Review changed-file inventory is unavailable")
-    changed_files = tuple(line for line in names.stdout.splitlines() if line)
     return ReviewIdentity(
         task_number=target.task_number,
         pr_number=target.pr_number,
         base_sha=target.base_sha,
         head_sha=target.head_sha,
         task_body_sha256=target.task_body_sha256,
-        merge_base_sha=merge_base.stdout.strip(),
-        effective_diff_sha256=hashlib.sha256(
-            diff.stdout.encode("utf-8", errors="replace")
-        ).hexdigest(),
-        changed_files=changed_files,
+        merge_base_sha=effective_diff.merge_base_sha,
+        effective_diff_sha256=effective_diff.effective_diff_sha256,
+        changed_files=effective_diff.changed_files,
     )
 
 

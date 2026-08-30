@@ -7,10 +7,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from documentation_policy import (
+    DocumentationPolicyStatus,
+    evaluate_documentation_changes,
+)
 from workflow_common import ProgressReporter, is_sha, safe_text
 from workflow_evidence import _formal_blockers_gate
 
 from .eligibility import PhaseEligibilityResolver
+from .issue_profiles import LeafIssueKind, resolve_issue_profile
 from .models import (
     BASE_BRANCH,
     LCK_SCHEMA_VERSION,
@@ -39,7 +44,11 @@ from .state import (
     OperationSnapshotBuilder,
     _task_contract_from_state,
 )
-from .validation import DeliveryChecksGate, ReviewValidationGate
+from .validation import (
+    DeliveryChecksGate,
+    DocumentationReclassificationRequired,
+    ReviewValidationGate,
+)
 
 
 @dataclass(frozen=True)
@@ -127,6 +136,7 @@ class ReviewPreparer:
         self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.last_snapshot: OperationSnapshot | None = None
         self.last_validation: dict[str, Any] | None = None
+        self.last_documentation_validation: dict[str, Any] | None = None
 
     def prepare(self, task_number: int) -> ReviewContext:
         self.last_validation = None
@@ -186,6 +196,7 @@ class ReviewPreparer:
                 operation="review-prepare",
             )
             self.last_snapshot = snapshot
+            self.last_documentation_validation = None
             state = snapshot.state
             decision = self.eligibility.resolve(state, Phase.REVIEW_PREPARE)
             if not decision.eligible:
@@ -220,6 +231,19 @@ class ReviewPreparer:
                 task_contract,
                 repo_root=review_root,
             )
+            profile = resolve_issue_profile(state.issue).profile
+            documentation_policy: dict[str, Any] | None = None
+            if (
+                profile is not None
+                and profile.issue_kind is LeafIssueKind.DOCUMENTATION
+            ):
+                policy = evaluate_documentation_changes(identity.changed_files)
+                documentation_policy = policy.to_dict()
+                self.last_documentation_validation = documentation_policy
+                if policy.status is not DocumentationPolicyStatus.PASS:
+                    raise DocumentationReclassificationRequired(
+                        "DOCUMENTATION_RECLASSIFICATION_REQUIRED: " + policy.detail
+                    )
             mark(
                 "review-target-derived",
                 identity=identity.to_dict(),
@@ -229,6 +253,9 @@ class ReviewPreparer:
             validation = self.validation.run(
                 review_root, identity.base_sha, identity.head_sha
             )
+            if documentation_policy is not None:
+                validation = dict(validation)
+                validation["documentation_policy"] = documentation_policy
             # Preserve the structured validation result before applying the
             # pass gate so a rejected Review Prepare has complete evidence.
             self.last_validation = validation
@@ -354,6 +381,7 @@ class ReviewCompleter:
         self.workspace = workspace or ReviewWorkspaceManager(resolver)
         self.last_snapshot: OperationSnapshot | None = None
         self.last_checks: dict[str, Any] | None = None
+        self.last_documentation_validation: dict[str, Any] | None = None
 
     def _capture_checks_from_gate(self) -> None:
         """Retain a check gate's result when strict evaluation raises."""
@@ -386,6 +414,7 @@ class ReviewCompleter:
         findings_file: Path | None = None,
     ) -> ReviewCompletionResult:
         self.last_checks = None
+        self.last_documentation_validation = None
         verdict = verdict.upper()
         if verdict not in {"PASS", "FAIL"}:
             raise LckStopError("Review verdict must be PASS or FAIL")
@@ -454,6 +483,17 @@ class ReviewCompleter:
                 repo_root=review_root,
             )
             _assert_review_applicable(reviewed_identity, current_identity)
+            profile = resolve_issue_profile(state.issue).profile
+            if (
+                profile is not None
+                and profile.issue_kind is LeafIssueKind.DOCUMENTATION
+            ):
+                policy = evaluate_documentation_changes(current_identity.changed_files)
+                self.last_documentation_validation = policy.to_dict()
+                if policy.status is not DocumentationPolicyStatus.PASS:
+                    raise DocumentationReclassificationRequired(
+                        "DOCUMENTATION_RECLASSIFICATION_REQUIRED: " + policy.detail
+                    )
             if verdict == "PASS":
                 completion_snapshot = self.snapshots.bind_required_checks(
                     completion_snapshot, repo_root=review_root
@@ -573,6 +613,14 @@ class ReviewPassGate:
             )
         except ReviewStaleError as exc:
             raise LckStopError(f"Review PASS is stale: {exc}") from exc
+        profile = resolve_issue_profile(state.issue).profile
+        if profile is not None and profile.issue_kind is LeafIssueKind.DOCUMENTATION:
+            policy = evaluate_documentation_changes(recorded.changed_files)
+            if policy.status is not DocumentationPolicyStatus.PASS:
+                raise DocumentationReclassificationRequired(
+                    "Documentation Review PASS is outside the safe-change policy: "
+                    + policy.detail
+                )
 
         # Git commit objects are content-addressed. Once current PR/base/head and
         # Task Contract identity still match the accepted Review receipt, the

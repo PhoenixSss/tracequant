@@ -8,7 +8,11 @@ from typing import Any, Final, cast
 
 from workflow_common import WorkflowToolError, is_sha
 
-from .issue_profiles import TASK_PROFILE, canonical_branch_for_profile
+from .issue_profiles import (
+    TASK_PROFILE,
+    LeafIssueWorkflowProfile,
+    canonical_branch_for_profile,
+)
 
 BASE_BRANCH: Final = "main"
 REQUIRED_CHECKS_WORKFLOW: Final = ".github/workflows/ci.yml"
@@ -117,16 +121,15 @@ _OPERATION_FACT_PROFILES: Final = {
         include_local_task_branches=False,
         include_checks=True,
     ),
-    # Remediation Prepare hands the current contract to the semantic repair
-    # caller; the no-change terminal operation has no semantic caller and does
-    # not need to reacquire the Issue body.
+    # All phases that run eligibility need the current Issue contract so
+    # Documentation remains valid through its terminal lifecycle paths.
     "remediation-prepare": FactProfile(
         name="remediation-prepare",
         include_task_contract=True,
     ),
     "remediation-no-change": FactProfile(
         name="remediation-no-change",
-        include_task_contract=False,
+        include_task_contract=True,
     ),
     "remediation-complete": FactProfile(
         name="remediation-complete",
@@ -142,7 +145,7 @@ _OPERATION_FACT_PROFILES: Final = {
     "closeout": FactProfile(
         name="closeout",
         include_issue_closure=True,
-        include_task_contract=False,
+        include_task_contract=True,
         include_pr_history=True,
         include_pr_history_details=True,
     ),
@@ -281,8 +284,10 @@ def _validation_agent_view(value: Any) -> dict[str, Any]:
     return result
 
 
-def _critical_outcome_agent_view(value: Any) -> dict[str, Any]:
+def _critical_outcome_agent_view(value: Any) -> dict[str, Any] | None:
     """Summarize the formal Critical Outcome gate."""
+    if value is None:
+        return None
     if not isinstance(value, Mapping):
         return {"status": "unknown"}
     result: dict[str, Any] = {}
@@ -318,6 +323,24 @@ def _branch_matches_task(branch: str, task_number: int) -> bool:
         None,
     )
     return number == str(task_number)
+
+
+def branch_matches_profile(
+    branch: str,
+    issue_number: int,
+    profile: LeafIssueWorkflowProfile,
+) -> bool:
+    """Return whether a branch belongs to the profile-owned Issue namespace.
+
+    Task keeps its historical aliases for compatibility.  Other enabled leaf
+    profiles use only their canonical namespace, so a Documentation branch can
+    never be mistaken for a Task branch (or vice versa).
+    """
+
+    if profile is TASK_PROFILE:
+        return _branch_matches_task(branch, issue_number)
+    prefix = f"{profile.branch_namespace}{issue_number}-"
+    return bool(re.fullmatch(re.escape(prefix) + r"[a-z0-9][a-z0-9-]*", branch))
 
 
 def _is_clean_current_main(git: Mapping[str, Any]) -> bool:
@@ -441,6 +464,9 @@ class LiveState:
                             "body_sha256": self.task_contract.get("body_sha256"),
                             "critical_outcome": self.task_contract.get(
                                 "critical_outcome"
+                            ),
+                            "documentation_contract": self.task_contract.get(
+                                "documentation_contract"
                             ),
                         }
                         if isinstance(self.task_contract, Mapping)

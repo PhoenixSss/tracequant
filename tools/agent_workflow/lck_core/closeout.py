@@ -9,6 +9,7 @@ from workflow_common import WorkflowToolError, is_sha, read_json_text, safe_text
 from workflow_evidence import _find_project_status
 
 from .eligibility import PhaseEligibilityResolver
+from .issue_profiles import LeafIssueKind, resolve_issue_profile
 from .models import (
     BASE_BRANCH,
     LCK_SCHEMA_VERSION,
@@ -17,11 +18,11 @@ from .models import (
     LiveState,
     OperationSnapshot,
     Phase,
-    _branch_matches_task,
     _merge_commit_sha,
     _pr_base_sha,
     _pr_head_sha,
     _remote_refs,
+    branch_matches_profile,
 )
 from .review_workspace import ReviewInvocationStore, _identity_from_mapping
 from .state import LiveStateResolver, OperationSnapshotBuilder
@@ -277,8 +278,19 @@ class CleanupTaskRefsEffect:
         merge_sha: str | None,
     ) -> EffectReceipt:
         branch = state.target_branch
-        if branch == BASE_BRANCH or not _branch_matches_task(branch, state.task_number):
-            raise LckStopError("Cleanup target is not the verified Task branch")
+        profile = resolve_issue_profile(state.issue).profile
+        if (
+            branch == BASE_BRANCH
+            or profile is None
+            or not branch_matches_profile(branch, state.task_number, profile)
+        ):
+            label = (
+                "Documentation"
+                if profile is not None
+                and profile.issue_kind is LeafIssueKind.DOCUMENTATION
+                else "Task"
+            )
+            raise LckStopError(f"Cleanup target is not the verified {label} branch")
         worktrees = self.resolver.runner.run(
             ["git", "worktree", "list", "--porcelain"],
             command_id="lck-closeout-worktree-precondition",

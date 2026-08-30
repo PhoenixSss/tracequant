@@ -19,6 +19,7 @@ from .effects import (
     SetReviewStatusEffect,
 )
 from .eligibility import PhaseDecision, PhaseEligibilityResolver
+from .issue_profiles import LeafIssueKind, resolve_issue_profile
 from .models import (
     BASE_BRANCH,
     LCK_SCHEMA_VERSION,
@@ -36,7 +37,11 @@ from .state import (
     OperationSnapshotBuilder,
     _task_contract_from_state,
 )
-from .validation import DeliveryChecksGate, FormalValidationGate
+from .validation import (
+    DeliveryChecksGate,
+    DocumentationValidationGate,
+    FormalValidationGate,
+)
 
 
 @dataclass(frozen=True)
@@ -193,7 +198,7 @@ class DeliveryCompletionResult:
     status: str
     branch: str
     head_sha: str
-    critical_outcome: Mapping[str, Any]
+    critical_outcome: Mapping[str, Any] | None
     validation: Mapping[str, Any]
     checks: Mapping[str, Any]
     effects: tuple[EffectReceipt, ...]
@@ -237,6 +242,7 @@ class DeliveryCompleter:
         pr_effect: EnsureOpenPrEffect | ReuseExistingOpenPrEffect | None = None,
         status_effect: SetReviewStatusEffect | None = None,
         checks_gate: DeliveryChecksGate | None = None,
+        documentation_validation: DocumentationValidationGate | None = None,
         require_existing_open_pr: bool = False,
         candidate_recorder: Callable[[str, str], None] | None = None,
     ) -> None:
@@ -249,10 +255,14 @@ class DeliveryCompleter:
         self.pr_effect = pr_effect or EnsureOpenPrEffect(resolver)
         self.status_effect = status_effect or SetReviewStatusEffect(resolver)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
+        self.documentation_validation = (
+            documentation_validation or DocumentationValidationGate(resolver)
+        )
         self.require_existing_open_pr = require_existing_open_pr
         self.candidate_recorder = candidate_recorder
         self.last_snapshot: OperationSnapshot | None = None
         self.last_critical_outcome: dict[str, Any] | None = None
+        self.last_documentation_validation: dict[str, Any] | None = None
         self.last_validation: dict[str, Any] | None = None
         self.last_checks: dict[str, Any] | None = None
         self.last_effects: list[EffectReceipt] = []
@@ -305,6 +315,28 @@ class DeliveryCompleter:
             raise
         self.last_validation = validation
         return validation
+
+    def _run_profile_gates(
+        self,
+        state: LiveState,
+        base_sha: str,
+        *,
+        progress: ProgressReporter,
+    ) -> dict[str, Any] | None:
+        profile_resolution = resolve_issue_profile(state.issue)
+        profile = profile_resolution.profile
+        if profile is None or not profile_resolution.resolved:
+            raise LckStopError("current leaf Issue workflow profile is unavailable")
+        self.last_documentation_validation = None
+        if profile.issue_kind is LeafIssueKind.DOCUMENTATION:
+            progress.running("documentation-policy")
+            policy = self.documentation_validation.run(base_sha)
+            self.last_documentation_validation = policy
+        if profile.requires_critical_outcome:
+            progress.running("critical-outcome")
+            return self._run_critical_outcome(state, progress=progress)
+        self.last_critical_outcome = None
+        return None
 
     def _has_task_diff(self, base_sha: str) -> bool:
         result = self.resolver.runner.run(
@@ -367,6 +399,7 @@ class DeliveryCompleter:
         effects: list[EffectReceipt] = []
         self.last_effects = effects
         self.last_critical_outcome = None
+        self.last_documentation_validation = None
         self.last_validation = None
         self.last_checks = None
         decision = self.eligibility.resolve(
@@ -379,9 +412,10 @@ class DeliveryCompleter:
                 f"{phase.value} STOP for Task #{task_number}: "
                 + "; ".join(decision.reasons)
             )
-        base_sha = _authoritative_remote_main_sha(state.git)
-        if not is_sha(base_sha):
+        base_sha_value = _authoritative_remote_main_sha(state.git)
+        if not is_sha(base_sha_value):
             raise LckStopError("current remote main identity is unavailable")
+        base_sha = str(base_sha_value)
         issue = state.issue
         body_sha256 = issue.get("body_sha256") if isinstance(issue, Mapping) else None
         if not isinstance(body_sha256, str) or not body_sha256:
@@ -407,10 +441,17 @@ class DeliveryCompleter:
                     "Delivery Complete found no Task diff against operation base"
                 )
             validated_tree = self.commit_effect.current_head_tree()
-            progress.running("critical-outcome")
-            critical = self._run_critical_outcome(state, progress=progress)
+            critical = self._run_profile_gates(
+                state,
+                base_sha,
+                progress=progress,
+            )
             progress.running("formal-validation")
             validation = self._run_formal_validation(base_sha)
+            if self.last_documentation_validation is not None:
+                validation = dict(validation)
+                validation["documentation_policy"] = self.last_documentation_validation
+                self.last_validation = validation
             validated_head = state.local_task_head
             if not is_sha(validated_head):
                 raise LckStopError("current Task head is unavailable")
@@ -429,10 +470,17 @@ class DeliveryCompleter:
         else:
             progress.running("staging-candidate")
             validated_tree = self.commit_effect.stage_candidate_tree()
-            progress.running("critical-outcome")
-            critical = self._run_critical_outcome(state, progress=progress)
+            critical = self._run_profile_gates(
+                state,
+                base_sha,
+                progress=progress,
+            )
             progress.running("formal-validation")
             validation = self._run_formal_validation(base_sha)
+            if self.last_documentation_validation is not None:
+                validation = dict(validation)
+                validation["documentation_policy"] = self.last_documentation_validation
+                self.last_validation = validation
             self.commit_effect.verify_tree_unchanged(
                 validated_tree,
                 expected_head_sha=state.local_task_head,

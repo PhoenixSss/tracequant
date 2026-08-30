@@ -385,7 +385,7 @@ class EnsureOpenPrEffect:
         head_sha: str,
         summary: str,
         risks: str,
-        critical_outcome: Mapping[str, Any],
+        critical_outcome: Mapping[str, Any] | None,
         validation: Mapping[str, Any],
         expected_base_sha: str,
         expected_body_sha256: str,
@@ -416,13 +416,17 @@ class EnsureOpenPrEffect:
         title = issue.get("title")
         if not isinstance(title, str) or not title.strip():
             raise LckStopError("Task title is unavailable for PR creation")
+        validation_lines = [f"- Formal Delivery validation: {validation.get('status')}"]
+        if critical_outcome is not None:
+            validation_lines.insert(
+                0,
+                f"- Critical Outcome: {critical_outcome.get('status')}",
+            )
         body = (
             f"Closes #{state.task_number}\n\n"
             "## Summary\n"
             f"{summary.strip()}\n\n"
-            "## Validation\n"
-            f"- Critical Outcome: {critical_outcome.get('status')}\n"
-            f"- Formal Delivery validation: {validation.get('status')}\n\n"
+            "## Validation\n" + "\n".join(validation_lines) + "\n\n"
             "## Risks / limitations\n"
             f"{risks.strip() or 'None identified.'}\n"
         )
@@ -480,7 +484,7 @@ class ReuseExistingOpenPrEffect:
         head_sha: str,
         summary: str,
         risks: str,
-        critical_outcome: Mapping[str, Any],
+        critical_outcome: Mapping[str, Any] | None,
         validation: Mapping[str, Any],
         expected_base_sha: str,
         expected_body_sha256: str,

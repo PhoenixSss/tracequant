@@ -5,11 +5,11 @@ maintainer or reviewer can start with the responsibility that owns the behavior.
 
 | Concern | Start here | Typical companion modules |
 | --- | --- | --- |
-| leaf Issue type/profile contract and routing | `issue_profiles.py` | `models.py`, `eligibility.py` |
+| leaf Issue type/profile contract and routing | `issue_profiles.py` | `models.py`, `eligibility.py`, `../documentation_policy.py` |
 | contracts, immutable state/result models | `models.py` | `issue_profiles.py` |
 | live Git/GitHub facts, Fact Profiles, operation snapshots | `state.py` | `models.py` |
 | lifecycle admission / eligibility | `eligibility.py` | `state.py` |
-| formal validation and required-check gates | `validation.py` | `state.py` |
+| formal validation and required-check gates | `validation.py` | `state.py`, `../documentation_policy.py` |
 | bounded Git/GitHub write effects | `effects.py` | `delivery.py` or `remediation.py` |
 | Delivery prepare/complete | `delivery.py` | `eligibility.py`, `validation.py`, `effects.py` |
 | isolated Review workspace and review records | `review_workspace.py` | `review.py` |

@@ -4,6 +4,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from documentation_policy import (
+    documentation_contract_snapshot,
+    is_valid_documentation_contract,
+)
 from workflow_common import is_sha
 from workflow_evidence import _formal_blockers_gate
 
@@ -80,6 +84,20 @@ class PhaseEligibilityResolver:
                         "lifecycle labels must be exactly ['codex:ready']: "
                         f"{sorted(lifecycle_labels) or 'none'}"
                     )
+            if profile_resolution.profile is not None and (
+                profile_resolution.profile.issue_kind is LeafIssueKind.DOCUMENTATION
+            ):
+                documentation_contract = issue.get("documentation_contract")
+                if not isinstance(documentation_contract, Mapping):
+                    body = issue.get("body")
+                    documentation_contract = documentation_contract_snapshot(
+                        body if isinstance(body, str) else None
+                    )
+                if not is_valid_documentation_contract(documentation_contract):
+                    detail = (
+                        documentation_contract.get("detail") or "contract is invalid"
+                    )
+                    reasons.append(f"Documentation contract invalid: {detail}")
             project = issue.get("project_status")
             allowed_projects = {
                 Phase.DELIVERY_PREPARE: {"Ready", "In Progress"},
@@ -168,12 +186,24 @@ class PhaseEligibilityResolver:
             if state.open_pr is not None and state.open_pr.get("isDraft") is not False:
                 reasons.append("Delivery Complete cannot continue with a Draft OPEN PR")
             capabilities = (
-                "verify_critical_outcome",
-                "run_formal_validation",
-                "commit_current_tree",
-                "ensure_remote_branch",
-                "ensure_open_pr",
-                "set_review_status",
+                (
+                    "validate_documentation_candidate",
+                    "run_formal_validation",
+                    "commit_current_tree",
+                    "ensure_remote_branch",
+                    "ensure_open_pr",
+                    "set_review_status",
+                )
+                if profile_resolution.profile is not None
+                and profile_resolution.profile.issue_kind is LeafIssueKind.DOCUMENTATION
+                else (
+                    "verify_critical_outcome",
+                    "run_formal_validation",
+                    "commit_current_tree",
+                    "ensure_remote_branch",
+                    "ensure_open_pr",
+                    "set_review_status",
+                )
             )
         elif phase in {Phase.REVIEW_PREPARE, Phase.REVIEW_COMPLETE}:
             if state.open_pr is None:
@@ -224,17 +254,28 @@ class PhaseEligibilityResolver:
                     reasons.append(
                         f"{phase.value} requires the resolved Task branch selected"
                     )
-                capabilities = (
-                    ("close_no_change_remediation",)
-                    if phase is Phase.REMEDIATION_NO_CHANGE
-                    else (
+                if phase is Phase.REMEDIATION_NO_CHANGE:
+                    capabilities = ("close_no_change_remediation",)
+                elif (
+                    profile_resolution.profile is not None
+                    and profile_resolution.profile.issue_kind
+                    is LeafIssueKind.DOCUMENTATION
+                ):
+                    capabilities = (
+                        "validate_documentation_candidate",
+                        "run_formal_validation",
+                        "commit_current_tree",
+                        "ensure_remote_branch",
+                        "reuse_open_pr",
+                    )
+                else:
+                    capabilities = (
                         "verify_critical_outcome",
                         "run_formal_validation",
                         "commit_current_tree",
                         "ensure_remote_branch",
                         "reuse_open_pr",
                     )
-                )
         else:
             if state.merged is not True:
                 reasons.append("Closeout requires one current merged PR")

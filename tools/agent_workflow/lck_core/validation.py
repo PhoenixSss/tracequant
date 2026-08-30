@@ -7,6 +7,11 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Final
 
+from documentation_policy import (
+    DocumentationChangeResult,
+    DocumentationPolicyStatus,
+    evaluate_documentation_changes,
+)
 from workflow_common import (
     ProgressReporter,
     WorkflowToolError,
@@ -17,6 +22,7 @@ from workflow_common import (
 )
 from workflow_evidence import _normalize_checks
 
+from .effective_diff import calculate_effective_diff
 from .models import (
     LCK_SCHEMA_VERSION,
     LckStopError,
@@ -29,6 +35,12 @@ from .state import (
     _required_check_contract,
     _required_check_contract_for_snapshot,
 )
+
+
+class DocumentationReclassificationRequired(LckStopError):
+    """The candidate is outside the Documentation profile's safe scope."""
+
+    code = "DOCUMENTATION_RECLASSIFICATION_REQUIRED"
 
 
 class FormalValidationGate:
@@ -98,6 +110,41 @@ class FormalValidationGate:
             reporter.failed("formal-validation")
             raise
         reporter.completed("formal-validation")
+        return payload
+
+
+class DocumentationValidationGate:
+    """Apply the fixed repository-owned Documentation change policy."""
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+        self.last_result: dict[str, Any] | None = None
+
+    def run(self, base_sha: str) -> dict[str, Any]:
+        if not is_sha(base_sha):
+            raise LckStopError("Documentation validation base SHA is unavailable")
+        effective_diff = calculate_effective_diff(
+            self.resolver.runner,
+            base_sha=base_sha,
+            head_ref="HEAD",
+            command_id_prefix="lck-documentation",
+            cwd=self.resolver.repo_root,
+            include_index=True,
+        )
+        policy: DocumentationChangeResult = evaluate_documentation_changes(
+            effective_diff.changed_files
+        )
+        payload = policy.to_dict()
+        payload["effective_diff"] = {
+            "merge_base_sha": effective_diff.merge_base_sha,
+            "effective_diff_sha256": effective_diff.effective_diff_sha256,
+            "source": "index",
+        }
+        self.last_result = payload
+        if policy.status is not DocumentationPolicyStatus.PASS:
+            raise DocumentationReclassificationRequired(
+                "DOCUMENTATION_RECLASSIFICATION_REQUIRED: " + policy.detail
+            )
         return payload
 
 

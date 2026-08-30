@@ -120,6 +120,11 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
 - Task `Critical Outcome` 是正式 Delivery gate：LCK 从当前 Task body 读取结构化
   contract，使用固定 pytest verifier 执行真实 supported path。缺失、malformed、unsafe
   target 或 verifier failure 均 fail closed；不得用普通 unit/static check 替代。
+- Documentation leaf 使用 `.github/ISSUE_TEMPLATE/documentation.yml` 定义的
+  documentation fact contract，不要求 Critical Outcome，也不生成假的 Critical Outcome
+  evidence。它由 repository-owned typed safe-change policy 限制在 README.md 与安全的
+  `docs/**` 范围；Agent/policy/workflow 控制文件和 runtime、tests、CI、LCK 文件一旦进入
+  candidate diff，LCK 必须返回 reclassification / split required。
 - 每个 authoritative operation 在入口绑定一个稳定的 fact profile，并在 operation snapshot
   中记录 profile 与 acquired facts。Delivery Prepare 直接返回同一次 fresh acquisition 绑定的
   完整 Task Contract；semantic caller 不应为同一 operation 再查询 Task body。
@@ -136,6 +141,8 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
 - Initial Delivery 的 lifecycle mechanics（workspace prepare、commit validated tree、
   remote synchronization、OPEN PR resolve/create、Project Status → Review）由 LCK
   deterministic control 执行；Agent/Skill 不提供 branch/SHA/PR/refspec authority。
+- Documentation 使用独立的 `documentation/<Issue>-<slug>` branch namespace；Task 的
+  `task/`、历史 Task aliases 与其匹配规则保持不变。
 - 一次 Initial Delivery 覆盖：LCK Delivery Prepare → semantic implementation / targeted
   development validation → LCK Delivery Complete → Critical Outcome → formal validation →
   commit validated tree → ensure remote branch → ensure OPEN PR → observe current CI checks
