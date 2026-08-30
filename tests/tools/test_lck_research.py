@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -43,6 +44,7 @@ from research_policy import (  # type: ignore[import-not-found]  # noqa: E402
 )
 from workflow_evidence import (  # type: ignore[import-not-found]  # noqa: E402
     _formal_blockers_gate,
+    _issue_view_with_contract,
 )
 from workflow_common import CommandResult, sha256_json  # type: ignore[import-not-found]  # noqa: E402
 
@@ -73,6 +75,48 @@ The decision is needed before implementation.
 
 Adopt the repository-backed workflow contract and record the resulting ADR.
 """
+
+
+def test_live_research_issue_contract_uses_research_form() -> None:
+    class Runner:
+        repo_root = ROOT
+
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            return CommandResult(
+                command_id,
+                tuple(str(item) for item in argv),
+                0,
+                json.dumps(
+                    {
+                        "number": 199,
+                        "title": "[Research] supported workflow",
+                        "state": "OPEN",
+                        "labels": [{"name": "type:research"}],
+                        "body": RESEARCH_BODY,
+                        "projectItems": [],
+                    }
+                ),
+                "",
+            )
+
+    warnings: list[dict[str, Any]] = []
+    issue, contract = _issue_view_with_contract(
+        Runner(),
+        "owner/repo",
+        199,
+        warnings,
+        include_comments=False,
+        include_closure=False,
+    )
+
+    assert warnings == []
+    assert issue is not None
+    assert contract is not None
+    research_contract = issue["research_contract"]
+    assert research_contract["status"] == "pass"
+    assert research_contract["template_path"] == ".github/ISSUE_TEMPLATE/research.yml"
+    assert is_valid_research_contract(research_contract)
+    assert contract["research_contract"] == research_contract
 
 
 def test_research_profile_binds_typed_outcome_to_reviewed_artifact(

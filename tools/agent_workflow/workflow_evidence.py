@@ -23,6 +23,7 @@ from documentation_policy import (
 )
 from research_policy import (
     RESEARCH_OUTCOME_FIELD,
+    RESEARCH_TEMPLATE_PATH,
     ResearchPolicyError,
     architecture_decision_is_consistent,
     decision_contract_snapshot,
@@ -523,6 +524,9 @@ def _issue_view_with_contract(
         if isinstance(runner_root, Path)
         else None
     )
+    research_template_path = (
+        runner_root / RESEARCH_TEMPLATE_PATH if isinstance(runner_root, Path) else None
+    )
     is_documentation = "type:documentation" in normalized_labels
     is_task = "type:task" in normalized_labels
     is_research = "type:research" in normalized_labels
@@ -560,7 +564,7 @@ def _issue_view_with_contract(
             else None
         ),
         "research_contract": (
-            research_contract_snapshot(body, template_path=template_path)
+            research_contract_snapshot(body, template_path=research_template_path)
             if is_research
             else None
         ),
