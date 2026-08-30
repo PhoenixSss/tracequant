@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import Any, Final
 
 from critical_outcome import critical_outcome_snapshot
-from documentation_policy import documentation_contract_snapshot
+from documentation_policy import (
+    DOCUMENTATION_TEMPLATE_PATH,
+    documentation_contract_snapshot,
+)
 from workflow_common import (
     CommandResult,
     CommandRunner,
@@ -465,6 +468,12 @@ def _issue_view_with_contract(
                 }
             )
     body = value.get("body") if isinstance(value.get("body"), str) else None
+    runner_root = getattr(runner, "repo_root", None)
+    template_path = (
+        runner_root / DOCUMENTATION_TEMPLATE_PATH
+        if isinstance(runner_root, Path)
+        else None
+    )
     is_documentation = "type:documentation" in normalized_labels
     is_task = "type:task" in normalized_labels
     raw_comments = value.get("comments", [])
@@ -496,7 +505,9 @@ def _issue_view_with_contract(
         "body_characters": len(body) if body is not None else None,
         "critical_outcome": critical_outcome_snapshot(body) if is_task else None,
         "documentation_contract": (
-            documentation_contract_snapshot(body) if is_documentation else None
+            documentation_contract_snapshot(body, template_path=template_path)
+            if is_documentation
+            else None
         ),
         "comment_count": len(comment_facts) if include_comments else None,
         "state": safe_text(value.get("state")),

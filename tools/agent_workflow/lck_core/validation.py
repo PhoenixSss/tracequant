@@ -22,6 +22,7 @@ from workflow_common import (
 )
 from workflow_evidence import _normalize_checks
 
+from .effective_diff import calculate_effective_diff
 from .models import (
     LCK_SCHEMA_VERSION,
     LckStopError,
@@ -122,20 +123,23 @@ class DocumentationValidationGate:
     def run(self, base_sha: str) -> dict[str, Any]:
         if not is_sha(base_sha):
             raise LckStopError("Documentation validation base SHA is unavailable")
-        result = self.resolver.runner.run(
-            ["git", "diff", "--name-only", base_sha, "--"],
-            command_id="lck-documentation-changed-files",
+        effective_diff = calculate_effective_diff(
+            self.resolver.runner,
+            base_sha=base_sha,
+            head_ref="HEAD",
+            command_id_prefix="lck-documentation",
+            cwd=self.resolver.repo_root,
+            include_index=True,
         )
-        if result.returncode != 0:
-            raise LckStopError(
-                "Documentation changed-file inventory is unavailable: "
-                + (result.stderr.strip() or result.stdout.strip())
-            )
-        changed_files = tuple(line for line in result.stdout.splitlines() if line)
         policy: DocumentationChangeResult = evaluate_documentation_changes(
-            changed_files
+            effective_diff.changed_files
         )
         payload = policy.to_dict()
+        payload["effective_diff"] = {
+            "merge_base_sha": effective_diff.merge_base_sha,
+            "effective_diff_sha256": effective_diff.effective_diff_sha256,
+            "source": "index",
+        }
         self.last_result = payload
         if policy.status is not DocumentationPolicyStatus.PASS:
             raise DocumentationReclassificationRequired(

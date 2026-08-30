@@ -17,6 +17,8 @@ if AGENT_WORKFLOW not in sys.path:
 
 from documentation_policy import (  # type: ignore[import-not-found]  # noqa: E402
     DocumentationPolicyStatus,
+    DocumentationTemplateError,
+    documentation_template_contract,
     documentation_contract_snapshot,
     evaluate_documentation_changes,
 )
@@ -25,7 +27,10 @@ from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     issue_profiles as lck_profiles,
 )
 from lck_core.models import Phase  # type: ignore[import-not-found]  # noqa: E402
-from lck_core.validation import DocumentationValidationGate  # type: ignore[import-not-found]  # noqa: E402
+from lck_core.validation import (  # type: ignore[import-not-found]  # noqa: E402
+    DocumentationReclassificationRequired,
+    DocumentationValidationGate,
+)
 from lck_test_support import (  # noqa: E402
     FakeRunner,
     _install_facts,
@@ -33,6 +38,7 @@ from lck_test_support import (  # noqa: E402
     _relationships,
     _resolver,
 )
+from workflow_common import CommandRunner  # type: ignore[import-not-found]  # noqa: E402
 
 
 DOCUMENTATION_BODY = """### Documentation Goal
@@ -126,12 +132,42 @@ def test_documentation_contract_is_typed_and_does_not_execute_context() -> None:
         "Requirements",
         "Acceptance Criteria",
     ]
+    assert valid["empty_sections"] == []
 
     invalid = documentation_contract_snapshot(
         DOCUMENTATION_BODY + "\n### Documentation Goal\n"
     )
     assert invalid["status"] == DocumentationPolicyStatus.RECLASSIFICATION_REQUIRED
     assert "duplicate sections" in str(invalid["detail"])
+
+    empty = documentation_contract_snapshot(
+        "### Documentation Goal\n\n### Requirements\n\n### Acceptance Criteria\n"
+    )
+    assert empty["status"] == DocumentationPolicyStatus.RECLASSIFICATION_REQUIRED
+    assert empty["empty_sections"] == [
+        "Documentation Goal",
+        "Requirements",
+        "Acceptance Criteria",
+    ]
+
+
+def test_documentation_contract_is_bound_to_the_form_schema() -> None:
+    schema = documentation_template_contract(
+        ROOT / ".github/ISSUE_TEMPLATE/documentation.yml"
+    )
+    assert schema.field_ids == ("objective", "requirements", "acceptance_criteria")
+    assert schema.section_labels == (
+        "Documentation Goal",
+        "Requirements",
+        "Acceptance Criteria",
+    )
+
+
+def test_documentation_contract_fails_closed_when_form_schema_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(DocumentationTemplateError):
+        documentation_template_contract(tmp_path / "missing.yml")
 
 
 @pytest.mark.parametrize(
@@ -141,6 +177,10 @@ def test_documentation_contract_is_typed_and_does_not_execute_context() -> None:
         ("tests/test_runtime.py",),
         ("tools/agent_workflow/lck.py",),
         ("AGENTS.md",),
+        ("docs/AGENTS.md",),
+        ("docs/architecture/AGENTS.md",),
+        ("docs/CLAUDE.md",),
+        ("docs/reference/CLAUDE.md",),
         (".agents/policies/workflow-evidence.md",),
         ("docs/development/issue-workflow.md",),
         ("docs/workflows/lck.md",),
@@ -168,14 +208,74 @@ def test_documentation_validation_gate_uses_typed_policy_without_issue_commands(
 ) -> None:
     class Runner:
         def run(self, argv: Any, *, command_id: str, **_: Any) -> Any:
-            assert tuple(argv) == ("git", "diff", "--name-only", "a" * 40, "--")
+            command = tuple(argv)
+            if command == ("git", "merge-base", "a" * 40, "HEAD"):
+                return type(
+                    "Result",
+                    (),
+                    {"returncode": 0, "stdout": "b" * 40 + "\n", "stderr": ""},
+                )()
+            if command[:3] == ("git", "diff", "--cached"):
+                stdout = "README.md\n"
+            else:
+                raise AssertionError(command)
             return type(
                 "Result",
                 (),
-                {"returncode": 0, "stdout": "README.md\n", "stderr": ""},
+                {"returncode": 0, "stdout": stdout, "stderr": ""},
             )()
 
-    resolver = type("Resolver", (), {"runner": Runner()})()
+    resolver = type("Resolver", (), {"runner": Runner(), "repo_root": tmp_path})()
     result = DocumentationValidationGate(cast(Any, resolver)).run("a" * 40)
     assert result["status"] == DocumentationPolicyStatus.PASS
     assert result["policy_id"] == "repository-documentation-safe-v1"
+    assert result["effective_diff"]["source"] == "index"
+
+
+def test_documentation_validation_gate_uses_effective_diff_for_stale_branch_base(
+    tmp_path: Path,
+) -> None:
+    """A stale branch remains subject to the Review effective-diff boundary."""
+
+    import subprocess
+
+    def git(*args: str) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    subprocess.run(
+        ["git", "init", "-b", "main", str(tmp_path)],
+        check=True,
+        capture_output=True,
+    )
+    git("config", "user.name", "TraceQuant Test")
+    git("config", "user.email", "tracequant-test@example.invalid")
+    (tmp_path / "README.md").write_text("seed\n", encoding="utf-8")
+    git("add", "README.md")
+    git("commit", "-m", "seed")
+    git("switch", "-c", "documentation/stale")
+    git("switch", "main")
+    (tmp_path / "tools.md").write_text("behavior\n", encoding="utf-8")
+    git("add", "tools.md")
+    git("commit", "-m", "main independently adds content")
+    current_main = git("rev-parse", "HEAD")
+    git("switch", "documentation/stale")
+    (tmp_path / "tools.md").write_text("behavior\n", encoding="utf-8")
+    git("add", "tools.md")
+
+    resolver = type(
+        "Resolver",
+        (),
+        {"runner": CommandRunner(tmp_path), "repo_root": tmp_path},
+    )()
+    with pytest.raises(
+        DocumentationReclassificationRequired,
+        match="DOCUMENTATION_RECLASSIFICATION_REQUIRED",
+    ):
+        DocumentationValidationGate(cast(Any, resolver)).run(current_main)
