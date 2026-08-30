@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from bug_policy import bug_contract_snapshot, is_valid_bug_contract
 from documentation_policy import (
     documentation_contract_snapshot,
     is_valid_documentation_contract,
@@ -86,6 +87,18 @@ class PhaseEligibilityResolver:
                         f"{sorted(lifecycle_labels) or 'none'}"
                     )
             if profile_resolution.profile is not None and (
+                profile_resolution.profile.issue_kind is LeafIssueKind.BUG
+            ):
+                bug_contract = issue.get("bug_contract")
+                if not isinstance(bug_contract, Mapping):
+                    body = issue.get("body")
+                    bug_contract = bug_contract_snapshot(
+                        body if isinstance(body, str) else None
+                    )
+                if not is_valid_bug_contract(bug_contract):
+                    detail = bug_contract.get("detail") or "contract is invalid"
+                    reasons.append(f"Bug defect contract invalid: {detail}")
+            elif profile_resolution.profile is not None and (
                 profile_resolution.profile.issue_kind is LeafIssueKind.DOCUMENTATION
             ):
                 documentation_contract = issue.get("documentation_contract")
@@ -218,6 +231,18 @@ class PhaseEligibilityResolver:
                 )
             elif (
                 profile_resolution.profile is not None
+                and profile_resolution.profile.issue_kind is LeafIssueKind.BUG
+            ):
+                capabilities = (
+                    "validate_bug_contract",
+                    "run_formal_validation",
+                    "commit_current_tree",
+                    "ensure_remote_branch",
+                    "ensure_open_pr",
+                    "set_review_status",
+                )
+            elif (
+                profile_resolution.profile is not None
                 and profile_resolution.profile.issue_kind is LeafIssueKind.RESEARCH
             ):
                 capabilities = (
@@ -295,6 +320,17 @@ class PhaseEligibilityResolver:
                 ):
                     capabilities = (
                         "validate_documentation_candidate",
+                        "run_formal_validation",
+                        "commit_current_tree",
+                        "ensure_remote_branch",
+                        "reuse_open_pr",
+                    )
+                elif (
+                    profile_resolution.profile is not None
+                    and profile_resolution.profile.issue_kind is LeafIssueKind.BUG
+                ):
+                    capabilities = (
+                        "validate_bug_contract",
                         "run_formal_validation",
                         "commit_current_tree",
                         "ensure_remote_branch",

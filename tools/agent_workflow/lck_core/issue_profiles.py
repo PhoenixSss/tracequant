@@ -118,7 +118,7 @@ TASK_PROFILE: Final = _profile(
 BUG_PROFILE: Final = _profile(
     LeafIssueKind.BUG,
     requires_critical_outcome=False,
-    lifecycle_enabled=False,
+    lifecycle_enabled=True,
     branch_namespace="bug/",
 )
 DOCUMENTATION_PROFILE: Final = _profile(

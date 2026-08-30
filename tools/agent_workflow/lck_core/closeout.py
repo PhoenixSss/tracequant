@@ -561,7 +561,9 @@ class CleanupTaskRefsEffect:
             or not branch_matches_profile(branch, state.task_number, profile)
         ):
             label = (
-                "Documentation"
+                "Bug"
+                if profile is not None and profile.issue_kind is LeafIssueKind.BUG
+                else "Documentation"
                 if profile is not None
                 and profile.issue_kind is LeafIssueKind.DOCUMENTATION
                 else "Task"

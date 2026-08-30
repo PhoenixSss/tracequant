@@ -178,6 +178,10 @@ Review Complete fresh identity 与 sealed reviewed target 一致，current appli
 repository-owned typed safe-change policy，禁止把 runtime、tests、CI、Agent control 或
 workflow-policy 修改伪装成文档变化，也不要求不存在的 Critical Outcome evidence。
 
+对于 Bug leaf，semantic Review 还必须依据当前 Observed / Expected /
+Reproduction-or-Evidence / Acceptance Criteria defect contract 判断修复目标和回归证据；
+回归正确性必须针对当前 candidate head，head 变化后旧 Review 自动失效并要求 fresh Review。
+
 Review Complete 返回：
 
 ```text
@@ -295,7 +299,7 @@ LCK 复用 Initial Delivery 已迁移的 bounded effects：
 
 ```text
 reacquire live facts
-→ Documentation policy (Documentation) / Critical Outcome (Task)
+→ Bug defect contract (Bug) / Documentation policy (Documentation) / Critical Outcome (Task)
 → formal Delivery validation
 → commit exact validated repair tree
 → ensure remote Task branch

@@ -198,6 +198,7 @@ def _task_contract(issue: dict[str, Any] | None = None) -> dict[str, Any]:
         "body": body,
         "body_sha256": value.get("body_sha256") or sha256_json({"body": body}),
         "critical_outcome": value.get("critical_outcome"),
+        "bug_contract": value.get("bug_contract"),
     }
 
 
