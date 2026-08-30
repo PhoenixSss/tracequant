@@ -258,6 +258,47 @@ data or runtime configuration.
   guide](docs/workflows/wsl2-codex-environment/README.md) only when working in
   that specific environment.
 
+## Typed leaf Issue navigation
+
+TraceQuant has four executable leaf Issue kinds. The `type:*` label selects
+exactly one profile in the [LCK leaf profile resolver](tools/agent_workflow/lck_core/issue_profiles.py);
+the Issue Forms and [Issue authoring guide](docs/development/issue-authoring.md)
+define the semantic contract, while the profile-owned policy modules provide
+the type-specific gates.
+
+| Leaf kind | Semantic contract | Profile / gate owner | Branch namespace |
+| --- | --- | --- | --- |
+| Task | Add or change system behavior; uses the Task-only Critical Outcome contract. | [LCK profiles](tools/agent_workflow/lck_core/issue_profiles.py) / [Critical Outcome](tools/agent_workflow/critical_outcome.py) | `task/` |
+| Bug | Restore expected behavior with defect and regression semantics. | [LCK profiles](tools/agent_workflow/lck_core/issue_profiles.py) / [Bug policy](tools/agent_workflow/bug_policy.py) | `bug/` |
+| Documentation | Add, correct, or converge documented facts without changing runtime behavior. | [LCK profiles](tools/agent_workflow/lck_core/issue_profiles.py) / [Documentation policy](tools/agent_workflow/documentation_policy.py) | `documentation/` |
+| Research | Reduce an unknown with evidence and record a typed decision. Repository-backed v1 artifacts belong under [`docs/research/`](docs/research/). | [LCK profiles](tools/agent_workflow/lck_core/issue_profiles.py) / [Research policy](tools/agent_workflow/research_policy.py) | `research/` |
+
+The type-specific policies answer semantic questions; they do not create four
+workflow controllers. One shared [LCK implementation kernel](tools/agent_workflow/lck_core/README.md)
+owns the mechanical boundary for every leaf kind: branch and workspace
+preparation, formal validation authority, current PR/base/head identity, fresh
+Independent Review, maintainer manual Squash Merge, Closeout, remediation and
+recovery, and bounded Agent View / Audit Receipt evidence. The [shared Issue
+workflow](docs/development/issue-workflow.md) and [Review semantics](docs/development/pr-review.md)
+remain the canonical lifecycle references.
+
+`Critical Outcome` is required and verified only for an implementation Task.
+Bug, Documentation, and Research profiles neither require nor fabricate or
+auto-generate Task Critical Outcome evidence; each uses its own contract and
+policy gate.
+
+For Research, workflow completion and the Project `Research Outcome` are
+different facts. A completed repository-backed Research workflow records one
+typed business result—`IMPLEMENT`, `DO NOT IMPLEMENT`, `NEEDS MORE EVIDENCE`,
+or `ARCHITECTURE DECISION`—in the Project field during Closeout; the latter is
+not a replacement for the workflow lifecycle state, and the non-implementation
+outcomes are still valid research conclusions.
+
+Typed profiles are not retroactive. Historical Issues completed before the
+typed profiles existed, including [legacy sample #66](https://github.com/PhoenixSss/tracequant/issues/66),
+remain design, migration, or compatibility fixtures; they must not receive
+backfilled or replayed typed lifecycle receipts.
+
 ## Documentation map
 
 - [Technical baseline](docs/architecture/technical-baseline.md): current
