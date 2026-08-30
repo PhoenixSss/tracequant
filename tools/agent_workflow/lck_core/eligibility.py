@@ -4,16 +4,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from bug_policy import bug_contract_snapshot, is_valid_bug_contract
-from documentation_policy import (
-    documentation_contract_snapshot,
-    is_valid_documentation_contract,
-)
-from research_policy import is_valid_research_contract, research_contract_snapshot
 from workflow_common import is_sha
 from workflow_evidence import _formal_blockers_gate
 
-from .issue_profiles import LeafIssueKind, resolve_issue_profile
+from .issue_profiles import resolve_issue_profile
 from .models import (
     LiveState,
     Phase,
@@ -22,6 +16,7 @@ from .models import (
     _is_clean_current_main,
     _items,
 )
+from .profile_policies import validate_profile_contract
 
 
 @dataclass(frozen=True)
@@ -86,44 +81,10 @@ class PhaseEligibilityResolver:
                         "lifecycle labels must be exactly ['codex:ready']: "
                         f"{sorted(lifecycle_labels) or 'none'}"
                     )
-            if profile_resolution.profile is not None and (
-                profile_resolution.profile.issue_kind is LeafIssueKind.BUG
-            ):
-                bug_contract = issue.get("bug_contract")
-                if not isinstance(bug_contract, Mapping):
-                    body = issue.get("body")
-                    bug_contract = bug_contract_snapshot(
-                        body if isinstance(body, str) else None
-                    )
-                if not is_valid_bug_contract(bug_contract):
-                    detail = bug_contract.get("detail") or "contract is invalid"
-                    reasons.append(f"Bug defect contract invalid: {detail}")
-            elif profile_resolution.profile is not None and (
-                profile_resolution.profile.issue_kind is LeafIssueKind.DOCUMENTATION
-            ):
-                documentation_contract = issue.get("documentation_contract")
-                if not isinstance(documentation_contract, Mapping):
-                    body = issue.get("body")
-                    documentation_contract = documentation_contract_snapshot(
-                        body if isinstance(body, str) else None
-                    )
-                if not is_valid_documentation_contract(documentation_contract):
-                    detail = (
-                        documentation_contract.get("detail") or "contract is invalid"
-                    )
-                    reasons.append(f"Documentation contract invalid: {detail}")
-            elif profile_resolution.profile is not None and (
-                profile_resolution.profile.issue_kind is LeafIssueKind.RESEARCH
-            ):
-                research_contract = issue.get("research_contract")
-                if not isinstance(research_contract, Mapping):
-                    body = issue.get("body")
-                    research_contract = research_contract_snapshot(
-                        body if isinstance(body, str) else None
-                    )
-                if not is_valid_research_contract(research_contract):
-                    detail = research_contract.get("detail") or "contract is invalid"
-                    reasons.append(f"Research contract invalid: {detail}")
+            if profile is not None:
+                contract_check = validate_profile_contract(profile, issue)
+                if contract_check is not None and not contract_check.valid:
+                    reasons.append(contract_check.failure_reason)
             project = issue.get("project_status")
             allowed_projects = {
                 Phase.DELIVERY_PREPARE: {"Ready", "In Progress"},
@@ -150,11 +111,7 @@ class PhaseEligibilityResolver:
             if project not in allowed_projects:
                 reasons.append("Project Status is unavailable or unknown")
             if phase in {Phase.DELIVERY_PREPARE, Phase.DELIVERY_COMPLETE}:
-                if (
-                    profile is not None
-                    and profile.issue_kind is LeafIssueKind.TASK
-                    and profile.requires_critical_outcome
-                ):
+                if profile is not None and profile.requires_critical_outcome:
                     critical = issue.get("critical_outcome")
                     if (
                         not isinstance(critical, Mapping)
@@ -217,51 +174,19 @@ class PhaseEligibilityResolver:
                 reasons.append("Delivery Complete requires a current local Task head")
             if state.open_pr is not None and state.open_pr.get("isDraft") is not False:
                 reasons.append("Delivery Complete cannot continue with a Draft OPEN PR")
-            if (
-                profile_resolution.profile is not None
-                and profile_resolution.profile.issue_kind is LeafIssueKind.DOCUMENTATION
-            ):
-                capabilities = (
-                    "validate_documentation_candidate",
-                    "run_formal_validation",
-                    "commit_current_tree",
-                    "ensure_remote_branch",
-                    "ensure_open_pr",
-                    "set_review_status",
-                )
-            elif (
-                profile_resolution.profile is not None
-                and profile_resolution.profile.issue_kind is LeafIssueKind.BUG
-            ):
-                capabilities = (
-                    "validate_bug_contract",
-                    "run_formal_validation",
-                    "commit_current_tree",
-                    "ensure_remote_branch",
-                    "ensure_open_pr",
-                    "set_review_status",
-                )
-            elif (
-                profile_resolution.profile is not None
-                and profile_resolution.profile.issue_kind is LeafIssueKind.RESEARCH
-            ):
-                capabilities = (
-                    "validate_research_artifact",
-                    "run_formal_validation",
-                    "commit_current_tree",
-                    "ensure_remote_branch",
-                    "ensure_open_pr",
-                    "set_review_status",
-                )
-            else:
-                capabilities = (
-                    "verify_critical_outcome",
-                    "run_formal_validation",
-                    "commit_current_tree",
-                    "ensure_remote_branch",
-                    "ensure_open_pr",
-                    "set_review_status",
-                )
+            candidate_capability = (
+                profile_resolution.profile.candidate_capability
+                if profile_resolution.profile is not None
+                else "verify_critical_outcome"
+            )
+            capabilities = (
+                candidate_capability,
+                "run_formal_validation",
+                "commit_current_tree",
+                "ensure_remote_branch",
+                "ensure_open_pr",
+                "set_review_status",
+            )
         elif phase in {Phase.REVIEW_PREPARE, Phase.REVIEW_COMPLETE}:
             if state.open_pr is None:
                 reasons.append("no current OPEN PR")
@@ -313,48 +238,18 @@ class PhaseEligibilityResolver:
                     )
                 if phase is Phase.REMEDIATION_NO_CHANGE:
                     capabilities = ("close_no_change_remediation",)
-                elif (
-                    profile_resolution.profile is not None
-                    and profile_resolution.profile.issue_kind
-                    is LeafIssueKind.DOCUMENTATION
-                ):
-                    capabilities = (
-                        "validate_documentation_candidate",
-                        "run_formal_validation",
-                        "commit_current_tree",
-                        "ensure_remote_branch",
-                        "reuse_open_pr",
-                    )
-                elif (
-                    profile_resolution.profile is not None
-                    and profile_resolution.profile.issue_kind is LeafIssueKind.BUG
-                ):
-                    capabilities = (
-                        "validate_bug_contract",
-                        "run_formal_validation",
-                        "commit_current_tree",
-                        "ensure_remote_branch",
-                        "reuse_open_pr",
-                    )
-                elif (
-                    profile_resolution.profile is not None
-                    and profile_resolution.profile.issue_kind is LeafIssueKind.RESEARCH
-                ):
-                    capabilities = (
-                        "validate_research_artifact",
-                        "run_formal_validation",
-                        "commit_current_tree",
-                        "ensure_remote_branch",
-                        "reuse_open_pr",
-                    )
-                else:
-                    capabilities = (
-                        "verify_critical_outcome",
-                        "run_formal_validation",
-                        "commit_current_tree",
-                        "ensure_remote_branch",
-                        "reuse_open_pr",
-                    )
+                candidate_capability = (
+                    profile_resolution.profile.candidate_capability
+                    if profile_resolution.profile is not None
+                    else "verify_critical_outcome"
+                )
+                capabilities = (
+                    candidate_capability,
+                    "run_formal_validation",
+                    "commit_current_tree",
+                    "ensure_remote_branch",
+                    "reuse_open_pr",
+                )
         else:
             if state.merged is not True:
                 reasons.append("Closeout requires one current merged PR")

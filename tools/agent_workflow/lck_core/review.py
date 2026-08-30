@@ -7,10 +7,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
-from documentation_policy import (
-    DocumentationPolicyStatus,
-    evaluate_documentation_changes,
-)
 from research_policy import (
     ResearchPolicyError,
     bind_research_outcome,
@@ -20,7 +16,7 @@ from workflow_common import ProgressReporter, is_sha, safe_text
 from workflow_evidence import _formal_blockers_gate
 
 from .eligibility import PhaseEligibilityResolver
-from .issue_profiles import LeafIssueKind, resolve_issue_profile
+from .issue_profiles import resolve_issue_profile
 from .models import (
     BASE_BRANCH,
     LCK_SCHEMA_VERSION,
@@ -33,6 +29,10 @@ from .models import (
     _jsonable,
     _pr_base_sha,
     _pr_head_sha,
+)
+from .profile_policies import (
+    evaluate_profile_changes,
+    profile_research_outcome_supported,
 )
 from .review_workspace import (
     ReviewIdentity,
@@ -238,14 +238,14 @@ class ReviewPreparer:
             )
             profile = resolve_issue_profile(state.issue).profile
             documentation_policy: dict[str, Any] | None = None
-            if (
-                profile is not None
-                and profile.issue_kind is LeafIssueKind.DOCUMENTATION
-            ):
-                policy = evaluate_documentation_changes(identity.changed_files)
+            if profile is not None:
+                policy = evaluate_profile_changes(profile, identity.changed_files)
+            else:
+                policy = None
+            if policy is not None:
                 documentation_policy = policy.to_dict()
                 self.last_documentation_validation = documentation_policy
-                if policy.status is not DocumentationPolicyStatus.PASS:
+                if policy.status.value != "pass":
                     raise DocumentationReclassificationRequired(
                         "DOCUMENTATION_RECLASSIFICATION_REQUIRED: " + policy.detail
                     )
@@ -492,7 +492,7 @@ class ReviewCompleter:
             _assert_review_applicable(reviewed_identity, current_identity)
             profile = resolve_issue_profile(state.issue).profile
             research_artifact = current_identity.research_artifact
-            if profile is not None and profile.issue_kind is LeafIssueKind.RESEARCH:
+            if profile is not None and profile_research_outcome_supported(profile):
                 if verdict == "PASS":
                     if not isinstance(research_artifact, Mapping):
                         raise LckStopError(
@@ -518,15 +518,17 @@ class ReviewCompleter:
                         raise LckStopError(f"invalid Research Outcome: {exc}") from exc
             elif research_outcome is not None:
                 raise LckStopError(
-                    "--research-outcome is supported only for type:research Issues"
+                    "--research-outcome is supported only for Research Issues"
                 )
-            if (
-                profile is not None
-                and profile.issue_kind is LeafIssueKind.DOCUMENTATION
-            ):
-                policy = evaluate_documentation_changes(current_identity.changed_files)
+            if profile is not None:
+                policy = evaluate_profile_changes(
+                    profile, current_identity.changed_files
+                )
+            else:
+                policy = None
+            if policy is not None:
                 self.last_documentation_validation = policy.to_dict()
-                if policy.status is not DocumentationPolicyStatus.PASS:
+                if policy.status.value != "pass":
                     raise DocumentationReclassificationRequired(
                         "DOCUMENTATION_RECLASSIFICATION_REQUIRED: " + policy.detail
                     )
@@ -656,9 +658,12 @@ class ReviewPassGate:
         except ReviewStaleError as exc:
             raise LckStopError(f"Review PASS is stale: {exc}") from exc
         profile = resolve_issue_profile(state.issue).profile
-        if profile is not None and profile.issue_kind is LeafIssueKind.DOCUMENTATION:
-            policy = evaluate_documentation_changes(recorded.changed_files)
-            if policy.status is not DocumentationPolicyStatus.PASS:
+        if profile is not None:
+            policy = evaluate_profile_changes(profile, recorded.changed_files)
+        else:
+            policy = None
+        if policy is not None:
+            if policy.status.value != "pass":
                 raise DocumentationReclassificationRequired(
                     "Documentation Review PASS is outside the safe-change policy: "
                     + policy.detail

@@ -1,3 +1,5 @@
+# ruff: noqa: E402, I001
+
 """Architecture-level acceptance for the single LCK Task control authority."""
 
 from __future__ import annotations
@@ -12,6 +14,10 @@ if AGENT_WORKFLOW not in sys.path:
 
 from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     cli as lck_cli,
+    issue_profiles as lck_profiles,
+)
+from workflow_evidence import (  # type: ignore[import-not-found]  # noqa: E402
+    _formal_blockers_gate,
 )
 
 TASK_SKILLS = (
@@ -222,6 +228,109 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     )
     assert "frozen historical publication evidence" in archive
     assert "not a current workflow entry point" in archive
+
+
+def test_typed_leaf_workflows_share_one_lck_control_kernel() -> None:
+    """Verify Task #202's profile-routing and shared-kernel contract."""
+
+    profiles = lck_profiles.PROFILES_BY_TYPE_LABEL
+    assert set(profiles) == {
+        "type:task",
+        "type:bug",
+        "type:documentation",
+        "type:research",
+    }
+    assert all(profile.lifecycle_enabled for profile in profiles.values())
+    assert len({profile.profile_id for profile in profiles.values()}) == 4
+    assert len({profile.candidate_capability for profile in profiles.values()}) == 4
+    assert lck_profiles.TASK_PROFILE.requires_critical_outcome
+    assert not lck_profiles.BUG_PROFILE.requires_critical_outcome
+    assert not lck_profiles.DOCUMENTATION_PROFILE.requires_critical_outcome
+    assert not lck_profiles.RESEARCH_PROFILE.requires_critical_outcome
+    assert lck_profiles.TASK_PROFILE.allow_legacy_branch_aliases
+    assert not lck_profiles.BUG_PROFILE.allow_legacy_branch_aliases
+    assert not lck_profiles.DOCUMENTATION_PROFILE.allow_legacy_branch_aliases
+    assert not lck_profiles.RESEARCH_PROFILE.allow_legacy_branch_aliases
+
+    core_root = ROOT / "tools/agent_workflow/lck_core"
+    phase_sources = {
+        name: (core_root / name).read_text(encoding="utf-8")
+        for name in (
+            "eligibility.py",
+            "delivery.py",
+            "review.py",
+            "review_workspace.py",
+            "closeout.py",
+            "state.py",
+            "models.py",
+        )
+    }
+    assert all("LeafIssueKind" not in source for source in phase_sources.values())
+    assert all("type:" not in source for source in phase_sources.values())
+    assert "profile_policies" in phase_sources["eligibility.py"]
+    assert "profile_policies" in phase_sources["delivery.py"]
+    assert "profile_policies" in phase_sources["review.py"]
+    assert "profile_policies" in phase_sources["review_workspace.py"]
+    assert "profile_policies" in phase_sources["closeout.py"]
+    profile_policy_source = (core_root / "profile_policies.py").read_text(
+        encoding="utf-8"
+    )
+    assert "_CONTRACT_POLICIES" in profile_policy_source
+    assert "run_profile_delivery_gates" in profile_policy_source
+    assert "validate_profile_contract" in profile_policy_source
+
+    workflow_evidence = (ROOT / "tools/agent_workflow/workflow_evidence.py").read_text(
+        encoding="utf-8"
+    )
+    assert "resolve_leaf_issue_profile" in workflow_evidence
+    assert "validate_profile_contract" in workflow_evidence
+
+    relationships = {
+        "available": True,
+        "blocked_by": {
+            "items": [],
+            "count": 0,
+            "truncated": False,
+        },
+    }
+    for labels in ([], ["type:unknown"], ["type:feature"], ["type:task", "type:bug"]):
+        result = _formal_blockers_gate(
+            {
+                **relationships,
+                "blocked_by": {
+                    "items": [
+                        {
+                            "state": "CLOSED",
+                            "labels": labels,
+                            "labels_complete": True,
+                        }
+                    ],
+                    "count": 1,
+                    "truncated": False,
+                },
+            }
+        )
+        assert result["status"] == "unknown"
+
+    navigation = (ROOT / "docs/architecture/typed-leaf-workflows.md").read_text(
+        encoding="utf-8"
+    )
+    for marker in (
+        "canonical type:* label",
+        "issue_profiles.py",
+        "profile_policies.py",
+        "shared LCK phase controllers",
+        "type:task",
+        "type:bug",
+        "type:documentation",
+        "type:research",
+        "Task #198",
+        "Task #199",
+        "Task #200",
+        "Task #202",
+        "#66",
+    ):
+        assert marker in navigation
 
 
 def test_remediation_candidate_creation_is_not_blocked_by_future_review_evidence() -> (

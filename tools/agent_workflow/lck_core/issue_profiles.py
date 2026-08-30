@@ -62,6 +62,12 @@ class LeafIssueWorkflowProfile:
     branch_namespace: str
     lifecycle_enabled: bool
     policy_entrypoints: WorkflowPolicyEntrypoints
+    candidate_capability: str
+    contract_policy: str | None = None
+    change_policy: str | None = None
+    artifact_policy: str | None = None
+    supports_research_outcome: bool = False
+    allow_legacy_branch_aliases: bool = False
 
     @property
     def eligibility_policy(self) -> str:
@@ -84,6 +90,12 @@ class LeafIssueWorkflowProfile:
             "branch_namespace": self.branch_namespace,
             "lifecycle_enabled": self.lifecycle_enabled,
             "policy_entrypoints": self.policy_entrypoints.to_dict(),
+            "candidate_capability": self.candidate_capability,
+            "contract_policy": self.contract_policy,
+            "change_policy": self.change_policy,
+            "artifact_policy": self.artifact_policy,
+            "supports_research_outcome": self.supports_research_outcome,
+            "allow_legacy_branch_aliases": self.allow_legacy_branch_aliases,
         }
 
 
@@ -93,6 +105,12 @@ def _profile(
     requires_critical_outcome: bool,
     lifecycle_enabled: bool,
     branch_namespace: str,
+    candidate_capability: str,
+    contract_policy: str | None = None,
+    change_policy: str | None = None,
+    artifact_policy: str | None = None,
+    supports_research_outcome: bool = False,
+    allow_legacy_branch_aliases: bool = False,
 ) -> LeafIssueWorkflowProfile:
     return LeafIssueWorkflowProfile(
         profile_id=kind.value,
@@ -106,6 +124,12 @@ def _profile(
             validation=kind.value,
             completion=kind.value,
         ),
+        candidate_capability=candidate_capability,
+        contract_policy=contract_policy,
+        change_policy=change_policy,
+        artifact_policy=artifact_policy,
+        supports_research_outcome=supports_research_outcome,
+        allow_legacy_branch_aliases=allow_legacy_branch_aliases,
     )
 
 
@@ -114,24 +138,35 @@ TASK_PROFILE: Final = _profile(
     requires_critical_outcome=True,
     lifecycle_enabled=True,
     branch_namespace="task/",
+    candidate_capability="verify_critical_outcome",
+    allow_legacy_branch_aliases=True,
 )
 BUG_PROFILE: Final = _profile(
     LeafIssueKind.BUG,
     requires_critical_outcome=False,
     lifecycle_enabled=True,
     branch_namespace="bug/",
+    candidate_capability="validate_bug_contract",
+    contract_policy="bug",
 )
 DOCUMENTATION_PROFILE: Final = _profile(
     LeafIssueKind.DOCUMENTATION,
     requires_critical_outcome=False,
     lifecycle_enabled=True,
     branch_namespace="documentation/",
+    candidate_capability="validate_documentation_candidate",
+    contract_policy="documentation",
+    change_policy="documentation",
 )
 RESEARCH_PROFILE: Final = _profile(
     LeafIssueKind.RESEARCH,
     requires_critical_outcome=False,
     lifecycle_enabled=True,
     branch_namespace="research/",
+    candidate_capability="validate_research_artifact",
+    contract_policy="research",
+    artifact_policy="research",
+    supports_research_outcome=True,
 )
 
 PROFILES_BY_TYPE_LABEL: Final = {

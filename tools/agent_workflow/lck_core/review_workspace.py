@@ -16,7 +16,7 @@ from research_policy import ResearchPolicyError, research_artifact_binding
 from workflow_common import WorkflowToolError, atomic_write_json, is_sha, read_json_file
 
 from .effective_diff import calculate_effective_diff
-from .issue_profiles import LeafIssueKind, resolve_issue_profile
+from .issue_profiles import resolve_issue_profile
 from .models import (
     LCK_SCHEMA_VERSION,
     LckStopError,
@@ -25,6 +25,7 @@ from .models import (
     _pr_base_sha,
     _pr_head_sha,
 )
+from .profile_policies import profile_has_research_artifacts
 from .state import LiveStateResolver
 
 
@@ -127,7 +128,7 @@ def _review_identity(
     )
     research_artifact = None
     profile = resolve_issue_profile(state.issue).profile
-    if profile is not None and profile.issue_kind is LeafIssueKind.RESEARCH:
+    if profile is not None and profile_has_research_artifacts(profile):
         try:
             research_artifact = research_artifact_binding(
                 repo_root,

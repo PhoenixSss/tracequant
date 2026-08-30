@@ -16,12 +16,14 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final
 
-from bug_policy import BUG_TEMPLATE_PATH, bug_contract_snapshot, is_valid_bug_contract
+from bug_policy import BUG_TEMPLATE_PATH, bug_contract_snapshot
 from critical_outcome import critical_outcome_snapshot
 from documentation_policy import (
     DOCUMENTATION_TEMPLATE_PATH,
     documentation_contract_snapshot,
 )
+from lck_core.issue_profiles import resolve_leaf_issue_profile
+from lck_core.profile_policies import validate_profile_contract
 from research_policy import (
     RESEARCH_OUTCOME_FIELD,
     RESEARCH_TEMPLATE_PATH,
@@ -29,7 +31,6 @@ from research_policy import (
     architecture_decision_is_consistent,
     decision_contract_snapshot,
     is_implementation_outcome,
-    is_valid_research_contract,
     parse_research_outcome,
     research_contract_snapshot,
 )
@@ -550,10 +551,14 @@ def _issue_view_with_contract(
     research_template_path = (
         runner_root / RESEARCH_TEMPLATE_PATH if isinstance(runner_root, Path) else None
     )
-    is_documentation = "type:documentation" in normalized_labels
-    is_bug = "type:bug" in normalized_labels
-    is_task = "type:task" in normalized_labels
-    is_research = "type:research" in normalized_labels
+    profile_resolution = resolve_leaf_issue_profile({"labels": normalized_labels})
+    profile = profile_resolution.profile if profile_resolution.resolved else None
+    is_task = profile is not None and profile.requires_critical_outcome
+    is_bug = profile is not None and profile.contract_policy == "bug"
+    is_documentation = (
+        profile is not None and profile.contract_policy == "documentation"
+    )
+    is_research = profile is not None and profile.supports_research_outcome
     raw_comments = value.get("comments", [])
     comment_facts: list[dict[str, Any]] = []
     if isinstance(raw_comments, list):
@@ -603,7 +608,7 @@ def _issue_view_with_contract(
         "project_status": _find_project_status(value.get("projectItems")),
         "research_outcome": (
             _find_project_field(value.get("projectItems"), RESEARCH_OUTCOME_FIELD)
-            if "type:research" in normalized_labels
+            if is_research
             else None
         ),
         "url": safe_text(value.get("url")),
@@ -1029,8 +1034,12 @@ def _relationship_snapshot(
                     isinstance(page, dict) and page.get("hasNextPage") is False
                 )
             body = item.get("body") if isinstance(item.get("body"), str) else None
-            is_bug = "type:bug" in labels
-            is_research = "type:research" in labels
+            profile_resolution = resolve_leaf_issue_profile({"labels": labels})
+            profile = (
+                profile_resolution.profile if profile_resolution.resolved else None
+            )
+            is_bug = profile is not None and profile.contract_policy == "bug"
+            is_research = profile is not None and profile.supports_research_outcome
             research_outcome = (
                 _canonical_research_outcome(
                     item.get("projectItems"),
@@ -1430,24 +1439,22 @@ def _formal_blockers_gate(
             if labels_complete is not True or not isinstance(labels, list):
                 unknown_state += 1
                 continue
-            type_labels = [
-                label
-                for label in labels
-                if isinstance(label, str) and label.startswith("type:")
-            ]
-            if len(type_labels) != 1:
+            profile_resolution = resolve_leaf_issue_profile({"labels": labels})
+            if not profile_resolution.resolved or profile_resolution.profile is None:
                 unknown_state += 1
                 continue
-            if "type:research" not in labels:
-                if "type:bug" in labels and not is_valid_bug_contract(
-                    item.get("bug_contract")
-                ):
+            profile = profile_resolution.profile
+            contract_check = validate_profile_contract(profile, item)
+            if contract_check is not None and not contract_check.valid:
+                if contract_check.policy == "bug":
                     bug_contract_unknown += 1
-                    continue
-                resolved += 1
+                elif contract_check.policy == "research":
+                    research_contract_unknown += 1
+                else:
+                    unknown_state += 1
                 continue
-            if not is_valid_research_contract(item.get("research_contract")):
-                research_contract_unknown += 1
+            if not profile.supports_research_outcome:
+                resolved += 1
                 continue
             outcome_is_canonical = item.get("research_outcome_is_canonical")
             if outcome_is_canonical is None:

@@ -112,6 +112,10 @@ intent 无法可靠解析时：**不要猜**。回退到 explicit Skill-name fal
 
 ## 6. Delivery semantics
 
+四类 leaf Issue 的 routing / profile owner / shared-kernel 边界见
+[`docs/architecture/typed-leaf-workflows.md`](../architecture/typed-leaf-workflows.md)。
+该导航图是 profile ownership delta，不复制本文件的 lifecycle procedure。
+
 The project-level `uv.toml` directs canonical `uv` commands to
 `.workflow.local/uv-cache`. This is local runtime state and the directory is
 Git-ignored; an explicit `UV_CACHE_DIR` override remains supported. Workflow

@@ -5,7 +5,7 @@ maintainer or reviewer can start with the responsibility that owns the behavior.
 
 | Concern | Start here | Typical companion modules |
 | --- | --- | --- |
-| leaf Issue type/profile contract and routing | `issue_profiles.py` | `models.py`, `eligibility.py`, `../bug_policy.py`, `../documentation_policy.py` |
+| leaf Issue type/profile contract and routing | `issue_profiles.py`, `profile_policies.py` | `models.py`, `eligibility.py`, `../bug_policy.py`, `../documentation_policy.py`, `../research_policy.py` |
 | contracts, immutable state/result models | `models.py` | `issue_profiles.py` |
 | live Git/GitHub facts, Fact Profiles, operation snapshots | `state.py` | `models.py` |
 | lifecycle admission / eligibility | `eligibility.py` | `state.py` |
@@ -15,17 +15,22 @@ maintainer or reviewer can start with the responsibility that owns the behavior.
 | isolated Review workspace and review records | `review_workspace.py` | `review.py` |
 | Independent Review and Merge Preflight | `review.py` | `review_workspace.py`, `validation.py` |
 | remediation and owned-candidate recovery | `remediation.py` | `eligibility.py`, `delivery.py`, `effects.py` |
-| post-merge Closeout | `closeout.py` | `eligibility.py` |
+| post-merge Closeout | `closeout.py` | `eligibility.py`, `profile_policies.py` |
 | Agent View, Audit Receipt, failure evidence/replay | `receipts.py` | affected phase module |
 | CLI dispatch only | `cli.py` | phase modules |
 
 ## Dependency rule
 
-Shared layers (`models`, `state`, `eligibility`, `validation`) must not import phase
+Shared layers (`models`, `state`, `eligibility`, `validation`, `profile_policies`) must not import phase
 orchestration modules. Effects depend only on shared layers. Phase modules compose
 shared layers/effects. `receipts.py` projects completed phase results, and `cli.py`
 is the outermost dispatcher. Avoid runtime import tricks, service locators, or
 module mutation to bypass this direction.
+
+`issue_profiles.py` owns canonical label resolution and profile metadata.
+`profile_policies.py` owns the one dispatch boundary from that metadata to the
+Bug, Documentation, Research, and Task-specific candidate hooks. Lifecycle phase
+modules must not add another type-driven dispatch table.
 
 When diagnosing a lifecycle issue, read this map first and inspect the owner module
 plus at most its direct companion modules before broad repository searches.
