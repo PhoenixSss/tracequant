@@ -121,16 +121,15 @@ _OPERATION_FACT_PROFILES: Final = {
         include_local_task_branches=False,
         include_checks=True,
     ),
-    # Remediation Prepare hands the current contract to the semantic repair
-    # caller; the no-change terminal operation has no semantic caller and does
-    # not need to reacquire the Issue body.
+    # All phases that run eligibility need the current Issue contract so
+    # Documentation remains valid through its terminal lifecycle paths.
     "remediation-prepare": FactProfile(
         name="remediation-prepare",
         include_task_contract=True,
     ),
     "remediation-no-change": FactProfile(
         name="remediation-no-change",
-        include_task_contract=False,
+        include_task_contract=True,
     ),
     "remediation-complete": FactProfile(
         name="remediation-complete",
@@ -146,7 +145,7 @@ _OPERATION_FACT_PROFILES: Final = {
     "closeout": FactProfile(
         name="closeout",
         include_issue_closure=True,
-        include_task_contract=False,
+        include_task_contract=True,
         include_pr_history=True,
         include_pr_history_details=True,
     ),

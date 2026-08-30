@@ -464,7 +464,7 @@ def test_task_branch_inventory_warning_stops_before_workspace_write(
         (
             "Remediation No Change",
             {
-                "issue": (False, False, False),
+                "issue": (False, False, True),
                 "git": {
                     "read_only_local_refs": True,
                     "include_workspace_inventory": False,
@@ -481,7 +481,6 @@ def test_task_branch_inventory_warning_stops_before_workspace_write(
                 "excluded": {
                     "comments",
                     "issue_closure",
-                    "task_contract",
                     "workspace_inventory",
                     "checks",
                     "pr_history",
@@ -516,7 +515,7 @@ def test_task_branch_inventory_warning_stops_before_workspace_write(
         (
             "closeout",
             {
-                "issue": (False, True, False),
+                "issue": (False, True, True),
                 "git": {
                     "read_only_local_refs": True,
                     "include_workspace_inventory": False,
@@ -535,7 +534,6 @@ def test_task_branch_inventory_warning_stops_before_workspace_write(
                 },
                 "excluded": {
                     "comments",
-                    "task_contract",
                     "workspace_inventory",
                     "checks",
                 },
@@ -662,7 +660,7 @@ def test_authoritative_operation_resolver_queries_only_its_fact_profile(
         (
             "Remediation No Change",
             {"git", "local_task_branches", "open_pr"},
-            {"comments", "issue_closure", "task_contract", "checks", "pr_history"},
+            {"comments", "issue_closure", "checks", "pr_history"},
         ),
         (
             "Remediation Complete",
@@ -677,7 +675,7 @@ def test_authoritative_operation_resolver_queries_only_its_fact_profile(
         (
             "closeout",
             {"issue_closure", "git", "pr_history"},
-            {"comments", "task_contract", "workspace_inventory", "checks"},
+            {"comments", "workspace_inventory", "checks"},
         ),
     ],
 )
