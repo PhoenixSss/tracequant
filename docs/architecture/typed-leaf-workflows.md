@@ -41,21 +41,19 @@ resolution, identity/freshness, validation, effects, receipts, and recovery.
 ## Activation evidence
 
 The typed activation implementations are merged and remain independently
-traceable through their repository tasks:
+traceable through their real typed Issues:
 
-- Documentation: [Task #198](https://github.com/PhoenixSss/tracequant/issues/198)
-  and its merged implementation commit `6b19467`.
-- Research: [Task #199](https://github.com/PhoenixSss/tracequant/issues/199)
-  and its merged implementation commit `83534ab`.
-- Bug: [Task #200](https://github.com/PhoenixSss/tracequant/issues/200)
-  and its merged implementation commit `500c8ad`.
-- Task production path and heading-level Critical Outcome regression:
-  [Task #201](https://github.com/PhoenixSss/tracequant/issues/201) and the
-  current Task #202 lifecycle.
+- Documentation: [Issue #212](https://github.com/PhoenixSss/tracequant/issues/212),
+  which completed the repository-backed Documentation lifecycle.
+- Research: [Issue #191](https://github.com/PhoenixSss/tracequant/issues/191),
+  which completed the repository-backed Research lifecycle.
+- Bug: [Issue #201](https://github.com/PhoenixSss/tracequant/issues/201),
+  which completed the heading-level Critical Outcome Bug repair and regression
+  lifecycle.
+- Task production path: the current [Task #202](https://github.com/PhoenixSss/tracequant/issues/202)
+  lifecycle.
 
-Task #202's historical requirement names #66 as the Documentation activation;
-current GitHub state identifies #66 as the earlier documentation-related
-`type:task`, while #198 is the formal typed Documentation activation. This
-distinction is recorded rather than presenting a stale Issue number as a
-typed receipt. Live LCK receipts, PR identities, fresh Review, and post-merge
-Closeout remain the authoritative evidence for each execution.
+Issues #198, #199, and #200 are retained as historical Task implementation
+fixtures because their current labels are `type:task`; they are not typed
+activation receipts. Live LCK receipts, PR identities, fresh Review, and
+post-merge Closeout remain the authoritative evidence for each execution.

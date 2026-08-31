@@ -324,13 +324,17 @@ def test_typed_leaf_workflows_share_one_lck_control_kernel() -> None:
         "type:bug",
         "type:documentation",
         "type:research",
-        "Task #198",
-        "Task #199",
-        "Task #200",
+        "Issue #212",
+        "Issue #191",
+        "Issue #201",
         "Task #202",
-        "#66",
+        "#198",
+        "#199",
+        "#200",
     ):
         assert marker in navigation
+    for stale_marker in ("Task #198", "Task #199", "Task #200", "#66"):
+        assert stale_marker not in navigation
 
 
 def test_remediation_candidate_creation_is_not_blocked_by_future_review_evidence() -> (

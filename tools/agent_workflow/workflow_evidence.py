@@ -1039,6 +1039,9 @@ def _relationship_snapshot(
                 profile_resolution.profile if profile_resolution.resolved else None
             )
             is_bug = profile is not None and profile.contract_policy == "bug"
+            is_documentation = (
+                profile is not None and profile.contract_policy == "documentation"
+            )
             is_research = profile is not None and profile.supports_research_outcome
             research_outcome = (
                 _canonical_research_outcome(
@@ -1059,6 +1062,11 @@ def _relationship_snapshot(
                         research_contract_snapshot(body) if is_research else None
                     ),
                     "bug_contract": (bug_contract_snapshot(body) if is_bug else None),
+                    "documentation_contract": (
+                        documentation_contract_snapshot(body)
+                        if is_documentation
+                        else None
+                    ),
                     "decision_contract": (
                         decision_contract_snapshot(body, research=True)
                         if is_research

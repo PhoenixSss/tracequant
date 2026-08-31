@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any, cast
@@ -37,6 +38,10 @@ from lck_test_support import (  # noqa: E402
     _issue,
     _relationships,
     _resolver,
+)
+from workflow_evidence import (  # type: ignore[import-not-found]  # noqa: E402
+    _formal_blockers_gate,
+    _relationship_snapshot,
 )
 from workflow_common import CommandRunner  # type: ignore[import-not-found]  # noqa: E402
 
@@ -149,6 +154,76 @@ def test_documentation_contract_is_typed_and_does_not_execute_context() -> None:
         "Requirements",
         "Acceptance Criteria",
     ]
+
+
+def test_live_relationship_normalization_preserves_documentation_blocker_contract() -> (
+    None
+):
+    """A typed Documentation blocker remains resolvable after GraphQL normalization."""
+
+    class Runner:
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> Any:
+            return type(
+                "Result",
+                (),
+                {
+                    "returncode": 0,
+                    "stdout": json.dumps(
+                        {
+                            "data": {
+                                "repository": {
+                                    "issue": {
+                                        "number": 300,
+                                        "title": "Task with Documentation blocker",
+                                        "state": "OPEN",
+                                        "blockedBy": {
+                                            "nodes": [
+                                                {
+                                                    "number": 212,
+                                                    "title": "Typed Documentation activation",
+                                                    "state": "CLOSED",
+                                                    "body": DOCUMENTATION_BODY,
+                                                    "labels": {
+                                                        "nodes": [
+                                                            {
+                                                                "name": "type:documentation"
+                                                            }
+                                                        ],
+                                                        "pageInfo": {
+                                                            "hasNextPage": False
+                                                        },
+                                                    },
+                                                }
+                                            ],
+                                            "pageInfo": {"hasNextPage": False},
+                                        },
+                                        "blocking": {
+                                            "nodes": [],
+                                            "pageInfo": {"hasNextPage": False},
+                                        },
+                                        "subIssues": {
+                                            "nodes": [],
+                                            "pageInfo": {"hasNextPage": False},
+                                        },
+                                        "issueType": {"name": "Task"},
+                                        "parent": None,
+                                    }
+                                }
+                            }
+                        }
+                    ),
+                    "stderr": "",
+                },
+            )()
+
+    relationships = _relationship_snapshot(Runner(), "owner/repo", 300, [])
+    blocker = relationships["blocked_by"]["items"][0]
+
+    assert blocker["documentation_contract"] == documentation_contract_snapshot(
+        DOCUMENTATION_BODY
+    )
+    assert blocker["documentation_contract"]["status"] == "pass"
+    assert _formal_blockers_gate(relationships)["status"] == "pass"
 
 
 def test_documentation_contract_is_bound_to_the_form_schema() -> None:
