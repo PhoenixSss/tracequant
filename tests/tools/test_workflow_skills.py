@@ -218,6 +218,20 @@ def test_delivery_runner_uses_lck_for_initial_delivery_and_explicit_remediation(
     assert "MUST NOT start\nIndependent Review automatically" in text
 
 
+def test_delivery_runner_is_leaf_aware_and_task_gates_are_conditional() -> None:
+    for text in _dual_skill("task-delivery-runner"):
+        assert "existing leaf Issue" in text
+        assert "canonical `type:*` label selects the semantic profile" in text
+        assert "profile contract must include a valid `Critical Outcome`" in text
+        assert "fabricated Critical Outcome" in text
+        assert (
+            "parse the Task Critical Outcome only when the selected profile requires it"
+            in text
+        )
+        assert "run the selected profile's delivery gates" in text
+        assert "Use this Skill for one existing Task" not in text
+
+
 def test_delivery_skill_reserves_full_validation_for_lck_complete() -> None:
     for path in (
         ROOT / ".agents/skills/task-delivery-runner/SKILL.md",

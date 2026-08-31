@@ -20,6 +20,7 @@ if AGENT_WORKFLOW not in sys.path:
 from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     cli as lck_cli,
     closeout as lck_closeout,
+    delivery as lck_delivery,
     eligibility as lck_eligibility,
     models as lck_models,
     receipts as lck_receipts,
@@ -248,6 +249,109 @@ def test_review_prepare_returns_compact_agent_view_and_full_audit_receipt(
     assert receipt["operation_snapshot"] == snapshot.to_dict()
     assert receipt["agent_view"]["review_target"] == payload["review_target"]
     assert receipt["audit"]["review_guard"]["review_id"] == review_id
+
+
+def test_lifecycle_agent_views_include_the_selected_issue_profile(
+    tmp_path: Path,
+) -> None:
+    profile = {
+        "status": "resolved",
+        "terminal_status": "PROFILE_ENABLED",
+        "type_labels": ["type:task"],
+        "profile": {"profile_id": "task", "canonical_type_label": "type:task"},
+    }
+    state = replace(_review_state(), issue_profile=profile)
+    snapshot = lck_models.OperationSnapshot(operation="test", state=state)
+    identity = _review_identity_value()
+    delivery = lck_delivery.DeliveryCompletionResult(
+        task_number=159,
+        status="READY_FOR_REVIEW",
+        branch=state.target_branch,
+        head_sha=SHA,
+        critical_outcome=None,
+        validation={"status": "pass"},
+        checks={"status": "observed"},
+        effects=(),
+        operation_snapshot=snapshot,
+    )
+    values = (
+        lck_delivery.DeliveryContext(
+            task_number=159,
+            repository="owner/repo",
+            branch=state.target_branch,
+            base_sha=SHA,
+            action="selected-existing-branch",
+            operation_snapshot=snapshot,
+            eligibility=lck_eligibility.PhaseDecision(
+                phase=lck_models.Phase.DELIVERY_PREPARE,
+                eligible=True,
+            ),
+        ),
+        delivery,
+        lck_review.ReviewContext(
+            review_id="a" * 32,
+            task_contract=state.task_contract or {},
+            identity=identity,
+            checks={},
+            validation={"status": "pass"},
+            review_root=tmp_path,
+            issue_profile=profile,
+        ),
+        lck_review.ReviewCompletionResult(
+            review_id="b" * 32,
+            task_number=159,
+            verdict="FAIL",
+            status="STOP_REQUIRED",
+            identity=identity,
+            record_path=tmp_path / "review.json",
+            issue_profile=profile,
+        ),
+        lck_review.MergePreflightResult(
+            task_number=159,
+            status="READY_FOR_HUMAN_MERGE",
+            pr={},
+            review={},
+            checks={},
+            blockers={},
+            mergeability="MERGEABLE",
+            operation_snapshot=snapshot,
+        ),
+        lck_closeout.CloseoutResult(
+            task_number=159,
+            status="BUSINESS_DELIVERY_COMPLETE",
+            business_delivery="COMPLETE",
+            cleanup="COMPLETE",
+            effects=(),
+            operation_snapshot=snapshot,
+        ),
+        lck_remediation.RemediationContext(
+            task_number=159,
+            review_id="c" * 32,
+            findings="finding",
+            findings_source="local-review-record",
+            operation_snapshot=snapshot,
+            action="already-prepared",
+        ),
+        lck_remediation.RemediationNoChangeResult(
+            task_number=159,
+            review_id="d" * 32,
+            head_sha=SHA,
+            pr_number=200,
+            base_sha=SHA,
+            summary="unchanged",
+            operation_snapshot=snapshot,
+            receipt_path=tmp_path / "no-change.json",
+        ),
+        lck_remediation.RemediationCompletionResult(
+            task_number=159,
+            review_id="e" * 32,
+            delivery=delivery,
+        ),
+    )
+
+    for value in values:
+        assert lck_receipts._agent_view_for_result(value)["issue_profile"] == profile
+        assert value.to_dict()["issue_profile"] == profile
 
 
 def test_review_prepare_failure_receipt_preserves_validation_payload(

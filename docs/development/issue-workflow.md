@@ -78,6 +78,11 @@ readiness 由 deterministic Runner 快照验证（机械事实），
   （§6）→ 正确 Delivery Skill（Codex: `.agents/skills/task-delivery-runner/`；
   Claude: `.claude/skills/task-delivery-runner/`）→ 需要时 deterministic Runner。
 - 不要求维护者提供内部 Skill 名称。
+- Delivery Skill 先读取唯一 canonical `type:*` label，并选择对应的
+  semantic profile；上述 Codex / Claude 路径是同一个 leaf-aware shared
+  Delivery entry，不为 Bug、Documentation、Research 复制 controller。
+- 只有 `type:task` 选择 Task Critical Outcome gate；Bug、Documentation、Research
+  使用各自 profile contract，不要求也不生成假的 Critical Outcome。
 
 ### `审查 PR #N`
 
@@ -111,6 +116,10 @@ intent 无法可靠解析时：**不要猜**。回退到 explicit Skill-name fal
 或进入 Human Gate（§12）。
 
 ## 6. Delivery semantics
+
+四类 leaf Issue 的 routing / profile owner / shared-kernel 边界见
+[`docs/architecture/typed-leaf-workflows.md`](../architecture/typed-leaf-workflows.md)。
+该导航图是 profile ownership delta，不复制本文件的 lifecycle procedure。
 
 The project-level `uv.toml` directs canonical `uv` commands to
 `.workflow.local/uv-cache`. This is local runtime state and the directory is

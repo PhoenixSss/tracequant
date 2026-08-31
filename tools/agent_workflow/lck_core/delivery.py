@@ -19,7 +19,7 @@ from .effects import (
     SetReviewStatusEffect,
 )
 from .eligibility import PhaseDecision, PhaseEligibilityResolver
-from .issue_profiles import LeafIssueKind, resolve_issue_profile
+from .issue_profiles import resolve_issue_profile
 from .models import (
     BASE_BRANCH,
     LCK_SCHEMA_VERSION,
@@ -32,6 +32,7 @@ from .models import (
     _is_clean_current_main,
     _jsonable,
 )
+from .profile_policies import run_profile_delivery_gates
 from .state import (
     LiveStateResolver,
     OperationSnapshotBuilder,
@@ -68,6 +69,7 @@ class DeliveryContext:
             "branch": self.branch,
             "base_sha": self.base_sha,
             "action": self.action,
+            "issue_profile": _jsonable(self.state.issue_profile),
             "task_contract": _jsonable(_task_contract_from_state(self.state)),
             "operation_snapshot": self.operation_snapshot.to_dict(),
             "eligibility": self.eligibility.to_dict(),
@@ -214,6 +216,7 @@ class DeliveryCompletionResult:
             "status": self.status,
             "branch": self.branch,
             "head_sha": self.head_sha,
+            "issue_profile": _jsonable(self.operation_snapshot.state.issue_profile),
             "critical_outcome": _jsonable(self.critical_outcome),
             "validation": _jsonable(self.validation),
             "checks": _jsonable(self.checks),
@@ -339,29 +342,28 @@ class DeliveryCompleter:
             raise LckStopError("current leaf Issue workflow profile is unavailable")
         self.last_documentation_validation = None
         self.last_research_validation = None
-        if profile.issue_kind is LeafIssueKind.DOCUMENTATION:
-            progress.running("documentation-policy")
-            policy = self.documentation_validation.run(base_sha)
-            self.last_documentation_validation = policy
-        elif profile.issue_kind is LeafIssueKind.RESEARCH:
-            progress.running("research-artifact-policy")
-            try:
-                policy = self.research_validation.run(
-                    base_sha,
-                    head_sha=head_sha,
-                    include_index=include_index,
-                )
-            except LckStopError:
-                self.last_research_validation = getattr(
-                    self.research_validation, "last_result", None
-                )
-                raise
-            self.last_research_validation = policy
-        if profile.requires_critical_outcome:
-            progress.running("critical-outcome")
-            return self._run_critical_outcome(state, progress=progress)
-        self.last_critical_outcome = None
-        return None
+        try:
+            results = run_profile_delivery_gates(
+                profile,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                include_index=include_index,
+                progress=progress,
+                documentation_validation=self.documentation_validation,
+                research_validation=self.research_validation,
+                critical_outcome=lambda: self._run_critical_outcome(
+                    state, progress=progress
+                ),
+            )
+        except LckStopError:
+            self.last_research_validation = getattr(
+                self.research_validation, "last_result", None
+            )
+            raise
+        self.last_documentation_validation = results.documentation_validation
+        self.last_research_validation = results.research_validation
+        self.last_critical_outcome = results.critical_outcome
+        return results.critical_outcome
 
     def _has_task_diff(self, base_sha: str) -> bool:
         result = self.resolver.runner.run(

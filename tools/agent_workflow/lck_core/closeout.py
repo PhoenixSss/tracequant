@@ -15,7 +15,7 @@ from workflow_common import WorkflowToolError, is_sha, read_json_text, safe_text
 from workflow_evidence import CANONICAL_PROJECT_NUMBER, _find_project_status
 
 from .eligibility import PhaseEligibilityResolver
-from .issue_profiles import LeafIssueKind, resolve_issue_profile
+from .issue_profiles import resolve_issue_profile
 from .models import (
     BASE_BRANCH,
     LCK_SCHEMA_VERSION,
@@ -24,11 +24,16 @@ from .models import (
     LiveState,
     OperationSnapshot,
     Phase,
+    _jsonable,
     _merge_commit_sha,
     _pr_base_sha,
     _pr_head_sha,
     _remote_refs,
     branch_matches_profile,
+)
+from .profile_policies import (
+    profile_cleanup_label,
+    profile_research_outcome_supported,
 )
 from .review_workspace import ReviewInvocationStore, _identity_from_mapping
 from .state import LiveStateResolver, OperationSnapshotBuilder
@@ -471,7 +476,7 @@ class ResearchOutcomeEffect:
         merged_pr: Mapping[str, Any],
     ) -> EffectReceipt:
         profile = resolve_issue_profile(state.issue).profile
-        if profile is None or profile.issue_kind is not LeafIssueKind.RESEARCH:
+        if profile is None or not profile_research_outcome_supported(profile):
             return EffectReceipt(
                 effect="set_research_outcome",
                 action="not-applicable",
@@ -561,12 +566,7 @@ class CleanupTaskRefsEffect:
             or not branch_matches_profile(branch, state.task_number, profile)
         ):
             label = (
-                "Bug"
-                if profile is not None and profile.issue_kind is LeafIssueKind.BUG
-                else "Documentation"
-                if profile is not None
-                and profile.issue_kind is LeafIssueKind.DOCUMENTATION
-                else "Task"
+                profile_cleanup_label(profile) if profile is not None else "leaf Issue"
             )
             raise LckStopError(f"Cleanup target is not the verified {label} branch")
         worktrees = self.resolver.runner.run(
@@ -715,6 +715,7 @@ class CloseoutResult:
             "operation": "closeout",
             "task_number": self.task_number,
             "status": self.status,
+            "issue_profile": _jsonable(self.operation_snapshot.state.issue_profile),
             "business_delivery": self.business_delivery,
             "cleanup": self.cleanup,
             "research_outcome": self.research_outcome,
@@ -889,7 +890,7 @@ class CloseoutCompleter:
 
         profile = resolve_issue_profile(state.issue).profile
         research_outcome: EffectReceipt | None = None
-        if profile is not None and profile.issue_kind is LeafIssueKind.RESEARCH:
+        if profile is not None and profile_research_outcome_supported(profile):
             if main.action in {"synchronized", "already-synced"}:
                 research_outcome = self.research_outcome_effect.execute(
                     state,

@@ -25,7 +25,6 @@ from workflow_evidence import (
 )
 
 from .issue_profiles import (
-    LeafIssueKind,
     LeafIssueWorkflowProfile,
     canonical_branch_for_profile,
     resolve_issue_profile,
@@ -349,40 +348,37 @@ class LiveStateResolver:
             reasons.append("Task relationship facts unavailable")
         branch_warning_count = len(warnings)
         branch_profile = profile_resolution.profile
-        if profile.include_local_task_branches and profile.include_remote_task_branches:
+        branch_match_profile = (
+            None
+            if branch_profile is None or branch_profile.allow_legacy_branch_aliases
+            else branch_profile
+        )
+        if branch_match_profile is None:
+            # Keep the legacy call shape for the canonical Task path.  Apart
+            # from preserving compatibility with resolver doubles, this makes
+            # the shared branch inventory helper's default behavior explicit.
             if (
-                branch_profile is None
-                or branch_profile.issue_kind is LeafIssueKind.TASK
+                profile.include_local_task_branches
+                and profile.include_remote_task_branches
             ):
                 local_branches, remote_branches, remote_available = self._task_branches(
-                    task_number,
-                    warnings,
+                    task_number, warnings
                 )
             else:
                 local_branches, remote_branches, remote_available = self._task_branches(
                     task_number,
                     warnings,
-                    profile=branch_profile,
+                    include_local=profile.include_local_task_branches,
+                    include_remote=profile.include_remote_task_branches,
                 )
         else:
-            if (
-                branch_profile is not None
-                and branch_profile.issue_kind is not LeafIssueKind.TASK
-            ):
-                local_branches, remote_branches, remote_available = self._task_branches(
-                    task_number,
-                    warnings,
-                    include_local=profile.include_local_task_branches,
-                    include_remote=profile.include_remote_task_branches,
-                    profile=branch_profile,
-                )
-            else:
-                local_branches, remote_branches, remote_available = self._task_branches(
-                    task_number,
-                    warnings,
-                    include_local=profile.include_local_task_branches,
-                    include_remote=profile.include_remote_task_branches,
-                )
+            local_branches, remote_branches, remote_available = self._task_branches(
+                task_number,
+                warnings,
+                include_local=profile.include_local_task_branches,
+                include_remote=profile.include_remote_task_branches,
+                profile=branch_match_profile,
+            )
         if len(warnings) > branch_warning_count:
             reasons.append("Task branch inventory contains unavailable facts")
         if not remote_available:

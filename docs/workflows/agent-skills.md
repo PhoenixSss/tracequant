@@ -35,6 +35,8 @@ Claude Code 对应 Skill：
 - Independent Review 规范：`docs/development/pr-review.md`
   （fresh session、head lock、verdict semantics、remediation handoff）。
 - Issue specification authoring：`docs/development/issue-authoring.md`。
+- Typed leaf routing / profile ownership：
+  `docs/architecture/typed-leaf-workflows.md`。
 - 自然语言入口（无需维护者提供内部 Skill 名称）：
 
 ```text

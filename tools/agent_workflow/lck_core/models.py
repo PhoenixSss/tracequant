@@ -345,7 +345,7 @@ def branch_matches_profile(
     never be mistaken for a Task branch (or vice versa).
     """
 
-    if profile is TASK_PROFILE:
+    if profile.allow_legacy_branch_aliases:
         return _branch_matches_task(branch, issue_number)
     prefix = f"{profile.branch_namespace}{issue_number}-"
     return bool(re.fullmatch(re.escape(prefix) + r"[a-z0-9][a-z0-9-]*", branch))
