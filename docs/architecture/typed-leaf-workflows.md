@@ -46,7 +46,10 @@ traceable through their real typed Issues:
 - Documentation: [Issue #212](https://github.com/PhoenixSss/tracequant/issues/212),
   which completed the repository-backed Documentation lifecycle.
 - Research: [Issue #191](https://github.com/PhoenixSss/tracequant/issues/191),
-  which completed the repository-backed Research lifecycle.
+  merged as [PR #216](https://github.com/PhoenixSss/tracequant/pull/216) with the
+  versioned artifact
+  [`docs/research/binance-usdm-public-history-source-contract.md`](../research/binance-usdm-public-history-source-contract.md);
+  its canonical Project `Research Outcome` is `ARCHITECTURE DECISION`.
 - Bug: [Issue #201](https://github.com/PhoenixSss/tracequant/issues/201),
   which completed the heading-level Critical Outcome Bug repair and regression
   lifecycle.

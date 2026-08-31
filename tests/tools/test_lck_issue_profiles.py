@@ -26,6 +26,7 @@ from lck_test_support import (  # noqa: E402
     _issue,
     _relationships,
     _resolver,
+    _review_state,
 )
 
 
@@ -154,3 +155,12 @@ def test_task_profile_uses_labels_without_issue_type_fallback(
     assert state.issue_profile is not None
     assert state.issue_profile["profile"]["issue_kind"] == "task"
     assert state.target_branch == "task/159-lck-core-live-state-resolution"
+
+
+def test_remediation_no_change_exposes_only_close_capability() -> None:
+    decision = lck_eligibility.PhaseEligibilityResolver().resolve(
+        _review_state(clean=True), Phase.REMEDIATION_NO_CHANGE
+    )
+
+    assert decision.eligible
+    assert decision.capabilities == ("close_no_change_remediation",)

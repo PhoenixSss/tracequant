@@ -238,18 +238,19 @@ class PhaseEligibilityResolver:
                     )
                 if phase is Phase.REMEDIATION_NO_CHANGE:
                     capabilities = ("close_no_change_remediation",)
-                candidate_capability = (
-                    profile_resolution.profile.candidate_capability
-                    if profile_resolution.profile is not None
-                    else "verify_critical_outcome"
-                )
-                capabilities = (
-                    candidate_capability,
-                    "run_formal_validation",
-                    "commit_current_tree",
-                    "ensure_remote_branch",
-                    "reuse_open_pr",
-                )
+                else:
+                    candidate_capability = (
+                        profile_resolution.profile.candidate_capability
+                        if profile_resolution.profile is not None
+                        else "verify_critical_outcome"
+                    )
+                    capabilities = (
+                        candidate_capability,
+                        "run_formal_validation",
+                        "commit_current_tree",
+                        "ensure_remote_branch",
+                        "reuse_open_pr",
+                    )
         else:
             if state.merged is not True:
                 reasons.append("Closeout requires one current merged PR")
