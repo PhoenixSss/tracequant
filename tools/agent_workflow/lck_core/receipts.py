@@ -199,6 +199,18 @@ def _delivery_pr_agent_view(effects: Any) -> dict[str, Any] | None:
     return None
 
 
+def _issue_profile_agent_view(value: Any) -> Any:
+    """Return the bounded profile selected by the operation's live snapshot."""
+    if isinstance(value, ReviewContext):
+        return _jsonable(value.issue_profile)
+    if isinstance(value, ReviewCompletionResult):
+        return _jsonable(value.issue_profile)
+    snapshot = getattr(value, "operation_snapshot", None)
+    if isinstance(snapshot, OperationSnapshot):
+        return _jsonable(snapshot.state.issue_profile)
+    return None
+
+
 def _agent_view_for_result(value: Any) -> dict[str, Any]:
     """Convert one internal LCK result into the bounded Agent-facing view."""
     if isinstance(value, LiveState):
@@ -210,6 +222,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "operation": "delivery-prepare",
             "task_number": value.task_number,
             "repository": value.repository,
+            "issue_profile": _issue_profile_agent_view(value),
             "status": "READY_FOR_DELIVERY",
             "branch": value.branch,
             "base_sha": value.base_sha,
@@ -230,6 +243,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "status": "READY_FOR_SEMANTIC_REVIEW",
             "task_number": value.identity.task_number,
             "review_id": value.review_id,
+            "issue_profile": _issue_profile_agent_view(value),
             "task_contract": _jsonable(value.task_contract),
             "review_target": value.identity.to_dict(),
             "checks": _checks_agent_view(value.checks),
@@ -250,6 +264,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "review_id": value.review_id,
             "verdict": value.verdict,
             "status": value.status,
+            "issue_profile": _issue_profile_agent_view(value),
             "review_target": value.identity.to_dict(),
             "human_boundary": (
                 "STOP; run deterministic Merge Preflight before any manual merge"
@@ -269,6 +284,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "kind": "lck-agent-view",
             "operation": "delivery-complete",
             "task_number": value.task_number,
+            "issue_profile": _issue_profile_agent_view(value),
             "status": value.status,
             "branch": value.branch,
             "base_sha": base_sha,
@@ -288,6 +304,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "kind": "lck-agent-view",
             "operation": "merge-preflight",
             "task_number": value.task_number,
+            "issue_profile": _issue_profile_agent_view(value),
             "status": value.status,
             "pr": _pr_agent_view(value.pr),
             "review": {
@@ -311,6 +328,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "kind": "lck-agent-view",
             "operation": "closeout",
             "task_number": value.task_number,
+            "issue_profile": _issue_profile_agent_view(value),
             "status": value.status,
             "business_delivery": value.business_delivery,
             "cleanup": value.cleanup,
@@ -333,6 +351,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "operation": "remediation-prepare",
             "task_number": value.task_number,
             "review_id": value.review_id,
+            "issue_profile": _issue_profile_agent_view(value),
             "status": "READY_FOR_REMEDIATION",
             "action": value.action,
             "findings": value.findings,
@@ -353,6 +372,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "operation": "remediation-no-change",
             "task_number": value.task_number,
             "review_id": value.review_id,
+            "issue_profile": _issue_profile_agent_view(value),
             "status": "NO_IMPLEMENTATION_CHANGE",
             "head_sha": value.head_sha,
             "pr_number": value.pr_number,
@@ -373,6 +393,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "operation": "remediation-complete",
             "task_number": value.task_number,
             "review_id": value.review_id,
+            "issue_profile": _issue_profile_agent_view(delivery),
             "status": "READY_FOR_NEW_REVIEW",
             "head_sha": delivery.head_sha,
             "critical_outcome": _critical_outcome_agent_view(delivery.critical_outcome),
@@ -492,6 +513,11 @@ def _write_failure_receipt(
         "kind": "lck-agent-view",
         "operation": operation,
         "task_number": task_number,
+        "issue_profile": _jsonable(
+            snapshot.state.issue_profile
+            if isinstance(snapshot, OperationSnapshot)
+            else None
+        ),
         **detail,
         "next_action": next_action,
     }

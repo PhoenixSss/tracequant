@@ -56,6 +56,7 @@ class RemediationContext:
             "task_number": self.task_number,
             "review_id": self.review_id,
             "action": self.action,
+            "issue_profile": _jsonable(self.state.issue_profile),
             "findings": self.findings,
             "findings_source": self.findings_source,
             "task_contract": _jsonable(self.task_contract),
@@ -304,6 +305,7 @@ class RemediationNoChangeResult:
             "task_number": self.task_number,
             "review_id": self.review_id,
             "status": "NO_IMPLEMENTATION_CHANGE",
+            "issue_profile": _jsonable(self.operation_snapshot.state.issue_profile),
             "head_sha": self.head_sha,
             "pr_number": self.pr_number,
             "base_sha": self.base_sha,
@@ -508,6 +510,9 @@ class RemediationCompletionResult:
             "review_id": self.review_id,
             "status": "READY_FOR_NEW_REVIEW",
             "head_sha": self.delivery.head_sha,
+            "issue_profile": _jsonable(
+                self.delivery.operation_snapshot.state.issue_profile
+            ),
             "critical_outcome": payload["critical_outcome"],
             "validation": payload["validation"],
             "checks": payload["checks"],

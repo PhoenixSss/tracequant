@@ -64,6 +64,7 @@ class ReviewContext:
     checks: Mapping[str, Any]
     validation: Mapping[str, Any]
     review_root: Path
+    issue_profile: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -71,6 +72,7 @@ class ReviewContext:
             "operation": "review-prepare",
             "status": "READY_FOR_SEMANTIC_REVIEW",
             "review_id": self.review_id,
+            "issue_profile": _jsonable(self.issue_profile),
             "task_contract": _jsonable(self.task_contract),
             "review_target": self.identity.to_dict(),
             "checks": _jsonable(self.checks),
@@ -309,6 +311,7 @@ class ReviewPreparer:
                 checks=checks,
                 validation=validation,
                 review_root=review_root,
+                issue_profile=state.issue_profile,
             )
             invocation.release_lock()
         except BaseException as exc:
@@ -337,6 +340,7 @@ class ReviewCompletionResult:
     status: str
     identity: ReviewIdentity
     record_path: Path
+    issue_profile: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         human_boundary = (
@@ -351,6 +355,7 @@ class ReviewCompletionResult:
             "task_number": self.task_number,
             "verdict": self.verdict,
             "status": self.status,
+            "issue_profile": _jsonable(self.issue_profile),
             "review_target": self.identity.to_dict(),
             "research_artifact": _jsonable(self.identity.research_artifact),
             "record_path": str(self.record_path),
@@ -594,6 +599,7 @@ class ReviewCompleter:
                 status=cast(str, record["status"]),
                 identity=current_identity,
                 record_path=record_path,
+                issue_profile=completion_snapshot.state.issue_profile,
             )
         except ReviewStaleError:
             # Stale is a formal terminal outcome for this prepared target.  It
@@ -699,6 +705,11 @@ class MergePreflightResult:
             "operation": "merge-preflight",
             "task_number": self.task_number,
             "status": self.status,
+            "issue_profile": _jsonable(
+                self.operation_snapshot.state.issue_profile
+                if self.operation_snapshot is not None
+                else None
+            ),
             "pr": _jsonable(self.pr),
             "review": _jsonable(self.review),
             "checks": _jsonable(self.checks),

@@ -1,11 +1,14 @@
 ---
 name: task-delivery-runner
-description: Deliver one maintainer-specified existing GitHub Task through LCK, including explicitly requested remediation after a failed Independent Review. LCK owns workspace preparation, live identity, Critical Outcome, formal validation, commit, push, PR reuse/create as phase-appropriate, checks, and lifecycle boundaries. Review, merge, closeout, and Feature completion remain separate.
+description: Deliver one maintainer-specified existing GitHub leaf Issue through LCK, including explicitly requested remediation after a failed Independent Review. LCK owns workspace preparation, live identity, profile-specific validation, commit, push, PR reuse/create as phase-appropriate, checks, and lifecycle boundaries. Review, merge, closeout, and Feature completion remain separate.
 ---
 
-# Task delivery runner
+# Leaf delivery runner
 
-Use this Skill for one existing Task explicitly named by the maintainer.
+Use this shared Skill for one existing leaf Issue explicitly named by the maintainer.
+The canonical `type:*` label selects the semantic profile; this Skill does not
+maintain a second type allowlist or require the maintainer to name a provider-
+specific Skill.
 
 Initial Delivery is controlled by **LCK**. Codex / Claude owns semantic work;
 LCK owns deterministic lifecycle mechanics. A successful initial Delivery ends
@@ -18,14 +21,14 @@ explicit Human request that identifies a failed LCK `review_id`.
 
 ```text
 请按 task-delivery-runner 完整处理
-[Task] <当前完整标题> #<Task编号>，
+[Task|Bug|Documentation|Research] <当前完整标题> #<Issue编号>，
 直到 PR 准备好接受独立审查。
 ```
 
 For remediation after an Independent Review FAIL:
 
 ```text
-请按 task-delivery-runner 对 Task #<Task编号> 显式执行 remediation。
+请按 task-delivery-runner 对 leaf Issue #<Issue编号> 显式执行 remediation。
 Failed Review ID: <REVIEW_ID>
 ```
 
@@ -65,7 +68,13 @@ Read applicable `AGENTS.md` and
 Shared lifecycle semantics are owned by `docs/development/issue-workflow.md`.
 Read only the sections needed by the current invocation.
 
-The current Task body is the business specification. Do not default to reading comments, complete Parent/Epic bodies, dependency bodies, templates, workflows, validation sources, or linked docs/ADRs. Expand only when the current Task explicitly references them, the specification is missing or ambiguous, a dependency affects implementation, a safety/architecture constraint applies, or verification requires it.
+The current Task body is the business specification for a Task; for Bug,
+Documentation, or Research, the current leaf Issue body is the business
+specification. Do not default to reading comments, complete Parent/Epic bodies,
+dependency bodies, templates, workflows, validation sources, or linked docs/ADRs.
+Expand only when the current leaf Issue explicitly references them, the
+specification is missing or ambiguous, a dependency affects implementation, a
+safety/architecture constraint applies, or verification requires it.
 Verifying these mechanical facts does not require reading the full text of any source into the model context. Read the minimum relevant source/section, evaluate sufficiency, and expand further only if still insufficient.
 
 ## Execution route contract
@@ -86,7 +95,8 @@ equivalent failure before using its approved route. If a sandbox-first command
 fails, preserve the command-execution policy's classification and exact-context
 retry rules; a real command failure never justifies a broader-permission retry.
 
-It must contain a valid `Critical Outcome` contract with:
+It must contain the applicable profile contract. For a `type:task` Issue, that
+profile contract must include a valid `Critical Outcome` with:
 
 ```text
 Caller: ...
@@ -96,7 +106,9 @@ Verification test: tests/.../test_*.py::test_*
 ```
 
 The verification target is data, not an arbitrary command. LCK executes only
-the bounded pytest verifier defined by the repository runtime.
+the bounded pytest verifier defined by the repository runtime. Bug,
+Documentation, and Research Issues use their profile-specific contracts and do
+not receive a fabricated Critical Outcome.
 
 ## Long-operation wait and progress contract
 
@@ -118,7 +130,7 @@ the only machine-parseable lifecycle result.
 
 For **initial Delivery**, the Agent / Skill MAY:
 
-- read the current Task and required scoped context;
+- read the current leaf Issue and required scoped context;
 - understand, design, implement, diagnose, and explain the change;
 - edit files within approved Task scope;
 - run targeted validation while developing;
@@ -127,7 +139,7 @@ For **initial Delivery**, the Agent / Skill MAY:
 
 For **initial Delivery**, the Agent / Skill MUST NOT directly:
 
-- choose or create the Task branch;
+- choose or create the profile-owned Issue branch;
 - stage or commit the final candidate;
 - choose a remote/refspec or push;
 - choose a PR number or create/reuse/update the PR mechanically;
@@ -143,23 +155,26 @@ maintainer or implementation action.
 
 ### 1. LCK Delivery Prepare
 
-The first lifecycle action is:
+The first lifecycle action for every supported leaf profile is:
 
 ```bash
 uv run --frozen python tools/agent_workflow/lck.py delivery prepare <TASK>
 ```
 
 Proceed only when LCK returns a resolved Delivery context. LCK reacquires live
-Git/GitHub facts, verifies Task identity/readiness/blockers, and creates,
-selects, or restores the one correct Task workspace.
+Git/GitHub facts, resolves the canonical leaf profile, verifies readiness and
+blockers, and creates, selects, or restores the one correct profile-owned
+workspace.
 
 Do not pass branch, expected SHA, base SHA, PR number, remote, or refspec.
 
 ### 2. Semantic implementation
 
-Read the current Task body and implement the smallest complete change that
-satisfies Objective, Requirements, Critical Outcome, Acceptance Criteria, and
-explicit scope boundaries.
+Read the current leaf Issue body and implement the smallest complete change
+that satisfies its profile contract, Objective, Requirements, Acceptance
+Criteria, and explicit scope boundaries. Only a `type:task` candidate is
+required to satisfy a Critical Outcome; the other profiles use their typed
+policy gates.
 
 #### Development validation boundary
 
@@ -168,7 +183,7 @@ authorization. Before LCK Delivery Complete, choose the smallest check that
 matches the changed surface: a named targeted profile, a focused pytest node,
 or a scoped static check. Rerun the relevant target after a change when useful.
 
-For a normal Task, do not proactively run a full `current-ci-equivalent`, full
+For a normal leaf Issue, do not proactively run a full `current-ci-equivalent`, full
 `workflow-delivery`, or equivalent full-repository validation before LCK
 Delivery Complete merely as a precaution or to "confirm" the candidate. The
 formal full Delivery validation is intentionally reserved for LCK Delivery
@@ -177,7 +192,7 @@ Complete.
 A broader or full validation run is allowed only when concrete evidence requires
 diagnostic expansion, such as a targeted failure indicating a cross-module
 regression, an unresolved concern tied to observed behavior, or an explicit
-maintainer request. Task importance, broad scope, or a global-infrastructure
+maintainer request. Issue importance, broad scope, or a global-infrastructure
 classification alone is not a diagnostic trigger. Record and treat any broader
 run as diagnostic information only: it does not replace LCK's Critical Outcome
 verifier or formal validation, authorize commit/push/PR effects, or advance
@@ -196,7 +211,7 @@ validation performed for diagnosis remains non-authoritative; LCK Delivery
 Complete must still run its own Critical Outcome and formal Delivery validation
 and bind the exact validated tree before commit.
 
-Once change-relevant validation passes, known Task Contract gaps are closed,
+Once change-relevant validation passes, known profile contract gaps are closed,
 and no unresolved failure, finding, or concrete diagnostic concern remains,
 the candidate is **targeted-ready**. Proceed to LCK Delivery Complete. Do not
 insert precautionary repository-wide pytest/static validation, a second broad
@@ -207,7 +222,7 @@ non-authoritative.
 
 Before completion, inspect the complete workspace diff semantically. Remove or
 repair unrelated, generated, secret-bearing, or prohibited changes. The
-workspace presented to LCK is the candidate Task tree.
+workspace presented to LCK is the candidate leaf-Issue tree.
 
 ### 3. LCK Delivery Complete
 
@@ -225,11 +240,11 @@ Do not supply branch, remote, SHA, base SHA, PR number, or refspec.
 Within one bounded invocation, LCK performs the deterministic sequence:
 
 ```text
-reacquire live Task/Git/GitHub facts
+reacquire live Task/Git/GitHub facts and the canonical leaf profile
 → validate Delivery Complete eligibility
-→ parse current Task Critical Outcome
+→ parse the Task Critical Outcome only when the selected profile requires it
 → stage current candidate tree
-→ run Critical Outcome verifier
+→ run the selected profile's delivery gates
 → run formal Delivery validation
 → prove validated staged tree is unchanged
 → commit_current_tree
@@ -247,7 +262,7 @@ If the invocation resumes after an earlier partial side effect, LCK does not
 trust a previous receipt as authority. It reacquires current facts and reruns
 the applicable Critical Outcome / formal validation gates before continuing.
 
-`Critical Outcome FAIL`, formal validation failure, remote divergence,
+`Critical Outcome FAIL` when applicable, profile validation failure, remote divergence,
 ambiguous PR identity, stale lifecycle facts, or failed postconditions are
 terminal for that invocation. Pending, failed, missing, or otherwise unresolved
 PR checks may be reported as a non-authoritative observation, but do not veto
@@ -259,7 +274,7 @@ itself into repair.
 
 On `READY_FOR_REVIEW`, report:
 
-- canonical Task and PR URLs returned by current facts;
+- canonical Issue and PR URLs returned by current facts;
 - semantic changed-file summary;
 - Critical Outcome result;
 - formal Delivery validation result;
@@ -294,7 +309,7 @@ Proceed only on `READY_FOR_REMEDIATION`. With the normal local-record path, LCK
 verifies the failed Review audit record and reads its findings. For an explicit
 cross-workspace/runtime handoff where that ignored audit record does not exist,
 `--findings-file` supplies only the already-completed semantic findings. In both cases LCK
-reacquires the current OPEN non-Draft PR/head/base and Task branch and selects/restores
+reacquires the current OPEN non-Draft PR/head/base and profile-owned Issue branch and selects/restores
 the current implementation workspace.
 
 Do not pass expected head/base/PR identity. If current live identity is ambiguous,
@@ -341,7 +356,7 @@ uv run --frozen python tools/agent_workflow/lck.py remediation no-change <TASK> 
 ```
 
 Proceed only on `NO_IMPLEMENTATION_CHANGE`. LCK reacquires the current OPEN PR/head/base,
-requires the selected Task workspace to be clean and still exactly match the prepared
+requires the selected leaf-Issue workspace to be clean and still exactly match the prepared
 Remediation target, writes a formal no-change receipt under `.workflow.local/lck/`, and
 releases the prepared Remediation session. It does **not** commit, push, create a new head,
 set `fresh-review-required`, or claim that deferred provider/cross-runtime acceptance is
@@ -364,7 +379,7 @@ uv run --frozen python tools/agent_workflow/lck.py remediation complete <TASK> \
   --risks "<risks or limitations>"
 ```
 
-LCK reuses the Task-2 Delivery effects for Critical Outcome, formal validation, exact
+LCK reuses the shared Delivery effects for profile-specific gates, formal validation, exact
 validated-tree commit, remote synchronization, non-blocking check observation, and final
 local/remote/PR head verification. Unlike Initial Delivery, Remediation must reuse existing OPEN PR
 state; it never creates a replacement PR.
@@ -394,7 +409,7 @@ Distinguish deterministic STOP from tool failure:
 
 - valid LCK / Runner STOP → stop; no alternate write route;
 - missing/unparseable tool result → at most one identical bounded retry;
-- semantic Task ambiguity or requested scope expansion → Human Gate;
+- semantic leaf-Issue ambiguity or requested scope expansion → Human Gate;
 - remote divergence or identity ambiguity → stop; never force push or guess;
 - `partial` / `unknown` evidence remains `partial` / `unknown` in reporting.
 
