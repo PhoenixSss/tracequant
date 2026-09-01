@@ -1452,7 +1452,14 @@ def _formal_blockers_gate(
                 unknown_state += 1
                 continue
             profile = profile_resolution.profile
-            contract_check = validate_profile_contract(profile, item)
+            # Task Critical Outcome is a leaf-entry contract, not a dependency
+            # blocker policy. Its dependency semantics remain shared until the
+            # typed blocker migration owned by the follow-up blocker Task.
+            contract_check = (
+                validate_profile_contract(profile, item)
+                if profile.contract_policy is not None
+                else None
+            )
             if contract_check is not None and not contract_check.valid:
                 if contract_check.policy == "bug":
                     bug_contract_unknown += 1

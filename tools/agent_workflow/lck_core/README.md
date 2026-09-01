@@ -32,6 +32,13 @@ module mutation to bypass this direction.
 Bug, Documentation, Research, and Task-specific candidate hooks. Lifecycle phase
 modules must not add another type-driven dispatch table.
 
+The same module owns the immutable production `ProfilePolicyRegistry`, the
+injectable `LeafIssuePolicy` seam, and the frozen four-stage
+`ProfileEvidenceEnvelope` (`contract`, `candidate`, `review`, `completion`).
+Policy blockers and stage payloads are validated by the selected policy before
+the shared kernel transports or records them; the canonical leaf contract is
+referenced by identity/digest rather than copied into the envelope.
+
 When diagnosing a lifecycle issue, read this map first and inspect the owner module
 plus at most its direct companion modules before broad repository searches.
 
@@ -48,6 +55,7 @@ The former mixed `tests/tools/test_lck.py` suite is responsibility-owned too:
 - `test_lck_receipts.py` — Agent View / Audit Receipt and failure evidence.
 - `test_lck_closeout.py` plus `test_lck_closeout_additional.py` — Closeout.
 - `test_lck_delivery.py` — Delivery completion and bounded effects.
+- `test_lck_profile_architecture.py` — injectable policy and evidence envelope.
 - `test_lck_structure.py` — facade/module dependency guardrails.
 
 `tests/tools/test_lck.py` intentionally retains only the long-lived Critical Outcome
