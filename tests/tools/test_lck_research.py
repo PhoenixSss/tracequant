@@ -242,7 +242,11 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
                                                         },
                                                     },
                                                     "fieldValueByName": {
-                                                        "name": "IMPLEMENT"
+                                                        "name": (
+                                                            "IMPLEMENT"
+                                                            if self.project_writes
+                                                            else "DO NOT IMPLEMENT"
+                                                        )
                                                     },
                                                 }
                                             ],
@@ -755,7 +759,7 @@ def test_research_outcome_postcondition_paginates_past_first_page() -> None:
     assert "userAfter=cursor-page-1" in runner.calls[1]
 
 
-def test_research_outcome_effect_uses_normalized_state_field_for_idempotency() -> None:
+def test_research_outcome_effect_uses_canonical_read_for_idempotency() -> None:
     class Runner:
         def __init__(self) -> None:
             self.calls: list[tuple[str, ...]] = []
@@ -830,7 +834,7 @@ def test_research_outcome_effect_uses_normalized_state_field_for_idempotency() -
         {
             "repository": "owner/repo",
             "task_number": 199,
-            "issue": {"research_outcome": "IMPLEMENT"},
+            "issue": {"research_outcome": "DO NOT IMPLEMENT"},
         },
     )()
 
@@ -842,6 +846,104 @@ def test_research_outcome_effect_uses_normalized_state_field_for_idempotency() -
 
     assert receipt.action == "already-set"
     assert len(runner.calls) == 1
+
+
+def test_research_outcome_effect_writes_when_only_noncanonical_state_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Runner:
+        def __init__(self) -> None:
+            self.queries = 0
+
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            assert command[:3] == ("gh", "api", "graphql")
+            self.queries += 1
+            outcome = "DO NOT IMPLEMENT" if self.queries == 1 else "IMPLEMENT"
+            return CommandResult(
+                command_id,
+                command,
+                0,
+                json.dumps(
+                    {
+                        "data": {
+                            "user": {
+                                "projectV2": {
+                                    "items": {
+                                        "nodes": [
+                                            {
+                                                "content": {
+                                                    "number": 199,
+                                                    "repository": {
+                                                        "nameWithOwner": "owner/repo"
+                                                    },
+                                                },
+                                                "fieldValueByName": {"name": outcome},
+                                            }
+                                        ],
+                                        "pageInfo": {
+                                            "hasNextPage": False,
+                                            "endCursor": None,
+                                        },
+                                    }
+                                }
+                            },
+                            "organization": None,
+                        }
+                    }
+                ),
+                "",
+            )
+
+    descriptor = ProfileEffectDescriptor(
+        effect_kind="project.single_select.set.v1",
+        schema_version=1,
+        parameters={
+            "repository": "owner/repo",
+            "task_number": 199,
+            "project_number": 1,
+            "field": "Research Outcome",
+            "value": "IMPLEMENT",
+        },
+        postcondition={
+            "kind": "project.single_select.equals",
+            "repository": "owner/repo",
+            "task_number": 199,
+            "project_number": 1,
+            "field": "Research Outcome",
+            "value": "IMPLEMENT",
+        },
+        receipt={"outcome": "IMPLEMENT"},
+    )
+    writes: list[tuple[str, int, int, str, str]] = []
+    monkeypatch.setattr(
+        lck_effects,
+        "set_project_status_with_runner",
+        lambda _runner, repository, task_number, *, project_number, field, value: (
+            writes.append((repository, task_number, project_number, field, value))
+        ),
+    )
+    runner = Runner()
+    resolver = type("Resolver", (), {"runner": runner})()
+    state = type(
+        "State",
+        (),
+        {
+            "repository": "owner/repo",
+            "task_number": 199,
+            "issue": {"research_outcome": "IMPLEMENT"},
+        },
+    )()
+
+    receipt = lck_effects.DEFAULT_EFFECT_EXECUTOR_REGISTRY.execute(
+        descriptor,
+        resolver=cast(Any, resolver),
+        state=cast(Any, state),
+    )
+
+    assert receipt.action == "updated"
+    assert writes == [("owner/repo", 199, 1, "Research Outcome", "IMPLEMENT")]
+    assert runner.queries == 2
 
 
 def test_research_outcome_pending_receipt_preserves_descriptor_metadata() -> None:

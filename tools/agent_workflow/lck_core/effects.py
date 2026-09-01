@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -276,15 +275,14 @@ class ProjectSingleSelectEffectExecutor:
             raise LckStopError(
                 "project field effect identity does not match live state"
             )
-        current = None
-        if isinstance(state.issue, Mapping):
-            current = state.issue.get(params["field"])
-            if current is None:
-                normalized_field = re.sub(
-                    r"[^a-z0-9]+", "_", params["field"].strip().lower()
-                ).strip("_")
-                current = state.issue.get(normalized_field)
-        action = "already-set" if current == params["value"] else "updated"
+        observed = cls._query(
+            resolver,
+            repository=params["repository"],
+            project_number=params["project_number"],
+            task_number=params["task_number"],
+            field=params["field"],
+        )
+        action = "already-set" if observed == params["value"] else "updated"
         if action == "updated":
             try:
                 set_project_status_with_runner(
@@ -297,13 +295,13 @@ class ProjectSingleSelectEffectExecutor:
                 )
             except WorkflowToolError as exc:
                 raise LckStopError(f"project field effect write failed: {exc}") from exc
-        observed = cls._query(
-            resolver,
-            repository=params["repository"],
-            project_number=params["project_number"],
-            task_number=params["task_number"],
-            field=params["field"],
-        )
+            observed = cls._query(
+                resolver,
+                repository=params["repository"],
+                project_number=params["project_number"],
+                task_number=params["task_number"],
+                field=params["field"],
+            )
         if observed != params["value"]:
             return _pending_effect(
                 cls.effect_kind,
