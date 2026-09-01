@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, cast
 
 from workflow_common import ProgressReporter, is_sha, safe_text
-from workflow_evidence import _formal_blockers_gate
 
 from .eligibility import PhaseEligibilityResolver
 from .issue_profiles import resolve_leaf_issue_profile
@@ -48,6 +47,7 @@ from .review_workspace import (
 from .state import (
     LiveStateResolver,
     OperationSnapshotBuilder,
+    _policy_issue_from_state,
     _task_contract_from_state,
 )
 from .validation import (
@@ -257,19 +257,19 @@ class ReviewPreparer:
                 profile_resolver=self.profile_resolver,
             )
             profile, _policy = resolve_issue_policy(
-                state.issue or {},
+                _policy_issue_from_state(state),
                 registry=self.policy_registry,
                 profile_resolver=self.profile_resolver or resolve_leaf_issue_profile,
             )
             review_stage = validate_profile_review(
                 profile,
-                state.issue or {},
+                _policy_issue_from_state(state),
                 {"identity": identity.to_dict(), "verdict": "PREPARE"},
                 registry=self.policy_registry,
                 context=PolicyContext(
                     profile=profile,
                     phase="review",
-                    issue=state.issue,
+                    issue=_policy_issue_from_state(state),
                     repo_root=review_root,
                     runner=self.resolver.runner,
                     review_identity=identity.to_dict(),
@@ -543,7 +543,7 @@ class ReviewCompleter:
             _assert_review_applicable(reviewed_identity, current_identity)
             try:
                 profile, _policy = resolve_issue_policy(
-                    state.issue or {},
+                    _policy_issue_from_state(state),
                     registry=self.policy_registry,
                     profile_resolver=self.profile_resolver
                     or resolve_leaf_issue_profile,
@@ -556,13 +556,13 @@ class ReviewCompleter:
                     review_input["research_outcome"] = research_outcome
                 review_stage = validate_profile_review(
                     profile,
-                    state.issue or {},
+                    _policy_issue_from_state(state),
                     review_input,
                     registry=self.policy_registry,
                     context=PolicyContext(
                         profile=profile,
                         phase="review",
-                        issue=state.issue,
+                        issue=_policy_issue_from_state(state),
                         repo_root=review_root,
                         runner=self.resolver.runner,
                         review_identity=current_identity.to_dict(),
@@ -717,19 +717,19 @@ class ReviewPassGate:
             raise LckStopError(f"Review PASS is stale: {exc}") from exc
         try:
             profile, _policy = resolve_issue_policy(
-                state.issue or {},
+                _policy_issue_from_state(state),
                 registry=self.policy_registry,
                 profile_resolver=self.profile_resolver or resolve_leaf_issue_profile,
             )
             validate_profile_review(
                 profile,
-                state.issue or {},
+                _policy_issue_from_state(state),
                 {"identity": recorded.to_dict(), "verdict": "PASS"},
                 registry=self.policy_registry,
                 context=PolicyContext(
                     profile=profile,
                     phase="review",
-                    issue=state.issue,
+                    issue=_policy_issue_from_state(state),
                     review_identity=recorded.to_dict(),
                     review_verdict="PASS",
                 ),
@@ -802,6 +802,10 @@ class MergePreflight:
         self.snapshots = OperationSnapshotBuilder(resolver)
         self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
         self.profile_resolver = profile_resolver
+        self.eligibility = PhaseEligibilityResolver(
+            registry=self.policy_registry,
+            profile_resolver=self.profile_resolver,
+        )
         self.review_gate = review_gate or ReviewPassGate(
             resolver,
             policy_registry=self.policy_registry,
@@ -858,19 +862,17 @@ class MergePreflight:
         if state.project_status != "Review":
             raise LckStopError("Merge Preflight requires Project Status Review")
 
-        downstream_contract = (
-            state.task_contract
-            if isinstance(state.task_contract, Mapping)
-            else state.issue
+        blocker_reasons = self.eligibility.blocker_reasons(
+            state,
+            phase=Phase.REVIEW_COMPLETE,
         )
-        blockers = _formal_blockers_gate(
-            state.relationships,
-            downstream_contract=downstream_contract,
-        )
-        if blockers.get("status") != "pass":
+        blockers = {
+            "status": "pass" if not blocker_reasons else "fail",
+            "detail": "; ".join(blocker_reasons),
+        }
+        if blocker_reasons:
             raise LckStopError(
-                "Merge Preflight unresolved blockers: "
-                + str(blockers.get("detail") or blockers.get("status"))
+                "Merge Preflight unresolved blockers: " + "; ".join(blocker_reasons)
             )
         review = self.review_gate.run(task_number, state)
         try:

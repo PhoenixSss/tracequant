@@ -27,6 +27,7 @@ from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     receipts as lck_receipts,
     remediation as lck_remediation,
     review as lck_review,
+    shared_facts,
 )
 from lck_core.issue_profiles import (  # type: ignore[import-not-found]  # noqa: E402
     IssueProfileResolution,
@@ -99,6 +100,59 @@ def test_all_phase_controllers_use_only_generic_policy_capabilities() -> None:
                 assert module not in forbidden_modules, name
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 assert node.name != "__getattr__", name
+
+
+def test_shared_facts_and_policy_blockers_follow_frozen_one_way_contract() -> None:
+    """Shared facts stay mechanical while blockers use policy capabilities."""
+    shared_source = (
+        ROOT / "tools" / "agent_workflow" / "lck_core" / "shared_facts.py"
+    ).read_text(encoding="utf-8")
+    shared_tree = ast.parse(shared_source)
+    forbidden_imports = {
+        "issue_profiles",
+        "profile_policies",
+        "eligibility",
+        "workflow_evidence",
+    }
+    imported: set[str] = set()
+    for node in ast.walk(shared_tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported.add((node.module or "").split(".")[-1])
+    assert imported.isdisjoint(forbidden_imports)
+
+    for path in (ROOT / "tools" / "agent_workflow" / "lck_core").glob("*.py"):
+        if path.name not in {"shared_facts.py", "__init__.py"}:
+            assert "workflow_evidence" not in path.read_text(encoding="utf-8")
+
+    open_gate = shared_facts.evaluate_shared_blockers(
+        {
+            "available": True,
+            "blocked_by": {
+                "items": [{"number": 1, "state": "OPEN"}],
+                "count": 1,
+                "truncated": False,
+            },
+        }
+    )
+    closed_gate = shared_facts.evaluate_shared_blockers(
+        {
+            "available": True,
+            "blocked_by": {
+                "items": [{"number": 1, "state": "CLOSED"}],
+                "count": 1,
+                "truncated": False,
+            },
+        }
+    )
+    assert open_gate["status"] == "fail"
+    assert closed_gate["status"] == "pass"
+    assert all(
+        callable(getattr(policy, "evaluate_blockers", None))
+        for policy in DEFAULT_PROFILE_POLICY_REGISTRY.policies.values()
+    )
+    assert callable(SyntheticPolicy().evaluate_blockers)
 
 
 @dataclass(frozen=True)

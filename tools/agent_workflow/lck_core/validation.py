@@ -15,7 +15,6 @@ from workflow_common import (
     read_json_text,
     stderr_tail,
 )
-from workflow_evidence import _normalize_checks
 
 from .models import (
     LCK_SCHEMA_VERSION,
@@ -24,6 +23,7 @@ from .models import (
     OperationSnapshot,
     ResolutionStatus,
 )
+from .shared_facts import _normalize_checks
 from .state import (
     LiveStateResolver,
     _required_check_contract,

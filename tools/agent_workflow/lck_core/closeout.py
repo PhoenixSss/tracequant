@@ -6,7 +6,6 @@ from typing import Any
 
 from project_status import set_project_status_with_runner
 from workflow_common import WorkflowToolError, is_sha, read_json_text, safe_text
-from workflow_evidence import _find_project_status
 
 from .effects import DEFAULT_EFFECT_EXECUTOR_REGISTRY, EffectExecutorRegistry
 from .eligibility import PhaseEligibilityResolver
@@ -38,7 +37,12 @@ from .profile_policies import (
     validate_profile_completion,
 )
 from .review_workspace import ReviewInvocationStore, _identity_from_mapping
-from .state import LiveStateResolver, OperationSnapshotBuilder
+from .shared_facts import _find_project_status
+from .state import (
+    LiveStateResolver,
+    OperationSnapshotBuilder,
+    _policy_issue_from_state,
+)
 
 
 def _label_names(issue: Mapping[str, Any] | None) -> set[str]:
@@ -637,7 +641,7 @@ class CloseoutCompleter:
 
         try:
             profile, _policy = resolve_issue_policy(
-                state.issue or {},
+                _policy_issue_from_state(state),
                 registry=self.policy_registry,
                 profile_resolver=self.profile_resolver or resolve_leaf_issue_profile,
             )
@@ -649,7 +653,7 @@ class CloseoutCompleter:
             )
             completion = validate_profile_completion(
                 profile,
-                state.issue or {},
+                _policy_issue_from_state(state),
                 {
                     "task_number": state.task_number,
                     "repository": state.repository,
@@ -661,7 +665,7 @@ class CloseoutCompleter:
                 context=PolicyContext(
                     profile=profile,
                     phase="completion",
-                    issue=state.issue,
+                    issue=_policy_issue_from_state(state),
                     review_record=review_record,
                     merged_pr=state.merged_pr,
                 ),

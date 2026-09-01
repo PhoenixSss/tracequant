@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from workflow_common import is_sha
-from workflow_evidence import _formal_blockers_gate
 
 from .issue_profiles import resolve_leaf_issue_profile
 from .models import (
@@ -25,6 +24,7 @@ from .profile_policies import (
     resolve_profile_policy,
     validate_profile_contract,
 )
+from .shared_facts import evaluate_shared_blockers
 
 
 @dataclass(frozen=True)
@@ -57,6 +57,130 @@ class PhaseEligibilityResolver:
         self.registry = registry or DEFAULT_PROFILE_POLICY_REGISTRY
         self.profile_resolver = profile_resolver or resolve_leaf_issue_profile
 
+    def blocker_reasons(
+        self,
+        state: LiveState,
+        *,
+        phase: Phase,
+    ) -> tuple[str, ...]:
+        """Aggregate generic relationship and registered policy blockers."""
+        reasons: list[str] = []
+        shared_gate = evaluate_shared_blockers(state.relationships)
+        if shared_gate.get("status") != "pass":
+            detail = shared_gate.get("detail") or "shared blocker gate did not pass"
+            # Keep the established diagnostic prefix while making ownership
+            # explicit: this is the generic aggregate, not profile semantics.
+            reasons.append(f"formal blocker gate: {detail}")
+
+        issue = state.issue
+        profile_resolution = self.profile_resolver(
+            issue if isinstance(issue, Mapping) else None
+        )
+        profile = profile_resolution.profile if profile_resolution.resolved else None
+        target_contract: Mapping[str, Any] | None = None
+        if isinstance(issue, Mapping):
+            target_contract = dict(issue)
+            if isinstance(state.task_contract, Mapping):
+                target_contract.update(state.task_contract)
+        downstream_contract = (
+            state.task_contract if isinstance(state.task_contract, Mapping) else issue
+        )
+        validate_contract_at_entry = phase in {
+            Phase.DELIVERY_PREPARE,
+            Phase.DELIVERY_COMPLETE,
+            Phase.REMEDIATION_PREPARE,
+            Phase.REMEDIATION_COMPLETE,
+        }
+        if (
+            profile is not None
+            and isinstance(target_contract, Mapping)
+            and (profile.contract_policy is not None or validate_contract_at_entry)
+        ):
+            try:
+                contract_check = validate_profile_contract(
+                    profile, target_contract, registry=self.registry
+                )
+                if not contract_check.valid:
+                    reasons.append(contract_check.failure_reason)
+                else:
+                    policy_blockers = evaluate_profile_blockers(
+                        profile,
+                        target_contract,
+                        contract_evidence=contract_check.evidence,
+                        registry=self.registry,
+                        context=PolicyContext(
+                            profile=profile,
+                            phase=phase.value,
+                            issue=target_contract,
+                            relationships=state.relationships,
+                            repository=state.repository,
+                            downstream_contract=downstream_contract,
+                        ),
+                    )
+                    reasons.extend(
+                        f"policy blocker [{blocker.code}]: {blocker.detail}"
+                        for blocker in policy_blockers
+                    )
+            except ValueError as exc:
+                reasons.append(f"profile blocker evaluation failed: {exc}")
+
+        blocked_by = state.relationships.get("blocked_by")
+        dependency_items = (
+            blocked_by.get("items") if isinstance(blocked_by, Mapping) else None
+        )
+        if isinstance(dependency_items, list):
+            for dependency in dependency_items:
+                if not isinstance(dependency, Mapping):
+                    continue
+                if str(dependency.get("state", "")).upper() != "CLOSED":
+                    continue
+                labels = dependency.get("labels")
+                labels_complete = dependency.get("labels_complete")
+                if labels_complete is not None and labels_complete is not True:
+                    reasons.append(
+                        "formal blocker gate: closed dependency labels are incomplete"
+                    )
+                    continue
+                if not isinstance(labels, list):
+                    reasons.append(
+                        "formal blocker gate: closed dependency labels are unavailable"
+                    )
+                    continue
+                dependency_resolution = self.profile_resolver(dependency)
+                dependency_profile = dependency_resolution.profile
+                # Task Critical Outcome is a leaf-entry contract.  It is not a
+                # dependency blocker policy; typed dependency semantics are
+                # supplied only by the registered profile capability.
+                if not dependency_resolution.resolved or dependency_profile is None:
+                    reasons.append(
+                        "formal blocker gate: closed dependency profile is unavailable"
+                    )
+                    continue
+                if dependency_profile.contract_policy is None:
+                    continue
+                try:
+                    dependency_blockers = evaluate_profile_blockers(
+                        dependency_profile,
+                        dependency,
+                        registry=self.registry,
+                        context=PolicyContext(
+                            profile=dependency_profile,
+                            phase=phase.value,
+                            issue=dependency,
+                            relationships=state.relationships,
+                            repository=state.repository,
+                            downstream_contract=downstream_contract,
+                        ),
+                    )
+                except ValueError as exc:
+                    reasons.append(f"profile blocker evaluation failed: {exc}")
+                else:
+                    reasons.extend(
+                        f"policy blocker [{blocker.code}]: {blocker.detail}"
+                        for blocker in dependency_blockers
+                    )
+        return tuple(dict.fromkeys(reasons))
+
     def resolve(
         self,
         state: LiveState,
@@ -66,7 +190,6 @@ class PhaseEligibilityResolver:
     ) -> PhaseDecision:
         reasons = list(state.stop_reasons)
         issue = state.issue
-        relationships = state.relationships
         profile_resolution = self.profile_resolver(
             issue if isinstance(issue, Mapping) else None
         )
@@ -103,41 +226,6 @@ class PhaseEligibilityResolver:
                         "lifecycle labels must be exactly ['codex:ready']: "
                         f"{sorted(lifecycle_labels) or 'none'}"
                     )
-            validate_contract_at_entry = phase in {
-                Phase.DELIVERY_PREPARE,
-                Phase.DELIVERY_COMPLETE,
-                Phase.REMEDIATION_PREPARE,
-                Phase.REMEDIATION_COMPLETE,
-            }
-            if profile is not None and (
-                profile.contract_policy is not None or validate_contract_at_entry
-            ):
-                contract_check = validate_profile_contract(
-                    profile, issue, registry=self.registry
-                )
-                if not contract_check.valid:
-                    reasons.append(contract_check.failure_reason)
-                else:
-                    try:
-                        policy_blockers = evaluate_profile_blockers(
-                            profile,
-                            issue,
-                            contract_evidence=contract_check.evidence,
-                            registry=self.registry,
-                            context=PolicyContext(
-                                profile=profile,
-                                phase=phase.value,
-                                issue=issue,
-                                relationships=relationships,
-                            ),
-                        )
-                    except ValueError as exc:
-                        reasons.append(f"profile blocker evaluation failed: {exc}")
-                    else:
-                        reasons.extend(
-                            f"policy blocker [{blocker.code}]: {blocker.detail}"
-                            for blocker in policy_blockers
-                        )
             project = issue.get("project_status")
             allowed_projects = {
                 Phase.DELIVERY_PREPARE: {"Ready", "In Progress"},
@@ -164,16 +252,7 @@ class PhaseEligibilityResolver:
             if project not in allowed_projects:
                 reasons.append("Project Status is unavailable or unknown")
 
-        downstream_contract = (
-            state.task_contract if isinstance(state.task_contract, Mapping) else issue
-        )
-        blocker_gate = _formal_blockers_gate(
-            relationships,
-            downstream_contract=downstream_contract,
-        )
-        if blocker_gate.get("status") != "pass":
-            detail = blocker_gate.get("detail") or "formal blocker gate did not pass"
-            reasons.append(f"formal blocker gate: {detail}")
+        reasons.extend(self.blocker_reasons(state, phase=phase))
 
         capabilities: tuple[str, ...] = ()
         if phase is Phase.DELIVERY_PREPARE:

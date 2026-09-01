@@ -6,6 +6,7 @@ maintainer or reviewer can start with the responsibility that owns the behavior.
 | Concern | Start here | Typical companion modules |
 | --- | --- | --- |
 | leaf Issue type/profile contract and routing | `issue_profiles.py`, `profile_policies.py` | `models.py`, `eligibility.py`, `../bug_policy.py`, `../documentation_policy.py`, `../research_policy.py` |
+| profile-neutral authoritative Git/GitHub facts | `shared_facts.py` | `models.py`, `workflow_evidence.py` adapter |
 | contracts, immutable state/result models | `models.py` | `issue_profiles.py` |
 | live Git/GitHub facts, Fact Profiles, operation snapshots | `state.py` | `models.py` |
 | lifecycle admission / eligibility | `eligibility.py` | `state.py` |
@@ -21,11 +22,14 @@ maintainer or reviewer can start with the responsibility that owns the behavior.
 
 ## Dependency rule
 
-Shared layers (`models`, `state`, `eligibility`, `validation`, `profile_policies`) must not import phase
-orchestration modules. Effects depend only on shared layers. Phase modules compose
-shared layers/effects. `receipts.py` projects completed phase results, and `cli.py`
-is the outermost dispatcher. Avoid runtime import tricks, service locators, or
-module mutation to bypass this direction.
+Shared layers (`models`, `shared_facts`, `state`, `eligibility`, `validation`,
+`profile_policies`) must not import phase orchestration modules. `shared_facts`
+must remain profile-neutral; `workflow_evidence.py` consumes it through an
+audit adapter and is never an LCK core dependency. Effects depend only on
+shared layers. Phase modules compose shared layers/effects. `receipts.py`
+projects completed phase results, and `cli.py` is the outermost dispatcher.
+Avoid runtime import tricks, service locators, or module mutation to bypass
+this direction.
 
 `issue_profiles.py` owns canonical label resolution and profile metadata.
 `profile_policies.py` owns the one dispatch boundary from that metadata to the

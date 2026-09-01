@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Feature-audit evidence plus shared read-only GitHub fact helpers for LCK.
+"""Feature-audit evidence over the shared LCK fact-acquisition adapter.
 
 Task lifecycle control belongs exclusively to ``lck.py``. This module retains
-only audit-oriented Feature snapshot/recheck behavior and deterministic query
-helpers reused by LCK; it does not expose Delivery, Review, Remediation, Merge,
-or Closeout control commands.
+only audit-oriented Feature snapshot/recheck behavior; authoritative
+profile-neutral Git/GitHub facts are owned by ``lck_core.shared_facts`` and
+consumed here through adapters. It does not expose Delivery, Review,
+Remediation, Merge, or Closeout control commands.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import sys
-import unicodedata
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final
@@ -22,27 +23,27 @@ from documentation_policy import (
     DOCUMENTATION_TEMPLATE_PATH,
     documentation_contract_snapshot,
 )
+from lck_core import shared_facts
 from lck_core.issue_profiles import resolve_leaf_issue_profile
-from lck_core.profile_policies import validate_profile_contract
+from lck_core.profile_policies import (
+    DEFAULT_PROFILE_POLICY_REGISTRY,
+    PolicyContext,
+    evaluate_profile_blockers,
+    validate_profile_contract,
+)
 from research_policy import (
     RESEARCH_OUTCOME_FIELD,
     RESEARCH_TEMPLATE_PATH,
-    ResearchPolicyError,
-    architecture_decision_is_consistent,
     decision_contract_snapshot,
-    is_implementation_outcome,
-    parse_research_outcome,
     research_contract_snapshot,
 )
 from workflow_common import (
-    CommandResult,
     CommandRunner,
     WorkflowToolError,
     atomic_write_json,
     bounded_list,
     command_warning,
     is_sha,
-    parse_repository_slug,
     print_json,
     read_json_file,
     read_json_text,
@@ -57,1075 +58,6 @@ EVIDENCE_ROOT: Final = ".agents/evidence.local"
 SNAPSHOT_SUBDIR: Final = "snapshots"
 MAX_CHILDREN: Final = 50
 MAX_FILES: Final = 100
-CANONICAL_PROJECT_NUMBER: Final = 1
-
-RELATIONSHIPS_QUERY: Final = r"""
-query($owner:String!, $name:String!, $number:Int!) {
-  repository(owner:$owner, name:$name) {
-    issue(number:$number) {
-      number
-      title
-      state
-      body
-      labels(first:100) { nodes { name } pageInfo { hasNextPage } }
-      issueType { name }
-      parent { number title state }
-      subIssues(first:100) {
-        nodes {
-          number
-          title
-          state
-          body
-          labels(first:100) { nodes { name } pageInfo { hasNextPage } }
-        }
-        pageInfo { hasNextPage }
-      }
-      blockedBy(first:50) {
-        nodes {
-          number
-          title
-          state
-          body
-          labels(first:100) { nodes { name } pageInfo { hasNextPage } }
-          projectItems(first:20) {
-            nodes {
-              project {
-                number
-                owner {
-                  ... on User { login }
-                  ... on Organization { login }
-                }
-              }
-              fieldValues(first:20) {
-                nodes {
-                  ... on ProjectV2ItemFieldSingleSelectValue {
-                    name
-                    field { ... on ProjectV2SingleSelectField { name } }
-                  }
-                }
-                pageInfo { hasNextPage }
-              }
-            }
-            pageInfo { hasNextPage }
-          }
-        }
-        pageInfo { hasNextPage }
-      }
-      blocking(first:50) {
-        nodes {
-          number
-          title
-          state
-          body
-          labels(first:100) { nodes { name } pageInfo { hasNextPage } }
-          projectItems(first:20) {
-            nodes {
-              project {
-                number
-                owner {
-                  ... on User { login }
-                  ... on Organization { login }
-                }
-              }
-              fieldValues(first:20) {
-                nodes {
-                  ... on ProjectV2ItemFieldSingleSelectValue {
-                    name
-                    field { ... on ProjectV2SingleSelectField { name } }
-                  }
-                }
-                pageInfo { hasNextPage }
-              }
-            }
-            pageInfo { hasNextPage }
-          }
-        }
-        pageInfo { hasNextPage }
-      }
-    }
-  }
-}
-"""
-
-ISSUE_CLOSURE_QUERY: Final = r"""
-query($owner:String!, $name:String!, $number:Int!) {
-  repository(owner:$owner, name:$name) {
-    issue(number:$number) {
-      number
-      state
-      closedAt
-      closedByPullRequestsReferences(first:20, includeClosedPrs:true) {
-        nodes {
-          number
-          state
-          merged
-          mergedAt
-          url
-          repository { nameWithOwner }
-        }
-        pageInfo { hasNextPage }
-      }
-      timelineItems(last:50, itemTypes:[CLOSED_EVENT, REOPENED_EVENT]) {
-        nodes {
-          __typename
-          ... on ClosedEvent {
-            createdAt
-            closer {
-              __typename
-              ... on PullRequest {
-                number
-                state
-                merged
-                mergedAt
-                url
-                repository { nameWithOwner }
-              }
-            }
-          }
-          ... on ReopenedEvent { createdAt }
-        }
-        pageInfo { hasPreviousPage }
-      }
-    }
-  }
-}
-"""
-
-
-def _normalize_title(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", value)
-    return " ".join(normalized.split()).casefold()
-
-
-def _gate(status: str, detail: str | None = None) -> dict[str, Any]:
-    result: dict[str, Any] = {"status": status}
-    if detail:
-        result["detail"] = safe_text(detail, limit=256)
-    return result
-
-
-def _git_value(
-    runner: CommandRunner,
-    args: Sequence[str],
-    *,
-    command_id: str,
-    warnings: list[dict[str, Any]],
-) -> str | None:
-    result = runner.run(["git", *args], command_id=command_id)
-    if result.returncode != 0:
-        warnings.append(command_warning(result))
-        return None
-    return result.stdout.strip() or None
-
-
-def _git_lines(
-    runner: CommandRunner,
-    args: Sequence[str],
-    *,
-    command_id: str,
-    warnings: list[dict[str, Any]],
-) -> list[str]:
-    value = _git_value(
-        runner,
-        args,
-        command_id=command_id,
-        warnings=warnings,
-    )
-    if value is None:
-        return []
-    return [line for line in value.splitlines() if line]
-
-
-def _remote_main_sha(
-    runner: CommandRunner, warnings: list[dict[str, Any]]
-) -> str | None:
-    """Read the authoritative remote main ref without changing local refs."""
-    result = runner.run(
-        ["git", "ls-remote", "origin", "refs/heads/main"],
-        command_id="git-remote-main",
-        retries=1,
-    )
-    if result.returncode != 0:
-        warnings.append(command_warning(result))
-        return None
-    matches = [
-        line.split("\t", 1)[0]
-        for line in result.stdout.splitlines()
-        if "\t" in line and line.split("\t", 1)[1] == "refs/heads/main"
-    ]
-    if len(matches) != 1 or not is_sha(matches[0]):
-        warnings.append(
-            {
-                "command_id": result.command_id,
-                "exit_code": result.returncode,
-                "error": "authoritative refs/heads/main result is missing or malformed",
-            }
-        )
-        return None
-    return matches[0]
-
-
-def _repository_slug(
-    runner: CommandRunner,
-    explicit: str | None,
-    warnings: list[dict[str, Any]],
-) -> str | None:
-    if explicit:
-        return explicit
-    remote = _git_value(
-        runner,
-        ["remote", "get-url", "origin"],
-        command_id="git-origin-url",
-        warnings=warnings,
-    )
-    if remote:
-        slug = parse_repository_slug(remote)
-        if slug:
-            return slug
-    result = runner.run(
-        ["gh", "repo", "view", "--json", "nameWithOwner"],
-        command_id="gh-repo-view",
-        retries=1,
-    )
-    if result.returncode != 0:
-        warnings.append(command_warning(result))
-        return None
-    value = read_json_text(result.stdout, field="gh repo view")
-    if isinstance(value, dict) and isinstance(value.get("nameWithOwner"), str):
-        return str(value["nameWithOwner"])
-    return None
-
-
-def _git_snapshot(
-    runner: CommandRunner,
-    warnings: list[dict[str, Any]],
-    *,
-    read_only_local_refs: bool = False,
-    include_workspace_inventory: bool = True,
-) -> dict[str, Any]:
-    """Collect bounded Git facts for Feature audit and LCK queries.
-
-    Feature audit may refresh refs for its local object inventory. LCK supplies
-    the read-only mode when it reuses this helper; its authoritative main
-    identity always comes from ``git ls-remote`` rather than a tracking ref.
-    No environment variable or persisted evidence record controls Task
-    lifecycle behavior.
-    """
-
-    fetch: CommandResult | None = None
-    if not read_only_local_refs:
-        fetch = runner.run(
-            ["git", "fetch", "--prune", "origin"],
-            command_id="git-fetch-origin",
-            retries=1,
-        )
-        if fetch.returncode != 0:
-            warnings.append(command_warning(fetch))
-    branch = _git_value(
-        runner,
-        ["branch", "--show-current"],
-        command_id="git-current-branch",
-        warnings=warnings,
-    )
-    head = _git_value(
-        runner,
-        ["rev-parse", "HEAD"],
-        command_id="git-head",
-        warnings=warnings,
-    )
-    local_main = _git_value(
-        runner,
-        ["rev-parse", "refs/heads/main"],
-        command_id="git-local-main",
-        warnings=warnings,
-    )
-    tracking_main = _git_value(
-        runner,
-        ["rev-parse", "refs/remotes/origin/main"],
-        command_id="git-tracking-main",
-        warnings=warnings,
-    )
-    remote_main = _remote_main_sha(runner, warnings)
-    status_result = runner.run(
-        ["git", "status", "--short", "--untracked-files=all"],
-        command_id="git-status",
-    )
-    if status_result.returncode != 0:
-        warnings.append(command_warning(status_result))
-        status_lines: list[str] | None = None
-    else:
-        status_lines = [line for line in status_result.stdout.splitlines() if line]
-    staged = (
-        _git_lines(
-            runner,
-            ["diff", "--cached", "--name-only"],
-            command_id="git-staged-files",
-            warnings=warnings,
-        )
-        if include_workspace_inventory
-        else []
-    )
-    changed = (
-        _git_lines(
-            runner,
-            ["diff", "--name-only"],
-            command_id="git-changed-files",
-            warnings=warnings,
-        )
-        if include_workspace_inventory
-        else []
-    )
-    worktrees = (
-        _git_lines(
-            runner,
-            ["worktree", "list", "--porcelain"],
-            command_id="git-worktrees",
-            warnings=warnings,
-        )
-        if include_workspace_inventory
-        else []
-    )
-    worktree_branches = sorted(
-        line.removeprefix("branch refs/heads/")
-        for line in worktrees
-        if line.startswith("branch refs/heads/")
-    )
-    return {
-        "origin_fetch": (
-            "pass"
-            if read_only_local_refs
-            else "pass"
-            if fetch is not None and fetch.returncode == 0
-            else "unknown"
-        ),
-        "origin_refresh": (
-            "skipped-read-only" if read_only_local_refs else "attempted"
-        ),
-        "branch": safe_text(branch),
-        "head_sha": head if is_sha(head) else None,
-        "local_main_sha": local_main if is_sha(local_main) else None,
-        "tracking_main_sha": tracking_main if is_sha(tracking_main) else None,
-        "remote_main_sha": remote_main,
-        "tracking_main_stale": (
-            is_sha(tracking_main)
-            and is_sha(remote_main)
-            and tracking_main != remote_main
-        ),
-        "remote_main_query": "pass" if is_sha(remote_main) else "unknown",
-        "clean": None if status_lines is None else len(status_lines) == 0,
-        "status_entries": None if status_lines is None else len(status_lines),
-        "staged_files": (
-            bounded_list(staged, item_limit=MAX_FILES)
-            if include_workspace_inventory
-            else None
-        ),
-        "changed_files": (
-            bounded_list(changed, item_limit=MAX_FILES)
-            if include_workspace_inventory
-            else None
-        ),
-        "worktree_count": (
-            sum(1 for line in worktrees if line.startswith("worktree "))
-            if include_workspace_inventory
-            else None
-        ),
-        "worktree_branches": (
-            bounded_list(worktree_branches, item_limit=MAX_FILES)
-            if include_workspace_inventory
-            else None
-        ),
-    }
-
-
-def _issue_view_with_contract(
-    runner: CommandRunner,
-    repository: str,
-    number: int,
-    warnings: list[dict[str, Any]],
-    include_comments: bool = True,
-    include_closure: bool = True,
-    include_contract: bool = True,
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Read one Issue once and return compact facts plus the Task contract.
-
-    The compact Issue snapshot intentionally omits the full body so audit/state
-    payloads stay bounded.  LCK, however, needs the body as semantic input.  A
-    single GitHub read therefore produces both representations so callers do
-    not re-query the same Task later in an operation.
-    """
-    fields = ["number", "title", "state", "labels", "projectItems", "url"]
-    if include_contract:
-        fields.append("body")
-    if include_comments:
-        fields.append("comments")
-    if include_closure:
-        fields.extend(("closedAt", "closedByPullRequestsReferences"))
-    result = runner.run(
-        [
-            "gh",
-            "issue",
-            "view",
-            str(number),
-            "--repo",
-            repository,
-            "--json",
-            ",".join(fields),
-        ],
-        command_id=f"gh-issue-view-{number}",
-        retries=1,
-    )
-    if result.returncode != 0:
-        fallback = runner.run(
-            [
-                "gh",
-                "issue",
-                "view",
-                str(number),
-                "--repo",
-                repository,
-                "--json",
-                ",".join(
-                    field
-                    for field in fields
-                    if field
-                    not in {
-                        "comments",
-                        "projectItems",
-                        "closedByPullRequestsReferences",
-                    }
-                ),
-            ],
-            command_id=f"gh-issue-view-fallback-{number}",
-        )
-        if fallback.returncode != 0:
-            warnings.append(command_warning(result))
-            warnings.append(command_warning(fallback))
-            return None, None
-        result = fallback
-    value = read_json_text(result.stdout, field=f"Issue #{number}")
-    if not isinstance(value, dict):
-        warnings.append(
-            {
-                "command_id": result.command_id,
-                "exit_code": 0,
-                "error": "Issue response is not an object",
-            }
-        )
-        return None, None
-    labels = value.get("labels", [])
-    normalized_labels: list[str] = []
-    if isinstance(labels, list):
-        for item in labels:
-            if isinstance(item, dict) and isinstance(item.get("name"), str):
-                normalized_labels.append(item["name"])
-            elif isinstance(item, str):
-                normalized_labels.append(item)
-    pull_refs: list[dict[str, Any]] = []
-    raw_pull_refs = value.get("closedByPullRequestsReferences", [])
-    if isinstance(raw_pull_refs, list):
-        for pr in raw_pull_refs:
-            if not isinstance(pr, dict):
-                continue
-            pull_refs.append(
-                {
-                    "number": pr.get("number"),
-                    "state": safe_text(pr.get("state")),
-                    "merged": pr.get("merged")
-                    if isinstance(pr.get("merged"), bool)
-                    else None,
-                    "merged_at": safe_text(pr.get("mergedAt")),
-                    "url": safe_text(pr.get("url")),
-                    "repository": _repository_name(pr),
-                }
-            )
-    body = value.get("body") if isinstance(value.get("body"), str) else None
-    runner_root = getattr(runner, "repo_root", None)
-    template_path = (
-        runner_root / DOCUMENTATION_TEMPLATE_PATH
-        if isinstance(runner_root, Path)
-        else None
-    )
-    bug_template_path = (
-        runner_root / BUG_TEMPLATE_PATH if isinstance(runner_root, Path) else None
-    )
-    research_template_path = (
-        runner_root / RESEARCH_TEMPLATE_PATH if isinstance(runner_root, Path) else None
-    )
-    profile_resolution = resolve_leaf_issue_profile({"labels": normalized_labels})
-    profile = profile_resolution.profile if profile_resolution.resolved else None
-    is_task = profile is not None and profile.requires_critical_outcome
-    is_bug = profile is not None and profile.contract_policy == "bug"
-    is_documentation = (
-        profile is not None and profile.contract_policy == "documentation"
-    )
-    is_research = profile is not None and profile.supports_research_outcome
-    raw_comments = value.get("comments", [])
-    comment_facts: list[dict[str, Any]] = []
-    if isinstance(raw_comments, list):
-        for comment in raw_comments:
-            if not isinstance(comment, dict):
-                continue
-            author = comment.get("author")
-            comment_facts.append(
-                {
-                    "author": author.get("login") if isinstance(author, dict) else None,
-                    "created_at": comment.get("createdAt"),
-                    "updated_at": comment.get("updatedAt"),
-                    "body": comment.get("body")
-                    if isinstance(comment.get("body"), str)
-                    else None,
-                }
-            )
-    content_facts = {
-        "body": body,
-        "comments": comment_facts if include_comments else None,
-    }
-    issue = {
-        "number": value.get("number"),
-        "title": safe_text(value.get("title")),
-        "content_sha256": sha256_json(content_facts),
-        "body_sha256": sha256_json({"body": body}),
-        "body_characters": len(body) if body is not None else None,
-        "critical_outcome": critical_outcome_snapshot(body) if is_task else None,
-        "bug_contract": (
-            bug_contract_snapshot(body, template_path=bug_template_path)
-            if is_bug
-            else None
-        ),
-        "documentation_contract": (
-            documentation_contract_snapshot(body, template_path=template_path)
-            if is_documentation
-            else None
-        ),
-        "research_contract": (
-            research_contract_snapshot(body, template_path=research_template_path)
-            if is_research
-            else None
-        ),
-        "comment_count": len(comment_facts) if include_comments else None,
-        "state": safe_text(value.get("state")),
-        "labels": bounded_list(sorted(normalized_labels)),
-        "project_status": _find_project_status(value.get("projectItems")),
-        "research_outcome": (
-            _find_project_field(value.get("projectItems"), RESEARCH_OUTCOME_FIELD)
-            if is_research
-            else None
-        ),
-        "url": safe_text(value.get("url")),
-        "closed_at": safe_text(value.get("closedAt")),
-        "closing_pull_requests": bounded_list(pull_refs),
-    }
-    if include_closure:
-        issue["issue_closure"] = _issue_closure_snapshot(
-            runner, repository, number, warnings
-        )
-    contract = (
-        {
-            "number": value.get("number"),
-            "title": safe_text(value.get("title")),
-            "url": safe_text(value.get("url")),
-            "body": body,
-            "body_sha256": issue["body_sha256"],
-            "critical_outcome": issue["critical_outcome"],
-            "bug_contract": issue["bug_contract"],
-            "documentation_contract": issue["documentation_contract"],
-            "research_contract": issue["research_contract"],
-            "research_outcome": issue["research_outcome"],
-        }
-        if include_contract and body is not None
-        else None
-    )
-    return issue, contract
-
-
-def _issue_view(
-    runner: CommandRunner,
-    repository: str,
-    number: int,
-    warnings: list[dict[str, Any]],
-) -> dict[str, Any] | None:
-    issue, _contract = _issue_view_with_contract(
-        runner,
-        repository,
-        number,
-        warnings,
-    )
-    return issue
-
-
-def _find_project_status(value: Any) -> str | None:
-    if isinstance(value, dict):
-        for key, nested in value.items():
-            if str(key).casefold() == "status":
-                if isinstance(nested, dict) and isinstance(nested.get("name"), str):
-                    return safe_text(nested["name"])
-                if isinstance(nested, str):
-                    return safe_text(nested)
-            result = _find_project_status(nested)
-            if result:
-                return result
-    if isinstance(value, list):
-        for nested in value:
-            result = _find_project_status(nested)
-            if result:
-                return result
-    return None
-
-
-def _find_project_field(value: Any, field_name: str) -> str | None:
-    """Find a named Project single-select value in bounded GitHub JSON."""
-
-    if isinstance(value, Mapping):
-        field = value.get("field")
-        if isinstance(field, Mapping) and field.get("name") == field_name:
-            for key in ("name", "value", "text"):
-                candidate = value.get(key)
-                if isinstance(candidate, str) and candidate.strip():
-                    return safe_text(candidate)
-        for key, nested in value.items():
-            if str(key).casefold() == field_name.casefold():
-                if isinstance(nested, str) and nested.strip():
-                    return safe_text(nested)
-                if isinstance(nested, Mapping):
-                    for candidate_key in ("name", "value", "text"):
-                        candidate = nested.get(candidate_key)
-                        if isinstance(candidate, str) and candidate.strip():
-                            return safe_text(candidate)
-            result = _find_project_field(nested, field_name)
-            if result is not None:
-                return result
-    elif isinstance(value, list):
-        for nested in value:
-            result = _find_project_field(nested, field_name)
-            if result is not None:
-                return result
-    return None
-
-
-def _canonical_research_outcome(
-    project_items: Any,
-    *,
-    repository: str,
-) -> str | None:
-    """Read Research Outcome only from the repository owner's canonical Project."""
-
-    if not isinstance(project_items, Mapping):
-        return None
-    nodes = project_items.get("nodes")
-    page_info = project_items.get("pageInfo")
-    if not isinstance(nodes, list) or not isinstance(page_info, Mapping):
-        return None
-    if page_info.get("hasNextPage") is not False:
-        return None
-    owner, separator, _name = repository.partition("/")
-    if not separator or not owner:
-        return None
-
-    canonical_items: list[Mapping[str, Any]] = []
-    for item in nodes:
-        if not isinstance(item, Mapping):
-            continue
-        project = item.get("project")
-        if not isinstance(project, Mapping):
-            continue
-        project_number = project.get("number")
-        project_owner = project.get("owner")
-        project_owner_login = (
-            project_owner.get("login") if isinstance(project_owner, Mapping) else None
-        )
-        if (
-            isinstance(project_number, int)
-            and not isinstance(project_number, bool)
-            and project_number == CANONICAL_PROJECT_NUMBER
-            and isinstance(project_owner_login, str)
-            and project_owner_login.casefold() == owner.casefold()
-        ):
-            canonical_items.append(item)
-
-    # A missing or duplicate canonical item is not evidence for a blocker gate.
-    if len(canonical_items) != 1:
-        return None
-    field_values = canonical_items[0].get("fieldValues")
-    if not isinstance(field_values, Mapping):
-        return None
-    field_page_info = field_values.get("pageInfo")
-    if (
-        not isinstance(field_page_info, Mapping)
-        or field_page_info.get("hasNextPage") is not False
-    ):
-        return None
-    return _find_project_field(field_values, RESEARCH_OUTCOME_FIELD)
-
-
-def _graphql(
-    runner: CommandRunner,
-    repository: str,
-    number: int,
-    query: str,
-    *,
-    command_id: str,
-    warnings: list[dict[str, Any]],
-) -> dict[str, Any] | None:
-    owner, name = repository.split("/", 1)
-    result = runner.run(
-        [
-            "gh",
-            "api",
-            "graphql",
-            "-f",
-            f"query={' '.join(query.split())}",
-            "-F",
-            f"owner={owner}",
-            "-F",
-            f"name={name}",
-            "-F",
-            f"number={number}",
-        ],
-        command_id=command_id,
-        retries=1,
-    )
-    if result.returncode != 0:
-        warnings.append(command_warning(result))
-        return None
-    value = read_json_text(result.stdout, field=command_id)
-    if not isinstance(value, dict):
-        warnings.append(
-            {
-                "command_id": command_id,
-                "exit_code": 0,
-                "error": "GraphQL response is not an object",
-            }
-        )
-        return None
-    errors = value.get("errors")
-    if errors:
-        warnings.append(
-            {
-                "command_id": command_id,
-                "exit_code": 0,
-                "error": safe_text(errors, limit=1000),
-            }
-        )
-        return None
-    return value
-
-
-def _repository_name(value: Mapping[str, Any]) -> str | None:
-    repository = value.get("repository")
-    if isinstance(repository, Mapping):
-        return safe_text(repository.get("nameWithOwner"))
-    return None
-
-
-def _normalize_closing_pr(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, Mapping):
-        return None
-    return {
-        "number": value.get("number"),
-        "state": safe_text(value.get("state")),
-        "merged": value.get("merged")
-        if isinstance(value.get("merged"), bool)
-        else None,
-        "merged_at": safe_text(value.get("mergedAt")),
-        "url": safe_text(value.get("url")),
-        "repository": _repository_name(value),
-    }
-
-
-def _issue_closure_snapshot(
-    runner: CommandRunner,
-    repository: str,
-    number: int,
-    warnings: list[dict[str, Any]],
-) -> dict[str, Any]:
-    value = _graphql(
-        runner,
-        repository,
-        number,
-        ISSUE_CLOSURE_QUERY,
-        command_id=f"gh-issue-closure-{number}",
-        warnings=warnings,
-    )
-    if not isinstance(value, dict):
-        return {
-            "status": "unknown",
-            "reason": "issue-closure-query-unavailable",
-            "evidence_status": "partial",
-        }
-    data = value.get("data")
-    repo = data.get("repository") if isinstance(data, Mapping) else None
-    issue = repo.get("issue") if isinstance(repo, Mapping) else None
-    if not isinstance(issue, Mapping):
-        return {
-            "status": "unknown",
-            "reason": "issue-closure-metadata-unavailable",
-            "evidence_status": "partial",
-        }
-
-    refs = issue.get("closedByPullRequestsReferences")
-    if isinstance(refs, Mapping):
-        ref_nodes = refs.get("nodes")
-    elif isinstance(refs, list):
-        ref_nodes = refs
-    else:
-        ref_nodes = []
-    ref_items = (
-        [
-            normalized
-            for normalized in (_normalize_closing_pr(item) for item in ref_nodes)
-            if normalized is not None
-        ]
-        if isinstance(ref_nodes, list)
-        else []
-    )
-    ref_page = refs.get("pageInfo") if isinstance(refs, Mapping) else None
-    refs_truncated = (
-        isinstance(ref_page, Mapping) and ref_page.get("hasNextPage") is True
-    )
-
-    timeline = issue.get("timelineItems")
-    timeline_nodes = timeline.get("nodes") if isinstance(timeline, Mapping) else []
-    timeline_page = timeline.get("pageInfo") if isinstance(timeline, Mapping) else None
-    timeline_truncated = (
-        isinstance(timeline_page, Mapping)
-        and timeline_page.get("hasPreviousPage") is True
-    )
-
-    events: list[dict[str, Any]] = []
-    if isinstance(timeline_nodes, list):
-        for item in timeline_nodes:
-            if not isinstance(item, Mapping):
-                continue
-            typename = safe_text(item.get("__typename"))
-            created_at = safe_text(item.get("createdAt"))
-            if typename == "ClosedEvent":
-                closer = item.get("closer")
-                closer_type = (
-                    safe_text(closer.get("__typename"))
-                    if isinstance(closer, Mapping)
-                    else None
-                )
-                event: dict[str, Any] = {
-                    "type": "closed",
-                    "created_at": created_at,
-                    "closer_type": closer_type,
-                }
-                if closer_type == "PullRequest" and isinstance(closer, Mapping):
-                    event["closer"] = _normalize_closing_pr(closer)
-                events.append(event)
-            elif typename == "ReopenedEvent":
-                events.append({"type": "reopened", "created_at": created_at})
-
-    latest_closure: dict[str, Any] | None = None
-    for event in sorted(events, key=lambda item: str(item.get("created_at") or "")):
-        if event.get("type") == "closed":
-            latest_closure = event
-        elif event.get("type") == "reopened":
-            latest_closure = None
-
-    state = safe_text(issue.get("state"))
-    closed_at = safe_text(issue.get("closedAt"))
-    evidence_status = "complete"
-    reason = "closed-by-pr"
-    status = "closed-by-pr"
-    if refs_truncated:
-        evidence_status = "partial"
-        reason = "closing-pr-references-truncated"
-        status = "unknown"
-    elif timeline_truncated:
-        evidence_status = "partial"
-        reason = "timeline-truncated"
-        status = "unknown"
-    elif state != "CLOSED":
-        reason = "issue-not-closed"
-        status = "not-closed"
-    elif latest_closure is None:
-        evidence_status = "partial"
-        reason = "latest-effective-close-event-unavailable"
-        status = "unknown"
-    elif latest_closure.get("closer_type") != "PullRequest":
-        reason = "latest-closer-is-not-pull-request"
-        status = "not-pr-closer"
-    elif not isinstance(latest_closure.get("closer"), Mapping):
-        evidence_status = "partial"
-        reason = "latest-closer-pr-metadata-unavailable"
-        status = "unknown"
-
-    closer = (
-        latest_closure.get("closer") if isinstance(latest_closure, Mapping) else None
-    )
-    return {
-        "status": status,
-        "reason": reason,
-        "state": state,
-        "closed_at": closed_at,
-        "latest_effective_event": latest_closure,
-        "closer_type": latest_closure.get("closer_type")
-        if isinstance(latest_closure, Mapping)
-        else None,
-        "closer_repository": closer.get("repository")
-        if isinstance(closer, Mapping)
-        else None,
-        "closer_number": closer.get("number") if isinstance(closer, Mapping) else None,
-        "closed_by_pull_requests": bounded_list(ref_items),
-        "evidence_status": evidence_status,
-        "evidence_complete": evidence_status == "complete",
-        "conflict": False,
-    }
-
-
-def _relationship_snapshot(
-    runner: CommandRunner,
-    repository: str,
-    number: int,
-    warnings: list[dict[str, Any]],
-) -> dict[str, Any]:
-    value = _graphql(
-        runner,
-        repository,
-        number,
-        RELATIONSHIPS_QUERY,
-        command_id=f"gh-issue-relationships-{number}",
-        warnings=warnings,
-    )
-    issue = None
-    if isinstance(value, dict):
-        data = value.get("data")
-        if isinstance(data, dict):
-            repo = data.get("repository")
-            if isinstance(repo, dict):
-                issue = repo.get("issue")
-    if not isinstance(issue, dict):
-        return {
-            "available": False,
-            "issue_type": None,
-            "parent": None,
-            "sub_issues": bounded_list([]),
-            "sub_issue_set_digest": None,
-            "sub_issues_complete": False,
-            "blocked_by": bounded_list([]),
-            "blocking": bounded_list([]),
-        }
-
-    def _nodes(field: str) -> list[dict[str, Any]]:
-        connection = issue.get(field)
-        if not isinstance(connection, dict):
-            return []
-        nodes = connection.get("nodes", [])
-        if not isinstance(nodes, list):
-            return []
-        normalized: list[dict[str, Any]] = []
-        for item in nodes:
-            if not isinstance(item, dict):
-                continue
-            labels: list[str] = []
-            raw_labels = item.get("labels")
-            labels_complete = False
-            if isinstance(raw_labels, dict) and isinstance(
-                raw_labels.get("nodes"), list
-            ):
-                labels = [
-                    label["name"]
-                    for label in raw_labels["nodes"]
-                    if isinstance(label, dict) and isinstance(label.get("name"), str)
-                ]
-                page = raw_labels.get("pageInfo")
-                labels_complete = (
-                    isinstance(page, dict) and page.get("hasNextPage") is False
-                )
-            body = item.get("body") if isinstance(item.get("body"), str) else None
-            profile_resolution = resolve_leaf_issue_profile({"labels": labels})
-            profile = (
-                profile_resolution.profile if profile_resolution.resolved else None
-            )
-            is_bug = profile is not None and profile.contract_policy == "bug"
-            is_documentation = (
-                profile is not None and profile.contract_policy == "documentation"
-            )
-            is_research = profile is not None and profile.supports_research_outcome
-            research_outcome = (
-                _canonical_research_outcome(
-                    item.get("projectItems"),
-                    repository=repository,
-                )
-                if is_research
-                else None
-            )
-            normalized.append(
-                {
-                    "number": item.get("number"),
-                    "title": safe_text(item.get("title")),
-                    "state": safe_text(item.get("state")),
-                    "labels": sorted(labels),
-                    "labels_complete": labels_complete,
-                    "research_contract": (
-                        research_contract_snapshot(body) if is_research else None
-                    ),
-                    "bug_contract": (bug_contract_snapshot(body) if is_bug else None),
-                    "documentation_contract": (
-                        documentation_contract_snapshot(body)
-                        if is_documentation
-                        else None
-                    ),
-                    "decision_contract": (
-                        decision_contract_snapshot(body, research=True)
-                        if is_research
-                        else None
-                    ),
-                    "research_outcome": safe_text(research_outcome) or None,
-                    "research_outcome_is_canonical": (
-                        research_outcome is not None if is_research else None
-                    ),
-                }
-            )
-        return normalized
-
-    parent = issue.get("parent")
-    normalized_parent = None
-    if isinstance(parent, dict):
-        normalized_parent = {
-            "number": parent.get("number"),
-            "title": safe_text(parent.get("title")),
-            "state": safe_text(parent.get("state")),
-        }
-    issue_type = issue.get("issueType")
-    sub_issue_nodes = _nodes("subIssues")
-    sub_connection = issue.get("subIssues")
-    sub_page = (
-        sub_connection.get("pageInfo") if isinstance(sub_connection, dict) else None
-    )
-    sub_has_next = (
-        sub_page.get("hasNextPage") is True if isinstance(sub_page, dict) else False
-    )
-    sub_bounded = bounded_list(sub_issue_nodes, item_limit=MAX_CHILDREN)
-
-    def _bounded_connection(field: str) -> dict[str, Any]:
-        connection = issue.get(field)
-        nodes = _nodes(field)
-        bounded = bounded_list(nodes)
-        page = connection.get("pageInfo") if isinstance(connection, dict) else None
-        if isinstance(page, dict) and page.get("hasNextPage") is True:
-            bounded["truncated"] = True
-        return bounded
-
-    return {
-        "available": True,
-        "issue_type": safe_text(issue_type.get("name"))
-        if isinstance(issue_type, dict)
-        else None,
-        "parent": normalized_parent,
-        "sub_issues": sub_bounded,
-        "sub_issue_set_digest": sha256_json(
-            sorted(
-                item.get("number")
-                for item in sub_issue_nodes
-                if isinstance(item.get("number"), int)
-            )
-        ),
-        "sub_issues_complete": not sub_has_next and not sub_bounded["truncated"],
-        "blocked_by": _bounded_connection("blockedBy"),
-        "blocking": _bounded_connection("blocking"),
-    }
 
 
 def _pr_view(
@@ -1238,81 +170,163 @@ def _pr_view(
     }
 
 
-def _normalize_checks(value: Any) -> dict[str, Any]:
-    if not isinstance(value, list):
-        return {
-            "count": 0,
-            "success": 0,
-            "pending": 0,
-            "failed": 0,
-            "skipped_or_unknown": 0,
-            "all_success": None,
-            "items": bounded_list([]),
-        }
-    items: list[dict[str, Any]] = []
-    success = pending = failed = skipped = 0
-    for item in value:
-        if not isinstance(item, dict):
+def _audit_issue_view_with_contract(
+    runner: CommandRunner,
+    repository: str,
+    number: int,
+    warnings: list[dict[str, Any]],
+    include_comments: bool = True,
+    include_closure: bool = True,
+    include_contract: bool = True,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Adapt shared Issue facts with profile semantics for Feature audit."""
+    issue, contract = shared_facts._issue_view_with_contract(
+        runner,
+        repository,
+        number,
+        warnings,
+        include_comments,
+        include_closure,
+        include_contract,
+    )
+    if issue is None:
+        return None, contract
+    result = copy.deepcopy(issue)
+    body = contract.get("body") if isinstance(contract, Mapping) else None
+    labels = result.get("labels")
+    if isinstance(labels, Mapping):
+        labels = labels.get("items")
+    labels = labels if isinstance(labels, list) else []
+    resolution = resolve_leaf_issue_profile({"labels": labels})
+    profile = resolution.profile if resolution.resolved else None
+    root = getattr(runner, "repo_root", None)
+    bug_template = root / BUG_TEMPLATE_PATH if isinstance(root, Path) else None
+    documentation_template = (
+        root / DOCUMENTATION_TEMPLATE_PATH if isinstance(root, Path) else None
+    )
+    research_template = (
+        root / RESEARCH_TEMPLATE_PATH if isinstance(root, Path) else None
+    )
+    result["critical_outcome"] = (
+        critical_outcome_snapshot(body)
+        if profile is not None and profile.requires_critical_outcome
+        else None
+    )
+    result["bug_contract"] = (
+        bug_contract_snapshot(body, template_path=bug_template)
+        if profile is not None and profile.contract_policy == "bug"
+        else None
+    )
+    result["documentation_contract"] = (
+        documentation_contract_snapshot(body, template_path=documentation_template)
+        if profile is not None and profile.contract_policy == "documentation"
+        else None
+    )
+    is_research = profile is not None and profile.supports_research_outcome
+    result["research_contract"] = (
+        research_contract_snapshot(body, template_path=research_template)
+        if is_research
+        else None
+    )
+    result["research_outcome"] = (
+        shared_facts.canonical_project_field(
+            result.get("project_items"),
+            repository=repository,
+            field_name=RESEARCH_OUTCOME_FIELD,
+        )
+        if is_research
+        else None
+    )
+    if isinstance(contract, Mapping):
+        enriched_contract = dict(contract)
+        for field in (
+            "critical_outcome",
+            "bug_contract",
+            "documentation_contract",
+            "research_contract",
+            "research_outcome",
+        ):
+            enriched_contract[field] = result[field]
+        contract = enriched_contract
+    return result, contract
+
+
+def _audit_relationship_snapshot(
+    runner: CommandRunner,
+    repository: str,
+    number: int,
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Adapt shared relationship facts with audit-only profile projections."""
+    result = copy.deepcopy(
+        shared_facts._relationship_snapshot(runner, repository, number, warnings)
+    )
+    for connection_name in ("sub_issues", "blocked_by", "blocking"):
+        connection = result.get(connection_name)
+        items = connection.get("items") if isinstance(connection, Mapping) else None
+        if not isinstance(items, list):
             continue
-        name = (
-            item.get("name")
-            or item.get("context")
-            or item.get("workflowName")
-            or "unnamed"
-        )
-        state = (
-            item.get("conclusion")
-            or item.get("state")
-            or item.get("status")
-            or "UNKNOWN"
-        )
-        normalized_state = str(state).upper()
-        if normalized_state in {"SUCCESS", "NEUTRAL"}:
-            success += 1
-            category = "success"
-        elif normalized_state in {
-            "PENDING",
-            "QUEUED",
-            "IN_PROGRESS",
-            "EXPECTED",
-            "WAITING",
-        }:
-            pending += 1
-            category = "pending"
-        elif normalized_state in {
-            "FAILURE",
-            "ERROR",
-            "CANCELLED",
-            "TIMED_OUT",
-            "ACTION_REQUIRED",
-        }:
-            failed += 1
-            category = "failed"
-        else:
-            skipped += 1
-            category = "skipped-or-unknown"
-        items.append(
-            {
-                "name": safe_text(name, limit=160),
-                "state": safe_text(normalized_state, limit=64),
-                "category": category,
-            }
-        )
-    count = len(items)
-    all_success: bool | None
-    if count == 0:
-        all_success = None
-    else:
-        all_success = success == count
-    return {
-        "count": count,
-        "success": success,
-        "pending": pending,
-        "failed": failed,
-        "skipped_or_unknown": skipped,
-        "all_success": all_success,
-        "items": bounded_list(items),
-    }
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            labels = item.get("labels") if isinstance(item.get("labels"), list) else []
+            resolution = resolve_leaf_issue_profile({"labels": labels})
+            profile = resolution.profile if resolution.resolved else None
+            body = item.get("body") if isinstance(item.get("body"), str) else None
+            is_bug = profile is not None and profile.contract_policy == "bug"
+            is_documentation = (
+                profile is not None and profile.contract_policy == "documentation"
+            )
+            is_research = profile is not None and profile.supports_research_outcome
+            item["research_contract"] = (
+                research_contract_snapshot(body) if is_research else None
+            )
+            item["bug_contract"] = bug_contract_snapshot(body) if is_bug else None
+            item["documentation_contract"] = (
+                documentation_contract_snapshot(body) if is_documentation else None
+            )
+            item["decision_contract"] = (
+                decision_contract_snapshot(body, research=True) if is_research else None
+            )
+            item["research_outcome"] = (
+                shared_facts.canonical_project_field(
+                    item.get("project_items"),
+                    repository=repository,
+                    field_name=RESEARCH_OUTCOME_FIELD,
+                )
+                if is_research
+                else None
+            )
+            item["research_outcome_is_canonical"] = (
+                item["research_outcome"] is not None if is_research else None
+            )
+    return result
+
+
+# The public names below are retained as audit adapters for existing Feature
+# snapshot consumers.  LCK imports the owner module directly and therefore
+# cannot accidentally acquire lifecycle facts through this audit module.
+_normalize_title = shared_facts.normalize_title
+_gate = shared_facts.gate
+_git_value = shared_facts._git_value
+_git_snapshot = shared_facts._git_snapshot
+_repository_slug = shared_facts._repository_slug
+_issue_view_with_contract = _audit_issue_view_with_contract
+
+
+def _issue_view(
+    runner: CommandRunner,
+    repository: str,
+    number: int,
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    return _audit_issue_view_with_contract(runner, repository, number, warnings)[0]
+
+
+_find_project_status = shared_facts._find_project_status
+_find_project_field = shared_facts._find_project_field
+_relationship_snapshot = _audit_relationship_snapshot
+_normalize_checks = shared_facts._normalize_checks
 
 
 def _runner_source(
@@ -1392,151 +406,106 @@ def _issue_gates(
     return gates
 
 
-def _formal_blockers_gate(
+def _audit_formal_blockers_gate(
     relationships: Mapping[str, Any],
     *,
     downstream_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if relationships.get("available") is not True:
-        return _gate("unknown", "Relationship facts unavailable")
-
+    """Audit adapter for the shared gate and registered profile capabilities."""
+    shared_gate = shared_facts.evaluate_shared_blockers(relationships)
+    if shared_gate.get("status") == "fail":
+        return shared_gate
+    if shared_gate.get("status") != "pass":
+        return shared_gate
     blocked_by = relationships.get("blocked_by")
-    if not isinstance(blocked_by, Mapping):
-        return _gate("unknown", "Blocked-by metadata unavailable")
-
-    items = blocked_by.get("items")
-    count = blocked_by.get("count")
-    truncated = blocked_by.get("truncated")
-    if (
-        not isinstance(items, list)
-        or not isinstance(count, int)
-        or isinstance(count, bool)
-        or count < 0
-        or not isinstance(truncated, bool)
-    ):
-        return _gate("unknown", "Blocked-by metadata is malformed")
-
-    open_numbers: list[int] = []
-    unresolved = 0
+    items = blocked_by.get("items") if isinstance(blocked_by, Mapping) else None
+    if not isinstance(items, list):
+        return shared_facts.gate("unknown", "Blocked-by metadata unavailable")
+    profile_blockers: list[tuple[str, str]] = []
     resolved = 0
-    unknown_state = 0
-    research_not_implementation = 0
-    research_contract_unknown = 0
-    architecture_contract_unknown = 0
-    research_outcome_unknown = 0
-    bug_contract_unknown = 0
     for item in items:
-        if not isinstance(item, Mapping):
-            unknown_state += 1
+        if (
+            not isinstance(item, Mapping)
+            or str(item.get("state", "")).upper() != "CLOSED"
+        ):
             continue
-        state = item.get("state")
-        normalized_state = state.upper() if isinstance(state, str) else ""
-        if normalized_state == "OPEN":
-            unresolved += 1
-            number = item.get("number")
-            if isinstance(number, int) and not isinstance(number, bool):
-                open_numbers.append(number)
-        elif normalized_state == "CLOSED":
-            labels = item.get("labels")
-            labels_complete = item.get("labels_complete")
-            if labels_complete is None:
-                # Unit callers may provide the already-normalized legacy
-                # shape. Live GraphQL normalization always supplies this
-                # explicit completeness bit.
-                labels_complete = isinstance(labels, list)
-            if labels_complete is not True or not isinstance(labels, list):
-                unknown_state += 1
-                continue
-            profile_resolution = resolve_leaf_issue_profile({"labels": labels})
-            if not profile_resolution.resolved or profile_resolution.profile is None:
-                unknown_state += 1
-                continue
-            profile = profile_resolution.profile
-            # Task Critical Outcome is a leaf-entry contract, not a dependency
-            # blocker policy. Its dependency semantics remain shared until the
-            # typed blocker migration owned by the follow-up blocker Task.
-            contract_check = (
-                validate_profile_contract(profile, item)
-                if profile.contract_policy is not None
-                else None
+        labels = item.get("labels")
+        if not isinstance(labels, list):
+            return shared_facts.gate("unknown", "closed dependency labels unavailable")
+        if item.get("labels_complete") is False:
+            return shared_facts.gate(
+                "unknown", "closed dependency labels are incomplete"
             )
-            if contract_check is not None and not contract_check.valid:
-                if contract_check.policy == "bug":
-                    bug_contract_unknown += 1
-                elif contract_check.policy == "research":
-                    research_contract_unknown += 1
-                else:
-                    unknown_state += 1
+        resolution = resolve_leaf_issue_profile({"labels": labels})
+        profile = resolution.profile if resolution.resolved else None
+        if profile is None:
+            return shared_facts.gate(
+                "unknown",
+                "unknown_state=1, closed dependency profile is unavailable",
+            )
+        if profile.contract_policy is None:
+            resolved += 1
+            continue
+        try:
+            contract_check = validate_profile_contract(
+                profile, item, registry=DEFAULT_PROFILE_POLICY_REGISTRY
+            )
+            if not contract_check.valid:
+                profile_blockers.append(("unknown", contract_check.failure_reason))
                 continue
-            if not profile.supports_research_outcome:
-                resolved += 1
-                continue
-            outcome_is_canonical = item.get("research_outcome_is_canonical")
-            if outcome_is_canonical is None:
-                # Preserve compatibility for already-normalized unit callers;
-                # live relationship normalization always supplies this bit.
-                outcome_is_canonical = "projectItems" not in item
-            if outcome_is_canonical is not True:
-                research_outcome_unknown += 1
-                continue
-            raw_outcome = item.get("research_outcome")
-            try:
-                outcome = parse_research_outcome(raw_outcome)
-            except ResearchPolicyError:
-                unknown_state += 1
-                continue
-            if outcome.value == "ARCHITECTURE DECISION":
-                if not architecture_decision_is_consistent(
-                    item.get("decision_contract"), downstream_contract
-                ):
-                    architecture_contract_unknown += 1
-                else:
-                    resolved += 1
-            elif is_implementation_outcome(outcome):
-                resolved += 1
-            else:
-                research_not_implementation += 1
+            blockers = evaluate_profile_blockers(
+                profile,
+                item,
+                contract_evidence=contract_check.evidence,
+                registry=DEFAULT_PROFILE_POLICY_REGISTRY,
+                context=PolicyContext(
+                    profile=profile,
+                    phase="audit",
+                    issue=item,
+                    repository=relationships.get("repository")
+                    if isinstance(relationships.get("repository"), str)
+                    else None,
+                    downstream_contract=downstream_contract,
+                ),
+            )
+        except (TypeError, ValueError) as exc:
+            profile_blockers.append(("unknown", str(exc)))
+            continue
+        if blockers:
+            profile_blockers.extend(
+                (
+                    "unknown"
+                    if blocker.code
+                    in {
+                        "CONTRACT_INVALID",
+                        "RESEARCH_OUTCOME_UNKNOWN",
+                        "ARCHITECTURE_DECISION_UNMATCHED",
+                    }
+                    else "fail",
+                    blocker.detail,
+                )
+                for blocker in blockers
+            )
         else:
-            unknown_state += 1
+            resolved += 1
+    if any(status == "fail" for status, _detail in profile_blockers):
+        details = "; ".join(
+            detail for status, detail in profile_blockers if status == "fail"
+        )
+        return shared_facts.gate("fail", details or "profile blocker rejected")
+    if profile_blockers:
+        details = "; ".join(detail for _status, detail in profile_blockers)
+        return shared_facts.gate(
+            "unknown", details or "profile blocker evidence unavailable"
+        )
+    return shared_facts.gate(
+        "pass", f"unresolved=0, resolved={resolved}, total={len(items)}"
+    )
 
-    if unresolved or research_not_implementation:
-        return _gate(
-            "fail",
-            "unresolved="
-            f"{unresolved + research_not_implementation}, resolved={resolved}, "
-            f"open={open_numbers[:10]}, research_not_implementation={research_not_implementation}",
-        )
-    if (
-        research_contract_unknown
-        or architecture_contract_unknown
-        or research_outcome_unknown
-        or bug_contract_unknown
-    ):
-        return _gate(
-            "unknown",
-            "research decision evidence unavailable: "
-            f"research_contract_unknown={research_contract_unknown}, "
-            f"architecture_contract_unknown={architecture_contract_unknown}, "
-            f"research_outcome_unknown={research_outcome_unknown}, "
-            f"bug_contract_unknown={bug_contract_unknown}, "
-            f"resolved={resolved}, total={count}",
-        )
-    if truncated:
-        return _gate(
-            "unknown",
-            f"blocked-by list truncated; observed={len(items)}, resolved={resolved}",
-        )
-    if count != len(items):
-        return _gate(
-            "unknown",
-            f"blocked-by count mismatch: count={count}, observed={len(items)}",
-        )
-    if unknown_state:
-        return _gate(
-            "unknown",
-            f"unknown_state={unknown_state}, resolved={resolved}, total={count}",
-        )
-    return _gate("pass", f"unresolved=0, resolved={resolved}, total={count}")
+
+# Keep the historical audit helper available while routing all current LCK
+# decisions through ``PhaseEligibilityResolver.blocker_reasons``.
+_formal_blockers_gate = _audit_formal_blockers_gate
 
 
 def _sha_gate(actual: Any, expected: str | None, name: str) -> dict[str, Any]:

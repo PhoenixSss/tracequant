@@ -15,7 +15,6 @@ from workflow_common import (
     safe_text,
     stderr_tail,
 )
-from workflow_evidence import _find_project_status
 
 from .models import (
     BASE_BRANCH,
@@ -26,6 +25,7 @@ from .models import (
     _remote_refs,
 )
 from .profile_policies import ProfileEffectDescriptor
+from .shared_facts import _find_project_status
 from .state import LiveStateResolver
 
 
