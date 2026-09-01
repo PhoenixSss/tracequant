@@ -24,6 +24,7 @@ from documentation_policy import (
     documentation_contract_snapshot,
 )
 from lck_core import shared_facts
+from lck_core.eligibility import evaluate_shared_blockers
 from lck_core.issue_profiles import resolve_leaf_issue_profile
 from lck_core.profile_policies import (
     DEFAULT_PROFILE_POLICY_REGISTRY,
@@ -412,7 +413,7 @@ def _audit_formal_blockers_gate(
     downstream_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Audit adapter for the shared gate and registered profile capabilities."""
-    shared_gate = shared_facts.evaluate_shared_blockers(relationships)
+    shared_gate = evaluate_shared_blockers(relationships)
     if shared_gate.get("status") == "fail":
         return shared_gate
     if shared_gate.get("status") != "pass":

@@ -24,7 +24,55 @@ from .profile_policies import (
     resolve_profile_policy,
     validate_profile_contract,
 )
-from .shared_facts import evaluate_shared_blockers
+from .shared_facts import gate
+
+
+def evaluate_shared_blockers(relationships: Mapping[str, Any]) -> dict[str, Any]:
+    """Evaluate generic lifecycle blockers from normalized relationship facts."""
+    if relationships.get("available") is not True:
+        return gate("unknown", "Relationship facts unavailable")
+    blocked_by = relationships.get("blocked_by")
+    if not isinstance(blocked_by, Mapping):
+        return gate("unknown", "Blocked-by metadata unavailable")
+    items = blocked_by.get("items")
+    count = blocked_by.get("count")
+    truncated = blocked_by.get("truncated")
+    if (
+        not isinstance(items, list)
+        or not isinstance(count, int)
+        or isinstance(count, bool)
+        or count < 0
+        or not isinstance(truncated, bool)
+    ):
+        return gate("unknown", "Blocked-by metadata is malformed")
+    open_numbers: list[int] = []
+    unresolved = unknown_state = 0
+    for item in items:
+        if not isinstance(item, Mapping):
+            unknown_state += 1
+            continue
+        state = item.get("state")
+        normalized_state = state.upper() if isinstance(state, str) else ""
+        if normalized_state == "OPEN":
+            unresolved += 1
+            if isinstance(item.get("number"), int) and not isinstance(
+                item.get("number"), bool
+            ):
+                open_numbers.append(item["number"])
+        elif normalized_state != "CLOSED":
+            unknown_state += 1
+    if unresolved:
+        return gate("fail", f"unresolved={unresolved}, open={open_numbers[:10]}")
+    if truncated:
+        return gate("unknown", f"blocked-by list truncated; observed={len(items)}")
+    if count != len(items):
+        return gate(
+            "unknown",
+            f"blocked-by count mismatch: count={count}, observed={len(items)}",
+        )
+    if unknown_state:
+        return gate("unknown", f"unknown_state={unknown_state}, total={count}")
+    return gate("pass", f"unresolved=0, total={count}")
 
 
 @dataclass(frozen=True)
@@ -85,23 +133,24 @@ class PhaseEligibilityResolver:
         downstream_contract = (
             state.task_contract if isinstance(state.task_contract, Mapping) else issue
         )
-        validate_contract_at_entry = phase in {
-            Phase.DELIVERY_PREPARE,
-            Phase.DELIVERY_COMPLETE,
-            Phase.REMEDIATION_PREPARE,
-            Phase.REMEDIATION_COMPLETE,
-        }
-        if (
-            profile is not None
-            and isinstance(target_contract, Mapping)
-            and (profile.contract_policy is not None or validate_contract_at_entry)
-        ):
+        if profile is not None and isinstance(target_contract, Mapping):
             try:
                 contract_check = validate_profile_contract(
                     profile, target_contract, registry=self.registry
                 )
                 if not contract_check.valid:
-                    reasons.append(contract_check.failure_reason)
+                    # Contract validity remains a lifecycle gate for entry
+                    # phases and typed profiles.  Review/Closeout snapshots
+                    # intentionally do not reacquire a Task contract, but a
+                    # registered policy with usable contract evidence still
+                    # receives the same blocker dispatch below.
+                    if profile.contract_policy is not None or phase in {
+                        Phase.DELIVERY_PREPARE,
+                        Phase.DELIVERY_COMPLETE,
+                        Phase.REMEDIATION_PREPARE,
+                        Phase.REMEDIATION_COMPLETE,
+                    }:
+                        reasons.append(contract_check.failure_reason)
                 else:
                     policy_blockers = evaluate_profile_blockers(
                         profile,
@@ -156,12 +205,20 @@ class PhaseEligibilityResolver:
                         "formal blocker gate: closed dependency profile is unavailable"
                     )
                     continue
-                if dependency_profile.contract_policy is None:
-                    continue
                 try:
+                    contract_check = validate_profile_contract(
+                        dependency_profile,
+                        dependency,
+                        registry=self.registry,
+                    )
+                    if not contract_check.valid:
+                        if dependency_profile.contract_policy is not None:
+                            reasons.append(contract_check.failure_reason)
+                        continue
                     dependency_blockers = evaluate_profile_blockers(
                         dependency_profile,
                         dependency,
+                        contract_evidence=contract_check.evidence,
                         registry=self.registry,
                         context=PolicyContext(
                             profile=dependency_profile,

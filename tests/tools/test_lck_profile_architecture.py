@@ -22,12 +22,12 @@ from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     closeout as lck_closeout,
     delivery as lck_delivery,
     effects as lck_effects,
+    eligibility as lck_eligibility,
     issue_profiles,
     models as lck_models,
     receipts as lck_receipts,
     remediation as lck_remediation,
     review as lck_review,
-    shared_facts,
 )
 from lck_core.issue_profiles import (  # type: ignore[import-not-found]  # noqa: E402
     IssueProfileResolution,
@@ -126,7 +126,7 @@ def test_shared_facts_and_policy_blockers_follow_frozen_one_way_contract() -> No
         if path.name not in {"shared_facts.py", "__init__.py"}:
             assert "workflow_evidence" not in path.read_text(encoding="utf-8")
 
-    open_gate = shared_facts.evaluate_shared_blockers(
+    open_gate = lck_eligibility.evaluate_shared_blockers(
         {
             "available": True,
             "blocked_by": {
@@ -136,7 +136,7 @@ def test_shared_facts_and_policy_blockers_follow_frozen_one_way_contract() -> No
             },
         }
     )
-    closed_gate = shared_facts.evaluate_shared_blockers(
+    closed_gate = lck_eligibility.evaluate_shared_blockers(
         {
             "available": True,
             "blocked_by": {
@@ -165,6 +165,8 @@ class SyntheticPolicy:
     candidate_kind: str = "synthetic.candidate.v1"
     review_kind: str = "synthetic.review.v1"
     completion_kind: str = "synthetic.completion.v1"
+    blocker: PolicyBlocker | None = None
+    blocker_numbers: tuple[int, ...] = ()
 
     def validate_contract(
         self, context: PolicyContext, leaf_contract: Mapping[str, Any]
@@ -195,8 +197,13 @@ class SyntheticPolicy:
         leaf_contract: Mapping[str, Any],
         contract_evidence: ProfileEvidenceRecord,
     ) -> tuple[PolicyBlocker, ...]:
-        del context, leaf_contract, contract_evidence
-        return ()
+        del context, contract_evidence
+        if (
+            self.blocker is None
+            or leaf_contract.get("number") not in self.blocker_numbers
+        ):
+            return ()
+        return (self.blocker,)
 
     def validate_candidate(
         self,
@@ -328,7 +335,14 @@ def test_non_research_review_rejects_research_outcome_at_generic_policy_boundary
 def test_review_and_closeout_propagate_policy_injection_to_eligibility(
     tmp_path: Path,
 ) -> None:
-    policy = SyntheticPolicy()
+    policy = SyntheticPolicy(
+        blocker=PolicyBlocker(
+            code="SYNTHETIC_BLOCKED",
+            kind="synthetic",
+            detail="synthetic policy rejected this lifecycle operation",
+        ),
+        blocker_numbers=(159,),
+    )
     registry = ProfilePolicyRegistry.from_policies(policy)
     profile = replace(
         issue_profiles.TASK_PROFILE,
@@ -371,6 +385,74 @@ def test_review_and_closeout_propagate_policy_injection_to_eligibility(
         assert controller.eligibility.profile_resolver is resolve_synthetic
         decision = controller.eligibility.resolve(resolver.state, phase)
         assert decision.issue_profile["profile"]["profile_id"] == policy.profile_id
+        assert (
+            "policy blocker [SYNTHETIC_BLOCKED]: synthetic policy rejected this "
+            "lifecycle operation" in decision.reasons
+        )
+
+
+def test_dependency_policy_blocker_is_dispatched_without_contract_policy_filter(
+    tmp_path: Path,
+) -> None:
+    policy = SyntheticPolicy(
+        blocker=PolicyBlocker(
+            code="SYNTHETIC_DEPENDENCY_BLOCKED",
+            kind="synthetic",
+            detail="synthetic dependency policy rejected this dependency",
+        ),
+        blocker_numbers=(217,),
+    )
+    registry = ProfilePolicyRegistry.from_policies(policy)
+    profile = replace(
+        issue_profiles.TASK_PROFILE,
+        profile_id=policy.profile_id,
+        canonical_type_label=policy.canonical_type_label,
+        candidate_capability="synthetic_candidate",
+        requires_critical_outcome=False,
+    )
+
+    def resolve_synthetic(_issue: Mapping[str, Any] | None) -> IssueProfileResolution:
+        return IssueProfileResolution(
+            status=IssueProfileResolutionStatus.RESOLVED,
+            profile=profile,
+            type_labels=(profile.canonical_type_label,),
+        )
+
+    state = _review_state()
+    state = replace(
+        state,
+        relationships={
+            "available": True,
+            "blocked_by": {
+                "items": [
+                    {
+                        "number": 217,
+                        "state": "CLOSED",
+                        "labels": ["type:synthetic"],
+                        "labels_complete": True,
+                        "body_sha256": "a" * 64,
+                    }
+                ],
+                "count": 1,
+                "truncated": False,
+            },
+        },
+    )
+    resolver = StaticResolver(tmp_path, state)
+    eligibility = lck_eligibility.PhaseEligibilityResolver(
+        registry=registry,
+        profile_resolver=resolve_synthetic,
+    )
+
+    reasons = eligibility.blocker_reasons(
+        resolver.state,
+        phase=lck_models.Phase.REVIEW_PREPARE,
+    )
+
+    assert reasons == (
+        "policy blocker [SYNTHETIC_DEPENDENCY_BLOCKED]: "
+        "synthetic dependency policy rejected this dependency",
+    )
 
 
 def test_synthetic_policy_contract_blocker_candidate_use_frozen_registry_and_envelope() -> (
