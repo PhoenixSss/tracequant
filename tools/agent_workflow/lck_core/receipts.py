@@ -39,7 +39,7 @@ from .remediation import (
 )
 from .review import MergePreflightResult, ReviewCompletionResult, ReviewContext
 from .review_workspace import ReviewInvocationStore
-from .state import _task_contract_from_state
+from .state import _leaf_contract_from_state
 
 
 @dataclass(frozen=True)
@@ -237,7 +237,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "branch": value.branch,
             "base_sha": value.base_sha,
             "action": value.action,
-            "task_contract": _jsonable(_task_contract_from_state(value.state)),
+            "task_contract": _jsonable(_leaf_contract_from_state(value.state)),
             "eligibility": {
                 "eligible": value.eligibility.eligible,
                 "reasons": list(value.eligibility.reasons),

@@ -102,7 +102,7 @@ def _review_target_refs(
     if not isinstance(task_body_sha256, str) or not task_body_sha256:
         raise LckStopError("Review target Task Contract identity is unavailable")
     return ReviewTargetRefs(
-        task_number=state.task_number,
+        task_number=state.issue_number,
         pr_number=pr_number,
         base_sha=str(base_sha),
         head_sha=str(head_sha),
