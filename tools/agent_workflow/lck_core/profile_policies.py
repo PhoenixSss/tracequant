@@ -1929,6 +1929,12 @@ def validate_profile_review(
     context: PolicyContext | None = None,
 ) -> ProfileReviewResult:
     """Dispatch the generic Review capability without profile switches."""
+    if review_input.get(
+        "research_outcome"
+    ) is not None and not profile_research_outcome_supported(profile):
+        raise ProfilePolicyError(
+            "--research-outcome is supported only for Research Issues"
+        )
     policy = resolve_profile_policy(profile, registry=registry)
     execution_context = _policy_context(
         profile,

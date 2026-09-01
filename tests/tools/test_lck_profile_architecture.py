@@ -39,6 +39,7 @@ from lck_core.profile_policies import (  # type: ignore[import-not-found]  # noq
     ProfileEffectDescriptor,
     ProfileEvidenceEnvelope,
     ProfileEvidenceRecord,
+    ProfilePolicyError,
     ProfilePolicyRegistry,
     evaluate_profile_blockers,
     validate_profile_completion,
@@ -229,6 +230,28 @@ class SyntheticPolicy:
                 and isinstance(record.payload.get("effect"), Mapping)
             )
         return False
+
+
+@pytest.mark.parametrize(
+    "profile",
+    (
+        issue_profiles.TASK_PROFILE,
+        issue_profiles.BUG_PROFILE,
+        issue_profiles.DOCUMENTATION_PROFILE,
+    ),
+)
+def test_non_research_review_rejects_research_outcome_at_generic_policy_boundary(
+    profile: issue_profiles.LeafIssueWorkflowProfile,
+) -> None:
+    with pytest.raises(
+        ProfilePolicyError,
+        match="--research-outcome is supported only for Research Issues",
+    ):
+        validate_profile_review(
+            profile,
+            {"number": 219, "body_sha256": "a" * 64},
+            {"verdict": "PASS", "research_outcome": "IMPLEMENT"},
+        )
 
 
 def test_review_and_closeout_propagate_policy_injection_to_eligibility(
