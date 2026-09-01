@@ -12,11 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, cast
 
-from research_policy import ResearchPolicyError, research_artifact_binding
 from workflow_common import WorkflowToolError, atomic_write_json, is_sha, read_json_file
 
 from .effective_diff import calculate_effective_diff
-from .issue_profiles import resolve_issue_profile
+from .issue_profiles import resolve_leaf_issue_profile
 from .models import (
     LCK_SCHEMA_VERSION,
     LckStopError,
@@ -25,7 +24,14 @@ from .models import (
     _pr_base_sha,
     _pr_head_sha,
 )
-from .profile_policies import profile_has_research_artifacts
+from .profile_policies import (
+    DEFAULT_PROFILE_POLICY_REGISTRY,
+    ProfilePolicyError,
+    ProfilePolicyRegistry,
+    ProfileResolver,
+    build_profile_review_artifact,
+    resolve_issue_policy,
+)
 from .state import LiveStateResolver
 
 
@@ -110,6 +116,8 @@ def _review_identity(
     task_contract: Mapping[str, Any],
     *,
     repo_root: Path,
+    policy_registry: ProfilePolicyRegistry = DEFAULT_PROFILE_POLICY_REGISTRY,
+    profile_resolver: ProfileResolver | None = None,
 ) -> ReviewIdentity:
     """Derive the effective diff from frozen refs inside a materialized repository.
 
@@ -126,25 +134,33 @@ def _review_identity(
         command_id_prefix="lck-review",
         cwd=repo_root,
     )
-    research_artifact = None
-    profile = resolve_issue_profile(state.issue).profile
-    if profile is not None and profile_has_research_artifacts(profile):
-        try:
-            research_artifact = research_artifact_binding(
-                repo_root,
-                task_number=target.task_number,
-                pr_number=target.pr_number,
-                base_sha=target.base_sha,
-                head_sha=target.head_sha,
-                task_body_sha256=target.task_body_sha256,
-                merge_base_sha=effective_diff.merge_base_sha,
-                effective_diff_sha256=effective_diff.effective_diff_sha256,
-                changed_files=effective_diff.changed_files,
-            )
-        except ResearchPolicyError as exc:
-            raise LckStopError(
-                f"Research artifact policy rejected the Review target: {exc}"
-            ) from exc
+    artifact_input = {
+        "task_number": target.task_number,
+        "pr_number": target.pr_number,
+        "base_sha": target.base_sha,
+        "head_sha": target.head_sha,
+        "task_body_sha256": target.task_body_sha256,
+        "merge_base_sha": effective_diff.merge_base_sha,
+        "effective_diff_sha256": effective_diff.effective_diff_sha256,
+        "changed_files": effective_diff.changed_files,
+    }
+    try:
+        profile, _policy = resolve_issue_policy(
+            state.issue or {},
+            registry=policy_registry,
+            profile_resolver=profile_resolver or resolve_leaf_issue_profile,
+        )
+        research_artifact = build_profile_review_artifact(
+            profile,
+            state.issue or {},
+            artifact_input,
+            repo_root=repo_root,
+            registry=policy_registry,
+        )
+    except (ProfilePolicyError, ValueError) as exc:
+        raise LckStopError(
+            f"Research artifact policy rejected the Review target: {exc}"
+        ) from exc
     return ReviewIdentity(
         task_number=target.task_number,
         pr_number=target.pr_number,

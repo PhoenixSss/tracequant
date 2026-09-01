@@ -9,6 +9,7 @@ an independent registry without mutating production state.
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from critical_outcome import (
     CriticalOutcomeError,
     contract_from_snapshot,
     critical_outcome_snapshot,
+    verify_critical_outcome,
 )
 from documentation_policy import (
     DocumentationChangeResult,
@@ -28,9 +30,20 @@ from documentation_policy import (
     evaluate_documentation_changes,
     is_valid_documentation_contract,
 )
-from research_policy import is_valid_research_contract, research_contract_snapshot
-from workflow_common import sha256_json
+from research_policy import (
+    RESEARCH_OUTCOME_FIELD,
+    ResearchPolicyError,
+    bind_research_outcome,
+    evaluate_research_changes,
+    is_valid_research_contract,
+    require_typed_research_outcome,
+    research_artifact_binding,
+    research_artifact_outcome,
+    research_contract_snapshot,
+)
+from workflow_common import read_json_text, safe_text, sha256_json
 
+from .effective_diff import calculate_effective_diff
 from .issue_profiles import (
     IssueProfileResolution,
     LeafIssueWorkflowProfile,
@@ -44,10 +57,115 @@ _KIND_PATTERN: Final = r"^[a-z][a-z0-9_.-]*$"
 _CODE_PATTERN: Final = r"^[A-Z][A-Z0-9_.-]*$"
 _TYPE_LABEL_PATTERN: Final = r"^type:[a-z][a-z0-9_.-]*$"
 _SHA256_PATTERN: Final = r"^[0-9a-f]{64}$"
+_EFFECT_KIND_PATTERN: Final = r"^[a-z][a-z0-9_.-]*$"
 
 
 class ProfilePolicyError(ValueError):
     """A profile policy or its typed evidence cannot be accepted safely."""
+
+
+class ProfileCandidateRejected(ProfilePolicyError):
+    """A candidate failed with a structured, policy-owned result."""
+
+    def __init__(self, detail: str, result: Mapping[str, Any]) -> None:
+        super().__init__(detail)
+        self.result = dict(result)
+
+
+@dataclass(frozen=True)
+class ProfileEffectDescriptor:
+    """A constrained, data-only intent emitted by a profile policy.
+
+    A descriptor is deliberately not executable.  The LCK kernel validates its
+    shape and dispatches the allow-listed ``effect_kind`` through its own
+    executor registry.  Keeping parameters, postconditions, and receipt
+    metadata as JSON data also prevents a policy from smuggling a callable or
+    an unbounded GitHub operation through the profile boundary.
+    """
+
+    effect_kind: str
+    schema_version: int
+    parameters: Mapping[str, Any]
+    postcondition: Mapping[str, Any]
+    receipt: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.effect_kind, str)
+            or re.fullmatch(_EFFECT_KIND_PATTERN, self.effect_kind) is None
+        ):
+            raise ProfilePolicyError("effect descriptor kind is malformed")
+        if (
+            not isinstance(self.schema_version, int)
+            or isinstance(self.schema_version, bool)
+            or self.schema_version != 1
+        ):
+            raise ProfilePolicyError("unsupported effect descriptor schema version")
+        for name, value in (
+            ("parameters", self.parameters),
+            ("postcondition", self.postcondition),
+            ("receipt", self.receipt),
+        ):
+            if not isinstance(value, Mapping):
+                raise ProfilePolicyError(f"effect descriptor {name} must be a mapping")
+            if any(not isinstance(key, str) for key in value):
+                raise ProfilePolicyError(
+                    f"effect descriptor {name} keys must be strings"
+                )
+            try:
+                _validate_json_data(value)
+                _canonical_json(value)
+            except (TypeError, ValueError) as exc:
+                raise ProfilePolicyError(
+                    f"effect descriptor {name} must be JSON data"
+                ) from exc
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "effect_kind": self.effect_kind,
+            "schema_version": self.schema_version,
+            "parameters": _jsonable(self.parameters),
+            "postcondition": _jsonable(self.postcondition),
+            "receipt": _jsonable(self.receipt),
+        }
+
+    def serialize(self) -> str:
+        return _canonical_json(self.to_dict())
+
+
+# Short aliases make the generic contract convenient for policy adapters and
+# for external test-only policies without exposing a second schema.
+EffectDescriptor = ProfileEffectDescriptor
+
+
+class DocumentationReclassificationRequired(LckStopError):
+    """The Documentation policy rejected the candidate file scope."""
+
+    code = "DOCUMENTATION_RECLASSIFICATION_REQUIRED"
+
+    def __init__(
+        self, message: str, *, result: Mapping[str, Any] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.result = dict(result) if isinstance(result, Mapping) else None
+
+
+class ResearchReclassificationRequired(LckStopError):
+    """The Research policy rejected the candidate artifact scope."""
+
+    code = "RESEARCH_RECLASSIFICATION_REQUIRED"
+
+    def __init__(
+        self, message: str, *, result: Mapping[str, Any] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.result = dict(result) if isinstance(result, Mapping) else None
+
+
+class ResearchOutcomeRequired(LckStopError):
+    """A Research completion boundary has no typed outcome."""
+
+    code = "RESEARCH_OUTCOME_REQUIRED"
 
 
 ProfileResolver = Callable[[Mapping[str, Any] | None], IssueProfileResolution]
@@ -59,6 +177,26 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
     return value
+
+
+def _validate_json_data(value: Any) -> None:
+    if value is None or isinstance(value, (str, bool, int)):
+        return
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return
+        raise TypeError("non-finite numbers are not JSON data")
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                raise TypeError("JSON object keys must be strings")
+            _validate_json_data(nested)
+        return
+    if isinstance(value, (list, tuple)):
+        for nested in value:
+            _validate_json_data(nested)
+        return
+    raise TypeError(f"unsupported JSON data type: {type(value).__name__}")
 
 
 def _canonical_json(value: Any) -> str:
@@ -250,11 +388,21 @@ class PolicyContext:
     issue: Mapping[str, Any] | None = None
     relationships: Mapping[str, Any] | None = None
     repo_root: Path | None = None
+    runner: Any = None
     base_sha: str | None = None
     head_sha: str | None = None
     include_index: bool = False
     changed_files: tuple[str, ...] = ()
     progress: Any = None
+    # ``services`` is a compatibility seam for deterministic test doubles.
+    # Production policies use the bounded inputs above and do not receive
+    # controller-owned concrete validators.
+    services: tuple[Any, ...] = ()
+    review_identity: Mapping[str, Any] | None = None
+    review_record: Mapping[str, Any] | None = None
+    merged_pr: Mapping[str, Any] | None = None
+    review_verdict: str | None = None
+    research_outcome: str | None = None
     critical_outcome: Callable[[], Mapping[str, Any]] | None = None
     documentation_validation: Callable[[], Mapping[str, Any]] | None = None
     research_validation: Callable[[], Mapping[str, Any]] | None = None
@@ -290,6 +438,28 @@ class LeafIssuePolicy(Protocol):
     ) -> ProfileEvidenceRecord: ...
 
     def validate_evidence(self, record: ProfileEvidenceRecord) -> bool: ...
+
+
+class ProfileReviewPolicy(Protocol):
+    """Optional generic review-stage capability supplied by a leaf policy."""
+
+    def validate_review(
+        self,
+        context: PolicyContext,
+        leaf_contract: Mapping[str, Any],
+        review_input: Mapping[str, Any],
+    ) -> ProfileEvidenceRecord: ...
+
+
+class ProfileCompletionPolicy(Protocol):
+    """Optional generic completion-stage capability supplied by a leaf policy."""
+
+    def validate_completion(
+        self,
+        context: PolicyContext,
+        leaf_contract: Mapping[str, Any],
+        completion_input: Mapping[str, Any],
+    ) -> ProfileEvidenceRecord | None: ...
 
 
 class ProfilePolicyRegistry:
@@ -393,19 +563,22 @@ LeafIssuePolicyRegistry = ProfilePolicyRegistry
 
 
 def _contract_reference(leaf_contract: Mapping[str, Any]) -> dict[str, Any]:
-    reference = {
+    body_sha256 = leaf_contract.get("body_sha256")
+    if isinstance(body_sha256, str) and body_sha256:
+        return {
+            "number": leaf_contract.get("number"),
+            "body_sha256": body_sha256,
+        }
+    return {
         "number": leaf_contract.get("number"),
-        "body_sha256": leaf_contract.get("body_sha256"),
-    }
-    if not isinstance(reference["body_sha256"], str) or not reference["body_sha256"]:
-        reference["contract_sha256"] = sha256_json(
+        "contract_sha256": sha256_json(
             {
                 "number": leaf_contract.get("number"),
                 "title": leaf_contract.get("title"),
                 "url": leaf_contract.get("url"),
             }
-        )
-    return reference
+        ),
+    }
 
 
 def _valid_contract_reference(value: Any) -> bool:
@@ -433,7 +606,7 @@ def _valid_contract_reference(value: Any) -> bool:
     return set(value) == (
         {"number", "body_sha256"}
         if body_sha256 is not None
-        else {"number", "body_sha256", "contract_sha256"}
+        else {"number", "contract_sha256"}
     )
 
 
@@ -514,8 +687,14 @@ class _BuiltinPolicy:
     contract_kind: str
     candidate_kind: str
     policy_label: str
+    review_kind: str | None = None
+    completion_kind: str | None = None
     legacy_result_field: str | None = None
     candidate_requires_result: bool = False
+
+    def _kind(self, stage: str) -> str:
+        value = getattr(self, f"{stage}_kind", None)
+        return value if isinstance(value, str) else f"{self.profile_id}.{stage}.v1"
 
     def _validate_contract_payload(self, value: object) -> bool:
         del value
@@ -554,7 +733,12 @@ class _BuiltinPolicy:
     def validate_evidence(self, record: ProfileEvidenceRecord) -> bool:
         if record.schema_version != PROFILE_EVIDENCE_SCHEMA_VERSION:
             return False
-        if record.kind not in {self.contract_kind, self.candidate_kind}:
+        if record.kind not in {
+            self.contract_kind,
+            self.candidate_kind,
+            self._kind("review"),
+            self._kind("completion"),
+        }:
             return False
         payload = record.payload
         if payload.get("policy_id") != self.profile_id or not isinstance(
@@ -572,9 +756,41 @@ class _BuiltinPolicy:
         if status == "fail":
             error = payload.get("error")
             return isinstance(error, str) and bool(error.strip())
-        return not self.candidate_requires_result or (
-            isinstance(result, Mapping) and result.get("status") == "pass"
+        if record.kind == self.candidate_kind and self.candidate_requires_result:
+            return isinstance(result, Mapping) and result.get("status") == "pass"
+        return True
+
+    def validate_review(
+        self,
+        context: PolicyContext,
+        leaf_contract: Mapping[str, Any],
+        review_input: Mapping[str, Any],
+    ) -> ProfileEvidenceRecord:
+        return self._record(
+            self._kind("review"),
+            context,
+            leaf_contract,
+            result={"status": "pass"},
+            status="pass",
+            review=review_input,
         )
+
+    def review_artifact(
+        self,
+        context: PolicyContext,
+        review_input: Mapping[str, Any],
+    ) -> Mapping[str, Any] | None:
+        del context, review_input
+        return None
+
+    def validate_completion(
+        self,
+        context: PolicyContext,
+        leaf_contract: Mapping[str, Any],
+        completion_input: Mapping[str, Any],
+    ) -> ProfileEvidenceRecord | None:
+        del context, leaf_contract, completion_input
+        return None
 
     def evaluate_blockers(
         self,
@@ -612,6 +828,271 @@ class _BuiltinPolicy:
         if self.legacy_result_field is None or result is None:
             return {}
         return {self.legacy_result_field: dict(result)}
+
+    def _service_result(self, context: PolicyContext) -> Mapping[str, Any] | None:
+        """Use an injected test service without making it a controller contract."""
+        if not context.services:
+            return None
+        service = context.services[0]
+        run = getattr(service, "run", None)
+        if not callable(run):
+            raise ProfilePolicyError("injected profile service is not executable")
+        try:
+            result = run(
+                context.base_sha,
+                head_sha=context.head_sha,
+                include_index=context.include_index,
+            )
+        except TypeError:
+            # Keep old test doubles that only accept a positional base SHA.
+            result = run(context.base_sha)
+        if not isinstance(result, Mapping):
+            raise ProfilePolicyError("profile candidate result is malformed")
+        return result
+
+
+def _candidate_effective_diff(context: PolicyContext, *, command_prefix: str) -> Any:
+    if context.runner is None or context.repo_root is None:
+        raise ProfilePolicyError("profile candidate diff context is unavailable")
+    if not isinstance(context.base_sha, str) or not context.base_sha:
+        raise ProfilePolicyError("profile candidate base identity is unavailable")
+    head_ref = "HEAD" if context.include_index else (context.head_sha or "HEAD")
+    return calculate_effective_diff(
+        context.runner,
+        base_sha=context.base_sha,
+        head_ref=head_ref,
+        command_id_prefix=command_prefix,
+        cwd=context.repo_root,
+        include_index=context.include_index,
+    )
+
+
+def _documentation_candidate_result(context: PolicyContext) -> dict[str, Any]:
+    effective_diff = _candidate_effective_diff(
+        context, command_prefix="lck-documentation"
+    )
+    policy = evaluate_documentation_changes(effective_diff.changed_files)
+    payload = policy.to_dict()
+    payload["effective_diff"] = {
+        "merge_base_sha": effective_diff.merge_base_sha,
+        "effective_diff_sha256": effective_diff.effective_diff_sha256,
+        "source": "index" if context.include_index else "head",
+    }
+    return payload
+
+
+def _research_candidate_result(context: PolicyContext) -> dict[str, Any]:
+    effective_diff = _candidate_effective_diff(context, command_prefix="lck-research")
+    policy = evaluate_research_changes(
+        effective_diff.changed_files, repo_root=context.repo_root
+    )
+    payload = policy.to_dict()
+    payload["effective_diff"] = {
+        "merge_base_sha": effective_diff.merge_base_sha,
+        "effective_diff_sha256": effective_diff.effective_diff_sha256,
+        "source": "index" if context.include_index else "head",
+    }
+    try:
+        artifact_outcome = research_artifact_outcome(
+            context.repo_root, policy.artifact_files
+        )
+    except ResearchPolicyError as exc:
+        raise ResearchReclassificationRequired(str(exc)) from exc
+    payload["artifact_outcome"] = (
+        artifact_outcome.value if artifact_outcome is not None else None
+    )
+    return payload
+
+
+class DocumentationValidationGate:
+    """Compatibility adapter; production Delivery uses policy dispatch."""
+
+    def __init__(self, resolver: Any) -> None:
+        self.resolver = resolver
+        self.last_result: dict[str, Any] | None = None
+
+    def run(self, base_sha: str) -> dict[str, Any]:
+        context = PolicyContext(
+            base_sha=base_sha,
+            repo_root=self.resolver.repo_root,
+            runner=self.resolver.runner,
+            include_index=True,
+        )
+        result = _documentation_candidate_result(context)
+        self.last_result = result
+        if result.get("status") != "pass":
+            raise DocumentationReclassificationRequired(
+                "DOCUMENTATION_RECLASSIFICATION_REQUIRED: "
+                + str(
+                    result.get("detail")
+                    or "Documentation policy rejected the candidate"
+                ),
+                result=result,
+            )
+        return result
+
+
+class ResearchValidationGate:
+    """Compatibility adapter; production Delivery uses policy dispatch."""
+
+    def __init__(self, resolver: Any) -> None:
+        self.resolver = resolver
+        self.last_result: dict[str, Any] | None = None
+
+    def run(
+        self,
+        base_sha: str,
+        *,
+        head_sha: str | None = None,
+        include_index: bool = False,
+    ) -> dict[str, Any]:
+        context = PolicyContext(
+            base_sha=base_sha,
+            head_sha=head_sha,
+            repo_root=self.resolver.repo_root,
+            runner=self.resolver.runner,
+            include_index=include_index,
+        )
+        result = _research_candidate_result(context)
+        self.last_result = result
+        if result.get("status") != "pass":
+            raise ResearchReclassificationRequired(
+                "RESEARCH_RECLASSIFICATION_REQUIRED: "
+                + str(result.get("detail") or "Research policy rejected the candidate"),
+                result=result,
+            )
+        return result
+
+
+RESEARCH_OUTCOME_QUERY: Final = r"""
+query($owner:String!, $projectNumber:Int!, $userAfter:String, $organizationAfter:String) {
+  user(login:$owner) {
+    projectV2(number:$projectNumber) {
+      items(first:100, after:$userAfter) {
+        nodes {
+          content { ... on Issue { number repository { nameWithOwner } } }
+          fieldValueByName(name:"Research Outcome") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+  organization(login:$owner) {
+    projectV2(number:$projectNumber) {
+      items(first:100, after:$organizationAfter) {
+        nodes {
+          content { ... on Issue { number repository { nameWithOwner } } }
+          fieldValueByName(name:"Research Outcome") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+
+class ResearchOutcomeEffect:
+    """Legacy read-only adapter retained for callers of the old helper.
+
+    Closeout no longer owns this profile-specific implementation; the generic
+    effect executor in ``effects.py`` owns completion side effects.
+    """
+
+    def __init__(self, resolver: Any) -> None:
+        self.resolver = resolver
+
+    def _query_outcome(self, repository: str, task_number: int) -> str | None:
+        owner, separator, _name = repository.partition("/")
+        if not separator or not owner:
+            return None
+        cursors: dict[str, str | None] = {"user": None, "organization": None}
+        seen: dict[str, set[str]] = {"user": set(), "organization": set()}
+        complete: set[str] = set()
+        while len(complete) < 2:
+            argv = [
+                "gh",
+                "api",
+                "graphql",
+                "-f",
+                f"query={' '.join(RESEARCH_OUTCOME_QUERY.split())}",
+                "-F",
+                f"owner={owner}",
+                "-F",
+                "projectNumber=1",
+            ]
+            if cursors["user"] is not None:
+                argv.extend(("-F", f"userAfter={cursors['user']}"))
+            if cursors["organization"] is not None:
+                argv.extend(("-F", f"organizationAfter={cursors['organization']}"))
+            result = self.resolver.runner.run(
+                argv, command_id="lck-research-outcome-postcondition", retries=1
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return None
+            value = read_json_text(
+                result.stdout, field="lck-research-outcome-postcondition"
+            )
+            if not isinstance(value, Mapping) or value.get("errors"):
+                return None
+            data = value.get("data")
+            if not isinstance(data, Mapping):
+                return None
+            for scope in ("user", "organization"):
+                if scope in complete:
+                    continue
+                owner_data = data.get(scope)
+                if owner_data is None:
+                    complete.add(scope)
+                    continue
+                if not isinstance(owner_data, Mapping):
+                    return None
+                project = owner_data.get("projectV2")
+                if project is None:
+                    complete.add(scope)
+                    continue
+                if not isinstance(project, Mapping):
+                    return None
+                items = project.get("items")
+                if not isinstance(items, Mapping):
+                    return None
+                nodes = items.get("nodes")
+                page_info = items.get("pageInfo")
+                if not isinstance(nodes, list) or not isinstance(page_info, Mapping):
+                    return None
+                for item in nodes:
+                    if not isinstance(item, Mapping):
+                        continue
+                    content = item.get("content")
+                    if not isinstance(content, Mapping):
+                        continue
+                    content_repository = content.get("repository")
+                    if (
+                        content.get("number") == task_number
+                        and isinstance(content_repository, Mapping)
+                        and content_repository.get("nameWithOwner") == repository
+                    ):
+                        field_value = item.get("fieldValueByName")
+                        if not isinstance(field_value, Mapping):
+                            return None
+                        return safe_text(field_value.get("name"))
+                if page_info.get("hasNextPage") is False:
+                    complete.add(scope)
+                elif page_info.get("hasNextPage") is True:
+                    end_cursor = page_info.get("endCursor")
+                    if not isinstance(end_cursor, str) or not end_cursor:
+                        return None
+                    if end_cursor in seen[scope]:
+                        return None
+                    seen[scope].add(end_cursor)
+                    cursors[scope] = end_cursor
+                else:
+                    return None
+        return None
 
 
 class _TaskPolicy(_BuiltinPolicy):
@@ -654,19 +1135,46 @@ class _TaskPolicy(_BuiltinPolicy):
         leaf_contract: Mapping[str, Any],
         contract_evidence: ProfileEvidenceRecord,
     ) -> ProfileEvidenceRecord:
-        if context.critical_outcome is None:
-            raise ProfilePolicyError("Task Critical Outcome verifier is unavailable")
         _validate_policy_evidence(
             self,
             contract_evidence,
             stage="contract",
             leaf_contract=leaf_contract,
         )
-        result = context.critical_outcome()
+        if context.critical_outcome is not None:
+            # Compatibility for callers that inject a deterministic candidate
+            # callback.  Production Delivery leaves this unset and uses the
+            # policy-owned verifier below.
+            result = context.critical_outcome()
+        else:
+            if context.repo_root is None or context.runner is None:
+                raise ProfilePolicyError(
+                    "Task Critical Outcome verifier is unavailable"
+                )
+            try:
+                contract = contract_from_snapshot(
+                    contract_evidence.payload.get("contract")
+                )
+                verified = verify_critical_outcome(
+                    context.repo_root,
+                    context.runner,
+                    contract,
+                    progress=context.progress,
+                )
+            except (CriticalOutcomeError, ValueError) as exc:
+                raise ProfilePolicyError(str(exc)) from exc
+            result = verified.to_dict()
         if not isinstance(result, Mapping):
             raise ProfilePolicyError("Task Critical Outcome result is malformed")
         if result.get("status") != "pass":
-            raise ProfilePolicyError("Task Critical Outcome candidate did not pass")
+            detail = "Critical Outcome FAIL"
+            verification_test = contract_evidence.payload.get("verification_test")
+            exit_code = result.get("exit_code")
+            if isinstance(verification_test, str) and verification_test:
+                detail += f": {verification_test}"
+            if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+                detail += f" exited {exit_code}"
+            raise ProfileCandidateRejected(detail, result)
         return self._record(
             self.candidate_kind,
             context,
@@ -753,18 +1261,61 @@ class _DocumentationPolicy(_BuiltinPolicy):
             stage="contract",
             leaf_contract=leaf_contract,
         )
-        if context.documentation_validation is not None:
-            result = context.documentation_validation()
-        else:
-            result = evaluate_documentation_changes(context.changed_files).to_dict()
+        result = self._service_result(context)
+        if result is None:
+            if context.runner is None or context.repo_root is None:
+                result = evaluate_documentation_changes(context.changed_files).to_dict()
+            else:
+                result = _documentation_candidate_result(context)
         if not isinstance(result, Mapping):
             raise ProfilePolicyError("Documentation candidate result is malformed")
+        if result.get("status") != "pass":
+            raise DocumentationReclassificationRequired(
+                "DOCUMENTATION_RECLASSIFICATION_REQUIRED: "
+                + str(
+                    result.get("detail")
+                    or "Documentation policy rejected the candidate"
+                ),
+                result=result,
+            )
         return self._record(
             self.candidate_kind,
             context,
             leaf_contract,
             result=dict(result),
             status=result.get("status"),
+        )
+
+    def validate_review(
+        self,
+        context: PolicyContext,
+        leaf_contract: Mapping[str, Any],
+        review_input: Mapping[str, Any],
+    ) -> ProfileEvidenceRecord:
+        identity = review_input.get("identity", review_input)
+        changed_files = (
+            identity.get("changed_files") if isinstance(identity, Mapping) else None
+        )
+        if not isinstance(changed_files, (list, tuple)):
+            raise DocumentationReclassificationRequired(
+                "DOCUMENTATION_RECLASSIFICATION_REQUIRED: "
+                "Review changed-file inventory is unavailable"
+            )
+        result = evaluate_documentation_changes(changed_files).to_dict()
+        if result.get("status") != "pass":
+            raise DocumentationReclassificationRequired(
+                "DOCUMENTATION_RECLASSIFICATION_REQUIRED: "
+                + str(
+                    result.get("detail")
+                    or "Documentation policy rejected the Review target"
+                )
+            )
+        return self._record(
+            self._kind("review"),
+            context,
+            leaf_contract,
+            result=result,
+            status="pass",
         )
 
 
@@ -806,11 +1357,19 @@ class _ResearchPolicy(_BuiltinPolicy):
             stage="contract",
             leaf_contract=leaf_contract,
         )
-        if context.research_validation is None:
-            raise ProfilePolicyError("Research candidate validator is unavailable")
-        result = context.research_validation()
+        result = self._service_result(context)
+        if result is None:
+            if context.runner is None or context.repo_root is None:
+                raise ProfilePolicyError("Research candidate validator is unavailable")
+            result = _research_candidate_result(context)
         if not isinstance(result, Mapping):
             raise ProfilePolicyError("Research candidate result is malformed")
+        if result.get("status") != "pass":
+            raise ResearchReclassificationRequired(
+                "RESEARCH_RECLASSIFICATION_REQUIRED: "
+                + str(result.get("detail") or "Research policy rejected the candidate"),
+                result=result,
+            )
         return self._record(
             self.candidate_kind,
             context,
@@ -818,6 +1377,184 @@ class _ResearchPolicy(_BuiltinPolicy):
             result=dict(result),
             status=result.get("status"),
         )
+
+    def review_artifact(
+        self,
+        context: PolicyContext,
+        review_input: Mapping[str, Any],
+    ) -> Mapping[str, Any] | None:
+        if context.repo_root is None:
+            raise ResearchPolicyError("Research Review workspace is unavailable")
+        identity = review_input.get("identity", review_input)
+        if not isinstance(identity, Mapping):
+            raise ResearchPolicyError("Research Review identity is unavailable")
+        required = {
+            key: identity.get(key)
+            for key in (
+                "task_number",
+                "pr_number",
+                "base_sha",
+                "head_sha",
+                "task_body_sha256",
+                "merge_base_sha",
+                "effective_diff_sha256",
+                "changed_files",
+            )
+        }
+        if not isinstance(required["changed_files"], (list, tuple)):
+            raise ResearchPolicyError(
+                "Research Review changed-file inventory is unavailable"
+            )
+        try:
+            return research_artifact_binding(
+                context.repo_root,
+                task_number=required["task_number"],
+                pr_number=required["pr_number"],
+                base_sha=required["base_sha"],
+                head_sha=required["head_sha"],
+                task_body_sha256=required["task_body_sha256"],
+                merge_base_sha=required["merge_base_sha"],
+                effective_diff_sha256=required["effective_diff_sha256"],
+                changed_files=required["changed_files"],
+            )
+        except (ResearchPolicyError, TypeError, ValueError) as exc:
+            raise ResearchPolicyError(str(exc)) from exc
+
+    def validate_review(
+        self,
+        context: PolicyContext,
+        leaf_contract: Mapping[str, Any],
+        review_input: Mapping[str, Any],
+    ) -> ProfileEvidenceRecord:
+        artifact = review_input.get("artifact")
+        if not isinstance(artifact, Mapping):
+            artifact = self.review_artifact(context, review_input)
+        verdict = str(review_input.get("verdict") or "PASS").upper()
+        outcome = review_input.get("research_outcome")
+        if outcome is not None:
+            if not isinstance(artifact, Mapping):
+                raise ResearchOutcomeRequired(
+                    "Research Review Complete requires a reviewed artifact binding"
+                )
+            try:
+                artifact = bind_research_outcome(artifact, outcome)
+            except ResearchPolicyError as exc:
+                raise ResearchOutcomeRequired(str(exc)) from exc
+        if verdict == "PASS":
+            if not isinstance(artifact, Mapping):
+                raise ResearchOutcomeRequired(
+                    "Research Review Complete requires a reviewed artifact binding"
+                )
+            try:
+                require_typed_research_outcome(artifact)
+            except ResearchPolicyError as exc:
+                raise ResearchOutcomeRequired(
+                    f"Research Review Complete requires a typed outcome: {exc}"
+                ) from exc
+        payload: dict[str, Any] = {
+            "result": {"status": "pass"},
+            "status": "pass",
+            "verdict": verdict,
+        }
+        if isinstance(artifact, Mapping):
+            payload["artifact"] = dict(artifact)
+        return self._record(self._kind("review"), context, leaf_contract, **payload)
+
+    def validate_completion(
+        self,
+        context: PolicyContext,
+        leaf_contract: Mapping[str, Any],
+        completion_input: Mapping[str, Any],
+    ) -> ProfileEvidenceRecord:
+        review_record = completion_input.get("review_record")
+        artifact: Mapping[str, Any] | None = None
+        if isinstance(review_record, Mapping):
+            raw_artifact = review_record.get("research_artifact")
+            if not isinstance(raw_artifact, Mapping):
+                raw_identity = review_record.get("identity")
+                if isinstance(raw_identity, Mapping):
+                    raw_artifact = raw_identity.get("research_artifact")
+            if isinstance(raw_artifact, Mapping):
+                artifact = raw_artifact
+        if artifact is None:
+            raw_artifact = completion_input.get("artifact")
+            if isinstance(raw_artifact, Mapping):
+                artifact = raw_artifact
+        if artifact is None:
+            raise ResearchOutcomeRequired(
+                "Research completion requires a reviewed artifact binding"
+            )
+        try:
+            outcome = require_typed_research_outcome(artifact)
+        except ResearchPolicyError as exc:
+            raise ResearchOutcomeRequired(
+                f"Research completion requires a typed outcome: {exc}"
+            ) from exc
+        repository = completion_input.get("repository") or (
+            context.issue.get("repository")
+            if isinstance(context.issue, Mapping)
+            else None
+        )
+        task_number = completion_input.get("task_number")
+        if not isinstance(repository, str) or not repository:
+            raise ProfilePolicyError("Research completion repository is unavailable")
+        if (
+            not isinstance(task_number, int)
+            or isinstance(task_number, bool)
+            or task_number <= 0
+        ):
+            raise ProfilePolicyError("Research completion Task number is unavailable")
+        descriptor = ProfileEffectDescriptor(
+            effect_kind="project.single_select.set.v1",
+            schema_version=1,
+            parameters={
+                "repository": repository,
+                "task_number": task_number,
+                "project_number": 1,
+                "field": RESEARCH_OUTCOME_FIELD,
+                "value": outcome.value,
+            },
+            postcondition={
+                "kind": "project.single_select.equals",
+                "repository": repository,
+                "task_number": task_number,
+                "project_number": 1,
+                "field": RESEARCH_OUTCOME_FIELD,
+                "value": outcome.value,
+            },
+            receipt={"outcome": outcome.value},
+        )
+        return self._record(
+            self._kind("completion"),
+            context,
+            leaf_contract,
+            result={"status": "pass", "outcome": outcome.value},
+            status="pass",
+            effect=descriptor.to_dict(),
+        )
+
+    def validate_evidence(self, record: ProfileEvidenceRecord) -> bool:
+        if not super().validate_evidence(record):
+            return False
+        if record.kind == self._kind("review"):
+            artifact = record.payload.get("artifact")
+            if artifact is not None and not isinstance(artifact, Mapping):
+                return False
+        if record.kind == self._kind("completion"):
+            effect = record.payload.get("effect")
+            if not isinstance(effect, Mapping):
+                return False
+            try:
+                ProfileEffectDescriptor(
+                    effect_kind=effect.get("effect_kind"),
+                    schema_version=effect.get("schema_version"),
+                    parameters=effect.get("parameters"),
+                    postcondition=effect.get("postcondition"),
+                    receipt=effect.get("receipt"),
+                )
+            except (ProfilePolicyError, TypeError, ValueError):
+                return False
+        return True
 
 
 DEFAULT_PROFILE_POLICY_REGISTRY: Final = ProfilePolicyRegistry(
@@ -860,6 +1597,7 @@ class ProfileGateFailure(LckStopError):
 
     detail: str
     profile_evidence: ProfileEvidenceEnvelope | None = None
+    legacy_results: Mapping[str, Any] = MappingProxyType({})
 
     def __str__(self) -> str:
         return self.detail
@@ -1036,6 +1774,211 @@ def validate_profile_candidate(
     return candidate
 
 
+@dataclass(frozen=True)
+class ProfileReviewResult:
+    """Generic Review-stage output, including the optional workspace artifact."""
+
+    evidence: ProfileEvidenceRecord | None
+    artifact: Mapping[str, Any] | None = None
+    profile_evidence: ProfileEvidenceEnvelope | None = None
+
+
+@dataclass(frozen=True)
+class ProfileCompletionResult:
+    """Generic completion-stage output and its data-only effect intent."""
+
+    evidence: ProfileEvidenceRecord | None
+    effect: ProfileEffectDescriptor | None = None
+    profile_evidence: ProfileEvidenceEnvelope | None = None
+
+
+def _policy_context(
+    profile: LeafIssueWorkflowProfile,
+    issue: Mapping[str, Any],
+    *,
+    context: PolicyContext | None = None,
+    **updates: Any,
+) -> PolicyContext:
+    if context is not None:
+        values = {**context.__dict__, **updates}
+        return PolicyContext(**values)
+    return PolicyContext(profile=profile, issue=issue, **updates)
+
+
+def build_profile_review_artifact(
+    profile: LeafIssueWorkflowProfile,
+    issue: Mapping[str, Any],
+    review_input: Mapping[str, Any],
+    *,
+    repo_root: Path | None,
+    registry: ProfilePolicyRegistry = DEFAULT_PROFILE_POLICY_REGISTRY,
+) -> Mapping[str, Any] | None:
+    """Ask the selected policy for artifact semantics inside a review clone."""
+    policy = resolve_profile_policy(profile, registry=registry)
+    method = getattr(policy, "review_artifact", None)
+    if not callable(method):
+        return None
+    context = PolicyContext(
+        profile=profile,
+        phase="review",
+        issue=issue,
+        repo_root=repo_root,
+        review_identity=(
+            review_input.get("identity")
+            if isinstance(review_input.get("identity"), Mapping)
+            else review_input
+        ),
+    )
+    value = method(context, review_input)
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ProfilePolicyError("policy returned malformed Review artifact")
+    return dict(value)
+
+
+def validate_profile_review(
+    profile: LeafIssueWorkflowProfile,
+    issue: Mapping[str, Any],
+    review_input: Mapping[str, Any],
+    *,
+    registry: ProfilePolicyRegistry = DEFAULT_PROFILE_POLICY_REGISTRY,
+    context: PolicyContext | None = None,
+) -> ProfileReviewResult:
+    """Dispatch the generic Review capability without profile switches."""
+    policy = resolve_profile_policy(profile, registry=registry)
+    execution_context = _policy_context(
+        profile,
+        issue,
+        context=context,
+        phase="review",
+        review_identity=(
+            review_input.get("identity")
+            if isinstance(review_input.get("identity"), Mapping)
+            else review_input
+        ),
+        review_verdict=review_input.get("verdict"),
+        research_outcome=review_input.get("research_outcome"),
+    )
+    normalized_input = dict(review_input)
+    artifact = normalized_input.get("artifact")
+    identity = normalized_input.get("identity")
+    if not isinstance(artifact, Mapping) and isinstance(identity, Mapping):
+        identity_artifact = identity.get("research_artifact")
+        if isinstance(identity_artifact, Mapping):
+            artifact = identity_artifact
+            normalized_input["artifact"] = dict(identity_artifact)
+    if not isinstance(artifact, Mapping):
+        artifact = build_profile_review_artifact(
+            profile,
+            issue,
+            normalized_input,
+            repo_root=execution_context.repo_root,
+            registry=registry,
+        )
+        if artifact is not None:
+            normalized_input["artifact"] = dict(artifact)
+    method = getattr(policy, "validate_review", None)
+    evidence: ProfileEvidenceRecord | None = None
+    if callable(method):
+        evidence = _coerce_evidence(method(execution_context, issue, normalized_input))
+        _validate_policy_evidence(policy, evidence, stage="review", leaf_contract=issue)
+    artifact = normalized_input.get("artifact")
+    check = validate_profile_contract(
+        profile, issue, registry=registry, context=execution_context
+    )
+    if not check.valid or check.evidence is None:
+        raise ProfilePolicyError(check.failure_reason)
+    envelope = ProfileEvidenceEnvelope(
+        profile_id=profile.profile_id,
+        contract=check.evidence,
+        review=evidence,
+    ).validated(registry, leaf_contract=issue)
+    return ProfileReviewResult(
+        evidence=evidence,
+        artifact=dict(artifact) if isinstance(artifact, Mapping) else None,
+        profile_evidence=envelope,
+    )
+
+
+def validate_profile_completion(
+    profile: LeafIssueWorkflowProfile,
+    issue: Mapping[str, Any],
+    completion_input: Mapping[str, Any],
+    *,
+    registry: ProfilePolicyRegistry = DEFAULT_PROFILE_POLICY_REGISTRY,
+    context: PolicyContext | None = None,
+) -> ProfileCompletionResult:
+    """Dispatch and validate one profile's generic completion capability."""
+    policy = resolve_profile_policy(profile, registry=registry)
+    execution_context = _policy_context(
+        profile,
+        issue,
+        context=context,
+        phase="completion",
+        review_record=completion_input.get("review_record")
+        if isinstance(completion_input.get("review_record"), Mapping)
+        else None,
+        merged_pr=completion_input.get("merged_pr")
+        if isinstance(completion_input.get("merged_pr"), Mapping)
+        else None,
+    )
+    method = getattr(policy, "validate_completion", None)
+    evidence: ProfileEvidenceRecord | None = None
+    if callable(method):
+        result = method(execution_context, issue, completion_input)
+        if result is not None:
+            evidence = _coerce_evidence(result)
+            _validate_policy_evidence(
+                policy, evidence, stage="completion", leaf_contract=issue
+            )
+    effect: ProfileEffectDescriptor | None = None
+    if evidence is not None:
+        raw_effect = evidence.payload.get("effect")
+        if raw_effect is not None:
+            if not isinstance(raw_effect, Mapping):
+                raise ProfilePolicyError("completion effect descriptor is malformed")
+            try:
+                effect = ProfileEffectDescriptor(
+                    effect_kind=raw_effect.get("effect_kind"),
+                    schema_version=raw_effect.get("schema_version"),
+                    parameters=raw_effect.get("parameters"),
+                    postcondition=raw_effect.get("postcondition"),
+                    receipt=raw_effect.get("receipt"),
+                )
+            except (ProfilePolicyError, TypeError, ValueError) as exc:
+                raise ProfilePolicyError(str(exc)) from exc
+    if evidence is None:
+        # Completion is an optional capability.  Profiles without a completion
+        # policy must not acquire or re-validate a profile-specific contract at
+        # this generic lifecycle boundary.
+        return ProfileCompletionResult(
+            evidence=None, effect=None, profile_evidence=None
+        )
+    check = validate_profile_contract(
+        profile, issue, registry=registry, context=execution_context
+    )
+    if not check.valid or check.evidence is None:
+        raise ProfilePolicyError(check.failure_reason)
+    review_record = completion_input.get("review_evidence")
+    review_evidence = (
+        _coerce_evidence(review_record) if review_record is not None else None
+    )
+    if review_evidence is not None:
+        _validate_policy_evidence(
+            policy, review_evidence, stage="review", leaf_contract=issue
+        )
+    envelope = ProfileEvidenceEnvelope(
+        profile_id=profile.profile_id,
+        contract=check.evidence,
+        review=review_evidence,
+        completion=evidence,
+    ).validated(registry, leaf_contract=issue)
+    return ProfileCompletionResult(
+        evidence=evidence, effect=effect, profile_evidence=envelope
+    )
+
+
 def _result_from_candidate(
     record: ProfileEvidenceRecord | None,
 ) -> dict[str, Any] | None:
@@ -1052,11 +1995,14 @@ def run_profile_delivery_gates(
     head_sha: str | None,
     include_index: bool,
     progress: Any,
-    documentation_validation: Any,
-    research_validation: Any,
-    critical_outcome: Callable[[], dict[str, Any]],
+    documentation_validation: Any = None,
+    research_validation: Any = None,
+    critical_outcome: Callable[[], dict[str, Any]] | None = None,
     issue: Mapping[str, Any] | None = None,
     registry: ProfilePolicyRegistry = DEFAULT_PROFILE_POLICY_REGISTRY,
+    repo_root: Path | None = None,
+    runner: Any = None,
+    services: Sequence[Any] = (),
 ) -> ProfileGateResults:
     """Run contract and candidate stages through the selected policy."""
     policy = resolve_profile_policy(profile, registry=registry)
@@ -1106,13 +2052,22 @@ def run_profile_delivery_gates(
         profile=profile,
         phase="delivery",
         issue=issue,
+        repo_root=repo_root,
+        runner=runner,
         base_sha=base_sha,
         head_sha=head_sha,
         include_index=include_index,
         progress=progress,
-        critical_outcome=run_critical,
-        documentation_validation=run_documentation,
-        research_validation=run_research,
+        critical_outcome=run_critical if critical_outcome is not None else None,
+        documentation_validation=(
+            run_documentation if documentation_validation is not None else None
+        ),
+        research_validation=run_research if research_validation is not None else None,
+        services=tuple(
+            item
+            for item in (*services, documentation_validation, research_validation)
+            if item is not None
+        ),
     )
     if not isinstance(issue, Mapping):
         raise LckStopError("current leaf Issue contract is unavailable")
@@ -1143,12 +2098,24 @@ def run_profile_delivery_gates(
             if callable(failure_builder)
             else None
         )
+        structured_result = getattr(exc, "result", None)
+        if isinstance(structured_result, Mapping):
+            observed_result = dict(structured_result)
+            if callable(failure_builder):
+                failure = failure_builder(
+                    context,
+                    issue,
+                    check.evidence,
+                    observed_result,
+                    str(exc),
+                )
         envelope = ProfileEvidenceEnvelope(
             profile_id=profile.profile_id,
             contract=check.evidence,
             candidate=failure,
         ).validated(registry, leaf_contract=issue)
-        raise ProfileGateFailure(str(exc), envelope) from exc
+        legacy = getattr(policy, "legacy_result", lambda _result: {})(observed_result)
+        raise ProfileGateFailure(str(exc), envelope, legacy_results=legacy) from exc
 
     envelope = ProfileEvidenceEnvelope(
         profile_id=profile.profile_id,

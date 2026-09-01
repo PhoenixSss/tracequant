@@ -256,6 +256,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "issue_profile": _issue_profile_agent_view(value),
             "task_contract": _jsonable(value.task_contract),
             "review_target": value.identity.to_dict(),
+            "profile_evidence": _profile_evidence(value.profile_evidence),
             "checks": _checks_agent_view(value.checks),
             "validation": _validation_agent_view(value.validation),
             "review_root": str(value.review_root),
@@ -276,6 +277,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "status": value.status,
             "issue_profile": _issue_profile_agent_view(value),
             "review_target": value.identity.to_dict(),
+            "profile_evidence": _profile_evidence(value.profile_evidence),
             "human_boundary": (
                 "STOP; run deterministic Merge Preflight before any manual merge"
                 if value.verdict == "PASS"
@@ -344,6 +346,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "business_delivery": value.business_delivery,
             "cleanup": value.cleanup,
             "research_outcome": value.research_outcome,
+            "profile_evidence": _profile_evidence(value.profile_evidence),
             "effects": _effect_agent_view(value.effects),
             "automatic_merge": False,
             "manual_issue_close": False,

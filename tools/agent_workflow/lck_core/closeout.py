@@ -2,20 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any
 
 from project_status import set_project_status_with_runner
-from research_policy import (
-    RESEARCH_OUTCOME_FIELD,
-    ResearchOutcome,
-    ResearchPolicyError,
-    require_typed_research_outcome,
-)
 from workflow_common import WorkflowToolError, is_sha, read_json_text, safe_text
-from workflow_evidence import CANONICAL_PROJECT_NUMBER, _find_project_status
+from workflow_evidence import _find_project_status
 
+from .effects import DEFAULT_EFFECT_EXECUTOR_REGISTRY, EffectExecutorRegistry
 from .eligibility import PhaseEligibilityResolver
-from .issue_profiles import resolve_issue_profile
+from .issue_profiles import resolve_leaf_issue_profile
 from .models import (
     BASE_BRANCH,
     LCK_SCHEMA_VERSION,
@@ -32,11 +27,27 @@ from .models import (
     branch_matches_profile,
 )
 from .profile_policies import (
+    DEFAULT_PROFILE_POLICY_REGISTRY,
+    PolicyContext,
+    ProfileEvidenceEnvelope,
+    ProfilePolicyError,
+    ProfilePolicyRegistry,
+    ProfileResolver,
     profile_cleanup_label,
-    profile_research_outcome_supported,
+    resolve_issue_policy,
+    validate_profile_completion,
 )
 from .review_workspace import ReviewInvocationStore, _identity_from_mapping
 from .state import LiveStateResolver, OperationSnapshotBuilder
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve the removed Research helper only for legacy callers."""
+    if name == "ResearchOutcomeEffect":
+        from .profile_policies import ResearchOutcomeEffect
+
+        return ResearchOutcomeEffect
+    raise AttributeError(name)
 
 
 def _label_names(issue: Mapping[str, Any] | None) -> set[str]:
@@ -61,48 +72,6 @@ def _pending_receipt(
     if details:
         payload.update(details)
     return EffectReceipt(effect=effect, action=action, details=payload)
-
-
-RESEARCH_OUTCOME_QUERY: Final = r"""
-query($owner:String!, $projectNumber:Int!, $userAfter:String, $organizationAfter:String) {
-  user(login:$owner) {
-    projectV2(number:$projectNumber) {
-      items(first:100, after:$userAfter) {
-        nodes {
-          content {
-            ... on Issue {
-              number
-              repository { nameWithOwner }
-            }
-          }
-          fieldValueByName(name:"Research Outcome") {
-            ... on ProjectV2ItemFieldSingleSelectValue { name }
-          }
-        }
-        pageInfo { hasNextPage endCursor }
-      }
-    }
-  }
-  organization(login:$owner) {
-    projectV2(number:$projectNumber) {
-      items(first:100, after:$organizationAfter) {
-        nodes {
-          content {
-            ... on Issue {
-              number
-              repository { nameWithOwner }
-            }
-          }
-          fieldValueByName(name:"Research Outcome") {
-            ... on ProjectV2ItemFieldSingleSelectValue { name }
-          }
-        }
-        pageInfo { hasNextPage endCursor }
-      }
-    }
-  }
-}
-"""
 
 
 class MainSynchronizationEffect:
@@ -317,234 +286,6 @@ class CloseoutMetadataEffect:
         )
 
 
-class ResearchOutcomeEffect:
-    """Persist the typed Research decision after a reviewed merge."""
-
-    def __init__(self, resolver: LiveStateResolver) -> None:
-        self.resolver = resolver
-
-    def _query_outcome(self, repository: str, task_number: int) -> str | None:
-        owner, separator, _name = repository.partition("/")
-        if not separator or not owner:
-            return None
-        cursors: dict[str, str | None] = {
-            "user": None,
-            "organization": None,
-        }
-        seen_cursors: dict[str, set[str]] = {"user": set(), "organization": set()}
-        complete: set[str] = set()
-
-        while len(complete) < 2:
-            argv = [
-                "gh",
-                "api",
-                "graphql",
-                "-f",
-                f"query={' '.join(RESEARCH_OUTCOME_QUERY.split())}",
-                "-F",
-                f"owner={owner}",
-                "-F",
-                f"projectNumber={CANONICAL_PROJECT_NUMBER}",
-            ]
-            if cursors["user"] is not None:
-                argv.extend(("-F", f"userAfter={cursors['user']}"))
-            if cursors["organization"] is not None:
-                argv.extend(("-F", f"organizationAfter={cursors['organization']}"))
-            result = self.resolver.runner.run(
-                argv,
-                command_id="lck-research-outcome-postcondition",
-                retries=1,
-            )
-            if result.returncode != 0 or not result.stdout.strip():
-                return None
-            value = read_json_text(
-                result.stdout, field="lck-research-outcome-postcondition"
-            )
-            if not isinstance(value, Mapping) or value.get("errors"):
-                return None
-            data = value.get("data")
-            if not isinstance(data, Mapping):
-                return None
-
-            for scope in ("user", "organization"):
-                if scope in complete:
-                    continue
-                if scope not in data:
-                    return None
-                owner_data = data.get(scope)
-                if owner_data is None:
-                    complete.add(scope)
-                    continue
-                if not isinstance(owner_data, Mapping):
-                    return None
-                project = owner_data.get("projectV2")
-                if project is None:
-                    complete.add(scope)
-                    continue
-                if not isinstance(project, Mapping):
-                    return None
-                items = project.get("items")
-                if not isinstance(items, Mapping):
-                    return None
-                nodes = items.get("nodes")
-                page_info = items.get("pageInfo")
-                if not isinstance(nodes, list) or not isinstance(page_info, Mapping):
-                    return None
-                for item in nodes:
-                    if not isinstance(item, Mapping):
-                        continue
-                    content = item.get("content")
-                    if not isinstance(content, Mapping):
-                        continue
-                    content_repository = content.get("repository")
-                    if (
-                        content.get("number") != task_number
-                        or not isinstance(content_repository, Mapping)
-                        or content_repository.get("nameWithOwner") != repository
-                    ):
-                        continue
-                    field_value = item.get("fieldValueByName")
-                    if not isinstance(field_value, Mapping):
-                        return None
-                    return safe_text(field_value.get("name"))
-                has_next_page = page_info.get("hasNextPage")
-                if has_next_page is False:
-                    complete.add(scope)
-                    continue
-                if has_next_page is not True:
-                    return None
-                end_cursor = page_info.get("endCursor")
-                if not isinstance(end_cursor, str) or not end_cursor:
-                    return None
-                if end_cursor in seen_cursors[scope]:
-                    return None
-                seen_cursors[scope].add(end_cursor)
-                cursors[scope] = end_cursor
-        return None
-
-    @staticmethod
-    def _validate_binding(
-        state: LiveState,
-        review_record: Mapping[str, Any],
-        merged_pr: Mapping[str, Any],
-    ) -> ResearchOutcome:
-        raw_identity = review_record.get("identity")
-        binding = review_record.get("research_artifact")
-        if not isinstance(binding, Mapping) and isinstance(raw_identity, Mapping):
-            binding = raw_identity.get("research_artifact")
-        if not isinstance(binding, Mapping):
-            raise LckStopError(
-                "Closeout STOP: Research Review PASS has no artifact binding"
-            )
-        try:
-            outcome = require_typed_research_outcome(binding)
-        except ResearchPolicyError as exc:
-            raise LckStopError(
-                f"Closeout STOP: Research outcome is not typed: {exc}"
-            ) from exc
-        expected = {
-            "task_number": state.task_number,
-            "pr_number": merged_pr.get("number"),
-            "base_sha": _pr_base_sha(merged_pr),
-            "head_sha": _pr_head_sha(merged_pr),
-        }
-        if any(binding.get(key) != value for key, value in expected.items()):
-            raise LckStopError(
-                "Closeout STOP: Research outcome is not bound to the merged PR head/base"
-            )
-        if isinstance(raw_identity, Mapping):
-            for key in (
-                "task_number",
-                "pr_number",
-                "base_sha",
-                "head_sha",
-                "task_body_sha256",
-                "merge_base_sha",
-                "effective_diff_sha256",
-            ):
-                if binding.get(key) != raw_identity.get(key):
-                    raise LckStopError(
-                        "Closeout STOP: Research outcome is not bound to the reviewed artifact"
-                    )
-        return outcome
-
-    def execute(
-        self,
-        state: LiveState,
-        *,
-        review_record: Mapping[str, Any],
-        merged_pr: Mapping[str, Any],
-    ) -> EffectReceipt:
-        profile = resolve_issue_profile(state.issue).profile
-        if profile is None or not profile_research_outcome_supported(profile):
-            return EffectReceipt(
-                effect="set_research_outcome",
-                action="not-applicable",
-                details={},
-            )
-        outcome = self._validate_binding(state, review_record, merged_pr)
-        repository = state.repository
-        if repository is None:
-            raise LckStopError(
-                "Closeout STOP: Research Outcome requires repository identity"
-            )
-        current = (
-            state.issue.get("research_outcome")
-            if isinstance(state.issue, Mapping)
-            else None
-        )
-        if current == outcome.value:
-            action = "already-set"
-        else:
-            try:
-                set_project_status_with_runner(
-                    self.resolver.runner,
-                    repository,
-                    state.task_number,
-                    field=RESEARCH_OUTCOME_FIELD,
-                    value=outcome.value,
-                )
-            except WorkflowToolError as exc:
-                raise LckStopError(f"Research Outcome write failed: {exc}") from exc
-            action = "updated"
-        observed = self._query_outcome(repository, state.task_number)
-        if observed != outcome.value:
-            return _pending_receipt(
-                "set_research_outcome",
-                "pending",
-                reason="Research Outcome postcondition is not proven",
-                details={"outcome": outcome.value},
-            )
-        identity = review_record.get("identity")
-        decision_identity = {
-            key: identity.get(key)
-            for key in (
-                "task_number",
-                "pr_number",
-                "base_sha",
-                "head_sha",
-                "merge_base_sha",
-                "effective_diff_sha256",
-            )
-            if isinstance(identity, Mapping)
-        }
-        return EffectReceipt(
-            effect="set_research_outcome",
-            action=action,
-            details={
-                "field": RESEARCH_OUTCOME_FIELD,
-                "outcome": outcome.value,
-                "decision_identity": decision_identity,
-                "reviewed_artifact": review_record.get("research_artifact")
-                or (
-                    identity.get("research_artifact")
-                    if isinstance(identity, Mapping)
-                    else None
-                ),
-            },
-        )
-
-
 class CleanupTaskRefsEffect:
     """Clean only the verified Task branch and recognize GitHub auto-deletion."""
 
@@ -559,7 +300,7 @@ class CleanupTaskRefsEffect:
         merge_sha: str | None,
     ) -> EffectReceipt:
         branch = state.target_branch
-        profile = resolve_issue_profile(state.issue).profile
+        profile = resolve_leaf_issue_profile(state.issue).profile
         if (
             branch == BASE_BRANCH
             or profile is None
@@ -708,6 +449,7 @@ class CloseoutResult:
     effects: tuple[EffectReceipt, ...]
     operation_snapshot: OperationSnapshot
     research_outcome: str | None = None
+    profile_evidence: ProfileEvidenceEnvelope | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -719,6 +461,9 @@ class CloseoutResult:
             "business_delivery": self.business_delivery,
             "cleanup": self.cleanup,
             "research_outcome": self.research_outcome,
+            "profile_evidence": (
+                self.profile_evidence.to_dict() if self.profile_evidence else None
+            ),
             "effects": [item.to_dict() for item in self.effects],
             "operation_snapshot": self.operation_snapshot.to_dict(),
             "automatic_merge": False,
@@ -737,8 +482,10 @@ class CloseoutCompleter:
         main_effect: MainSynchronizationEffect | None = None,
         metadata_effect: CloseoutMetadataEffect | None = None,
         cleanup_effect: CleanupTaskRefsEffect | None = None,
-        research_outcome_effect: ResearchOutcomeEffect | None = None,
         review_store: ReviewInvocationStore | None = None,
+        effect_registry: EffectExecutorRegistry | None = None,
+        policy_registry: ProfilePolicyRegistry | None = None,
+        profile_resolver: ProfileResolver | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
@@ -746,12 +493,13 @@ class CloseoutCompleter:
         self.main_effect = main_effect or MainSynchronizationEffect(resolver)
         self.metadata_effect = metadata_effect or CloseoutMetadataEffect(resolver)
         self.cleanup_effect = cleanup_effect or CleanupTaskRefsEffect(resolver)
-        self.research_outcome_effect = research_outcome_effect or ResearchOutcomeEffect(
-            resolver
-        )
+        self.effect_registry = effect_registry or DEFAULT_EFFECT_EXECUTOR_REGISTRY
+        self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
+        self.profile_resolver = profile_resolver
         self.review_store = review_store or ReviewInvocationStore(resolver.repo_root)
         self.last_snapshot: OperationSnapshot | None = None
         self.last_effects: list[EffectReceipt] = []
+        self.last_profile_evidence: ProfileEvidenceEnvelope | None = None
 
     @staticmethod
     def _validate_merged_identity(state: LiveState) -> tuple[str, str]:
@@ -870,6 +618,7 @@ class CloseoutCompleter:
         # Keep the same list object while effects run so any effect failure
         # still leaves already-completed effects visible to the failure path.
         self.last_effects = effects
+        self.last_profile_evidence = None
         snapshot = self.snapshots.acquire(task_number, operation="closeout")
         self.last_snapshot = snapshot
         state = snapshot.state
@@ -888,22 +637,59 @@ class CloseoutCompleter:
         metadata = self.metadata_effect.execute(state)
         effects.append(metadata)
 
-        profile = resolve_issue_profile(state.issue).profile
-        research_outcome: EffectReceipt | None = None
-        if profile is not None and profile_research_outcome_supported(profile):
-            if main.action in {"synchronized", "already-synced"}:
-                research_outcome = self.research_outcome_effect.execute(
-                    state,
+        try:
+            profile, _policy = resolve_issue_policy(
+                state.issue or {},
+                registry=self.policy_registry,
+                profile_resolver=self.profile_resolver or resolve_leaf_issue_profile,
+            )
+            raw_envelope = review_record.get("profile_evidence")
+            review_evidence = (
+                raw_envelope.get("review")
+                if isinstance(raw_envelope, Mapping)
+                else None
+            )
+            completion = validate_profile_completion(
+                profile,
+                state.issue or {},
+                {
+                    "task_number": state.task_number,
+                    "repository": state.repository,
+                    "merged_pr": state.merged_pr,
+                    "review_record": review_record,
+                    "review_evidence": review_evidence,
+                },
+                registry=self.policy_registry,
+                context=PolicyContext(
+                    profile=profile,
+                    phase="completion",
+                    issue=state.issue,
+                    runner=self.resolver.runner,
                     review_record=review_record,
                     merged_pr=state.merged_pr,
+                ),
+            )
+        except (ProfilePolicyError, TypeError, ValueError) as exc:
+            raise LckStopError(
+                f"profile completion capability rejected the merge: {exc}"
+            ) from exc
+
+        self.last_profile_evidence = completion.profile_evidence
+        completion_effect: EffectReceipt | None = None
+        if completion.effect is not None:
+            if main.action in {"synchronized", "already-synced"}:
+                completion_effect = self.effect_registry.execute(
+                    completion.effect,
+                    resolver=self.resolver,
+                    state=state,
                 )
             else:
-                research_outcome = _pending_receipt(
-                    "set_research_outcome",
+                completion_effect = _pending_receipt(
+                    completion.effect.effect_kind,
                     "pending",
                     reason="main synchronization is incomplete",
                 )
-            effects.append(research_outcome)
+            effects.append(completion_effect)
 
         if main.action in {"synchronized", "already-synced"}:
             cleanup = self.cleanup_effect.execute(
@@ -923,7 +709,7 @@ class CloseoutCompleter:
             and metadata.action in {"updated", "already-converged"}
             and cleanup.action in {"cleaned", "already-clean"}
         )
-        research_complete = research_outcome is None or research_outcome.action in {
+        completion_complete = completion_effect is None or completion_effect.action in {
             "updated",
             "already-set",
             "not-applicable",
@@ -931,13 +717,14 @@ class CloseoutCompleter:
         return CloseoutResult(
             task_number=task_number,
             status="BUSINESS_DELIVERY_COMPLETE",
-            business_delivery="COMPLETE" if research_complete else "PENDING",
+            business_delivery="COMPLETE" if completion_complete else "PENDING",
             cleanup="COMPLETE" if cleanup_complete else "PENDING",
             effects=tuple(effects),
             operation_snapshot=snapshot,
             research_outcome=(
-                research_outcome.details.get("outcome")
-                if research_outcome is not None
+                completion_effect.details.get("outcome")
+                if completion_effect is not None
                 else None
             ),
+            profile_evidence=completion.profile_evidence,
         )
