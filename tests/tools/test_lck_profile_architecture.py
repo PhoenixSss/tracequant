@@ -5,10 +5,12 @@
 from __future__ import annotations
 
 import ast
+import json
 import sys
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -49,6 +51,10 @@ from lck_core.profile_policies import (  # type: ignore[import-not-found]  # noq
     ProfileGateResults,
     ProfilePolicyError,
     ProfilePolicyRegistry,
+    ProfileCompletionResult,
+    ProfileContractCheck,
+    ProfileGateFailure,
+    ProfileReviewResult,
     evaluate_profile_blockers,
     validate_profile_completion,
     validate_profile_candidate,
@@ -94,6 +100,93 @@ def _referenced_symbols(tree: ast.AST) -> set[str]:
         elif isinstance(node, ast.Attribute):
             symbols.add(node.attr)
     return symbols
+
+
+_PROFILE_SEMANTIC_MARKERS = frozenset(
+    {
+        "profile",
+        "profile_id",
+        "issue_profile",
+        "issue_kind",
+        "canonical_type_label",
+        "critical_outcome",
+        "research_outcome",
+        "research_artifact",
+        "bug_contract",
+        "documentation_contract",
+        "research_contract",
+        "requires_critical_outcome",
+        "supports_research_outcome",
+        "candidate_capability",
+        "contract_policy",
+        "change_policy",
+        "artifact_policy",
+        "policy_entrypoints",
+    }
+)
+
+
+def _profile_semantic_references(tree: ast.AST) -> list[ast.AST]:
+    """Find profile-owned identifiers and mapping keys in a shared module."""
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    references: list[ast.AST] = []
+    for node in ast.walk(tree):
+        identifier: str | None = None
+        if isinstance(node, ast.Name):
+            identifier = node.id
+        elif isinstance(node, ast.Attribute):
+            identifier = node.attr
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            identifier = node.name
+        elif isinstance(node, ast.arg):
+            identifier = node.arg
+        if identifier is not None:
+            token = identifier.casefold()
+            if token in _PROFILE_SEMANTIC_MARKERS or "profile" in token:
+                references.append(node)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            token = node.value.casefold()
+            parent = parents.get(node)
+            is_structural_string = isinstance(
+                parent, (ast.Call, ast.Dict, ast.keyword, ast.Subscript)
+            )
+            if is_structural_string and (
+                token in _PROFILE_SEMANTIC_MARKERS
+                or any(
+                    marker in token
+                    for marker in (
+                        "profile_",
+                        "_profile",
+                        "critical_outcome",
+                        "research_outcome",
+                        "research_artifact",
+                    )
+                )
+            ):
+                references.append(node)
+    return references
+
+
+def _profile_identity_references(tree: ast.AST) -> list[ast.AST]:
+    """Find every direct or string-keyed profile identity access."""
+    identity_attributes = {
+        "profile_id",
+        "issue_kind",
+        "canonical_type_label",
+    }
+    references: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in identity_attributes:
+            references.append(node)
+        elif isinstance(node, ast.Attribute) and node.attr in identity_attributes:
+            references.append(node)
+        elif isinstance(node, ast.Constant) and node.value in identity_attributes:
+            references.append(node)
+    return references
 
 
 def test_all_phase_controllers_use_only_generic_policy_capabilities() -> None:
@@ -156,20 +249,18 @@ def test_phase_controllers_do_not_branch_on_profile_identity() -> None:
         "closeout.py",
         "validation.py",
     )
-    identity_attributes = {
-        "profile_id",
-        "issue_kind",
-        "canonical_type_label",
-    }
     for name in controller_names:
         tree = ast.parse((controller_root / name).read_text(encoding="utf-8"))
-        identity_references = [
-            node
-            for node in ast.walk(tree)
-            if (isinstance(node, ast.Attribute) and node.attr in identity_attributes)
-            or (isinstance(node, ast.Name) and node.id in identity_attributes)
-        ]
+        identity_references = _profile_identity_references(tree)
         assert not identity_references, (name, identity_references)
+
+    probes = (
+        'if state.issue_profile["profile"]["profile_id"] == "task": pass',
+        'if getattr(state, "profile_id", None) == "task": pass',
+        'if state.issue_profile.get("canonical_type_label") == "type:task": pass',
+    )
+    for source in probes:
+        assert _profile_identity_references(ast.parse(source)), source
 
     production_root = ROOT / "tools" / "agent_workflow" / "lck_core"
     for path in production_root.glob("*.py"):
@@ -279,6 +370,7 @@ def test_shared_facts_and_policy_blockers_follow_frozen_one_way_contract() -> No
         ROOT / "tools" / "agent_workflow" / "lck_core" / "shared_facts.py"
     ).read_text(encoding="utf-8")
     shared_tree = ast.parse(shared_source)
+    assert not _profile_semantic_references(shared_tree)
     forbidden_imports = {
         "issue_profiles",
         "profile_policies",
@@ -332,6 +424,18 @@ def test_shared_facts_and_policy_blockers_follow_frozen_one_way_contract() -> No
         for policy in DEFAULT_PROFILE_POLICY_REGISTRY.policies.values()
     )
     assert callable(SyntheticPolicy().evaluate_blockers)
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        'facts["research_outcome"] = "IMPLEMENT"',
+        'facts.get("critical_outcome")',
+        "def normalize_profile_specific_fact(value): return value",
+    ),
+)
+def test_shared_facts_guard_rejects_profile_owned_semantics(source: str) -> None:
+    assert _profile_semantic_references(ast.parse(source)), source
 
 
 @dataclass(frozen=True)
@@ -464,13 +568,23 @@ class SyntheticPolicy:
         completion_input: Mapping[str, Any],
     ) -> ProfileEvidenceRecord:
         assert context.runner is None
-        del completion_input
         self._mark("completion")
+        repository = completion_input.get("repository")
+        task_number = completion_input.get("task_number")
+        if not isinstance(repository, str) or not isinstance(task_number, int):
+            raise ProfilePolicyError("synthetic completion identity is invalid")
+        parameters = {
+            "repository": repository,
+            "task_number": task_number,
+            "project_number": 1,
+            "field": "Status",
+            "value": "Done",
+        }
         descriptor = ProfileEffectDescriptor(
-            effect_kind="synthetic.noop.v1",
+            effect_kind="project.single_select.set.v1",
             schema_version=1,
-            parameters={"value": "complete"},
-            postcondition={"kind": "synthetic.completed", "value": "complete"},
+            parameters=parameters,
+            postcondition={"kind": "project.single_select.equals", **parameters},
             receipt={"source": "synthetic-policy"},
         )
         return ProfileEvidenceRecord(
@@ -603,7 +717,11 @@ def test_synthetic_fifth_profile_requires_only_allowed_extension_points(
     completion = validate_profile_completion(
         profile,
         leaf_contract,
-        {"task_number": 223, "review_evidence": review.evidence},
+        {
+            "task_number": 223,
+            "repository": "owner/repo",
+            "review_evidence": review.evidence,
+        },
         registry=registry,
         context=replace(context, runner=object()),
     )
@@ -637,6 +755,38 @@ def test_synthetic_fifth_profile_requires_only_allowed_extension_points(
 def test_generic_kernel_models_have_no_synthetic_fixed_slots() -> None:
     """Profile extensions add registrations/evidence, never shared schema fields."""
     expected_schemas = {
+        ProfileEffectDescriptor: {
+            "effect_kind",
+            "schema_version",
+            "parameters",
+            "postcondition",
+            "receipt",
+        },
+        PolicyContext: {
+            "profile",
+            "profile_id",
+            "phase",
+            "issue",
+            "relationships",
+            "repository",
+            "downstream_contract",
+            "repo_root",
+            "runner",
+            "base_sha",
+            "head_sha",
+            "include_index",
+            "changed_files",
+            "progress",
+            "services",
+            "review_identity",
+            "review_record",
+            "merged_pr",
+            "review_verdict",
+            "research_outcome",
+            "critical_outcome",
+            "documentation_validation",
+            "research_validation",
+        },
         ProfileEvidenceEnvelope: {
             "profile_id",
             "schema_version",
@@ -684,6 +834,83 @@ def test_generic_kernel_models_have_no_synthetic_fixed_slots() -> None:
             "documentation_validation",
             "research_validation",
             "profile_evidence",
+        },
+        ProfileGateFailure: {"detail", "profile_evidence", "legacy_results"},
+        ProfileContractCheck: {
+            "policy",
+            "label",
+            "valid",
+            "contract",
+            "detail",
+            "evidence",
+        },
+        ProfileReviewResult: {"evidence", "artifact", "profile_evidence"},
+        ProfileCompletionResult: {"evidence", "effect", "profile_evidence"},
+        lck_review_workspace.ReviewTargetRefs: {
+            "task_number",
+            "pr_number",
+            "base_sha",
+            "head_sha",
+            "task_body_sha256",
+        },
+        lck_review_workspace.ReviewIdentity: {
+            "task_number",
+            "pr_number",
+            "base_sha",
+            "head_sha",
+            "task_body_sha256",
+            "merge_base_sha",
+            "effective_diff_sha256",
+            "changed_files",
+            "research_artifact",
+        },
+        lck_review.ReviewContext: {
+            "review_id",
+            "task_contract",
+            "identity",
+            "checks",
+            "validation",
+            "review_root",
+            "issue_profile",
+            "profile_evidence",
+        },
+        lck_delivery.DeliveryCompletionResult: {
+            "task_number",
+            "status",
+            "branch",
+            "head_sha",
+            "critical_outcome",
+            "validation",
+            "checks",
+            "effects",
+            "operation_snapshot",
+            "research_artifact",
+            "profile_evidence",
+        },
+        lck_review.ReviewCompletionResult: {
+            "review_id",
+            "task_number",
+            "verdict",
+            "status",
+            "identity",
+            "record_path",
+            "issue_profile",
+            "profile_evidence",
+        },
+        lck_closeout.CloseoutResult: {
+            "task_number",
+            "status",
+            "business_delivery",
+            "cleanup",
+            "effects",
+            "operation_snapshot",
+            "research_outcome",
+            "profile_evidence",
+        },
+        lck_remediation.RemediationCompletionResult: {
+            "task_number",
+            "review_id",
+            "delivery",
         },
     }
     for model, allowed_fields in expected_schemas.items():
@@ -1083,42 +1310,135 @@ def test_synthetic_policy_review_completion_and_effect_are_generic_capabilities(
     assert completion.profile_evidence is not None
     assert completion.profile_evidence.completion == completion.evidence
 
-    def execute_effect(
-        descriptor: ProfileEffectDescriptor, **_kwargs: Any
-    ) -> lck_models.EffectReceipt:
-        assert descriptor.postcondition == {
-            "kind": "synthetic.completed",
-            "value": "complete",
-        }
-        return lck_models.EffectReceipt(
-            "synthetic.noop.v1", "executed", dict(descriptor.receipt)
-        )
+    class ProjectEffectRunner:
+        def __init__(self, repository: str, task_number: int, value: str) -> None:
+            self.repository = repository
+            self.task_number = task_number
+            self.value = value
 
-    effects = lck_effects.EffectExecutorRegistry({"synthetic.noop.v1": execute_effect})
+        def run(
+            self,
+            argv: list[str] | tuple[str, ...],
+            *,
+            command_id: str,
+            **_: Any,
+        ) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            if command[:3] == ("gh", "api", "graphql"):
+                return CommandResult(
+                    command_id,
+                    command,
+                    0,
+                    json.dumps(
+                        {
+                            "data": {
+                                "user": {
+                                    "projectV2": {
+                                        "items": {
+                                            "nodes": [
+                                                {
+                                                    "content": {
+                                                        "number": self.task_number,
+                                                        "repository": {
+                                                            "nameWithOwner": self.repository
+                                                        },
+                                                    },
+                                                    "fieldValueByName": {
+                                                        "name": self.value
+                                                    },
+                                                }
+                                            ],
+                                            "pageInfo": {"hasNextPage": False},
+                                        }
+                                    }
+                                },
+                                "organization": None,
+                            }
+                        }
+                    ),
+                    "",
+                )
+            return CommandResult(
+                command_id, command, 1, "", "unexpected effect command"
+            )
+
+    effect_resolver = SimpleNamespace(
+        runner=ProjectEffectRunner("PhoenixSss/tracequant", 219, "Done")
+    )
+    effect_state = lck_models.LiveState(
+        issue_number=219,
+        repository="PhoenixSss/tracequant",
+    )
+    effects = lck_effects.DEFAULT_EFFECT_EXECUTOR_REGISTRY
     with pytest.raises(TypeError):
-        effects.executors["other"] = execute_effect
+        effects.executors["other"] = lambda *_args, **_kwargs: None
     receipt = effects.execute(
         completion.effect,
-        resolver=object(),
-        state=object(),
+        resolver=effect_resolver,
+        state=effect_state,
     )
-    assert receipt.action == "executed"
-    assert receipt.details == {"source": "synthetic-policy"}
+    assert receipt.effect == completion.effect.effect_kind
+    assert receipt.action == "already-set"
+    assert receipt.details["source"] == "synthetic-policy"
     assert receipt.is_complete
-    assert not lck_models.EffectReceipt("synthetic.noop.v1", "pending", {}).is_complete
+    assert not lck_models.EffectReceipt(
+        "project.single_select.set.v1", "pending", {}
+    ).is_complete
+
+    with pytest.raises(lck_models.LckStopError, match="postcondition is invalid"):
+        effects.execute(
+            replace(completion.effect, postcondition={"kind": "invalid"}),
+            resolver=effect_resolver,
+            state=effect_state,
+        )
+    unauthorized_parameters = {
+        **completion.effect.parameters,
+        "task_number": 220,
+    }
+    with pytest.raises(lck_models.LckStopError, match="identity does not match"):
+        effects.execute(
+            replace(
+                completion.effect,
+                parameters=unauthorized_parameters,
+                postcondition={
+                    "kind": "project.single_select.equals",
+                    **unauthorized_parameters,
+                },
+            ),
+            resolver=effect_resolver,
+            state=effect_state,
+        )
+
+    def mismatched_executor(
+        _descriptor: ProfileEffectDescriptor, **_kwargs: Any
+    ) -> lck_models.EffectReceipt:
+        return lck_models.EffectReceipt("different.effect", "executed", {})
+
+    mismatch_registry = lck_effects.EffectExecutorRegistry(
+        {completion.effect.effect_kind: mismatched_executor}
+    )
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="receipt does not match its descriptor",
+    ):
+        mismatch_registry.execute(
+            completion.effect,
+            resolver=effect_resolver,
+            state=effect_state,
+        )
     with pytest.raises(ProfilePolicyError, match="must be JSON data"):
         ProfileEffectDescriptor(
-            effect_kind="synthetic.noop.v1",
+            effect_kind="project.single_select.set.v1",
             schema_version=1,
-            parameters={"callable": execute_effect},
+            parameters={"callable": mismatched_executor},
             postcondition={},
             receipt={},
         )
     with pytest.raises(lck_models.LckStopError, match="unknown completion effect"):
         effects.execute(
             replace(completion.effect, effect_kind="synthetic.unknown.v1"),
-            resolver=object(),
-            state=object(),
+            resolver=effect_resolver,
+            state=effect_state,
         )
 
 
@@ -1198,6 +1518,7 @@ def test_synthetic_profile_review_and_closeout_use_kernel_and_persist_receipts(
     closed_issue.update(
         {
             "state": "CLOSED",
+            "project_status": "Done",
             "issue_closure": {
                 "evidence_status": "complete",
                 "status": "closed-by-pr",
@@ -1224,34 +1545,125 @@ def test_synthetic_profile_review_and_closeout_use_kernel_and_persist_receipts(
         merged_pr_numbers=(200,),
     )
 
-    effect_events: list[str] = []
+    class CloseoutEffectRunner:
+        def __init__(self) -> None:
+            self.remote_branch_exists = True
+            self.commands: list[tuple[str, ...]] = []
 
-    class FixedEffect:
-        def __init__(self, effect: str, action: str) -> None:
-            self.receipt = lck_models.EffectReceipt(effect, action, {})
+        def run(
+            self,
+            argv: list[str] | tuple[str, ...],
+            *,
+            command_id: str,
+            **_: Any,
+        ) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            self.commands.append(command)
+            if command[:3] == ("gh", "api", "graphql"):
+                return CommandResult(
+                    command_id,
+                    command,
+                    0,
+                    json.dumps(
+                        {
+                            "data": {
+                                "user": {
+                                    "projectV2": {
+                                        "items": {
+                                            "nodes": [
+                                                {
+                                                    "content": {
+                                                        "number": 159,
+                                                        "repository": {
+                                                            "nameWithOwner": "owner/repo"
+                                                        },
+                                                    },
+                                                    "fieldValueByName": {
+                                                        "name": "Done"
+                                                    },
+                                                }
+                                            ],
+                                            "pageInfo": {"hasNextPage": False},
+                                        }
+                                    }
+                                },
+                                "organization": None,
+                            }
+                        }
+                    ),
+                    "",
+                )
+            if command[:3] == ("gh", "issue", "view"):
+                return CommandResult(
+                    command_id,
+                    command,
+                    0,
+                    json.dumps(
+                        {
+                            "state": "CLOSED",
+                            "labels": [{"name": "codex:ready"}],
+                            "projectItems": [{"fields": {"Status": "Done"}}],
+                        }
+                    ),
+                    "",
+                )
+            if command == ("git", "rev-parse", "HEAD"):
+                return CommandResult(command_id, command, 0, f"{merge_sha}\n", "")
+            if command == ("git", "rev-parse", "refs/remotes/origin/main"):
+                return CommandResult(command_id, command, 0, f"{merge_sha}\n", "")
+            if command == (
+                "git",
+                "rev-parse",
+                "refs/heads/task/159-lck-core-live-state-resolution",
+            ):
+                return CommandResult(command_id, command, 0, f"{'a' * 40}\n", "")
+            if command == (
+                "git",
+                "ls-remote",
+                "--heads",
+                "origin",
+                "task/159-lck-core-live-state-resolution",
+            ):
+                output = (
+                    f"{'a' * 40}\trefs/heads/task/159-lck-core-live-state-resolution\n"
+                    if self.remote_branch_exists
+                    else ""
+                )
+                return CommandResult(command_id, command, 0, output, "")
+            if command == (
+                "git",
+                "push",
+                "origin",
+                "--delete",
+                "task/159-lck-core-live-state-resolution",
+            ):
+                self.remote_branch_exists = False
+                return CommandResult(command_id, command, 0, "", "")
+            if command[:3] in {
+                ("git", "switch", "main"),
+                ("git", "fetch", "--prune"),
+            }:
+                return CommandResult(command_id, command, 0, "", "")
+            if command[:3] == ("git", "merge", "--ff-only"):
+                return CommandResult(command_id, command, 0, "", "")
+            if command[:2] == ("git", "merge-base"):
+                return CommandResult(command_id, command, 0, "", "")
+            if command[:3] == ("git", "worktree", "list"):
+                return CommandResult(command_id, command, 0, "worktree /tmp/main\n", "")
+            if command[:3] == ("git", "diff", "--quiet"):
+                return CommandResult(command_id, command, 0, "", "")
+            if command[:3] == ("git", "branch", "-d"):
+                return CommandResult(command_id, command, 0, "", "")
+            return CommandResult(
+                command_id, command, 1, "", "unexpected closeout command"
+            )
 
-        def execute(self, *_args: Any, **_kwargs: Any) -> lck_models.EffectReceipt:
-            return self.receipt
-
-    def execute_effect(
-        descriptor: ProfileEffectDescriptor, **_kwargs: Any
-    ) -> lck_models.EffectReceipt:
-        effect_events.append(descriptor.effect_kind)
-        return lck_models.EffectReceipt(
-            descriptor.effect_kind, "executed", dict(descriptor.receipt)
-        )
+    closeout_runner = CloseoutEffectRunner()
+    resolver.runner = closeout_runner
 
     closeout_result = lck_closeout.CloseoutCompleter(
         resolver,
-        main_effect=cast(Any, FixedEffect("synchronize_main", "synchronized")),
-        metadata_effect=cast(
-            Any, FixedEffect("converge_task_metadata", "already-converged")
-        ),
-        cleanup_effect=cast(Any, FixedEffect("cleanup_task_refs", "already-clean")),
         review_store=store,
-        effect_registry=lck_effects.EffectExecutorRegistry(
-            {"synthetic.noop.v1": execute_effect}
-        ),
         policy_registry=registry,
         profile_resolver=resolve_synthetic,
     ).complete(159)
@@ -1259,7 +1671,19 @@ def test_synthetic_profile_review_and_closeout_use_kernel_and_persist_receipts(
     assert closeout_result.profile_evidence is not None
     assert closeout_result.profile_evidence.completion is not None
     assert closeout_result.profile_evidence.completion.kind == policy.completion_kind
-    assert effect_events == ["synthetic.noop.v1"]
+    assert [effect.effect for effect in closeout_result.effects] == [
+        "synchronize_main",
+        "converge_task_metadata",
+        "project.single_select.set.v1",
+        "cleanup_task_refs",
+    ]
+    assert [effect.action for effect in closeout_result.effects] == [
+        "synchronized",
+        "already-converged",
+        "already-set",
+        "cleaned",
+    ]
+    assert closeout_result.effects[2].details["source"] == "synthetic-policy"
 
     closeout_view = lck_receipts._write_success_receipt(
         closeout_result,

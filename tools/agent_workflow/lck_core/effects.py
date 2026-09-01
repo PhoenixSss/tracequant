@@ -66,6 +66,10 @@ class EffectExecutorRegistry:
             receipt = executor(descriptor, resolver=resolver, state=state)
             if not isinstance(receipt, EffectReceipt):
                 raise LckStopError("completion effect executor returned no receipt")
+            if receipt.effect != descriptor.effect_kind:
+                raise LckStopError(
+                    "completion effect receipt does not match its descriptor"
+                )
             return receipt
         except LckStopError:
             raise
