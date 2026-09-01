@@ -7,16 +7,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
-from research_policy import (
-    ResearchPolicyError,
-    bind_research_outcome,
-    require_typed_research_outcome,
-)
 from workflow_common import ProgressReporter, is_sha, safe_text
 from workflow_evidence import _formal_blockers_gate
 
 from .eligibility import PhaseEligibilityResolver
-from .issue_profiles import resolve_issue_profile
+from .issue_profiles import resolve_leaf_issue_profile
 from .models import (
     BASE_BRANCH,
     LCK_SCHEMA_VERSION,
@@ -31,8 +26,14 @@ from .models import (
     _pr_head_sha,
 )
 from .profile_policies import (
-    evaluate_profile_changes,
-    profile_research_outcome_supported,
+    DEFAULT_PROFILE_POLICY_REGISTRY,
+    PolicyContext,
+    ProfileEvidenceEnvelope,
+    ProfilePolicyError,
+    ProfilePolicyRegistry,
+    ProfileResolver,
+    resolve_issue_policy,
+    validate_profile_review,
 )
 from .review_workspace import (
     ReviewIdentity,
@@ -51,7 +52,6 @@ from .state import (
 )
 from .validation import (
     DeliveryChecksGate,
-    DocumentationReclassificationRequired,
     ReviewValidationGate,
 )
 
@@ -65,6 +65,7 @@ class ReviewContext:
     validation: Mapping[str, Any]
     review_root: Path
     issue_profile: Mapping[str, Any] | None = None
+    profile_evidence: ProfileEvidenceEnvelope | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -77,6 +78,9 @@ class ReviewContext:
             "review_target": self.identity.to_dict(),
             "checks": _jsonable(self.checks),
             "validation": _jsonable(self.validation),
+            "profile_evidence": (
+                self.profile_evidence.to_dict() if self.profile_evidence else None
+            ),
             "review_root": str(self.review_root),
             "workspace_mode": "implementation-read-only",
             "agent_role": ["Inspect", "Reason", "Judge", "Report"],
@@ -133,10 +137,21 @@ class ReviewPreparer:
         checks_gate: DeliveryChecksGate | None = None,
         workspace: ReviewWorkspaceManager | None = None,
         store: ReviewInvocationStore | None = None,
+        policy_registry: ProfilePolicyRegistry | None = None,
+        profile_resolver: ProfileResolver | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
-        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
+        self.profile_resolver = (
+            profile_resolver
+            or getattr(eligibility, "profile_resolver", None)
+            or resolve_leaf_issue_profile
+        )
+        self.eligibility = eligibility or PhaseEligibilityResolver(
+            registry=self.policy_registry,
+            profile_resolver=self.profile_resolver,
+        )
         self.validation = validation or ReviewValidationGate(resolver)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.workspace = workspace or ReviewWorkspaceManager(resolver)
@@ -144,6 +159,7 @@ class ReviewPreparer:
         self.last_snapshot: OperationSnapshot | None = None
         self.last_validation: dict[str, Any] | None = None
         self.last_documentation_validation: dict[str, Any] | None = None
+        self.last_profile_evidence: ProfileEvidenceEnvelope | None = None
 
     def prepare(self, task_number: int) -> ReviewContext:
         self.last_validation = None
@@ -237,20 +253,29 @@ class ReviewPreparer:
                 state,
                 task_contract,
                 repo_root=review_root,
+                policy_registry=self.policy_registry,
+                profile_resolver=self.profile_resolver,
             )
-            profile = resolve_issue_profile(state.issue).profile
-            documentation_policy: dict[str, Any] | None = None
-            if profile is not None:
-                policy = evaluate_profile_changes(profile, identity.changed_files)
-            else:
-                policy = None
-            if policy is not None:
-                documentation_policy = policy.to_dict()
-                self.last_documentation_validation = documentation_policy
-                if policy.status.value != "pass":
-                    raise DocumentationReclassificationRequired(
-                        "DOCUMENTATION_RECLASSIFICATION_REQUIRED: " + policy.detail
-                    )
+            profile, _policy = resolve_issue_policy(
+                state.issue or {},
+                registry=self.policy_registry,
+                profile_resolver=self.profile_resolver or resolve_leaf_issue_profile,
+            )
+            review_stage = validate_profile_review(
+                profile,
+                state.issue or {},
+                {"identity": identity.to_dict(), "verdict": "PREPARE"},
+                registry=self.policy_registry,
+                context=PolicyContext(
+                    profile=profile,
+                    phase="review",
+                    issue=state.issue,
+                    repo_root=review_root,
+                    runner=self.resolver.runner,
+                    review_identity=identity.to_dict(),
+                ),
+            )
+            self.last_profile_evidence = review_stage.profile_evidence
             mark(
                 "review-target-derived",
                 identity=identity.to_dict(),
@@ -260,9 +285,6 @@ class ReviewPreparer:
             validation = self.validation.run(
                 review_root, identity.base_sha, identity.head_sha
             )
-            if documentation_policy is not None:
-                validation = dict(validation)
-                validation["documentation_policy"] = documentation_policy
             # Preserve the structured validation result before applying the
             # pass gate so a rejected Review Prepare has complete evidence.
             self.last_validation = validation
@@ -290,6 +312,11 @@ class ReviewPreparer:
                 "review_root": str(review_root),
                 "validation": validation,
                 "checks": checks,
+                "profile_evidence": (
+                    review_stage.profile_evidence.to_dict()
+                    if review_stage.profile_evidence
+                    else None
+                ),
                 "snapshot": snapshot.to_dict(),
                 "authority": (
                     "sealed Review Prepare target; historical identity for Review Complete "
@@ -312,6 +339,7 @@ class ReviewPreparer:
                 validation=validation,
                 review_root=review_root,
                 issue_profile=state.issue_profile,
+                profile_evidence=review_stage.profile_evidence,
             )
             invocation.release_lock()
         except BaseException as exc:
@@ -341,6 +369,7 @@ class ReviewCompletionResult:
     identity: ReviewIdentity
     record_path: Path
     issue_profile: Mapping[str, Any] | None = None
+    profile_evidence: ProfileEvidenceEnvelope | None = None
 
     def to_dict(self) -> dict[str, Any]:
         human_boundary = (
@@ -359,6 +388,9 @@ class ReviewCompletionResult:
             "review_target": self.identity.to_dict(),
             "research_artifact": _jsonable(self.identity.research_artifact),
             "record_path": str(self.record_path),
+            "profile_evidence": (
+                self.profile_evidence.to_dict() if self.profile_evidence else None
+            ),
             "human_boundary": human_boundary,
             "automatic_remediation": False,
         }
@@ -383,16 +415,28 @@ class ReviewCompleter:
         checks_gate: DeliveryChecksGate | None = None,
         store: ReviewInvocationStore | None = None,
         workspace: ReviewWorkspaceManager | None = None,
+        policy_registry: ProfilePolicyRegistry | None = None,
+        profile_resolver: ProfileResolver | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
-        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
+        self.profile_resolver = (
+            profile_resolver
+            or getattr(eligibility, "profile_resolver", None)
+            or resolve_leaf_issue_profile
+        )
+        self.eligibility = eligibility or PhaseEligibilityResolver(
+            registry=self.policy_registry,
+            profile_resolver=self.profile_resolver,
+        )
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.workspace = workspace or ReviewWorkspaceManager(resolver)
         self.last_snapshot: OperationSnapshot | None = None
         self.last_checks: dict[str, Any] | None = None
         self.last_documentation_validation: dict[str, Any] | None = None
+        self.last_profile_evidence: ProfileEvidenceEnvelope | None = None
 
     def _capture_checks_from_gate(self) -> None:
         """Retain a check gate's result when strict evaluation raises."""
@@ -493,50 +537,48 @@ class ReviewCompleter:
                 state,
                 current_contract,
                 repo_root=review_root,
+                policy_registry=self.policy_registry,
+                profile_resolver=self.profile_resolver,
             )
             _assert_review_applicable(reviewed_identity, current_identity)
-            profile = resolve_issue_profile(state.issue).profile
-            research_artifact = current_identity.research_artifact
-            if profile is not None and profile_research_outcome_supported(profile):
-                if verdict == "PASS":
-                    if not isinstance(research_artifact, Mapping):
-                        raise LckStopError(
-                            "Research Review Complete requires a reviewed artifact binding"
-                        )
-                    try:
-                        if research_outcome is not None:
-                            research_artifact = bind_research_outcome(
-                                research_artifact, research_outcome
-                            )
-                        require_typed_research_outcome(research_artifact)
-                    except ResearchPolicyError as exc:
-                        raise LckStopError(
-                            f"Research Review Complete requires a typed outcome: {exc}"
-                        ) from exc
-                    current_identity = replace(
-                        current_identity, research_artifact=research_artifact
-                    )
-                elif research_outcome is not None:
-                    try:
-                        bind_research_outcome(research_artifact or {}, research_outcome)
-                    except ResearchPolicyError as exc:
-                        raise LckStopError(f"invalid Research Outcome: {exc}") from exc
-            elif research_outcome is not None:
+            try:
+                profile, _policy = resolve_issue_policy(
+                    state.issue or {},
+                    registry=self.policy_registry,
+                    profile_resolver=self.profile_resolver
+                    or resolve_leaf_issue_profile,
+                )
+                review_input: dict[str, Any] = {
+                    "identity": current_identity.to_dict(),
+                    "verdict": verdict,
+                }
+                if research_outcome is not None:
+                    review_input["research_outcome"] = research_outcome
+                review_stage = validate_profile_review(
+                    profile,
+                    state.issue or {},
+                    review_input,
+                    registry=self.policy_registry,
+                    context=PolicyContext(
+                        profile=profile,
+                        phase="review",
+                        issue=state.issue,
+                        repo_root=review_root,
+                        runner=self.resolver.runner,
+                        review_identity=current_identity.to_dict(),
+                        review_verdict=verdict,
+                        research_outcome=research_outcome,
+                    ),
+                )
+            except (ProfilePolicyError, TypeError, ValueError) as exc:
                 raise LckStopError(
-                    "--research-outcome is supported only for Research Issues"
+                    f"profile Review capability rejected the verdict: {exc}"
+                ) from exc
+            if review_stage.artifact is not None:
+                current_identity = replace(
+                    current_identity, research_artifact=review_stage.artifact
                 )
-            if profile is not None:
-                policy = evaluate_profile_changes(
-                    profile, current_identity.changed_files
-                )
-            else:
-                policy = None
-            if policy is not None:
-                self.last_documentation_validation = policy.to_dict()
-                if policy.status.value != "pass":
-                    raise DocumentationReclassificationRequired(
-                        "DOCUMENTATION_RECLASSIFICATION_REQUIRED: " + policy.detail
-                    )
+            self.last_profile_evidence = review_stage.profile_evidence
             if verdict == "PASS":
                 completion_snapshot = self.snapshots.bind_required_checks(
                     completion_snapshot, repo_root=review_root
@@ -580,6 +622,11 @@ class ReviewCompleter:
                 "validation": validation,
                 "checks": dict(prepared_checks),
                 "completion_checks": completion_checks,
+                "profile_evidence": (
+                    review_stage.profile_evidence.to_dict()
+                    if review_stage.profile_evidence
+                    else None
+                ),
                 "review_snapshot": dict(prepared_snapshot),
                 "completion_snapshot": completion_snapshot.to_dict(),
                 "authority_note": (
@@ -600,6 +647,7 @@ class ReviewCompleter:
                 identity=current_identity,
                 record_path=record_path,
                 issue_profile=completion_snapshot.state.issue_profile,
+                profile_evidence=review_stage.profile_evidence,
             )
         except ReviewStaleError:
             # Stale is a formal terminal outcome for this prepared target.  It
@@ -629,9 +677,13 @@ class ReviewPassGate:
         resolver: LiveStateResolver,
         *,
         store: ReviewInvocationStore | None = None,
+        policy_registry: ProfilePolicyRegistry | None = None,
+        profile_resolver: ProfileResolver | None = None,
     ) -> None:
         self.resolver = resolver
         self.store = store or ReviewInvocationStore(resolver.repo_root)
+        self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
+        self.profile_resolver = profile_resolver
 
     def run(self, task_number: int, state: LiveState) -> dict[str, Any]:
         latest = self.store.read_latest_review(task_number)
@@ -663,18 +715,29 @@ class ReviewPassGate:
             )
         except ReviewStaleError as exc:
             raise LckStopError(f"Review PASS is stale: {exc}") from exc
-        profile = resolve_issue_profile(state.issue).profile
-        if profile is not None:
-            policy = evaluate_profile_changes(profile, recorded.changed_files)
-        else:
-            policy = None
-        if policy is not None:
-            if policy.status.value != "pass":
-                raise DocumentationReclassificationRequired(
-                    "Documentation Review PASS is outside the safe-change policy: "
-                    + policy.detail
-                )
-
+        try:
+            profile, _policy = resolve_issue_policy(
+                state.issue or {},
+                registry=self.policy_registry,
+                profile_resolver=self.profile_resolver or resolve_leaf_issue_profile,
+            )
+            validate_profile_review(
+                profile,
+                state.issue or {},
+                {"identity": recorded.to_dict(), "verdict": "PASS"},
+                registry=self.policy_registry,
+                context=PolicyContext(
+                    profile=profile,
+                    phase="review",
+                    issue=state.issue,
+                    review_identity=recorded.to_dict(),
+                    review_verdict="PASS",
+                ),
+            )
+        except (ProfilePolicyError, TypeError, ValueError) as exc:
+            raise LckStopError(
+                f"Review PASS profile evidence is invalid: {exc}"
+            ) from exc
         # Git commit objects are content-addressed. Once current PR/base/head and
         # Task Contract identity still match the accepted Review receipt, the
         # recorded merge-base/effective-diff identity remains mechanically bound
@@ -732,10 +795,18 @@ class MergePreflight:
         *,
         review_gate: ReviewPassGate | None = None,
         checks_gate: DeliveryChecksGate | None = None,
+        policy_registry: ProfilePolicyRegistry | None = None,
+        profile_resolver: ProfileResolver | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
-        self.review_gate = review_gate or ReviewPassGate(resolver)
+        self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
+        self.profile_resolver = profile_resolver
+        self.review_gate = review_gate or ReviewPassGate(
+            resolver,
+            policy_registry=self.policy_registry,
+            profile_resolver=self.profile_resolver,
+        )
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.last_snapshot: OperationSnapshot | None = None
         self.last_checks: dict[str, Any] | None = None

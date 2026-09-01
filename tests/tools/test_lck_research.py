@@ -22,10 +22,11 @@ from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     closeout as lck_closeout,
     delivery as lck_delivery,
     eligibility as lck_eligibility,
+    effects as lck_effects,
+    issue_profiles,
     models as lck_models,
     review as lck_review,
     review_workspace as lck_review_workspace,
-    validation as lck_validation,
 )
 from lck_test_support import FakeReviewWorkspace  # noqa: E402
 from research_policy import (  # type: ignore[import-not-found]  # noqa: E402
@@ -41,6 +42,11 @@ from research_policy import (  # type: ignore[import-not-found]  # noqa: E402
     research_contract_snapshot,
     research_template_contract,
     require_typed_research_outcome,
+)
+from lck_core.profile_policies import (  # type: ignore[import-not-found]  # noqa: E402
+    ProfileEffectDescriptor,
+    ResearchValidationGate,
+    validate_profile_completion,
 )
 from workflow_evidence import (  # type: ignore[import-not-found]  # noqa: E402
     _formal_blockers_gate,
@@ -236,7 +242,11 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
                                                         },
                                                     },
                                                     "fieldValueByName": {
-                                                        "name": "IMPLEMENT"
+                                                        "name": (
+                                                            "IMPLEMENT"
+                                                            if self.project_writes
+                                                            else "DO NOT IMPLEMENT"
+                                                        )
                                                     },
                                                 }
                                             ],
@@ -375,7 +385,7 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
         pr_effect=cast(Any, PR()),
         status_effect=cast(Any, Status()),
         checks_gate=cast(Any, Checks()),
-        research_validation=lck_validation.ResearchValidationGate(resolver),
+        services=(ResearchValidationGate(resolver),),
     )
     delivery_result = delivery.complete(
         199,
@@ -513,6 +523,85 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
         }
     )
     assert blocker_gate["status"] == "pass"
+
+
+def test_research_completion_rejects_artifact_divergence_from_review_identity(
+    tmp_path: Path,
+) -> None:
+    artifact_path = tmp_path / "docs" / "research" / "report.md"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(
+        "# Research report\n\nResearch Outcome: IMPLEMENT\n",
+        encoding="utf-8",
+    )
+    body_sha = sha256_json({"body": RESEARCH_BODY})
+    head_sha = "c" * 40
+    binding = research_artifact_binding(
+        tmp_path,
+        task_number=199,
+        pr_number=299,
+        base_sha=SHA,
+        head_sha=head_sha,
+        task_body_sha256=body_sha,
+        merge_base_sha=SHA,
+        effective_diff_sha256=DIGEST,
+        changed_files=("docs/research/report.md",),
+    )
+    identity = {
+        "task_number": 199,
+        "pr_number": 299,
+        "base_sha": SHA,
+        "head_sha": head_sha,
+        "task_body_sha256": body_sha,
+        "merge_base_sha": SHA,
+        "effective_diff_sha256": DIGEST,
+        "changed_files": ["docs/research/report.md"],
+        "research_artifact": binding,
+    }
+    issue = {
+        "number": 199,
+        "body_sha256": body_sha,
+        "research_contract": research_contract_snapshot(RESEARCH_BODY),
+    }
+    completion_input = {
+        "task_number": 199,
+        "repository": "owner/repo",
+        "merged_pr": {
+            "number": 299,
+            "baseRefOid": SHA,
+            "headRefOid": head_sha,
+        },
+        "review_record": {
+            "identity": identity,
+            "research_artifact": binding,
+        },
+    }
+
+    result = validate_profile_completion(
+        issue_profiles.RESEARCH_PROFILE,
+        issue,
+        completion_input,
+    )
+    assert result.effect is not None
+
+    tampered = dict(binding)
+    tampered["artifact_sha256"] = "f" * 64
+    tampered_input = {
+        **completion_input,
+        "review_record": {
+            "identity": identity,
+            "research_artifact": tampered,
+        },
+    }
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="diverges from the reviewed identity",
+    ):
+        validate_profile_completion(
+            issue_profiles.RESEARCH_PROFILE,
+            issue,
+            tampered_input,
+        )
 
 
 def test_research_blocker_uses_only_the_canonical_project_outcome() -> None:
@@ -661,13 +750,266 @@ def test_research_outcome_postcondition_paginates_past_first_page() -> None:
     runner = Runner()
     resolver = type("Resolver", (), {"runner": runner})()
 
-    outcome = lck_closeout.ResearchOutcomeEffect(cast(Any, resolver))._query_outcome(
+    from lck_core.profile_policies import ResearchOutcomeEffect
+
+    outcome = ResearchOutcomeEffect(cast(Any, resolver))._query_outcome(
         "owner/repo", 199
     )
 
     assert outcome == "IMPLEMENT"
     assert len(runner.calls) == 2
     assert "userAfter=cursor-page-1" in runner.calls[1]
+
+
+def test_research_outcome_effect_uses_canonical_read_for_idempotency() -> None:
+    class Runner:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, ...]] = []
+
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            self.calls.append(command)
+            if command[:3] != ("gh", "api", "graphql"):
+                raise AssertionError(f"unexpected Project write: {command}")
+            return CommandResult(
+                command_id,
+                command,
+                0,
+                json.dumps(
+                    {
+                        "data": {
+                            "user": {
+                                "projectV2": {
+                                    "items": {
+                                        "nodes": [
+                                            {
+                                                "content": {
+                                                    "number": 199,
+                                                    "repository": {
+                                                        "nameWithOwner": "owner/repo"
+                                                    },
+                                                },
+                                                "fieldValueByName": {
+                                                    "name": "IMPLEMENT"
+                                                },
+                                            }
+                                        ],
+                                        "pageInfo": {
+                                            "hasNextPage": False,
+                                            "endCursor": None,
+                                        },
+                                    }
+                                }
+                            },
+                            "organization": None,
+                        }
+                    }
+                ),
+                "",
+            )
+
+    descriptor = ProfileEffectDescriptor(
+        effect_kind="project.single_select.set.v1",
+        schema_version=1,
+        parameters={
+            "repository": "owner/repo",
+            "task_number": 199,
+            "project_number": 1,
+            "field": "Research Outcome",
+            "value": "IMPLEMENT",
+        },
+        postcondition={
+            "kind": "project.single_select.equals",
+            "repository": "owner/repo",
+            "task_number": 199,
+            "project_number": 1,
+            "field": "Research Outcome",
+            "value": "IMPLEMENT",
+        },
+        receipt={"outcome": "IMPLEMENT"},
+    )
+    runner = Runner()
+    resolver = type("Resolver", (), {"runner": runner})()
+    state = type(
+        "State",
+        (),
+        {
+            "repository": "owner/repo",
+            "task_number": 199,
+            "issue": {"research_outcome": "DO NOT IMPLEMENT"},
+        },
+    )()
+
+    receipt = lck_effects.DEFAULT_EFFECT_EXECUTOR_REGISTRY.execute(
+        descriptor,
+        resolver=cast(Any, resolver),
+        state=cast(Any, state),
+    )
+
+    assert receipt.action == "already-set"
+    assert len(runner.calls) == 1
+
+
+def test_research_outcome_effect_writes_when_only_noncanonical_state_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Runner:
+        def __init__(self) -> None:
+            self.queries = 0
+
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            assert command[:3] == ("gh", "api", "graphql")
+            self.queries += 1
+            outcome = "DO NOT IMPLEMENT" if self.queries == 1 else "IMPLEMENT"
+            return CommandResult(
+                command_id,
+                command,
+                0,
+                json.dumps(
+                    {
+                        "data": {
+                            "user": {
+                                "projectV2": {
+                                    "items": {
+                                        "nodes": [
+                                            {
+                                                "content": {
+                                                    "number": 199,
+                                                    "repository": {
+                                                        "nameWithOwner": "owner/repo"
+                                                    },
+                                                },
+                                                "fieldValueByName": {"name": outcome},
+                                            }
+                                        ],
+                                        "pageInfo": {
+                                            "hasNextPage": False,
+                                            "endCursor": None,
+                                        },
+                                    }
+                                }
+                            },
+                            "organization": None,
+                        }
+                    }
+                ),
+                "",
+            )
+
+    descriptor = ProfileEffectDescriptor(
+        effect_kind="project.single_select.set.v1",
+        schema_version=1,
+        parameters={
+            "repository": "owner/repo",
+            "task_number": 199,
+            "project_number": 1,
+            "field": "Research Outcome",
+            "value": "IMPLEMENT",
+        },
+        postcondition={
+            "kind": "project.single_select.equals",
+            "repository": "owner/repo",
+            "task_number": 199,
+            "project_number": 1,
+            "field": "Research Outcome",
+            "value": "IMPLEMENT",
+        },
+        receipt={"outcome": "IMPLEMENT"},
+    )
+    writes: list[tuple[str, int, int, str, str]] = []
+    monkeypatch.setattr(
+        lck_effects,
+        "set_project_status_with_runner",
+        lambda _runner, repository, task_number, *, project_number, field, value: (
+            writes.append((repository, task_number, project_number, field, value))
+        ),
+    )
+    runner = Runner()
+    resolver = type("Resolver", (), {"runner": runner})()
+    state = type(
+        "State",
+        (),
+        {
+            "repository": "owner/repo",
+            "task_number": 199,
+            "issue": {"research_outcome": "IMPLEMENT"},
+        },
+    )()
+
+    receipt = lck_effects.DEFAULT_EFFECT_EXECUTOR_REGISTRY.execute(
+        descriptor,
+        resolver=cast(Any, resolver),
+        state=cast(Any, state),
+    )
+
+    assert receipt.action == "updated"
+    assert writes == [("owner/repo", 199, 1, "Research Outcome", "IMPLEMENT")]
+    assert runner.queries == 2
+
+
+def test_research_outcome_pending_receipt_preserves_descriptor_metadata() -> None:
+    class Runner:
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            if command[:3] == ("gh", "project", "item-edit"):
+                return CommandResult(command_id, command, 0, "", "")
+            if command[:3] == ("gh", "api", "graphql"):
+                return CommandResult(
+                    command_id,
+                    command,
+                    0,
+                    json.dumps(
+                        {
+                            "data": {
+                                "user": None,
+                                "organization": None,
+                            }
+                        }
+                    ),
+                    "",
+                )
+            raise AssertionError(f"unexpected command: {command}")
+
+    descriptor = ProfileEffectDescriptor(
+        effect_kind="project.single_select.set.v1",
+        schema_version=1,
+        parameters={
+            "repository": "owner/repo",
+            "task_number": 199,
+            "project_number": 1,
+            "field": "Research Outcome",
+            "value": "IMPLEMENT",
+        },
+        postcondition={
+            "kind": "project.single_select.equals",
+            "repository": "owner/repo",
+            "task_number": 199,
+            "project_number": 1,
+            "field": "Research Outcome",
+            "value": "IMPLEMENT",
+        },
+        receipt={"outcome": "IMPLEMENT"},
+    )
+    resolver = type("Resolver", (), {"runner": Runner()})()
+    state = type(
+        "State",
+        (),
+        {
+            "repository": "owner/repo",
+            "task_number": 199,
+            "issue": {},
+        },
+    )()
+
+    receipt = lck_effects.DEFAULT_EFFECT_EXECUTOR_REGISTRY.execute(
+        descriptor,
+        resolver=cast(Any, resolver),
+        state=cast(Any, state),
+    )
+
+    assert receipt.action == "pending"
+    assert receipt.details["outcome"] == "IMPLEMENT"
 
 
 def test_research_artifact_binding_rejects_non_utf8_as_policy_error(

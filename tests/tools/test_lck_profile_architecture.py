@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import ast
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -18,11 +19,14 @@ if AGENT_WORKFLOW not in sys.path:
     sys.path.insert(0, AGENT_WORKFLOW)
 
 from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
+    closeout as lck_closeout,
     delivery as lck_delivery,
+    effects as lck_effects,
     issue_profiles,
     models as lck_models,
     receipts as lck_receipts,
     remediation as lck_remediation,
+    review as lck_review,
 )
 from lck_core.issue_profiles import (  # type: ignore[import-not-found]  # noqa: E402
     IssueProfileResolution,
@@ -32,12 +36,16 @@ from lck_core.profile_policies import (  # type: ignore[import-not-found]  # noq
     DEFAULT_PROFILE_POLICY_REGISTRY,
     PolicyBlocker,
     PolicyContext,
+    ProfileEffectDescriptor,
     ProfileEvidenceEnvelope,
     ProfileEvidenceRecord,
+    ProfilePolicyError,
     ProfilePolicyRegistry,
     evaluate_profile_blockers,
+    validate_profile_completion,
     validate_profile_candidate,
     validate_profile_contract,
+    validate_profile_review,
     run_profile_delivery_gates,
 )
 from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
@@ -50,6 +58,49 @@ from lck_test_support import (  # noqa: E402
 )
 
 
+def test_all_phase_controllers_use_only_generic_policy_capabilities() -> None:
+    """Shared lifecycle controllers must not dispatch concrete profile capabilities."""
+    controller_names = (
+        "delivery.py",
+        "review.py",
+        "review_workspace.py",
+        "validation.py",
+        "closeout.py",
+    )
+    forbidden_modules = {
+        "critical_outcome",
+        "documentation_policy",
+        "research_policy",
+    }
+    forbidden_capability_names = {
+        "CriticalOutcomeGate",
+        "DocumentationReclassificationRequired",
+        "DocumentationValidationGate",
+        "ResearchOutcomeEffect",
+        "ResearchOutcomeRequired",
+        "ResearchReclassificationRequired",
+        "ResearchValidationGate",
+        "_run_critical_outcome",
+    }
+    controller_root = ROOT / "tools" / "agent_workflow" / "lck_core"
+
+    for name in controller_names:
+        source = (controller_root / name).read_text(encoding="utf-8")
+        assert not any(
+            capability in source for capability in forbidden_capability_names
+        ), name
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported = {alias.name.split(".", 1)[0] for alias in node.names}
+                assert imported.isdisjoint(forbidden_modules), name
+            elif isinstance(node, ast.ImportFrom):
+                module = (node.module or "").split(".")[-1]
+                assert module not in forbidden_modules, name
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                assert node.name != "__getattr__", name
+
+
 @dataclass(frozen=True)
 class SyntheticPolicy:
     """A fifth policy proving the injection seam is independent of production."""
@@ -58,6 +109,8 @@ class SyntheticPolicy:
     canonical_type_label: str = "type:synthetic"
     contract_kind: str = "synthetic.contract.v1"
     candidate_kind: str = "synthetic.candidate.v1"
+    review_kind: str = "synthetic.review.v1"
+    completion_kind: str = "synthetic.completion.v1"
 
     def validate_contract(
         self, context: PolicyContext, leaf_contract: Mapping[str, Any]
@@ -110,6 +163,58 @@ class SyntheticPolicy:
             },
         )
 
+    def validate_review(
+        self,
+        context: PolicyContext,
+        leaf_contract: Mapping[str, Any],
+        review_input: Mapping[str, Any],
+    ) -> ProfileEvidenceRecord:
+        del context
+        return ProfileEvidenceRecord(
+            self.review_kind,
+            1,
+            {
+                "policy_id": self.profile_id,
+                "contract_ref": {
+                    "number": leaf_contract["number"],
+                    "body_sha256": leaf_contract["body_sha256"],
+                },
+                "result": {"status": "pass"},
+                "status": "pass",
+                "review_input": dict(review_input),
+            },
+        )
+
+    def validate_completion(
+        self,
+        context: PolicyContext,
+        leaf_contract: Mapping[str, Any],
+        completion_input: Mapping[str, Any],
+    ) -> ProfileEvidenceRecord:
+        assert context.runner is None
+        del completion_input
+        descriptor = ProfileEffectDescriptor(
+            effect_kind="synthetic.noop.v1",
+            schema_version=1,
+            parameters={"value": "complete"},
+            postcondition={"kind": "synthetic.completed", "value": "complete"},
+            receipt={"source": "synthetic-policy"},
+        )
+        return ProfileEvidenceRecord(
+            self.completion_kind,
+            1,
+            {
+                "policy_id": self.profile_id,
+                "contract_ref": {
+                    "number": leaf_contract["number"],
+                    "body_sha256": leaf_contract["body_sha256"],
+                },
+                "result": {"status": "pass"},
+                "status": "pass",
+                "effect": descriptor.to_dict(),
+            },
+        )
+
     def validate_evidence(self, record: ProfileEvidenceRecord) -> bool:
         if (
             record.schema_version != 1
@@ -128,7 +233,90 @@ class SyntheticPolicy:
                 and isinstance(result, Mapping)
                 and dict(result) == {"status": "pass"}
             )
+        if record.kind == self.review_kind:
+            return (
+                record.payload.get("status") == "pass"
+                and isinstance(record.payload.get("result"), Mapping)
+                and record.payload["result"].get("status") == "pass"
+            )
+        if record.kind == self.completion_kind:
+            return (
+                record.payload.get("status") == "pass"
+                and isinstance(record.payload.get("result"), Mapping)
+                and record.payload["result"].get("status") == "pass"
+                and isinstance(record.payload.get("effect"), Mapping)
+            )
         return False
+
+
+@pytest.mark.parametrize(
+    "profile",
+    (
+        issue_profiles.TASK_PROFILE,
+        issue_profiles.BUG_PROFILE,
+        issue_profiles.DOCUMENTATION_PROFILE,
+    ),
+)
+def test_non_research_review_rejects_research_outcome_at_generic_policy_boundary(
+    profile: issue_profiles.LeafIssueWorkflowProfile,
+) -> None:
+    with pytest.raises(
+        ProfilePolicyError,
+        match="--research-outcome is supported only for Research Issues",
+    ):
+        validate_profile_review(
+            profile,
+            {"number": 219, "body_sha256": "a" * 64},
+            {"verdict": "PASS", "research_outcome": "IMPLEMENT"},
+        )
+
+
+def test_review_and_closeout_propagate_policy_injection_to_eligibility(
+    tmp_path: Path,
+) -> None:
+    policy = SyntheticPolicy()
+    registry = ProfilePolicyRegistry.from_policies(policy)
+    profile = replace(
+        issue_profiles.TASK_PROFILE,
+        profile_id=policy.profile_id,
+        canonical_type_label=policy.canonical_type_label,
+        candidate_capability="synthetic_candidate",
+        requires_critical_outcome=False,
+    )
+
+    def resolve_synthetic(_issue: Mapping[str, Any] | None) -> IssueProfileResolution:
+        return IssueProfileResolution(
+            status=IssueProfileResolutionStatus.RESOLVED,
+            profile=profile,
+            type_labels=(profile.canonical_type_label,),
+        )
+
+    resolver = StaticResolver(tmp_path, _review_state())
+    preparer = lck_review.ReviewPreparer(
+        resolver,
+        policy_registry=registry,
+        profile_resolver=resolve_synthetic,
+    )
+    completer = lck_review.ReviewCompleter(
+        resolver,
+        policy_registry=registry,
+        profile_resolver=resolve_synthetic,
+    )
+    closeout = lck_closeout.CloseoutCompleter(
+        resolver,
+        policy_registry=registry,
+        profile_resolver=resolve_synthetic,
+    )
+
+    for controller, phase in (
+        (preparer, lck_models.Phase.REVIEW_PREPARE),
+        (completer, lck_models.Phase.REVIEW_COMPLETE),
+        (closeout, lck_models.Phase.CLOSEOUT),
+    ):
+        assert controller.eligibility.registry is registry
+        assert controller.eligibility.profile_resolver is resolve_synthetic
+        decision = controller.eligibility.resolve(resolver.state, phase)
+        assert decision.issue_profile["profile"]["profile_id"] == policy.profile_id
 
 
 def test_synthetic_policy_contract_blocker_candidate_use_frozen_registry_and_envelope() -> (
@@ -279,6 +467,105 @@ def test_profile_registry_rejects_conflicting_canonical_labels() -> None:
     second = SyntheticPolicy(profile_id="synthetic-b")
     with pytest.raises(ValueError, match="duplicate canonical type label"):
         ProfilePolicyRegistry.from_policies(first, second)
+
+
+def test_synthetic_policy_review_completion_and_effect_are_generic_capabilities() -> (
+    None
+):
+    policy = SyntheticPolicy()
+    registry = ProfilePolicyRegistry.from_policies(policy)
+    profile = replace(
+        issue_profiles.TASK_PROFILE,
+        profile_id=policy.profile_id,
+        canonical_type_label=policy.canonical_type_label,
+        candidate_capability="synthetic_candidate",
+        requires_critical_outcome=False,
+    )
+    leaf_contract = {
+        "number": 219,
+        "body": "synthetic lifecycle contract",
+        "body_sha256": "a" * 64,
+    }
+
+    review = validate_profile_review(
+        profile,
+        leaf_contract,
+        {"verdict": "PASS", "review_input": "bounded"},
+        registry=registry,
+    )
+    assert review.evidence is not None
+    assert review.profile_evidence is not None
+    assert review.profile_evidence.review == review.evidence
+
+    completion = validate_profile_completion(
+        profile,
+        leaf_contract,
+        {
+            "task_number": 219,
+            "repository": "PhoenixSss/tracequant",
+            "review_evidence": review.evidence,
+        },
+        registry=registry,
+        context=PolicyContext(
+            profile=profile,
+            issue=leaf_contract,
+            runner=object(),
+        ),
+    )
+    assert completion.effect is not None
+    assert completion.profile_evidence is not None
+    assert completion.profile_evidence.completion == completion.evidence
+
+    def execute_effect(
+        _descriptor: ProfileEffectDescriptor, **_kwargs: Any
+    ) -> lck_models.EffectReceipt:
+        return lck_models.EffectReceipt(
+            "synthetic.noop.v1", "executed", {"source": "test"}
+        )
+
+    effects = lck_effects.EffectExecutorRegistry({"synthetic.noop.v1": execute_effect})
+    receipt = effects.execute(
+        completion.effect,
+        resolver=object(),
+        state=object(),
+    )
+    assert receipt.action == "executed"
+    assert receipt.is_complete
+    assert not lck_models.EffectReceipt("synthetic.noop.v1", "pending", {}).is_complete
+    with pytest.raises(lck_models.LckStopError, match="unknown completion effect"):
+        effects.execute(
+            replace(completion.effect, effect_kind="synthetic.unknown.v1"),
+            resolver=object(),
+            state=object(),
+        )
+
+
+def test_merge_preflight_propagates_policy_injection_to_default_review_gate(
+    tmp_path: Path,
+) -> None:
+    policy = SyntheticPolicy()
+    registry = ProfilePolicyRegistry.from_policies(policy)
+
+    def resolve_synthetic(_issue: Mapping[str, Any] | None) -> IssueProfileResolution:
+        return IssueProfileResolution(
+            status=IssueProfileResolutionStatus.RESOLVED,
+            profile=replace(
+                issue_profiles.TASK_PROFILE,
+                profile_id=policy.profile_id,
+                canonical_type_label=policy.canonical_type_label,
+            ),
+            type_labels=(policy.canonical_type_label,),
+        )
+
+    preflight = lck_review.MergePreflight(
+        StaticResolver(tmp_path, _review_state()),
+        policy_registry=registry,
+        profile_resolver=resolve_synthetic,
+    )
+
+    assert isinstance(preflight.review_gate, lck_review.ReviewPassGate)
+    assert preflight.review_gate.policy_registry is registry
+    assert preflight.review_gate.profile_resolver is resolve_synthetic
 
 
 def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(

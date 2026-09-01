@@ -288,6 +288,40 @@ def test_review_complete_acquires_one_fresh_snapshot_and_accepts_unchanged_targe
     assert workspace.removed == [review_root]
 
 
+def test_review_complete_rejects_research_outcome_for_task_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = _review_identity_value()
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    monkeypatch.setattr(
+        lck_review, "_review_identity", lambda *_args, **_kwargs: identity
+    )
+    store = lck_review_workspace.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    store.write_guard(review_id, _review_guard(identity, review_root=review_root))
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="--research-outcome is supported only for Research Issues",
+    ):
+        lck_review.ReviewCompleter(
+            resolver,
+            checks_gate=cast(Any, FakeReviewChecks()),
+            store=store,
+            workspace=cast(Any, FakeReviewWorkspace(review_root)),
+        ).complete(
+            159,
+            review_id,
+            verdict="PASS",
+            research_outcome="IMPLEMENT",
+        )
+
+    assert not store.record_path(159, review_id).exists()
+
+
 def test_review_complete_acquires_only_review_complete_fact_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

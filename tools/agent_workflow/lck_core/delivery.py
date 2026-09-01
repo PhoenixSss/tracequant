@@ -4,11 +4,6 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from critical_outcome import (
-    CriticalOutcomeError,
-    contract_from_snapshot,
-    verify_critical_outcome,
-)
 from workflow_common import ProgressReporter, is_sha
 
 from .effects import (
@@ -48,9 +43,7 @@ from .state import (
 )
 from .validation import (
     DeliveryChecksGate,
-    DocumentationValidationGate,
     FormalValidationGate,
-    ResearchValidationGate,
 )
 
 
@@ -268,12 +261,11 @@ class DeliveryCompleter:
         pr_effect: EnsureOpenPrEffect | ReuseExistingOpenPrEffect | None = None,
         status_effect: SetReviewStatusEffect | None = None,
         checks_gate: DeliveryChecksGate | None = None,
-        documentation_validation: DocumentationValidationGate | None = None,
-        research_validation: ResearchValidationGate | None = None,
         policy_registry: ProfilePolicyRegistry | None = None,
         profile_resolver: ProfileResolver | None = None,
         require_existing_open_pr: bool = False,
         candidate_recorder: Callable[[str, str], None] | None = None,
+        services: Sequence[Any] = (),
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
@@ -293,12 +285,7 @@ class DeliveryCompleter:
         self.pr_effect = pr_effect or EnsureOpenPrEffect(resolver)
         self.status_effect = status_effect or SetReviewStatusEffect(resolver)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
-        self.documentation_validation = (
-            documentation_validation or DocumentationValidationGate(resolver)
-        )
-        self.research_validation = research_validation or ResearchValidationGate(
-            resolver
-        )
+        self.services = tuple(services)
         self.require_existing_open_pr = require_existing_open_pr
         self.candidate_recorder = candidate_recorder
         self.last_snapshot: OperationSnapshot | None = None
@@ -317,35 +304,6 @@ class DeliveryCompleter:
             if isinstance(value, Mapping):
                 self.last_checks = dict(value)
                 return
-
-    def _run_critical_outcome(
-        self,
-        state: LiveState,
-        *,
-        progress: ProgressReporter | None = None,
-    ) -> dict[str, Any]:
-        issue = state.issue
-        contract_snapshot = (
-            issue.get("critical_outcome") if isinstance(issue, Mapping) else None
-        )
-        try:
-            contract = contract_from_snapshot(contract_snapshot)
-            result = verify_critical_outcome(
-                self.resolver.repo_root,
-                self.resolver.runner,
-                contract,
-                progress=progress,
-            )
-        except CriticalOutcomeError as exc:
-            raise LckStopError(f"Critical Outcome contract invalid: {exc}") from exc
-        payload = result.to_dict()
-        self.last_critical_outcome = payload
-        if result.status != "pass":
-            raise LckStopError(
-                "Critical Outcome FAIL: "
-                f"{contract.verification_test} exited {result.exit_code}"
-            )
-        return payload
 
     def _run_formal_validation(self, base_sha: str) -> dict[str, Any]:
         """Retain a parsed validation payload when the gate rejects it."""
@@ -390,24 +348,20 @@ class DeliveryCompleter:
                 head_sha=head_sha,
                 include_index=include_index,
                 progress=progress,
-                documentation_validation=self.documentation_validation,
-                research_validation=self.research_validation,
-                critical_outcome=lambda: self._run_critical_outcome(
-                    state, progress=progress
-                ),
                 issue=state.issue,
                 registry=self.policy_registry,
+                repo_root=self.resolver.repo_root,
+                runner=self.resolver.runner,
+                services=self.services,
             )
         except ProfileGateFailure as exc:
             self.last_profile_evidence = exc.profile_evidence
-            self.last_research_validation = getattr(
-                self.research_validation, "last_result", None
-            )
+            for field, value in exc.legacy_results.items():
+                target = f"last_{field}"
+                if isinstance(field, str) and hasattr(self, target):
+                    setattr(self, target, value)
             raise
         except LckStopError:
-            self.last_research_validation = getattr(
-                self.research_validation, "last_result", None
-            )
             raise
         self.last_documentation_validation = results.documentation_validation
         self.last_research_validation = results.research_validation

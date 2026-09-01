@@ -3,11 +3,18 @@ from __future__ import annotations
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Final
 
 from pr_resolve import PrResolveError, resolve_or_create_pr
 from project_status import set_project_status_with_runner
-from workflow_common import is_sha, read_json_text, stderr_tail
+from workflow_common import (
+    WorkflowToolError,
+    is_sha,
+    read_json_text,
+    safe_text,
+    stderr_tail,
+)
 from workflow_evidence import _find_project_status
 
 from .models import (
@@ -18,7 +25,314 @@ from .models import (
     _authoritative_remote_main_sha,
     _remote_refs,
 )
+from .profile_policies import ProfileEffectDescriptor
 from .state import LiveStateResolver
+
+
+class EffectExecutorRegistry:
+    """Immutable kernel allowlist for policy-declared effect kinds."""
+
+    def __init__(self, executors: Mapping[str, Any]) -> None:
+        selected: dict[str, Any] = {}
+        for kind, executor in executors.items():
+            if not isinstance(kind, str) or not kind or not callable(executor):
+                raise ValueError("effect executor registry entry is malformed")
+            if kind in selected:
+                raise ValueError(f"duplicate effect executor: {kind}")
+            selected[kind] = executor
+        self._executors = MappingProxyType(selected)
+
+    @property
+    def executors(self) -> Mapping[str, Any]:
+        return self._executors
+
+    def execute(
+        self,
+        descriptor: ProfileEffectDescriptor,
+        *,
+        resolver: LiveStateResolver,
+        state: LiveState,
+    ) -> EffectReceipt:
+        if not isinstance(descriptor, ProfileEffectDescriptor):
+            raise LckStopError("completion effect descriptor is malformed")
+        try:
+            executor = self._executors[descriptor.effect_kind]
+        except KeyError as exc:
+            raise LckStopError(
+                f"unknown completion effect kind: {descriptor.effect_kind}"
+            ) from exc
+        try:
+            receipt = executor(descriptor, resolver=resolver, state=state)
+            if not isinstance(receipt, EffectReceipt):
+                raise LckStopError("completion effect executor returned no receipt")
+            return receipt
+        except LckStopError:
+            raise
+        except Exception as exc:
+            raise LckStopError(f"completion effect execution failed: {exc}") from exc
+
+
+def _pending_effect(
+    effect: str, *, reason: str, details: Mapping[str, Any]
+) -> EffectReceipt:
+    payload = {"reason": reason, **dict(details)}
+    return EffectReceipt(effect=effect, action="pending", details=payload)
+
+
+_PROJECT_FIELD_QUERY: Final = r"""
+query($owner:String!, $projectNumber:Int!, $fieldName:String!, $userAfter:String, $organizationAfter:String) {
+  user(login:$owner) {
+    projectV2(number:$projectNumber) {
+      items(first:100, after:$userAfter) {
+        nodes {
+          content { ... on Issue { number repository { nameWithOwner } } }
+          fieldValueByName(name:$fieldName) {
+            ... on ProjectV2ItemFieldSingleSelectValue { name }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+  organization(login:$owner) {
+    projectV2(number:$projectNumber) {
+      items(first:100, after:$organizationAfter) {
+        nodes {
+          content { ... on Issue { number repository { nameWithOwner } } }
+          fieldValueByName(name:$fieldName) {
+            ... on ProjectV2ItemFieldSingleSelectValue { name }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+
+class ProjectSingleSelectEffectExecutor:
+    """Execute the one generic Project single-select effect kind."""
+
+    effect_kind = "project.single_select.set.v1"
+    schema_version = 1
+
+    @staticmethod
+    def _parameters(descriptor: ProfileEffectDescriptor) -> dict[str, Any]:
+        params = dict(descriptor.parameters)
+        required = {"repository", "task_number", "project_number", "field", "value"}
+        if set(params) != required:
+            raise LckStopError("project field effect parameters are invalid")
+        if (
+            not isinstance(params["repository"], str)
+            or not params["repository"]
+            or not isinstance(params["task_number"], int)
+            or isinstance(params["task_number"], bool)
+            or params["task_number"] <= 0
+            or not isinstance(params["project_number"], int)
+            or isinstance(params["project_number"], bool)
+            or params["project_number"] <= 0
+            or not isinstance(params["field"], str)
+            or not params["field"]
+            or not isinstance(params["value"], str)
+            or not params["value"]
+        ):
+            raise LckStopError("project field effect parameters are invalid")
+        return params
+
+    @classmethod
+    def _validate(cls, descriptor: ProfileEffectDescriptor) -> dict[str, Any]:
+        if (
+            descriptor.effect_kind != cls.effect_kind
+            or descriptor.schema_version != cls.schema_version
+        ):
+            raise LckStopError("unsupported project field effect schema")
+        params = cls._parameters(descriptor)
+        expected_postcondition = {
+            "kind": "project.single_select.equals",
+            **params,
+        }
+        if dict(descriptor.postcondition) != expected_postcondition:
+            raise LckStopError("project field effect postcondition is invalid")
+        return params
+
+    @staticmethod
+    def _query(
+        resolver: LiveStateResolver,
+        *,
+        repository: str,
+        project_number: int,
+        task_number: int,
+        field: str,
+    ) -> str | None:
+        owner, separator, _name = repository.partition("/")
+        if not separator or not owner:
+            return None
+        cursors: dict[str, str | None] = {"user": None, "organization": None}
+        seen: dict[str, set[str]] = {"user": set(), "organization": set()}
+        complete: set[str] = set()
+        while len(complete) < 2:
+            argv = [
+                "gh",
+                "api",
+                "graphql",
+                "-f",
+                f"query={' '.join(_PROJECT_FIELD_QUERY.split())}",
+                "-F",
+                f"owner={owner}",
+                "-F",
+                f"projectNumber={project_number}",
+                "-F",
+                f"fieldName={field}",
+            ]
+            if cursors["user"] is not None:
+                argv.extend(("-F", f"userAfter={cursors['user']}"))
+            if cursors["organization"] is not None:
+                argv.extend(("-F", f"organizationAfter={cursors['organization']}"))
+            result = resolver.runner.run(
+                argv, command_id="lck-profile-effect-postcondition", retries=1
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return None
+            value = read_json_text(
+                result.stdout, field="lck-profile-effect-postcondition"
+            )
+            if not isinstance(value, Mapping) or value.get("errors"):
+                return None
+            data = value.get("data")
+            if not isinstance(data, Mapping):
+                return None
+            for scope in ("user", "organization"):
+                if scope in complete:
+                    continue
+                owner_data = data.get(scope)
+                if owner_data is None:
+                    complete.add(scope)
+                    continue
+                if not isinstance(owner_data, Mapping):
+                    return None
+                project = owner_data.get("projectV2")
+                if project is None:
+                    complete.add(scope)
+                    continue
+                if not isinstance(project, Mapping):
+                    return None
+                items = project.get("items")
+                if not isinstance(items, Mapping):
+                    return None
+                nodes = items.get("nodes")
+                page_info = items.get("pageInfo")
+                if not isinstance(nodes, list) or not isinstance(page_info, Mapping):
+                    return None
+                for item in nodes:
+                    if not isinstance(item, Mapping):
+                        continue
+                    content = item.get("content")
+                    repo = (
+                        content.get("repository")
+                        if isinstance(content, Mapping)
+                        else None
+                    )
+                    if (
+                        isinstance(content, Mapping)
+                        and content.get("number") == task_number
+                        and isinstance(repo, Mapping)
+                        and repo.get("nameWithOwner") == repository
+                    ):
+                        field_value = item.get("fieldValueByName")
+                        if not isinstance(field_value, Mapping):
+                            return None
+                        return safe_text(field_value.get("name"))
+                if page_info.get("hasNextPage") is False:
+                    complete.add(scope)
+                elif page_info.get("hasNextPage") is True:
+                    cursor = page_info.get("endCursor")
+                    if (
+                        not isinstance(cursor, str)
+                        or not cursor
+                        or cursor in seen[scope]
+                    ):
+                        return None
+                    seen[scope].add(cursor)
+                    cursors[scope] = cursor
+                else:
+                    return None
+        return None
+
+    @classmethod
+    def execute(
+        cls,
+        descriptor: ProfileEffectDescriptor,
+        *,
+        resolver: LiveStateResolver,
+        state: LiveState,
+    ) -> EffectReceipt:
+        params = cls._validate(descriptor)
+        if (
+            state.repository != params["repository"]
+            or state.task_number != params["task_number"]
+        ):
+            raise LckStopError(
+                "project field effect identity does not match live state"
+            )
+        observed = cls._query(
+            resolver,
+            repository=params["repository"],
+            project_number=params["project_number"],
+            task_number=params["task_number"],
+            field=params["field"],
+        )
+        action = "already-set" if observed == params["value"] else "updated"
+        if action == "updated":
+            try:
+                set_project_status_with_runner(
+                    resolver.runner,
+                    params["repository"],
+                    params["task_number"],
+                    project_number=params["project_number"],
+                    field=params["field"],
+                    value=params["value"],
+                )
+            except WorkflowToolError as exc:
+                raise LckStopError(f"project field effect write failed: {exc}") from exc
+            observed = cls._query(
+                resolver,
+                repository=params["repository"],
+                project_number=params["project_number"],
+                task_number=params["task_number"],
+                field=params["field"],
+            )
+        if observed != params["value"]:
+            return _pending_effect(
+                cls.effect_kind,
+                reason="project field effect postcondition is not proven",
+                details={
+                    "field": params["field"],
+                    "value": params["value"],
+                    "effect_kind": descriptor.effect_kind,
+                    **dict(descriptor.receipt),
+                },
+            )
+        details = {
+            "field": params["field"],
+            "value": params["value"],
+            "effect_kind": descriptor.effect_kind,
+            **dict(descriptor.receipt),
+        }
+        return EffectReceipt(
+            effect=cls.effect_kind,
+            action=action,
+            details=details,
+        )
+
+
+DEFAULT_EFFECT_EXECUTOR_REGISTRY: Final = EffectExecutorRegistry(
+    {
+        ProjectSingleSelectEffectExecutor.effect_kind: ProjectSingleSelectEffectExecutor.execute
+    }
+)
+PROFILE_EFFECT_EXECUTOR_REGISTRY: Final = DEFAULT_EFFECT_EXECUTOR_REGISTRY
+ProfileEffectExecutorRegistry = EffectExecutorRegistry
 
 
 class CommitCurrentTreeEffect:
