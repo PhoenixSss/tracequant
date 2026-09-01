@@ -17,7 +17,11 @@ from types import MappingProxyType
 from typing import Any, Final, Protocol, cast, runtime_checkable
 
 from bug_policy import bug_contract_snapshot, is_valid_bug_contract
-from critical_outcome import contract_from_snapshot, critical_outcome_snapshot
+from critical_outcome import (
+    CriticalOutcomeError,
+    contract_from_snapshot,
+    critical_outcome_snapshot,
+)
 from documentation_policy import (
     DocumentationChangeResult,
     documentation_contract_snapshot,
@@ -27,17 +31,26 @@ from documentation_policy import (
 from research_policy import is_valid_research_contract, research_contract_snapshot
 from workflow_common import sha256_json
 
-from .issue_profiles import LeafIssueWorkflowProfile, resolve_leaf_issue_profile
+from .issue_profiles import (
+    IssueProfileResolution,
+    LeafIssueWorkflowProfile,
+    resolve_leaf_issue_profile,
+)
 from .models import LckStopError
 
 PROFILE_EVIDENCE_SCHEMA_VERSION: Final = 1
 PROFILE_EVIDENCE_STAGES: Final = ("contract", "candidate", "review", "completion")
 _KIND_PATTERN: Final = r"^[a-z][a-z0-9_.-]*$"
 _CODE_PATTERN: Final = r"^[A-Z][A-Z0-9_.-]*$"
+_TYPE_LABEL_PATTERN: Final = r"^type:[a-z][a-z0-9_.-]*$"
+_SHA256_PATTERN: Final = r"^[0-9a-f]{64}$"
 
 
 class ProfilePolicyError(ValueError):
     """A profile policy or its typed evidence cannot be accepted safely."""
+
+
+ProfileResolver = Callable[[Mapping[str, Any] | None], IssueProfileResolution]
 
 
 def _jsonable(value: Any) -> Any:
@@ -166,6 +179,8 @@ class ProfileEvidenceEnvelope:
     def validated(
         self,
         registry: ProfilePolicyRegistry | None = None,
+        *,
+        leaf_contract: Mapping[str, Any] | None = None,
     ) -> ProfileEvidenceEnvelope:
         selected = registry or DEFAULT_PROFILE_POLICY_REGISTRY
         if not isinstance(self.profile_id, str) or not self.profile_id:
@@ -175,35 +190,54 @@ class ProfileEvidenceEnvelope:
                 "unsupported ProfileEvidenceEnvelope schema version"
             )
         policy = selected.resolve_profile_id(self.profile_id)
-        for record in (self.contract, self.candidate, self.review, self.completion):
+        records = (
+            ("contract", self.contract),
+            ("candidate", self.candidate),
+            ("review", self.review),
+            ("completion", self.completion),
+        )
+        if leaf_contract is None and any(record is not None for _, record in records):
+            raise ProfilePolicyError(
+                "canonical leaf contract is required to validate profile evidence"
+            )
+        for stage, record in records:
             if record is not None:
-                _validate_policy_evidence(policy, record)
+                _validate_policy_evidence(
+                    policy,
+                    record,
+                    stage=stage,
+                    leaf_contract=leaf_contract,
+                )
         return self
 
     def validate_evidence(
         self,
         registry: ProfilePolicyRegistry | None = None,
+        *,
+        leaf_contract: Mapping[str, Any] | None = None,
     ) -> ProfileEvidenceEnvelope:
         """Compatibility spelling for the lifecycle validation boundary."""
-        return self.validated(registry)
+        return self.validated(registry, leaf_contract=leaf_contract)
 
 
 def serialize_profile_evidence(
     value: ProfileEvidenceEnvelope,
     *,
     registry: ProfilePolicyRegistry | None = None,
+    leaf_contract: Mapping[str, Any] | None = None,
 ) -> str:
     """Serialize a validated envelope deterministically."""
-    return value.validated(registry).serialize()
+    return value.validated(registry, leaf_contract=leaf_contract).serialize()
 
 
 def validate_profile_evidence(
     value: ProfileEvidenceEnvelope,
     *,
     registry: ProfilePolicyRegistry | None = None,
+    leaf_contract: Mapping[str, Any] | None = None,
 ) -> ProfileEvidenceEnvelope:
     """Validate and return an envelope at a lifecycle boundary."""
-    return value.validated(registry)
+    return value.validated(registry, leaf_contract=leaf_contract)
 
 
 @dataclass(frozen=True)
@@ -271,6 +305,7 @@ class ProfilePolicyRegistry:
             else tuple(policies)
         )
         selected: dict[str, LeafIssuePolicy] = {}
+        by_type_label: dict[str, LeafIssuePolicy] = {}
         for policy in values:
             profile_id = getattr(policy, "profile_id", None)
             if not isinstance(profile_id, str) or not profile_id:
@@ -281,8 +316,22 @@ class ProfilePolicyRegistry:
                 raise ProfilePolicyError(
                     f"registered policy {profile_id!r} does not implement LeafIssuePolicy"
                 )
+            type_label = getattr(policy, "canonical_type_label", None)
+            if (
+                not isinstance(type_label, str)
+                or re.fullmatch(_TYPE_LABEL_PATTERN, type_label) is None
+            ):
+                raise ProfilePolicyError(
+                    f"registered policy {profile_id!r} has a malformed canonical type label"
+                )
+            if type_label in by_type_label:
+                raise ProfilePolicyError(
+                    f"duplicate canonical type label: {type_label}"
+                )
             selected[profile_id] = policy
+            by_type_label[type_label] = policy
         self._policies = MappingProxyType(selected)
+        self._policies_by_type_label = MappingProxyType(by_type_label)
 
     @classmethod
     def from_policies(cls, *policies: LeafIssuePolicy) -> ProfilePolicyRegistry:
@@ -291,6 +340,10 @@ class ProfilePolicyRegistry:
     @property
     def policies(self) -> Mapping[str, LeafIssuePolicy]:
         return self._policies
+
+    @property
+    def policies_by_type_label(self) -> Mapping[str, LeafIssuePolicy]:
+        return self._policies_by_type_label
 
     def resolve_profile_id(self, profile_id: str) -> LeafIssuePolicy:
         if not isinstance(profile_id, str) or not profile_id:
@@ -305,10 +358,12 @@ class ProfilePolicyRegistry:
     def resolve(self, profile: LeafIssueWorkflowProfile | str) -> LeafIssuePolicy:
         if isinstance(profile, str):
             if profile.startswith("type:"):
-                for candidate in self._policies.values():
-                    if getattr(candidate, "canonical_type_label", None) == profile:
-                        return candidate
-                raise ProfilePolicyError(f"profile policy is not registered: {profile}")
+                try:
+                    return self._policies_by_type_label[profile]
+                except KeyError as exc:
+                    raise ProfilePolicyError(
+                        f"profile policy is not registered: {profile}"
+                    ) from exc
             return self.resolve_profile_id(profile)
         if not isinstance(profile, LeafIssueWorkflowProfile):
             raise ProfilePolicyError("profile metadata is malformed")
@@ -321,9 +376,12 @@ class ProfilePolicyRegistry:
         return policy
 
     def resolve_issue(
-        self, issue: Mapping[str, Any]
+        self,
+        issue: Mapping[str, Any],
+        *,
+        profile_resolver: ProfileResolver = resolve_leaf_issue_profile,
     ) -> tuple[LeafIssueWorkflowProfile, LeafIssuePolicy]:
-        resolution = resolve_leaf_issue_profile(issue)
+        resolution = profile_resolver(issue)
         if not resolution.resolved or resolution.profile is None:
             raise ProfilePolicyError(
                 resolution.error_message or "profile resolution failed"
@@ -350,12 +408,73 @@ def _contract_reference(leaf_contract: Mapping[str, Any]) -> dict[str, Any]:
     return reference
 
 
+def _valid_contract_reference(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    number = value.get("number")
+    if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+        return False
+    body_sha256 = value.get("body_sha256")
+    contract_sha256 = value.get("contract_sha256")
+    if body_sha256 is not None and (
+        not isinstance(body_sha256, str)
+        or re.fullmatch(_SHA256_PATTERN, body_sha256) is None
+    ):
+        return False
+    if contract_sha256 is not None and (
+        not isinstance(contract_sha256, str)
+        or re.fullmatch(_SHA256_PATTERN, contract_sha256) is None
+    ):
+        return False
+    if body_sha256 is None and contract_sha256 is None:
+        return False
+    if body_sha256 is not None and contract_sha256 is not None:
+        return False
+    return set(value) == (
+        {"number", "body_sha256"}
+        if body_sha256 is not None
+        else {"number", "body_sha256", "contract_sha256"}
+    )
+
+
+def _contract_reference_matches(
+    value: Any,
+    leaf_contract: Mapping[str, Any],
+) -> bool:
+    return _valid_contract_reference(value) and dict(value) == _contract_reference(
+        leaf_contract
+    )
+
+
+def _expected_evidence_kind(policy: LeafIssuePolicy, stage: str) -> str:
+    value = getattr(policy, f"{stage}_kind", None)
+    if value is None:
+        value = f"{policy.profile_id}.{stage}.v1"
+    if not isinstance(value, str) or re.fullmatch(_KIND_PATTERN, value) is None:
+        raise ProfilePolicyError(f"policy evidence kind for {stage} is malformed")
+    return value
+
+
 def _validate_policy_evidence(
-    policy: LeafIssuePolicy, record: ProfileEvidenceRecord
+    policy: LeafIssuePolicy,
+    record: ProfileEvidenceRecord,
+    *,
+    stage: str | None = None,
+    leaf_contract: Mapping[str, Any] | None = None,
 ) -> None:
     if record.schema_version != PROFILE_EVIDENCE_SCHEMA_VERSION:
         raise ProfilePolicyError(
             f"unsupported evidence schema version for {record.kind}"
+        )
+    if stage is not None and record.kind != _expected_evidence_kind(policy, stage):
+        raise ProfilePolicyError(
+            f"policy evidence kind does not match {stage} stage: {record.kind}"
+        )
+    if leaf_contract is not None and not _contract_reference_matches(
+        record.payload.get("contract_ref"), leaf_contract
+    ):
+        raise ProfilePolicyError(
+            "profile evidence contract reference does not match the canonical leaf contract"
         )
     try:
         valid = policy.validate_evidence(record)
@@ -398,6 +517,10 @@ class _BuiltinPolicy:
     legacy_result_field: str | None = None
     candidate_requires_result: bool = False
 
+    def _validate_contract_payload(self, value: object) -> bool:
+        del value
+        return False
+
     def _record(
         self,
         kind: str,
@@ -439,13 +562,18 @@ class _BuiltinPolicy:
         ):
             return False
         if record.kind == self.contract_kind:
-            return isinstance(payload.get("contract"), Mapping)
-        if not isinstance(payload.get("status"), str):
+            return self._validate_contract_payload(payload.get("contract"))
+        status = payload.get("status")
+        if status not in {"pass", "fail"}:
             return False
-        if payload.get("status") == "fail":
-            return True
-        return not self.candidate_requires_result or isinstance(
-            payload.get("result"), Mapping
+        result = payload.get("result")
+        if result is not None and not isinstance(result, Mapping):
+            return False
+        if status == "fail":
+            error = payload.get("error")
+            return isinstance(error, str) and bool(error.strip())
+        return not self.candidate_requires_result or (
+            isinstance(result, Mapping) and result.get("status") == "pass"
         )
 
     def evaluate_blockers(
@@ -454,8 +582,13 @@ class _BuiltinPolicy:
         leaf_contract: Mapping[str, Any],
         contract_evidence: ProfileEvidenceRecord,
     ) -> Iterable[PolicyBlocker]:
-        del context, leaf_contract
-        _validate_policy_evidence(cast(LeafIssuePolicy, self), contract_evidence)
+        del context
+        _validate_policy_evidence(
+            cast(LeafIssuePolicy, self),
+            contract_evidence,
+            stage="contract",
+            leaf_contract=leaf_contract,
+        )
         return ()
 
     def candidate_failure(
@@ -490,6 +623,13 @@ class _TaskPolicy(_BuiltinPolicy):
     legacy_result_field = "critical_outcome"
     candidate_requires_result = True
 
+    def _validate_contract_payload(self, value: object) -> bool:
+        try:
+            contract_from_snapshot(value)
+        except (CriticalOutcomeError, ValueError):
+            return False
+        return True
+
     def validate_contract(
         self, context: PolicyContext, leaf_contract: Mapping[str, Any]
     ) -> ProfileEvidenceRecord:
@@ -516,7 +656,12 @@ class _TaskPolicy(_BuiltinPolicy):
     ) -> ProfileEvidenceRecord:
         if context.critical_outcome is None:
             raise ProfilePolicyError("Task Critical Outcome verifier is unavailable")
-        _validate_policy_evidence(self, contract_evidence)
+        _validate_policy_evidence(
+            self,
+            contract_evidence,
+            stage="contract",
+            leaf_contract=leaf_contract,
+        )
         result = context.critical_outcome()
         if not isinstance(result, Mapping):
             raise ProfilePolicyError("Task Critical Outcome result is malformed")
@@ -538,6 +683,9 @@ class _BugPolicy(_BuiltinPolicy):
     candidate_kind = "bug.candidate.v1"
     policy_label = "Bug defect"
 
+    def _validate_contract_payload(self, value: object) -> bool:
+        return is_valid_bug_contract(value)
+
     def validate_contract(
         self, context: PolicyContext, leaf_contract: Mapping[str, Any]
     ) -> ProfileEvidenceRecord:
@@ -558,7 +706,12 @@ class _BugPolicy(_BuiltinPolicy):
         leaf_contract: Mapping[str, Any],
         contract_evidence: ProfileEvidenceRecord,
     ) -> ProfileEvidenceRecord:
-        _validate_policy_evidence(self, contract_evidence)
+        _validate_policy_evidence(
+            self,
+            contract_evidence,
+            stage="contract",
+            leaf_contract=leaf_contract,
+        )
         return self._record(self.candidate_kind, context, leaf_contract, status="pass")
 
 
@@ -570,6 +723,9 @@ class _DocumentationPolicy(_BuiltinPolicy):
     policy_label = "Documentation"
     legacy_result_field = "documentation_validation"
     candidate_requires_result = True
+
+    def _validate_contract_payload(self, value: object) -> bool:
+        return is_valid_documentation_contract(value)
 
     def validate_contract(
         self, context: PolicyContext, leaf_contract: Mapping[str, Any]
@@ -591,7 +747,12 @@ class _DocumentationPolicy(_BuiltinPolicy):
         leaf_contract: Mapping[str, Any],
         contract_evidence: ProfileEvidenceRecord,
     ) -> ProfileEvidenceRecord:
-        _validate_policy_evidence(self, contract_evidence)
+        _validate_policy_evidence(
+            self,
+            contract_evidence,
+            stage="contract",
+            leaf_contract=leaf_contract,
+        )
         if context.documentation_validation is not None:
             result = context.documentation_validation()
         else:
@@ -616,6 +777,9 @@ class _ResearchPolicy(_BuiltinPolicy):
     legacy_result_field = "research_validation"
     candidate_requires_result = True
 
+    def _validate_contract_payload(self, value: object) -> bool:
+        return is_valid_research_contract(value)
+
     def validate_contract(
         self, context: PolicyContext, leaf_contract: Mapping[str, Any]
     ) -> ProfileEvidenceRecord:
@@ -636,7 +800,12 @@ class _ResearchPolicy(_BuiltinPolicy):
         leaf_contract: Mapping[str, Any],
         contract_evidence: ProfileEvidenceRecord,
     ) -> ProfileEvidenceRecord:
-        _validate_policy_evidence(self, contract_evidence)
+        _validate_policy_evidence(
+            self,
+            contract_evidence,
+            stage="contract",
+            leaf_contract=leaf_contract,
+        )
         if context.research_validation is None:
             raise ProfilePolicyError("Research candidate validator is unavailable")
         result = context.research_validation()
@@ -731,8 +900,9 @@ def resolve_issue_policy(
     issue: Mapping[str, Any],
     *,
     registry: ProfilePolicyRegistry = DEFAULT_PROFILE_POLICY_REGISTRY,
+    profile_resolver: ProfileResolver = resolve_leaf_issue_profile,
 ) -> tuple[LeafIssueWorkflowProfile, LeafIssuePolicy]:
-    return registry.resolve_issue(issue)
+    return registry.resolve_issue(issue, profile_resolver=profile_resolver)
 
 
 def _context_for(
@@ -774,7 +944,7 @@ def validate_profile_contract(
         policy = resolve_profile_policy(profile, registry=registry)
         execution_context = _context_for(profile, issue=issue, context=context)
         evidence = _coerce_evidence(policy.validate_contract(execution_context, issue))
-        _validate_policy_evidence(policy, evidence)
+        _validate_policy_evidence(policy, evidence, leaf_contract=issue)
     except (ProfilePolicyError, ValueError) as exc:
         label = getattr(policy, "policy_label", profile.profile_id.title())
         return ProfileContractCheck(
@@ -819,8 +989,8 @@ def evaluate_profile_blockers(
                 evidence_ref={"profile_id": profile.profile_id},
             ),
         )
-    evidence = contract_evidence or check.evidence
-    _validate_policy_evidence(policy, evidence)
+    evidence = contract_evidence if contract_evidence is not None else check.evidence
+    _validate_policy_evidence(policy, evidence, leaf_contract=issue)
     raw = policy.evaluate_blockers(execution_context, issue, evidence)
     if raw is None:
         raise ProfilePolicyError("policy returned no blocker collection")
@@ -849,12 +1019,17 @@ def validate_profile_candidate(
     )
     if not check.valid or check.evidence is None:
         raise ProfilePolicyError(check.failure_reason)
-    evidence = contract_evidence or check.evidence
-    _validate_policy_evidence(policy, evidence)
+    evidence = contract_evidence if contract_evidence is not None else check.evidence
+    _validate_policy_evidence(policy, evidence, leaf_contract=issue)
     candidate = _coerce_evidence(
         policy.validate_candidate(execution_context, issue, evidence)
     )
-    _validate_policy_evidence(policy, candidate)
+    _validate_policy_evidence(
+        policy,
+        candidate,
+        stage="candidate",
+        leaf_contract=issue,
+    )
     expected_kind = getattr(policy, "candidate_kind", candidate.kind)
     if candidate.kind != expected_kind:
         raise ProfilePolicyError("policy returned evidence for the wrong stage")
@@ -972,14 +1147,14 @@ def run_profile_delivery_gates(
             profile_id=profile.profile_id,
             contract=check.evidence,
             candidate=failure,
-        ).validated(registry)
+        ).validated(registry, leaf_contract=issue)
         raise ProfileGateFailure(str(exc), envelope) from exc
 
     envelope = ProfileEvidenceEnvelope(
         profile_id=profile.profile_id,
         contract=check.evidence,
         candidate=candidate,
-    ).validated(registry)
+    ).validated(registry, leaf_contract=issue)
     result = _result_from_candidate(candidate)
     legacy: dict[str, Any] = getattr(policy, "legacy_result", lambda _result: {})(
         result

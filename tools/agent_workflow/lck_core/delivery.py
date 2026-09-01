@@ -19,7 +19,7 @@ from .effects import (
     SetReviewStatusEffect,
 )
 from .eligibility import PhaseDecision, PhaseEligibilityResolver
-from .issue_profiles import resolve_issue_profile
+from .issue_profiles import resolve_leaf_issue_profile
 from .models import (
     BASE_BRANCH,
     LCK_SCHEMA_VERSION,
@@ -37,6 +37,8 @@ from .profile_policies import (
     ProfileEvidenceEnvelope,
     ProfileGateFailure,
     ProfilePolicyRegistry,
+    ProfileResolver,
+    resolve_issue_policy,
     run_profile_delivery_gates,
 )
 from .state import (
@@ -90,10 +92,18 @@ class DeliveryPreparer:
         resolver: LiveStateResolver,
         *,
         eligibility: PhaseEligibilityResolver | None = None,
+        profile_resolver: ProfileResolver | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
-        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.profile_resolver = (
+            profile_resolver
+            or getattr(eligibility, "profile_resolver", None)
+            or resolve_leaf_issue_profile
+        )
+        self.eligibility = eligibility or PhaseEligibilityResolver(
+            profile_resolver=self.profile_resolver
+        )
         self.last_snapshot: OperationSnapshot | None = None
 
     def _run_git(self, args: Sequence[str], command_id: str) -> None:
@@ -261,14 +271,21 @@ class DeliveryCompleter:
         documentation_validation: DocumentationValidationGate | None = None,
         research_validation: ResearchValidationGate | None = None,
         policy_registry: ProfilePolicyRegistry | None = None,
+        profile_resolver: ProfileResolver | None = None,
         require_existing_open_pr: bool = False,
         candidate_recorder: Callable[[str, str], None] | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
         self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
+        self.profile_resolver = (
+            profile_resolver
+            or getattr(eligibility, "profile_resolver", None)
+            or resolve_leaf_issue_profile
+        )
         self.eligibility = eligibility or PhaseEligibilityResolver(
-            registry=policy_registry
+            registry=self.policy_registry,
+            profile_resolver=self.profile_resolver,
         )
         self.formal_validation = formal_validation or FormalValidationGate(resolver)
         self.commit_effect = commit_effect or CommitCurrentTreeEffect(resolver)
@@ -351,10 +368,18 @@ class DeliveryCompleter:
         include_index: bool = False,
         head_sha: str | None = None,
     ) -> dict[str, Any] | None:
-        profile_resolution = resolve_issue_profile(state.issue)
-        profile = profile_resolution.profile
-        if profile is None or not profile_resolution.resolved:
+        if not isinstance(state.issue, Mapping):
             raise LckStopError("current leaf Issue workflow profile is unavailable")
+        try:
+            profile, _policy = resolve_issue_policy(
+                state.issue,
+                registry=self.policy_registry,
+                profile_resolver=self.profile_resolver,
+            )
+        except (TypeError, ValueError) as exc:
+            raise LckStopError(
+                f"current leaf Issue workflow profile is unavailable: {exc}"
+            ) from exc
         self.last_documentation_validation = None
         self.last_research_validation = None
         self.last_profile_evidence = None

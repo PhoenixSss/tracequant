@@ -7,7 +7,7 @@ from typing import Any
 from workflow_common import is_sha
 from workflow_evidence import _formal_blockers_gate
 
-from .issue_profiles import resolve_issue_profile
+from .issue_profiles import resolve_leaf_issue_profile
 from .models import (
     LiveState,
     Phase,
@@ -20,6 +20,7 @@ from .profile_policies import (
     DEFAULT_PROFILE_POLICY_REGISTRY,
     PolicyContext,
     ProfilePolicyRegistry,
+    ProfileResolver,
     evaluate_profile_blockers,
     resolve_profile_policy,
     validate_profile_contract,
@@ -51,8 +52,10 @@ class PhaseEligibilityResolver:
         self,
         *,
         registry: ProfilePolicyRegistry | None = None,
+        profile_resolver: ProfileResolver | None = None,
     ) -> None:
         self.registry = registry or DEFAULT_PROFILE_POLICY_REGISTRY
+        self.profile_resolver = profile_resolver or resolve_leaf_issue_profile
 
     def resolve(
         self,
@@ -64,7 +67,7 @@ class PhaseEligibilityResolver:
         reasons = list(state.stop_reasons)
         issue = state.issue
         relationships = state.relationships
-        profile_resolution = resolve_issue_profile(
+        profile_resolution = self.profile_resolver(
             issue if isinstance(issue, Mapping) else None
         )
         issue_profile = profile_resolution.to_dict()
