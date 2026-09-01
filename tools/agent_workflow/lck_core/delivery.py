@@ -32,7 +32,13 @@ from .models import (
     _is_clean_current_main,
     _jsonable,
 )
-from .profile_policies import run_profile_delivery_gates
+from .profile_policies import (
+    DEFAULT_PROFILE_POLICY_REGISTRY,
+    ProfileEvidenceEnvelope,
+    ProfileGateFailure,
+    ProfilePolicyRegistry,
+    run_profile_delivery_gates,
+)
 from .state import (
     LiveStateResolver,
     OperationSnapshotBuilder,
@@ -207,6 +213,7 @@ class DeliveryCompletionResult:
     effects: tuple[EffectReceipt, ...]
     operation_snapshot: OperationSnapshot
     research_artifact: Mapping[str, Any] | None = None
+    profile_evidence: ProfileEvidenceEnvelope | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -221,6 +228,9 @@ class DeliveryCompletionResult:
             "validation": _jsonable(self.validation),
             "checks": _jsonable(self.checks),
             "research_artifact": _jsonable(self.research_artifact),
+            "profile_evidence": (
+                self.profile_evidence.to_dict() if self.profile_evidence else None
+            ),
             "effects": [item.to_dict() for item in self.effects],
             "operation_snapshot": self.operation_snapshot.to_dict(),
             "human_boundary": "Independent Review must be started separately",
@@ -250,12 +260,16 @@ class DeliveryCompleter:
         checks_gate: DeliveryChecksGate | None = None,
         documentation_validation: DocumentationValidationGate | None = None,
         research_validation: ResearchValidationGate | None = None,
+        policy_registry: ProfilePolicyRegistry | None = None,
         require_existing_open_pr: bool = False,
         candidate_recorder: Callable[[str, str], None] | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
-        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
+        self.eligibility = eligibility or PhaseEligibilityResolver(
+            registry=policy_registry
+        )
         self.formal_validation = formal_validation or FormalValidationGate(resolver)
         self.commit_effect = commit_effect or CommitCurrentTreeEffect(resolver)
         self.remote_effect = remote_effect or EnsureRemoteBranchEffect(resolver)
@@ -274,6 +288,7 @@ class DeliveryCompleter:
         self.last_critical_outcome: dict[str, Any] | None = None
         self.last_documentation_validation: dict[str, Any] | None = None
         self.last_research_validation: dict[str, Any] | None = None
+        self.last_profile_evidence: ProfileEvidenceEnvelope | None = None
         self.last_validation: dict[str, Any] | None = None
         self.last_checks: dict[str, Any] | None = None
         self.last_effects: list[EffectReceipt] = []
@@ -342,6 +357,7 @@ class DeliveryCompleter:
             raise LckStopError("current leaf Issue workflow profile is unavailable")
         self.last_documentation_validation = None
         self.last_research_validation = None
+        self.last_profile_evidence = None
         try:
             results = run_profile_delivery_gates(
                 profile,
@@ -354,7 +370,15 @@ class DeliveryCompleter:
                 critical_outcome=lambda: self._run_critical_outcome(
                     state, progress=progress
                 ),
+                issue=state.issue,
+                registry=self.policy_registry,
             )
+        except ProfileGateFailure as exc:
+            self.last_profile_evidence = exc.profile_evidence
+            self.last_research_validation = getattr(
+                self.research_validation, "last_result", None
+            )
+            raise
         except LckStopError:
             self.last_research_validation = getattr(
                 self.research_validation, "last_result", None
@@ -363,6 +387,7 @@ class DeliveryCompleter:
         self.last_documentation_validation = results.documentation_validation
         self.last_research_validation = results.research_validation
         self.last_critical_outcome = results.critical_outcome
+        self.last_profile_evidence = results.profile_evidence
         return results.critical_outcome
 
     def _has_task_diff(self, base_sha: str) -> bool:
@@ -427,6 +452,7 @@ class DeliveryCompleter:
         self.last_effects = effects
         self.last_critical_outcome = None
         self.last_documentation_validation = None
+        self.last_profile_evidence = None
         self.last_validation = None
         self.last_checks = None
         decision = self.eligibility.resolve(
@@ -606,6 +632,7 @@ class DeliveryCompleter:
             effects=tuple(effects),
             operation_snapshot=snapshot,
             research_artifact=self.last_research_validation,
+            profile_evidence=self.last_profile_evidence,
         )
 
     def complete(

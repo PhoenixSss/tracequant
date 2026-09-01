@@ -20,6 +20,11 @@ from .models import (
     Phase,
     _jsonable,
 )
+from .profile_policies import (
+    DEFAULT_PROFILE_POLICY_REGISTRY,
+    ProfileEvidenceEnvelope,
+    ProfilePolicyRegistry,
+)
 from .review_workspace import ReviewInvocationStore, _identity_from_mapping
 from .state import (
     LiveStateResolver,
@@ -514,6 +519,7 @@ class RemediationCompletionResult:
                 self.delivery.operation_snapshot.state.issue_profile
             ),
             "critical_outcome": payload["critical_outcome"],
+            "profile_evidence": payload["profile_evidence"],
             "validation": payload["validation"],
             "checks": payload["checks"],
             "effects": payload["effects"],
@@ -540,14 +546,19 @@ class RemediationCompleter:
         eligibility: PhaseEligibilityResolver | None = None,
         store: ReviewInvocationStore | None = None,
         checks_gate: DeliveryChecksGate | None = None,
+        policy_registry: ProfilePolicyRegistry | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
-        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
+        self.eligibility = eligibility or PhaseEligibilityResolver(
+            registry=self.policy_registry
+        )
         self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.last_snapshot: OperationSnapshot | None = None
         self.last_critical_outcome: dict[str, Any] | None = None
+        self.last_profile_evidence: ProfileEvidenceEnvelope | None = None
         self.last_validation: dict[str, Any] | None = None
         self.last_checks: dict[str, Any] | None = None
         self.last_effects: list[EffectReceipt] = []
@@ -560,6 +571,9 @@ class RemediationCompleter:
         critical = getattr(delivery, "last_critical_outcome", None)
         if isinstance(critical, dict):
             self.last_critical_outcome = critical
+        profile_evidence = getattr(delivery, "last_profile_evidence", None)
+        if isinstance(profile_evidence, ProfileEvidenceEnvelope):
+            self.last_profile_evidence = profile_evidence
         validation = getattr(delivery, "last_validation", None)
         if isinstance(validation, dict):
             self.last_validation = validation
@@ -718,6 +732,7 @@ class RemediationCompleter:
             self.resolver,
             pr_effect=cast(Any, ReuseExistingOpenPrEffect(self.resolver)),
             checks_gate=self.checks_gate,
+            policy_registry=self.policy_registry,
             require_existing_open_pr=True,
             candidate_recorder=record_candidate,
         )

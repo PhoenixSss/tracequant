@@ -31,6 +31,7 @@ from .models import (
     _pr_head_sha,
     _validation_agent_view,
 )
+from .profile_policies import ProfileEvidenceEnvelope
 from .remediation import (
     RemediationCompletionResult,
     RemediationContext,
@@ -211,6 +212,15 @@ def _issue_profile_agent_view(value: Any) -> Any:
     return None
 
 
+def _profile_evidence(value: Any) -> Any:
+    """Serialize the generic profile envelope without profile-specific fields."""
+    if isinstance(value, ProfileEvidenceEnvelope):
+        return value.to_dict()
+    if isinstance(value, Mapping):
+        return _jsonable(value)
+    return None
+
+
 def _agent_view_for_result(value: Any) -> dict[str, Any]:
     """Convert one internal LCK result into the bounded Agent-facing view."""
     if isinstance(value, LiveState):
@@ -292,6 +302,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "pr": _delivery_pr_agent_view(value.effects),
             "critical_outcome": _critical_outcome_agent_view(value.critical_outcome),
             "research_artifact": _jsonable(value.research_artifact),
+            "profile_evidence": _profile_evidence(value.profile_evidence),
             "validation": _validation_agent_view(value.validation),
             "checks": _checks_agent_view(value.checks),
             "effects": _effect_agent_view(value.effects),
@@ -397,6 +408,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "status": "READY_FOR_NEW_REVIEW",
             "head_sha": delivery.head_sha,
             "critical_outcome": _critical_outcome_agent_view(delivery.critical_outcome),
+            "profile_evidence": _profile_evidence(delivery.profile_evidence),
             "validation": _validation_agent_view(delivery.validation),
             "checks": _checks_agent_view(delivery.checks),
             "effects": _effect_agent_view(delivery.effects),
@@ -538,6 +550,9 @@ def _write_failure_receipt(
             ),
             "documentation_policy": _jsonable(
                 getattr(handler, "last_documentation_validation", None)
+            ),
+            "profile_evidence": _profile_evidence(
+                getattr(handler, "last_profile_evidence", None)
             ),
             "validation": _jsonable(getattr(handler, "last_validation", None)),
             "checks": _jsonable(getattr(handler, "last_checks", None)),

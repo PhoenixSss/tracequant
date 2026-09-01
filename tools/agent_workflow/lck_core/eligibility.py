@@ -16,7 +16,14 @@ from .models import (
     _is_clean_current_main,
     _items,
 )
-from .profile_policies import validate_profile_contract
+from .profile_policies import (
+    DEFAULT_PROFILE_POLICY_REGISTRY,
+    PolicyContext,
+    ProfilePolicyRegistry,
+    evaluate_profile_blockers,
+    resolve_profile_policy,
+    validate_profile_contract,
+)
 
 
 @dataclass(frozen=True)
@@ -39,6 +46,13 @@ class PhaseDecision:
 
 class PhaseEligibilityResolver:
     """Apply static phase capabilities to current live preconditions."""
+
+    def __init__(
+        self,
+        *,
+        registry: ProfilePolicyRegistry | None = None,
+    ) -> None:
+        self.registry = registry or DEFAULT_PROFILE_POLICY_REGISTRY
 
     def resolve(
         self,
@@ -66,6 +80,11 @@ class PhaseEligibilityResolver:
                 reasons.append(profile_resolution.error_message)
             elif profile is not None and not profile.lifecycle_enabled:
                 reasons.append(profile_resolution.error_message)
+            elif profile is not None:
+                try:
+                    resolve_profile_policy(profile, registry=self.registry)
+                except ValueError as exc:
+                    reasons.append(f"profile policy resolution failed: {exc}")
             issue_state = str(issue.get("state", "")).upper()
             if phase is not Phase.CLOSEOUT and issue_state != "OPEN":
                 reasons.append("Task is not OPEN")
@@ -81,10 +100,41 @@ class PhaseEligibilityResolver:
                         "lifecycle labels must be exactly ['codex:ready']: "
                         f"{sorted(lifecycle_labels) or 'none'}"
                     )
-            if profile is not None:
-                contract_check = validate_profile_contract(profile, issue)
-                if contract_check is not None and not contract_check.valid:
+            validate_contract_at_entry = phase in {
+                Phase.DELIVERY_PREPARE,
+                Phase.DELIVERY_COMPLETE,
+                Phase.REMEDIATION_PREPARE,
+                Phase.REMEDIATION_COMPLETE,
+            }
+            if profile is not None and (
+                profile.contract_policy is not None or validate_contract_at_entry
+            ):
+                contract_check = validate_profile_contract(
+                    profile, issue, registry=self.registry
+                )
+                if not contract_check.valid:
                     reasons.append(contract_check.failure_reason)
+                else:
+                    try:
+                        policy_blockers = evaluate_profile_blockers(
+                            profile,
+                            issue,
+                            contract_evidence=contract_check.evidence,
+                            registry=self.registry,
+                            context=PolicyContext(
+                                profile=profile,
+                                phase=phase.value,
+                                issue=issue,
+                                relationships=relationships,
+                            ),
+                        )
+                    except ValueError as exc:
+                        reasons.append(f"profile blocker evaluation failed: {exc}")
+                    else:
+                        reasons.extend(
+                            f"policy blocker [{blocker.code}]: {blocker.detail}"
+                            for blocker in policy_blockers
+                        )
             project = issue.get("project_status")
             allowed_projects = {
                 Phase.DELIVERY_PREPARE: {"Ready", "In Progress"},
@@ -110,19 +160,6 @@ class PhaseEligibilityResolver:
             }[phase]
             if project not in allowed_projects:
                 reasons.append("Project Status is unavailable or unknown")
-            if phase in {Phase.DELIVERY_PREPARE, Phase.DELIVERY_COMPLETE}:
-                if profile is not None and profile.requires_critical_outcome:
-                    critical = issue.get("critical_outcome")
-                    if (
-                        not isinstance(critical, Mapping)
-                        or critical.get("status") != "valid"
-                    ):
-                        detail = (
-                            critical.get("detail")
-                            if isinstance(critical, Mapping)
-                            else "contract unavailable"
-                        )
-                        reasons.append(f"Critical Outcome contract invalid: {detail}")
 
         downstream_contract = (
             state.task_contract if isinstance(state.task_contract, Mapping) else issue
