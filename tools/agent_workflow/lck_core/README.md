@@ -48,6 +48,12 @@ workspace isolation, path containment, and review identity freshness remain
 kernel responsibilities; profile policies only supply bounded artifact
 semantics/evidence.
 
+`LiveState` and `OperationSnapshot` store Issue-neutral identity, branch, and
+`leaf_contract` fields. The historical `task_*` names remain read-only or
+serialized projections for compatibility; they are never a second canonical
+source. `leaf_contract` is the acquired Issue contract input, while
+`ProfileEvidenceEnvelope` remains lifecycle-stage evidence.
+
 When diagnosing a lifecycle issue, read this map first and inspect the owner module
 plus at most its direct companion modules before broad repository searches.
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -52,18 +53,32 @@ class FactProfile:
     name: str
     include_comments: bool = False
     include_issue_closure: bool = False
-    include_task_contract: bool = True
+    include_leaf_contract: bool = True
     include_git: bool = True
     include_workspace_inventory: bool = False
-    include_local_task_branches: bool = True
-    include_remote_task_branches: bool = True
+    include_local_issue_branches: bool = True
+    include_remote_issue_branches: bool = True
     include_open_pr: bool = True
     include_pr_history: bool = False
     include_pr_history_details: bool = False
     include_checks: bool = False
     include_mergeability: bool = False
 
+    # Stable compatibility spellings for persisted fact-profile consumers.
+    @property
+    def include_task_contract(self) -> bool:
+        return self.include_leaf_contract
+
+    @property
+    def include_local_task_branches(self) -> bool:
+        return self.include_local_issue_branches
+
+    @property
+    def include_remote_task_branches(self) -> bool:
+        return self.include_remote_issue_branches
+
     def facts(self) -> tuple[str, ...]:
+        """Return the stable legacy fact names used by persisted snapshots."""
         enabled = []
         for name in (
             "comments",
@@ -82,16 +97,36 @@ class FactProfile:
                 enabled.append(name)
         return tuple(enabled)
 
+    def neutral_facts(self) -> tuple[str, ...]:
+        """Return the canonical neutral names for new in-memory consumers."""
+        enabled = []
+        for name in (
+            "comments",
+            "issue_closure",
+            "leaf_contract",
+            "git",
+            "workspace_inventory",
+            "local_issue_branches",
+            "remote_issue_branches",
+            "open_pr",
+            "pr_history",
+            "checks",
+            "mergeability",
+        ):
+            if getattr(self, f"include_{name}"):
+                enabled.append(name)
+        return tuple(enabled)
+
 
 _DIAGNOSTIC_FACT_PROFILE: Final = FactProfile(
     name="diagnostic",
     include_comments=True,
     include_issue_closure=True,
-    include_task_contract=True,
+    include_leaf_contract=True,
     include_git=True,
     include_workspace_inventory=True,
-    include_local_task_branches=True,
-    include_remote_task_branches=True,
+    include_local_issue_branches=True,
+    include_remote_issue_branches=True,
     include_open_pr=True,
     include_pr_history=True,
     include_pr_history_details=True,
@@ -112,24 +147,24 @@ _OPERATION_FACT_PROFILES: Final = {
     "review-prepare": FactProfile(
         name="review-prepare",
         include_git=False,
-        include_local_task_branches=False,
+        include_local_issue_branches=False,
         include_checks=True,
     ),
     "review-complete": FactProfile(
         name="review-complete",
         include_git=False,
-        include_local_task_branches=False,
+        include_local_issue_branches=False,
         include_checks=True,
     ),
     # All phases that run eligibility need the current Issue contract so
     # Documentation remains valid through its terminal lifecycle paths.
     "remediation-prepare": FactProfile(
         name="remediation-prepare",
-        include_task_contract=True,
+        include_leaf_contract=True,
     ),
     "remediation-no-change": FactProfile(
         name="remediation-no-change",
-        include_task_contract=True,
+        include_leaf_contract=True,
     ),
     "remediation-complete": FactProfile(
         name="remediation-complete",
@@ -138,14 +173,14 @@ _OPERATION_FACT_PROFILES: Final = {
     "merge-preflight": FactProfile(
         name="merge-preflight",
         include_git=False,
-        include_local_task_branches=False,
+        include_local_issue_branches=False,
         include_checks=True,
         include_mergeability=True,
     ),
     "closeout": FactProfile(
         name="closeout",
         include_issue_closure=True,
-        include_task_contract=True,
+        include_leaf_contract=True,
         include_pr_history=True,
         include_pr_history_details=True,
     ),
@@ -411,20 +446,128 @@ def _pr_base_sha(pr: Mapping[str, Any] | None) -> str | None:
     return value if is_sha(value) else None
 
 
-@dataclass(frozen=True)
-class LiveState:
-    """Current mechanical facts acquired from Git and GitHub for one Issue."""
+def _called_from_dataclasses_replace() -> bool:
+    """Recognize Python's reconstruction path for legacy alias updates."""
+    frame = inspect.currentframe()
+    try:
+        while frame is not None:
+            if (
+                frame.f_globals.get("__name__") == "dataclasses"
+                and frame.f_code.co_name == "_replace"
+            ):
+                return True
+            frame = frame.f_back
+    finally:
+        del frame
+    return False
 
-    task_number: int
+
+def _coalesce_compatibility_value(
+    canonical_name: str,
+    canonical: Any,
+    legacy_name: str,
+    legacy: Any,
+) -> Any:
+    """Normalize one canonical value and its optional legacy projection.
+
+    Legacy serialized contracts historically contained a bounded projection of
+    the full contract.  Mapping values therefore use an overlap comparison so
+    that a complete canonical value and an older bounded projection can be
+    read together without creating a second source of truth.
+    """
+    if canonical is None:
+        return legacy
+    if legacy is None:
+        return canonical
+    if isinstance(canonical, Mapping) and isinstance(legacy, Mapping):
+        conflicts = [
+            key
+            for key, value in legacy.items()
+            if key in canonical and canonical[key] != value
+        ]
+        if conflicts:
+            if _called_from_dataclasses_replace():
+                return legacy
+            raise ValueError(
+                f"conflicting {canonical_name}/{legacy_name} values: "
+                + ", ".join(sorted(str(key) for key in conflicts))
+            )
+        return canonical
+    if canonical != legacy:
+        # ``dataclasses.replace`` reconstructs an object by passing every
+        # stored field plus the requested change.  A legacy property is not a
+        # stored field, but callers may still use the historical alias in a
+        # replace call.  Let that explicit replacement win while keeping all
+        # ordinary constructors and deserializers fail-closed below.
+        if _called_from_dataclasses_replace():
+            return legacy
+        raise ValueError(f"conflicting {canonical_name}/{legacy_name} values")
+    return canonical
+
+
+def _legacy_contract_projection(
+    leaf_contract: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return the bounded pre-neutralization ``task_contract`` projection."""
+    if not isinstance(leaf_contract, Mapping):
+        return None
+    return {
+        key: leaf_contract.get(key)
+        for key in (
+            "number",
+            "title",
+            "url",
+            "body_sha256",
+            "critical_outcome",
+            "bug_contract",
+            "documentation_contract",
+            "research_contract",
+            "research_outcome",
+        )
+    }
+
+
+def _contract_agent_view(
+    leaf_contract: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return a bounded contract projection without exposing the Issue body."""
+    if not isinstance(leaf_contract, Mapping):
+        return None
+    return _legacy_contract_projection(leaf_contract)
+
+
+def _issue_number_from_state(value: Any) -> int | None:
+    """Read an Issue number from canonical state with a legacy adapter fallback."""
+    issue_number = getattr(value, "issue_number", None)
+    if isinstance(issue_number, int) and not isinstance(issue_number, bool):
+        return issue_number
+    task_number = getattr(value, "task_number", None)
+    return (
+        task_number
+        if isinstance(task_number, int) and not isinstance(task_number, bool)
+        else None
+    )
+
+
+@dataclass(frozen=True, init=False)
+class LiveState:
+    """Current mechanical facts acquired from Git and GitHub for one Issue.
+
+    The neutral fields are the only stored identity, branch, and contract
+    values.  ``task_*`` names remain constructor and property compatibility
+    projections for existing Task callers and persisted consumers.
+    """
+
+    issue_number: int
     repository: str | None
     issue: Mapping[str, Any] | None
     relationships: Mapping[str, Any]
     git: Mapping[str, Any]
     target_branch: str
-    local_task_branch: str | None
-    local_task_head: str | None
-    remote_task_branch: str | None
-    remote_task_oid: str | None
+    local_issue_branch: str | None
+    local_issue_head: str | None
+    remote_issue_branch: str | None
+    remote_issue_oid: str | None
     open_pr: Mapping[str, Any] | None
     merged_pr_numbers: tuple[int, ...]
     merged: bool | None
@@ -434,8 +577,132 @@ class LiveState:
     stop_reasons: tuple[str, ...] = ()
     warnings: tuple[Mapping[str, Any], ...] = ()
     merged_pr: Mapping[str, Any] | None = None
-    task_contract: Mapping[str, Any] | None = None
+    leaf_contract: Mapping[str, Any] | None = None
     issue_profile: Mapping[str, Any] | None = None
+
+    def __init__(
+        self,
+        issue_number: int | None = None,
+        repository: str | None = None,
+        issue: Mapping[str, Any] | None = None,
+        relationships: Mapping[str, Any] | None = None,
+        git: Mapping[str, Any] | None = None,
+        target_branch: str = "",
+        local_issue_branch: str | None = None,
+        local_issue_head: str | None = None,
+        remote_issue_branch: str | None = None,
+        remote_issue_oid: str | None = None,
+        open_pr: Mapping[str, Any] | None = None,
+        merged_pr_numbers: tuple[int, ...] | list[int] = (),
+        merged: bool | None = None,
+        checks: Mapping[str, Any] | None = None,
+        cleanup: Mapping[str, Any] | None = None,
+        status: ResolutionStatus = ResolutionStatus.RESOLVED,
+        stop_reasons: tuple[str, ...] | list[str] = (),
+        warnings: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
+        merged_pr: Mapping[str, Any] | None = None,
+        leaf_contract: Mapping[str, Any] | None = None,
+        issue_profile: Mapping[str, Any] | None = None,
+        *,
+        task_number: int | None = None,
+        local_task_branch: str | None = None,
+        local_task_head: str | None = None,
+        remote_task_branch: str | None = None,
+        remote_task_oid: str | None = None,
+        task_contract: Mapping[str, Any] | None = None,
+    ) -> None:
+        resolved_number = _coalesce_compatibility_value(
+            "issue_number", issue_number, "task_number", task_number
+        )
+        if not isinstance(resolved_number, int) or isinstance(resolved_number, bool):
+            raise TypeError("LiveState issue_number must be an integer")
+
+        values = (
+            (
+                "local_issue_branch",
+                local_issue_branch,
+                "local_task_branch",
+                local_task_branch,
+            ),
+            (
+                "local_issue_head",
+                local_issue_head,
+                "local_task_head",
+                local_task_head,
+            ),
+            (
+                "remote_issue_branch",
+                remote_issue_branch,
+                "remote_task_branch",
+                remote_task_branch,
+            ),
+            (
+                "remote_issue_oid",
+                remote_issue_oid,
+                "remote_task_oid",
+                remote_task_oid,
+            ),
+        )
+        resolved_values = {
+            name: _coalesce_compatibility_value(name, canonical, legacy_name, legacy)
+            for name, canonical, legacy_name, legacy in values
+        }
+        resolved_contract = _coalesce_compatibility_value(
+            "leaf_contract", leaf_contract, "task_contract", task_contract
+        )
+        if resolved_contract is not None and not isinstance(resolved_contract, Mapping):
+            raise TypeError("LiveState leaf_contract must be a mapping or None")
+
+        if isinstance(status, str):
+            status = ResolutionStatus(status)
+        if not isinstance(status, ResolutionStatus):
+            raise TypeError("LiveState status must be a ResolutionStatus")
+        object.__setattr__(self, "issue_number", resolved_number)
+        object.__setattr__(self, "repository", repository)
+        object.__setattr__(self, "issue", issue)
+        object.__setattr__(self, "relationships", relationships or {})
+        object.__setattr__(self, "git", git or {})
+        object.__setattr__(self, "target_branch", target_branch)
+        for name, value in resolved_values.items():
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "open_pr", open_pr)
+        object.__setattr__(self, "merged_pr_numbers", tuple(merged_pr_numbers))
+        object.__setattr__(self, "merged", merged)
+        object.__setattr__(self, "checks", checks or {})
+        object.__setattr__(self, "cleanup", cleanup or {})
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "stop_reasons", tuple(stop_reasons))
+        object.__setattr__(self, "warnings", tuple(warnings))
+        object.__setattr__(self, "merged_pr", merged_pr)
+        object.__setattr__(self, "leaf_contract", resolved_contract)
+        object.__setattr__(self, "issue_profile", issue_profile)
+
+    # Read-only legacy projections.  They intentionally do not appear in the
+    # dataclass storage or in ``__dict__`` and can never diverge from neutral
+    # state.
+    @property
+    def task_number(self) -> int:
+        return self.issue_number
+
+    @property
+    def local_task_branch(self) -> str | None:
+        return self.local_issue_branch
+
+    @property
+    def local_task_head(self) -> str | None:
+        return self.local_issue_head
+
+    @property
+    def remote_task_branch(self) -> str | None:
+        return self.remote_issue_branch
+
+    @property
+    def remote_task_oid(self) -> str | None:
+        return self.remote_issue_oid
+
+    @property
+    def task_contract(self) -> Mapping[str, Any] | None:
+        return self.leaf_contract
 
     @property
     def project_status(self) -> str | None:
@@ -461,40 +728,26 @@ class LiveState:
             _jsonable(
                 {
                     "schema_version": LCK_SCHEMA_VERSION,
-                    "task_number": self.task_number,
+                    # Neutral fields are canonical.  The task_* entries below
+                    # are retained as additive compatibility projections.
+                    "issue_number": self.issue_number,
+                    "local_issue_branch": self.local_issue_branch,
+                    "local_issue_head": self.local_issue_head,
+                    "remote_issue_branch": self.remote_issue_branch,
+                    "remote_issue_oid": self.remote_issue_oid,
+                    "leaf_contract": self.leaf_contract,
+                    "task_number": self.issue_number,
                     "repository": self.repository,
                     "issue": self.issue,
-                    "task_contract": (
-                        {
-                            "number": self.task_contract.get("number"),
-                            "title": self.task_contract.get("title"),
-                            "url": self.task_contract.get("url"),
-                            "body_sha256": self.task_contract.get("body_sha256"),
-                            "critical_outcome": self.task_contract.get(
-                                "critical_outcome"
-                            ),
-                            "bug_contract": self.task_contract.get("bug_contract"),
-                            "documentation_contract": self.task_contract.get(
-                                "documentation_contract"
-                            ),
-                            "research_contract": self.task_contract.get(
-                                "research_contract"
-                            ),
-                            "research_outcome": self.task_contract.get(
-                                "research_outcome"
-                            ),
-                        }
-                        if isinstance(self.task_contract, Mapping)
-                        else None
-                    ),
+                    "task_contract": _legacy_contract_projection(self.leaf_contract),
                     "issue_profile": self.issue_profile,
                     "relationships": self.relationships,
                     "git": self.git,
                     "target_branch": self.target_branch,
-                    "local_task_branch": self.local_task_branch,
-                    "local_task_head": self.local_task_head,
-                    "remote_task_branch": self.remote_task_branch,
-                    "remote_task_oid": self.remote_task_oid,
+                    "local_task_branch": self.local_issue_branch,
+                    "local_task_head": self.local_issue_head,
+                    "remote_task_branch": self.remote_issue_branch,
+                    "remote_task_oid": self.remote_issue_oid,
                     "open_pr": self.open_pr,
                     "merged_pr_numbers": self.merged_pr_numbers,
                     "merged": self.merged,
@@ -508,23 +761,77 @@ class LiveState:
             ),
         )
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> LiveState:
+        """Deserialize canonical or legacy state into one neutral model.
+
+        Both schemas may be present in an additive receipt.  The constructor
+        performs overlap conflict detection and stores only the neutral form.
+        """
+        if not isinstance(value, Mapping):
+            raise TypeError("LiveState payload must be a mapping")
+        merged_numbers = value.get("merged_pr_numbers", ())
+        if not isinstance(merged_numbers, (list, tuple)):
+            raise TypeError("LiveState merged_pr_numbers must be a sequence")
+        stop_reasons = value.get("stop_reasons", ())
+        if not isinstance(stop_reasons, (list, tuple)):
+            raise TypeError("LiveState stop_reasons must be a sequence")
+        warnings = value.get("warnings", ())
+        if not isinstance(warnings, (list, tuple)):
+            raise TypeError("LiveState warnings must be a sequence")
+        return cls(
+            issue_number=value.get("issue_number"),
+            task_number=value.get("task_number"),
+            repository=value.get("repository"),
+            issue=value.get("issue"),
+            relationships=value.get("relationships"),
+            git=value.get("git"),
+            target_branch=value.get("target_branch", ""),
+            local_issue_branch=value.get("local_issue_branch"),
+            local_task_branch=value.get("local_task_branch"),
+            local_issue_head=value.get("local_issue_head"),
+            local_task_head=value.get("local_task_head"),
+            remote_issue_branch=value.get("remote_issue_branch"),
+            remote_task_branch=value.get("remote_task_branch"),
+            remote_issue_oid=value.get("remote_issue_oid"),
+            remote_task_oid=value.get("remote_task_oid"),
+            open_pr=value.get("open_pr"),
+            merged_pr_numbers=merged_numbers,
+            merged=value.get("merged"),
+            checks=value.get("checks"),
+            cleanup=value.get("cleanup"),
+            status=value.get("status", ResolutionStatus.RESOLVED),
+            stop_reasons=stop_reasons,
+            warnings=warnings,
+            merged_pr=value.get("merged_pr"),
+            leaf_contract=value.get("leaf_contract"),
+            task_contract=value.get("task_contract"),
+            issue_profile=value.get("issue_profile"),
+        )
+
     def agent_view(self) -> dict[str, Any]:
         """Return the compact result intended for the invoking Agent."""
         return {
             "schema_version": LCK_SCHEMA_VERSION,
             "kind": "lck-agent-view",
             "operation": "status",
-            "task_number": self.task_number,
+            "issue_number": self.issue_number,
+            "task_number": self.issue_number,
             "repository": self.repository,
             "status": self.status,
             "issue": _issue_agent_view(self.issue),
             "issue_profile": self.issue_profile,
             "target_branch": self.target_branch,
+            "local_issue_branch": self.local_issue_branch,
+            "local_issue_head": self.local_issue_head,
+            "remote_issue_branch": self.remote_issue_branch,
+            "remote_issue_oid": self.remote_issue_oid,
+            "leaf_contract": _contract_agent_view(self.leaf_contract),
             "task_branch": {
-                "local": self.local_task_branch,
-                "local_head_sha": self.local_task_head,
-                "remote": self.remote_task_branch,
-                "remote_head_sha": self.remote_task_oid,
+                "local": self.local_issue_branch,
+                "local_head_sha": self.local_issue_head,
+                "remote": self.remote_issue_branch,
+                "remote_head_sha": self.remote_issue_oid,
             },
             "pr": _pr_agent_view(self.open_pr or self.merged_pr),
             "checks": _checks_agent_view(self.checks),
@@ -556,16 +863,142 @@ class OperationSnapshot:
     fact_profile: str = "diagnostic"
     acquired_facts: tuple[str, ...] = ()
 
+    # The snapshot owns one LiveState object; these accessors expose its
+    # canonical neutral model without copying identity/branch/contract data.
+    @property
+    def issue_number(self) -> int:
+        return self.state.issue_number
+
+    @property
+    def local_issue_branch(self) -> str | None:
+        return self.state.local_issue_branch
+
+    @property
+    def local_issue_head(self) -> str | None:
+        return self.state.local_issue_head
+
+    @property
+    def remote_issue_branch(self) -> str | None:
+        return self.state.remote_issue_branch
+
+    @property
+    def remote_issue_oid(self) -> str | None:
+        return self.state.remote_issue_oid
+
+    @property
+    def leaf_contract(self) -> Mapping[str, Any] | None:
+        return self.state.leaf_contract
+
+    # Legacy names are read-only projections of the same snapshot state.
+    @property
+    def task_number(self) -> int:
+        return self.issue_number
+
+    @property
+    def local_task_branch(self) -> str | None:
+        return self.local_issue_branch
+
+    @property
+    def local_task_head(self) -> str | None:
+        return self.local_issue_head
+
+    @property
+    def remote_task_branch(self) -> str | None:
+        return self.remote_issue_branch
+
+    @property
+    def remote_task_oid(self) -> str | None:
+        return self.remote_issue_oid
+
+    @property
+    def task_contract(self) -> Mapping[str, Any] | None:
+        return self.leaf_contract
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": LCK_SCHEMA_VERSION,
             "operation": self.operation,
+            # These are projections of ``state`` for consumers that read the
+            # operation envelope without unpacking its nested LiveState.
+            "issue_number": self.issue_number,
+            "local_issue_branch": self.local_issue_branch,
+            "local_issue_head": self.local_issue_head,
+            "remote_issue_branch": self.remote_issue_branch,
+            "remote_issue_oid": self.remote_issue_oid,
+            "leaf_contract": _jsonable(self.leaf_contract),
+            "task_number": self.issue_number,
+            "local_task_branch": self.local_issue_branch,
+            "local_task_head": self.local_issue_head,
+            "remote_task_branch": self.remote_issue_branch,
+            "remote_task_oid": self.remote_issue_oid,
+            "task_contract": _jsonable(_legacy_contract_projection(self.leaf_contract)),
             "state": self.state.to_dict(),
             "required_checks": _jsonable(self.required_checks),
             "acquisition_warnings": _jsonable(self.acquisition_warnings),
             "fact_profile": self.fact_profile,
             "acquired_facts": list(self.acquired_facts),
         }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> OperationSnapshot:
+        """Deserialize a snapshot through the canonical LiveState adapter."""
+        if not isinstance(value, Mapping):
+            raise TypeError("OperationSnapshot payload must be a mapping")
+        state = value.get("state")
+        if not isinstance(state, Mapping):
+            raise TypeError("OperationSnapshot state payload must be a mapping")
+        restored_state = LiveState.from_dict(state)
+        for canonical_name, legacy_name, expected in (
+            ("issue_number", "task_number", restored_state.issue_number),
+            (
+                "local_issue_branch",
+                "local_task_branch",
+                restored_state.local_issue_branch,
+            ),
+            (
+                "local_issue_head",
+                "local_task_head",
+                restored_state.local_issue_head,
+            ),
+            (
+                "remote_issue_branch",
+                "remote_task_branch",
+                restored_state.remote_issue_branch,
+            ),
+            ("remote_issue_oid", "remote_task_oid", restored_state.remote_issue_oid),
+            ("leaf_contract", "task_contract", restored_state.leaf_contract),
+        ):
+            if canonical_name not in value and legacy_name not in value:
+                continue
+            observed = _coalesce_compatibility_value(
+                canonical_name,
+                value.get(canonical_name),
+                legacy_name,
+                value.get(legacy_name),
+            )
+            _coalesce_compatibility_value(
+                canonical_name,
+                expected,
+                "serialized_" + canonical_name,
+                observed,
+            )
+        warnings = value.get("acquisition_warnings", ())
+        facts = value.get("acquired_facts", ())
+        if not isinstance(warnings, (list, tuple)):
+            raise TypeError("OperationSnapshot acquisition_warnings must be a sequence")
+        if not isinstance(facts, (list, tuple)):
+            raise TypeError("OperationSnapshot acquired_facts must be a sequence")
+        operation = value.get("operation")
+        if not isinstance(operation, str) or not operation:
+            raise TypeError("OperationSnapshot operation must be a non-empty string")
+        return cls(
+            operation=operation,
+            state=restored_state,
+            required_checks=value.get("required_checks"),
+            acquisition_warnings=tuple(warnings),
+            fact_profile=str(value.get("fact_profile", "diagnostic")),
+            acquired_facts=tuple(str(fact) for fact in facts),
+        )
 
 
 @dataclass(frozen=True)

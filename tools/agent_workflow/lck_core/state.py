@@ -292,17 +292,17 @@ class LiveStateResolver:
         reasons: list[str] = []
         repository = _repository_slug(self.runner, self.repository, warnings)
         issue: Mapping[str, Any] | None = None
-        task_contract: Mapping[str, Any] | None = None
+        leaf_contract: Mapping[str, Any] | None = None
         relationships: Mapping[str, Any] = {"available": False}
         if repository is not None:
-            issue, task_contract = _issue_view_with_contract(
+            issue, leaf_contract = _issue_view_with_contract(
                 self.runner,
                 repository,
                 task_number,
                 warnings,
                 profile.include_comments,
                 profile.include_issue_closure,
-                profile.include_task_contract,
+                profile.include_leaf_contract,
             )
             relationships = _relationship_snapshot(
                 self.runner, repository, task_number, warnings
@@ -358,8 +358,8 @@ class LiveStateResolver:
             # from preserving compatibility with resolver doubles, this makes
             # the shared branch inventory helper's default behavior explicit.
             if (
-                profile.include_local_task_branches
-                and profile.include_remote_task_branches
+                profile.include_local_issue_branches
+                and profile.include_remote_issue_branches
             ):
                 local_branches, remote_branches, remote_available = self._task_branches(
                     task_number, warnings
@@ -368,15 +368,15 @@ class LiveStateResolver:
                 local_branches, remote_branches, remote_available = self._task_branches(
                     task_number,
                     warnings,
-                    include_local=profile.include_local_task_branches,
-                    include_remote=profile.include_remote_task_branches,
+                    include_local=profile.include_local_issue_branches,
+                    include_remote=profile.include_remote_issue_branches,
                 )
         else:
             local_branches, remote_branches, remote_available = self._task_branches(
                 task_number,
                 warnings,
-                include_local=profile.include_local_task_branches,
-                include_remote=profile.include_remote_task_branches,
+                include_local=profile.include_local_issue_branches,
+                include_remote=profile.include_remote_issue_branches,
                 profile=branch_match_profile,
             )
         if len(warnings) > branch_warning_count:
@@ -541,17 +541,17 @@ class LiveStateResolver:
         }
         status = ResolutionStatus.STOP if reasons else ResolutionStatus.RESOLVED
         return LiveState(
-            task_number=task_number,
+            issue_number=task_number,
             repository=repository,
             issue=issue,
-            task_contract=task_contract,
+            leaf_contract=leaf_contract,
             relationships=relationships,
             git=git,
             target_branch=target_branch,
-            local_task_branch=local_branch,
-            local_task_head=local_head,
-            remote_task_branch=remote_branch,
-            remote_task_oid=remote_oid,
+            local_issue_branch=local_branch,
+            local_issue_head=local_head,
+            remote_issue_branch=remote_branch,
+            remote_issue_oid=remote_oid,
             open_pr=open_pr,
             merged_pr_numbers=merged_numbers,
             merged=merged,
@@ -862,29 +862,36 @@ def _policy_issue_from_state(state: LiveState) -> dict[str, Any]:
     interpret profile semantics.
     """
     result = dict(state.issue) if isinstance(state.issue, Mapping) else {}
-    if isinstance(state.task_contract, Mapping):
-        result.update(state.task_contract)
+    if isinstance(state.leaf_contract, Mapping):
+        result.update(state.leaf_contract)
     return result
 
 
-def _task_contract_from_state(state: LiveState) -> dict[str, Any]:
-    """Return the Task contract captured by the operation-start live snapshot."""
+def _leaf_contract_from_state(state: LiveState) -> dict[str, Any]:
+    """Return the Issue contract captured by the operation-start snapshot."""
     if state.status is not ResolutionStatus.RESOLVED:
-        raise LckStopError("cannot read Task Contract from unresolved live state")
-    value = state.task_contract
+        raise LckStopError("cannot read Issue Contract from unresolved live state")
+    value = state.leaf_contract
     if not isinstance(value, Mapping):
-        raise LckStopError("current Task Contract is unavailable in operation snapshot")
+        raise LckStopError(
+            "current Issue Contract is unavailable in operation snapshot"
+        )
     body = value.get("body")
     body_sha256 = value.get("body_sha256")
     if not isinstance(body, str) or not isinstance(body_sha256, str):
-        raise LckStopError("current Task Contract body is unavailable")
+        raise LckStopError("current Issue Contract body is unavailable")
     issue = state.issue
     if (
         not isinstance(issue, Mapping)
         or issue.get("body_sha256") != body_sha256
-        or value.get("number") != state.task_number
+        or value.get("number") != state.issue_number
         or value.get("title") != issue.get("title")
         or str(issue.get("state", "")).upper() != "OPEN"
     ):
-        raise LckStopError("Task Contract is inconsistent inside operation snapshot")
+        raise LckStopError("Issue Contract is inconsistent inside operation snapshot")
     return dict(value)
+
+
+def _task_contract_from_state(state: LiveState) -> dict[str, Any]:
+    """Compatibility adapter for callers that still use the Task spelling."""
+    return _leaf_contract_from_state(state)

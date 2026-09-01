@@ -39,8 +39,8 @@ from .profile_policies import (
 from .state import (
     LiveStateResolver,
     OperationSnapshotBuilder,
+    _leaf_contract_from_state,
     _policy_issue_from_state,
-    _task_contract_from_state,
 )
 from .validation import (
     DeliveryChecksGate,
@@ -72,7 +72,7 @@ class DeliveryContext:
             "base_sha": self.base_sha,
             "action": self.action,
             "issue_profile": _jsonable(self.state.issue_profile),
-            "task_contract": _jsonable(_task_contract_from_state(self.state)),
+            "task_contract": _jsonable(_leaf_contract_from_state(self.state)),
             "operation_snapshot": self.operation_snapshot.to_dict(),
             "eligibility": self.eligibility.to_dict(),
         }
@@ -151,7 +151,7 @@ class DeliveryPreparer:
         clean = state.git.get("clean") is True
         base_sha = state.git.get("local_main_sha")
         action = "already-prepared"
-        local_exists = state.local_task_branch is not None
+        local_exists = state.local_issue_branch is not None
 
         if local_exists:
             if current_branch != branch:
@@ -164,7 +164,7 @@ class DeliveryPreparer:
                     "lck-select-existing-task-branch",
                 )
                 action = "selected-existing"
-        elif state.remote_task_branch is not None:
+        elif state.remote_issue_branch is not None:
             if current_branch != BASE_BRANCH or not clean:
                 raise LckStopError(
                     "restoring a remote Task branch requires a clean main worktree"
@@ -187,10 +187,10 @@ class DeliveryPreparer:
             action = "created-from-main"
 
         expected_head = (
-            state.local_task_head
+            state.local_issue_head
             if local_exists
-            else state.remote_task_oid
-            if state.remote_task_branch is not None
+            else state.remote_issue_oid
+            if state.remote_issue_branch is not None
             else base_sha
         )
         self._verify_workspace(branch, expected_head)
@@ -428,7 +428,7 @@ class DeliveryCompleter:
         progress: ProgressReporter,
     ) -> DeliveryCompletionResult:
         state = snapshot.state
-        task_number = state.task_number
+        task_number = state.issue_number
         effects: list[EffectReceipt] = []
         self.last_effects = effects
         self.last_critical_outcome = None
@@ -479,7 +479,7 @@ class DeliveryCompleter:
                 state,
                 base_sha,
                 progress=progress,
-                head_sha=state.local_task_head,
+                head_sha=state.local_issue_head,
             )
             progress.running("formal-validation")
             validation = self._run_formal_validation(base_sha)
@@ -487,7 +487,7 @@ class DeliveryCompleter:
                 validation = dict(validation)
                 validation["documentation_policy"] = self.last_documentation_validation
                 self.last_validation = validation
-            validated_head = state.local_task_head
+            validated_head = state.local_issue_head
             if not is_sha(validated_head):
                 raise LckStopError("current Task head is unavailable")
             self.commit_effect.verify_tree_unchanged(
@@ -510,7 +510,7 @@ class DeliveryCompleter:
                 base_sha,
                 progress=progress,
                 include_index=True,
-                head_sha=state.local_task_head,
+                head_sha=state.local_issue_head,
             )
             progress.running("formal-validation")
             validation = self._run_formal_validation(base_sha)
@@ -520,12 +520,12 @@ class DeliveryCompleter:
                 self.last_validation = validation
             self.commit_effect.verify_tree_unchanged(
                 validated_tree,
-                expected_head_sha=state.local_task_head,
+                expected_head_sha=state.local_issue_head,
             )
             commit = self.commit_effect.execute(
                 validated_tree,
                 commit_message,
-                expected_parent_sha=state.local_task_head,
+                expected_parent_sha=state.local_issue_head,
             )
             effects.append(commit)
             head = commit.details.get("head_sha")
@@ -644,7 +644,7 @@ class DeliveryCompleter:
                 operation=phase.value,
             )
             self.last_snapshot = snapshot
-            if snapshot.state.task_number != task_number:
+            if snapshot.state.issue_number != task_number:
                 raise LckStopError("operation snapshot belongs to another Task")
             result = self._complete_from_snapshot(
                 snapshot,

@@ -413,6 +413,53 @@ class SyntheticPolicy:
         return False
 
 
+def test_leaf_contract_is_canonical_input_not_profile_evidence_envelope() -> None:
+    """Keep acquired Issue input separate from #217 lifecycle evidence."""
+    policy = SyntheticPolicy()
+    registry = ProfilePolicyRegistry.from_policies(policy)
+    profile = replace(
+        issue_profiles.TASK_PROFILE,
+        profile_id=policy.profile_id,
+        canonical_type_label=policy.canonical_type_label,
+        requires_critical_outcome=False,
+    )
+    leaf_contract = {
+        "number": 217,
+        "title": "Synthetic leaf Issue",
+        "body": "the acquired Issue body is not lifecycle evidence",
+        "body_sha256": "a" * 64,
+    }
+    state = lck_models.LiveState(
+        issue_number=217,
+        issue={"number": 217, "body_sha256": leaf_contract["body_sha256"]},
+        target_branch="synthetic/217-leaf-contract",
+        leaf_contract=leaf_contract,
+    )
+    snapshot = lck_models.OperationSnapshot(operation="test", state=state)
+
+    contract_result = validate_profile_contract(
+        profile,
+        snapshot.leaf_contract or {},
+        registry=registry,
+        context=PolicyContext(profile=profile, issue=snapshot.leaf_contract),
+    )
+    assert contract_result.valid
+    assert contract_result.evidence is not None
+    envelope = ProfileEvidenceEnvelope(
+        profile_id=policy.profile_id,
+        contract=contract_result.evidence,
+    ).validated(registry, leaf_contract=snapshot.leaf_contract)
+
+    assert snapshot.issue_number == 217
+    assert snapshot.leaf_contract == leaf_contract
+    assert "body" not in envelope.to_dict()["contract"]["payload"]
+    assert "leaf_contract" not in envelope.to_dict()
+    assert envelope.to_dict()["contract"]["payload"]["contract_ref"] == {
+        "number": 217,
+        "body_sha256": "a" * 64,
+    }
+
+
 @pytest.mark.parametrize(
     "profile",
     (

@@ -22,6 +22,7 @@ from .models import (
     LckStopError,
     LiveState,
     _authoritative_remote_main_sha,
+    _issue_number_from_state,
     _remote_refs,
 )
 from .profile_policies import ProfileEffectDescriptor
@@ -270,7 +271,7 @@ class ProjectSingleSelectEffectExecutor:
         params = cls._validate(descriptor)
         if (
             state.repository != params["repository"]
-            or state.task_number != params["task_number"]
+            or _issue_number_from_state(state) != params["task_number"]
         ):
             raise LckStopError(
                 "project field effect identity does not match live state"
@@ -737,7 +738,7 @@ class EnsureOpenPrEffect:
                 f"- Critical Outcome: {critical_outcome.get('status')}",
             )
         body = (
-            f"Closes #{state.task_number}\n\n"
+            f"Closes #{state.issue_number}\n\n"
             "## Summary\n"
             f"{summary.strip()}\n\n"
             "## Validation\n" + "\n".join(validation_lines) + "\n\n"
@@ -945,10 +946,10 @@ class SetReviewStatusEffect:
         set_project_status_with_runner(
             self.resolver.runner,
             state.repository,
-            state.task_number,
+            state.issue_number,
             value="Review",
         )
-        observed = self._query_project_status(state.repository, state.task_number)
+        observed = self._query_project_status(state.repository, state.issue_number)
         if observed == "Review":
             return EffectReceipt(
                 effect="set_review_status",
@@ -960,7 +961,7 @@ class SetReviewStatusEffect:
             set_project_status_with_runner(
                 self.resolver.runner,
                 state.repository,
-                state.task_number,
+                state.issue_number,
                 value=previous_status,
             )
         except Exception as restore_exc:
@@ -968,7 +969,7 @@ class SetReviewStatusEffect:
                 "Project Status postcondition failed and compensation could not "
                 f"restore {previous_status!r}"
             ) from restore_exc
-        restored = self._query_project_status(state.repository, state.task_number)
+        restored = self._query_project_status(state.repository, state.issue_number)
         if restored != previous_status:
             raise LckStopError(
                 "Project Status postcondition failed and compensation did not "

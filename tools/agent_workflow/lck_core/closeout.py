@@ -223,7 +223,7 @@ class CloseoutMetadataEffect:
                 set_project_status_with_runner(
                     self.resolver.runner,
                     state.repository,
-                    state.task_number,
+                    state.issue_number,
                     value="Done",
                 )
                 actions.append("project-status-done")
@@ -234,7 +234,7 @@ class CloseoutMetadataEffect:
                         "gh",
                         "issue",
                         "edit",
-                        str(state.task_number),
+                        str(state.issue_number),
                         "--repo",
                         state.repository,
                         "--add-label",
@@ -260,7 +260,7 @@ class CloseoutMetadataEffect:
                 details={"actions": actions},
             )
         final_state, final_project_status, final_labels = self._query_metadata(
-            state.repository, state.task_number
+            state.repository, state.issue_number
         )
         if (
             str(final_state or "").upper() != "CLOSED"
@@ -299,7 +299,7 @@ class CleanupTaskRefsEffect:
         if (
             branch == BASE_BRANCH
             or profile is None
-            or not branch_matches_profile(branch, state.task_number, profile)
+            or not branch_matches_profile(branch, state.issue_number, profile)
         ):
             label = (
                 profile_cleanup_label(profile) if profile is not None else "leaf Issue"
@@ -340,13 +340,13 @@ class CleanupTaskRefsEffect:
                 "Cleanup STOP: PR head tree does not equal squash merge tree"
             )
 
-        if state.local_task_branch is None and state.remote_task_branch is None:
+        if state.local_issue_branch is None and state.remote_issue_branch is None:
             return EffectReceipt(
                 effect="cleanup_task_refs",
                 action="already-clean",
                 details={"branch": branch, "remote_branch": "already-deleted"},
             )
-        if state.local_task_branch is not None:
+        if state.local_issue_branch is not None:
             local_result = self.resolver.runner.run(
                 ["git", "rev-parse", f"refs/heads/{branch}"],
                 command_id="lck-closeout-local-branch-tip",
@@ -371,8 +371,8 @@ class CleanupTaskRefsEffect:
                     "pending",
                     reason="verified local Task branch could not be deleted",
                 )
-        if state.remote_task_branch is not None:
-            if state.remote_task_oid != expected_head_sha:
+        if state.remote_issue_branch is not None:
+            if state.remote_issue_oid != expected_head_sha:
                 raise LckStopError(
                     "Cleanup STOP: remote Task branch diverges from merged PR head"
                 )
@@ -541,7 +541,7 @@ class CloseoutCompleter:
             for item in closing
             if isinstance(item, Mapping) and isinstance(item.get("number"), int)
         ]
-        if len(closing_numbers) != 1 or closing_numbers[0] != state.task_number:
+        if len(closing_numbers) != 1 or closing_numbers[0] != state.issue_number:
             raise LckStopError(
                 "Closeout STOP: merged PR does not close exactly this Task"
             )
@@ -561,11 +561,17 @@ class CloseoutCompleter:
                 raise LckStopError(
                     "Closeout STOP: closed Task is not proven closed by the merged PR"
                 )
-        if state.local_task_head is not None and state.local_task_head != expected_head:
+        if (
+            state.local_issue_head is not None
+            and state.local_issue_head != expected_head
+        ):
             raise LckStopError(
                 "Closeout STOP: local Task branch diverges from merged PR head"
             )
-        if state.remote_task_oid is not None and state.remote_task_oid != expected_head:
+        if (
+            state.remote_issue_oid is not None
+            and state.remote_issue_oid != expected_head
+        ):
             raise LckStopError(
                 "Closeout STOP: remote Task branch diverges from merged PR head"
             )
@@ -574,7 +580,7 @@ class CloseoutCompleter:
     def _validate_reviewed_identity(
         self, state: LiveState, merged_pr: Mapping[str, Any]
     ) -> Mapping[str, Any]:
-        latest = self.review_store.read_latest_review(state.task_number)
+        latest = self.review_store.read_latest_review(state.issue_number)
         if not isinstance(latest, Mapping) or latest.get("verdict") != "PASS":
             raise LckStopError(
                 "Closeout STOP: latest Independent Review PASS is unavailable"
@@ -582,9 +588,9 @@ class CloseoutCompleter:
         review_id = latest.get("review_id")
         if not isinstance(review_id, str):
             raise LckStopError("Closeout STOP: latest Review PASS has no review id")
-        record = self.review_store.read_record(state.task_number, review_id)
+        record = self.review_store.read_record(state.issue_number, review_id)
         if (
-            record.get("task_number") != state.task_number
+            record.get("task_number") != state.issue_number
             or record.get("review_id") != review_id
             or record.get("verdict") != "PASS"
             or record.get("status") != "READY_FOR_MERGE_PREFLIGHT"
@@ -594,7 +600,7 @@ class CloseoutCompleter:
         if not isinstance(raw_identity, Mapping):
             raise LckStopError("Closeout STOP: Review PASS identity is unavailable")
         reviewed = _identity_from_mapping(raw_identity)
-        current_contract = state.task_contract
+        current_contract = state.leaf_contract
         current_body_sha256 = (
             current_contract.get("body_sha256")
             if isinstance(current_contract, Mapping)
@@ -605,7 +611,7 @@ class CloseoutCompleter:
                 "Closeout STOP: Review PASS is stale: Task Contract changed"
             )
         if (
-            reviewed.task_number != state.task_number
+            reviewed.task_number != state.issue_number
             or reviewed.pr_number != merged_pr.get("number")
             or reviewed.base_sha != _pr_base_sha(merged_pr)
             or reviewed.head_sha != _pr_head_sha(merged_pr)
@@ -655,7 +661,7 @@ class CloseoutCompleter:
                 profile,
                 _policy_issue_from_state(state),
                 {
-                    "task_number": state.task_number,
+                    "task_number": state.issue_number,
                     "repository": state.repository,
                     "merged_pr": state.merged_pr,
                     "review_record": review_record,

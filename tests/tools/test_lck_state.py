@@ -39,6 +39,7 @@ from lck_test_support import (  # noqa: E402
     _issue,
     _open_pr,
     _relationships,
+    _review_state,
     _resolver,
     _task_contract,
 )
@@ -709,3 +710,44 @@ def test_delivery_history_query_requests_only_merged_detection_fields() -> None:
 
     command = fake.commands[-1]
     assert command[command.index("--json") + 1] == "number,state"
+
+
+def test_live_state_uses_neutral_storage_with_legacy_projections() -> None:
+    state = _review_state()
+    payload = state.to_dict()
+
+    assert state.issue_number == state.task_number == 159
+    assert state.local_issue_branch == state.local_task_branch
+    assert state.local_issue_head == state.local_task_head
+    assert state.remote_issue_branch == state.remote_task_branch
+    assert state.remote_issue_oid == state.remote_task_oid
+    assert state.leaf_contract == state.task_contract
+    assert "task_number" not in state.__dict__
+    assert "task_contract" not in state.__dict__
+    assert payload["issue_number"] == payload["task_number"] == 159
+    assert payload["leaf_contract"]["body"] == "Task Contract"
+    assert payload["task_contract"]["body_sha256"] == "d" * 64
+
+    restored = lck_models.LiveState.from_dict(payload)
+    assert restored == state
+    snapshot = lck_models.OperationSnapshot(operation="test", state=state)
+    restored_snapshot = lck_models.OperationSnapshot.from_dict(snapshot.to_dict())
+    assert restored_snapshot.issue_number == restored_snapshot.task_number == 159
+    assert restored_snapshot.leaf_contract == state.leaf_contract
+
+
+def test_live_state_compatibility_conflicts_fail_closed() -> None:
+    with pytest.raises(ValueError, match="issue_number/task_number"):
+        lck_models.LiveState(issue_number=1, task_number=2)
+
+    payload = _review_state().to_dict()
+    payload["remote_task_oid"] = "b" * 40
+    with pytest.raises(ValueError, match="remote_issue_oid/remote_task_oid"):
+        lck_models.LiveState.from_dict(payload)
+
+    payload = _review_state().to_dict()
+    legacy_contract = dict(cast(dict[str, Any], payload["task_contract"]))
+    legacy_contract["body_sha256"] = "f" * 64
+    payload["task_contract"] = legacy_contract
+    with pytest.raises(ValueError, match="leaf_contract/task_contract"):
+        lck_models.LiveState.from_dict(payload)

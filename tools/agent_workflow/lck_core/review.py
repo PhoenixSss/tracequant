@@ -47,8 +47,8 @@ from .review_workspace import (
 from .state import (
     LiveStateResolver,
     OperationSnapshotBuilder,
+    _leaf_contract_from_state,
     _policy_issue_from_state,
-    _task_contract_from_state,
 )
 from .validation import (
     DeliveryChecksGate,
@@ -227,7 +227,7 @@ class ReviewPreparer:
                     f"Review Prepare STOP for Task #{task_number}: "
                     + "; ".join(decision.reasons)
                 )
-            task_contract = _task_contract_from_state(state)
+            task_contract = _leaf_contract_from_state(state)
             target = _review_target_refs(state, task_contract)
             review_root = self.workspace.path_for(task_number, invocation.operation_id)
             mark(
@@ -523,7 +523,7 @@ class ReviewCompleter:
                     f"Review Complete STOP for Task #{task_number}: "
                     + "; ".join(decision.reasons)
                 )
-            current_contract = _task_contract_from_state(state)
+            current_contract = _leaf_contract_from_state(state)
             _assert_review_target_facts_applicable(
                 reviewed_identity,
                 state,
@@ -706,7 +706,7 @@ class ReviewPassGate:
         if not isinstance(raw_identity, Mapping):
             raise LckStopError("Independent Review PASS has no identity")
         recorded = _identity_from_mapping(raw_identity)
-        current_contract = _task_contract_from_state(state)
+        current_contract = _leaf_contract_from_state(state)
         try:
             _assert_review_target_facts_applicable(
                 recorded,
@@ -851,11 +851,11 @@ class MergePreflight:
         base_sha = _pr_base_sha(pr)
         if head_sha is None or base_sha is None:
             raise LckStopError("Merge Preflight PR head/base identity is unavailable")
-        if state.remote_task_oid != head_sha:
+        if state.remote_issue_oid != head_sha:
             raise LckStopError(
                 "Merge Preflight remote Task branch diverges from PR head"
             )
-        if state.local_task_head is not None and state.local_task_head != head_sha:
+        if state.local_issue_head is not None and state.local_issue_head != head_sha:
             raise LckStopError(
                 "Merge Preflight local Task branch diverges from PR head"
             )

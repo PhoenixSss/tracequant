@@ -30,7 +30,7 @@ from .review_workspace import ReviewInvocationStore, _identity_from_mapping
 from .state import (
     LiveStateResolver,
     OperationSnapshotBuilder,
-    _task_contract_from_state,
+    _leaf_contract_from_state,
 )
 from .validation import DeliveryChecksGate
 
@@ -51,7 +51,7 @@ class RemediationContext:
     @property
     def task_contract(self) -> dict[str, Any]:
         """Return the contract bound to this Remediation Prepare snapshot."""
-        return _task_contract_from_state(self.state)
+        return _leaf_contract_from_state(self.state)
 
     def to_dict(self) -> dict[str, Any]:
         pr = self.state.open_pr or {}
@@ -237,12 +237,12 @@ class RemediationPreparer:
         current = state.git.get("branch")
         clean = state.git.get("clean") is True
         action = "already-prepared"
-        if state.local_task_branch is None:
+        if state.local_issue_branch is None:
             if not clean:
                 raise LckStopError(
                     "restoring Remediation workspace requires a clean current worktree"
                 )
-            if state.remote_task_branch != branch:
+            if state.remote_issue_branch != branch:
                 raise LckStopError(
                     "current OPEN PR has no restorable remote Task branch"
                 )
@@ -392,8 +392,8 @@ class RemediationNoChangeCompleter:
             pr.get("number") != pr_number
             or pr.get("headRefOid") != head_sha
             or pr.get("baseRefOid") != base_sha
-            or state.local_task_head != head_sha
-            or state.remote_task_oid != head_sha
+            or state.local_issue_head != head_sha
+            or state.remote_issue_oid != head_sha
         ):
             raise LckStopError(
                 "Remediation No Change target no longer matches the prepared session"
@@ -631,8 +631,8 @@ class RemediationCompleter:
             and pr.get("number") == session.get("pr_number")
             and pr.get("baseRefOid") == session.get("base_sha")
             and pr.get("headRefOid") == start_head
-            and state.remote_task_oid == start_head
-            and state.local_task_head == candidate_head
+            and state.remote_issue_oid == start_head
+            and state.local_issue_head == candidate_head
             and state.git.get("branch") == state.target_branch
             and state.git.get("clean") is True
         )
@@ -709,7 +709,7 @@ class RemediationCompleter:
         if (
             session is not None
             and session.get("candidate") is not None
-            and state.local_task_head != pr_head
+            and state.local_issue_head != pr_head
         ):
             owned_candidate = self._owned_candidate_recovery(
                 session,
@@ -727,7 +727,7 @@ class RemediationCompleter:
                 f"Remediation Complete STOP for Task #{task_number}: "
                 + "; ".join(decision.reasons)
             )
-        if state.git.get("clean") is True and state.local_task_head == start_head:
+        if state.git.get("clean") is True and state.local_issue_head == start_head:
             raise LckStopError(
                 "Remediation Complete requires a repaired head or uncommitted repair changes"
             )

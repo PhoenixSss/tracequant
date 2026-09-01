@@ -128,10 +128,10 @@ class PhaseEligibilityResolver:
         target_contract: Mapping[str, Any] | None = None
         if isinstance(issue, Mapping):
             target_contract = dict(issue)
-            if isinstance(state.task_contract, Mapping):
-                target_contract.update(state.task_contract)
+            if isinstance(state.leaf_contract, Mapping):
+                target_contract.update(state.leaf_contract)
         downstream_contract = (
-            state.task_contract if isinstance(state.task_contract, Mapping) else issue
+            state.leaf_contract if isinstance(state.leaf_contract, Mapping) else issue
         )
         if profile is not None and isinstance(target_contract, Mapping):
             try:
@@ -316,21 +316,21 @@ class PhaseEligibilityResolver:
             if state.merged is True:
                 reasons.append("Task already has a merged PR")
             if (
-                state.local_task_branch is not None
-                and state.git.get("branch") == state.local_task_branch
+                state.local_issue_branch is not None
+                and state.git.get("branch") == state.local_issue_branch
                 and state.git.get("clean") is not True
             ):
                 reasons.append("existing Task branch reuse requires a clean worktree")
-            if state.local_task_head and state.remote_task_oid:
-                if state.local_task_head != state.remote_task_oid:
+            if state.local_issue_head and state.remote_issue_oid:
+                if state.local_issue_head != state.remote_issue_oid:
                     reasons.append("Task branch has divergent local and remote tips")
-            if state.open_pr is not None and state.local_task_head is not None:
+            if state.open_pr is not None and state.local_issue_head is not None:
                 pr_head = state.open_pr.get("headRefOid")
-                if is_sha(pr_head) and state.local_task_head != pr_head:
+                if is_sha(pr_head) and state.local_issue_head != pr_head:
                     reasons.append(
                         "current OPEN PR head OID differs from local Task branch tip"
                     )
-            if not state.local_task_branch and not state.remote_task_branch:
+            if not state.local_issue_branch and not state.remote_issue_branch:
                 if not _is_clean_current_main(state.git):
                     reasons.append(
                         "new workspace bootstrap requires clean main with "
@@ -340,13 +340,13 @@ class PhaseEligibilityResolver:
         elif phase is Phase.DELIVERY_COMPLETE:
             if state.merged is True:
                 reasons.append("Task already has a merged PR")
-            if state.local_task_branch is None:
+            if state.local_issue_branch is None:
                 reasons.append("Delivery Complete requires a local Task branch")
             if state.git.get("branch") != state.target_branch:
                 reasons.append(
                     "Delivery Complete requires the resolved Task branch selected"
                 )
-            if not is_sha(state.local_task_head):
+            if not is_sha(state.local_issue_head):
                 reasons.append("Delivery Complete requires a current local Task head")
             if state.open_pr is not None and state.open_pr.get("isDraft") is not False:
                 reasons.append("Delivery Complete cannot continue with a Draft OPEN PR")
@@ -393,11 +393,11 @@ class PhaseEligibilityResolver:
             remote_main = _authoritative_remote_main_sha(state.git)
             if not is_sha(pr_base) or not is_sha(remote_main) or pr_base != remote_main:
                 reasons.append("current OPEN PR base must match current origin/main")
-            if state.remote_task_oid != pr_head:
+            if state.remote_issue_oid != pr_head:
                 reasons.append("remote Task branch must match current OPEN PR head")
             if (
-                state.local_task_head is not None
-                and state.local_task_head != pr_head
+                state.local_issue_head is not None
+                and state.local_issue_head != pr_head
                 and not (
                     phase is Phase.REMEDIATION_COMPLETE and owned_remediation_candidate
                 )
@@ -406,7 +406,7 @@ class PhaseEligibilityResolver:
             if phase is Phase.REMEDIATION_PREPARE:
                 capabilities = ("prepare_task_workspace", "load_review_findings")
             else:
-                if state.local_task_branch is None:
+                if state.local_issue_branch is None:
                     reasons.append(f"{phase.value} requires a local Task branch")
                 if state.git.get("branch") != state.target_branch:
                     reasons.append(
