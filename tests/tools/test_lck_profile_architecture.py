@@ -62,7 +62,11 @@ from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
     sha256_json,
 )
 from lck_test_support import (  # noqa: E402
+    FakeReviewChecks,
+    FakeReviewValidation,
+    FakeReviewWorkspace,
     StaticResolver,
+    _review_identity_value,
     _review_state,
 )
 
@@ -74,7 +78,10 @@ def _imported_modules(tree: ast.AST) -> set[str]:
         if isinstance(node, ast.Import):
             modules.update(alias.name.rsplit(".", 1)[-1] for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
-            modules.add((node.module or "").rsplit(".", 1)[-1])
+            if node.module:
+                modules.add(node.module.rsplit(".", 1)[-1])
+            if node.level:
+                modules.update(alias.name.rsplit(".", 1)[-1] for alias in node.names)
     return modules
 
 
@@ -92,14 +99,17 @@ def _referenced_symbols(tree: ast.AST) -> set[str]:
 def test_all_phase_controllers_use_only_generic_policy_capabilities() -> None:
     """Shared lifecycle controllers must not dispatch concrete profile capabilities."""
     controller_names = (
+        "eligibility.py",
         "delivery.py",
         "review.py",
         "review_workspace.py",
+        "remediation.py",
         "validation.py",
         "closeout.py",
     )
     forbidden_modules = {
         "critical_outcome",
+        "bug_policy",
         "documentation_policy",
         "research_policy",
     }
@@ -153,22 +163,13 @@ def test_phase_controllers_do_not_branch_on_profile_identity() -> None:
     }
     for name in controller_names:
         tree = ast.parse((controller_root / name).read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Compare):
-                continue
-            attributes = {
-                child.attr
-                for child in ast.walk(node)
-                if isinstance(child, ast.Attribute)
-            }
-            if not attributes & identity_attributes:
-                continue
-            string_literals = [
-                child.value
-                for child in ast.walk(node)
-                if isinstance(child, ast.Constant) and isinstance(child.value, str)
-            ]
-            assert not string_literals, (name, string_literals)
+        identity_references = [
+            node
+            for node in ast.walk(tree)
+            if (isinstance(node, ast.Attribute) and node.attr in identity_attributes)
+            or (isinstance(node, ast.Name) and node.id in identity_attributes)
+        ]
+        assert not identity_references, (name, identity_references)
 
     production_root = ROOT / "tools" / "agent_workflow" / "lck_core"
     for path in production_root.glob("*.py"):
@@ -635,26 +636,58 @@ def test_synthetic_fifth_profile_requires_only_allowed_extension_points(
 
 def test_generic_kernel_models_have_no_synthetic_fixed_slots() -> None:
     """Profile extensions add registrations/evidence, never shared schema fields."""
-    assert {field.name for field in fields(ProfileEvidenceEnvelope)} == {
-        "profile_id",
-        "schema_version",
-        "contract",
-        "candidate",
-        "review",
-        "completion",
+    expected_schemas = {
+        ProfileEvidenceEnvelope: {
+            "profile_id",
+            "schema_version",
+            "contract",
+            "candidate",
+            "review",
+            "completion",
+        },
+        lck_models.LiveState: {
+            "issue_number",
+            "repository",
+            "issue",
+            "relationships",
+            "git",
+            "target_branch",
+            "local_issue_branch",
+            "local_issue_head",
+            "remote_issue_branch",
+            "remote_issue_oid",
+            "open_pr",
+            "merged_pr_numbers",
+            "merged",
+            "checks",
+            "cleanup",
+            "status",
+            "stop_reasons",
+            "warnings",
+            "merged_pr",
+            "leaf_contract",
+            "issue_profile",
+        },
+        lck_models.OperationSnapshot: {
+            "operation",
+            "state",
+            "required_checks",
+            "acquisition_warnings",
+            "fact_profile",
+            "acquired_facts",
+        },
+        lck_models.EffectReceipt: {"effect", "action", "details"},
+        ProfileEvidenceRecord: {"kind", "schema_version", "payload"},
+        PolicyBlocker: {"code", "kind", "detail", "evidence_ref"},
+        ProfileGateResults: {
+            "critical_outcome",
+            "documentation_validation",
+            "research_validation",
+            "profile_evidence",
+        },
     }
-    for model in (
-        lck_models.LiveState,
-        lck_models.OperationSnapshot,
-        lck_models.EffectReceipt,
-        ProfileEvidenceRecord,
-        PolicyBlocker,
-    ):
-        assert all("synthetic" not in field.name.casefold() for field in fields(model))
-
-    result_fields = {field.name for field in fields(ProfileGateResults)}
-    assert "profile_evidence" in result_fields
-    assert not any("synthetic" in name.casefold() for name in result_fields)
+    for model, allowed_fields in expected_schemas.items():
+        assert {field.name for field in fields(model)} == allowed_fields, model
 
 
 def test_leaf_contract_is_canonical_input_not_profile_evidence_envelope() -> None:
@@ -1089,11 +1122,13 @@ def test_synthetic_policy_review_completion_and_effect_are_generic_capabilities(
         )
 
 
-def test_synthetic_profile_evidence_round_trips_through_all_phase_receipts(
+def test_synthetic_profile_review_and_closeout_use_kernel_and_persist_receipts(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Delivery, Review, Closeout, and Remediation share one receipt envelope."""
-    policy = SyntheticPolicy()
+    """Review and Closeout must execute policy stages through their controllers."""
+    events: list[str] = []
+    policy = SyntheticPolicy(events=events)
     registry = ProfilePolicyRegistry.from_policies(policy)
     profile = replace(
         issue_profiles.TASK_PROFILE,
@@ -1102,132 +1137,142 @@ def test_synthetic_profile_evidence_round_trips_through_all_phase_receipts(
         candidate_capability="synthetic_candidate",
         requires_critical_outcome=False,
     )
-    leaf_contract = {
-        "number": 159,
-        "body": "synthetic lifecycle contract",
-        "body_sha256": "a" * 64,
-    }
-    contract = validate_profile_contract(
-        profile,
-        leaf_contract,
-        registry=registry,
-    ).evidence
-    assert contract is not None
-    candidate = validate_profile_candidate(
-        profile,
-        leaf_contract,
-        contract_evidence=contract,
-        registry=registry,
-    )
-    review = validate_profile_review(
-        profile,
-        leaf_contract,
-        {"verdict": "PASS"},
-        registry=registry,
-    )
-    assert review.evidence is not None
-    completion = validate_profile_completion(
-        profile,
-        leaf_contract,
-        {"task_number": 159, "review_evidence": review.evidence},
-        registry=registry,
-    )
-    assert completion.evidence is not None
-    assert completion.effect is not None
-    envelope = ProfileEvidenceEnvelope(
-        profile_id=policy.profile_id,
-        contract=contract,
-        candidate=candidate,
-        review=review.evidence,
-        completion=completion.evidence,
-    ).validated(registry, leaf_contract=leaf_contract)
 
-    state = replace(
-        _review_state(),
-        issue_profile={"profile": profile.to_dict()},
-    )
-    snapshot = lck_models.OperationSnapshot(operation="synthetic", state=state)
-    delivery = lck_delivery.DeliveryCompletionResult(
-        task_number=159,
-        status="READY_FOR_REVIEW",
-        branch=state.target_branch,
-        head_sha="e" * 40,
-        critical_outcome=None,
-        validation={"status": "pass"},
-        checks={"status": "observed"},
-        effects=(
-            lck_models.EffectReceipt(
-                "ensure_open_pr",
-                "reused-current-open-pr",
-                {"number": 200, "head_sha": "e" * 40},
-            ),
-        ),
-        operation_snapshot=snapshot,
-        profile_evidence=envelope,
-    )
-    review_result = lck_review.ReviewCompletionResult(
-        review_id="b" * 32,
-        task_number=159,
-        verdict="PASS",
-        status="READY_FOR_MERGE_PREFLIGHT",
-        identity=lck_review_workspace.ReviewIdentity(
-            task_number=159,
-            pr_number=200,
-            base_sha="c" * 40,
-            head_sha="e" * 40,
-            task_body_sha256="a" * 64,
-            merge_base_sha="c" * 40,
-            effective_diff_sha256="d" * 64,
-            changed_files=("tests/tools/test_lck_profile_architecture.py",),
-        ),
-        record_path=tmp_path / "review-record.json",
-        issue_profile={"profile": profile.to_dict()},
-        profile_evidence=envelope,
-    )
-    closeout = lck_closeout.CloseoutResult(
-        task_number=159,
-        status="BUSINESS_DELIVERY_COMPLETE",
-        business_delivery="COMPLETE",
-        cleanup="COMPLETE",
-        effects=(lck_models.EffectReceipt("cleanup_task_refs", "cleaned", {}),),
-        operation_snapshot=snapshot,
-        profile_evidence=envelope,
-    )
-
-    store = lck_receipts.AuditReceiptStore(tmp_path)
-    for result, operation, operation_id in (
-        (delivery, "delivery-complete", "a" * 32),
-        (review_result, "review-complete", "b" * 32),
-        (closeout, "closeout", "c" * 32),
-        (
-            lck_remediation.RemediationCompletionResult(
-                task_number=159,
-                review_id="b" * 32,
-                delivery=delivery,
-            ),
-            "remediation-complete",
-            "d" * 32,
-        ),
-    ):
-        view = lck_receipts._write_success_receipt(
-            result,
-            operation=operation,
-            task_number=159,
-            operation_id=operation_id,
-            store=store,
+    def resolve_synthetic(_issue: Mapping[str, Any] | None) -> IssueProfileResolution:
+        return IssueProfileResolution(
+            status=IssueProfileResolutionStatus.RESOLVED,
+            profile=profile,
+            type_labels=(profile.canonical_type_label,),
         )
-        receipt = store.read(view["receipt_reference"])
-        stored = receipt["audit"]["profile_evidence"]
-        assert stored["profile_id"] == policy.profile_id
-        assert {
-            stored[stage]["kind"]
-            for stage in ("contract", "candidate", "review", "completion")
-        } == {
-            policy.contract_kind,
-            policy.candidate_kind,
-            policy.review_kind,
-            policy.completion_kind,
+
+    state = _review_state()
+    resolver = StaticResolver(tmp_path, state)
+    identity = _review_identity_value()
+    monkeypatch.setattr(
+        lck_review, "_review_identity", lambda *_args, **_kwargs: identity
+    )
+    store = lck_review_workspace.ReviewInvocationStore(tmp_path)
+    workspace = FakeReviewWorkspace(tmp_path / "review-root")
+
+    review_context = lck_review.ReviewPreparer(
+        resolver,
+        validation=cast(Any, FakeReviewValidation()),
+        checks_gate=cast(Any, FakeReviewChecks()),
+        workspace=cast(Any, workspace),
+        store=store,
+        policy_registry=registry,
+        profile_resolver=resolve_synthetic,
+    ).prepare(159)
+    assert review_context.profile_evidence is not None
+    assert review_context.profile_evidence.review is not None
+    assert review_context.profile_evidence.review.kind == policy.review_kind
+
+    review_result = lck_review.ReviewCompleter(
+        resolver,
+        checks_gate=cast(Any, FakeReviewChecks()),
+        store=store,
+        workspace=cast(Any, workspace),
+        policy_registry=registry,
+        profile_resolver=resolve_synthetic,
+    ).complete(159, review_context.review_id, verdict="PASS")
+    assert review_result.status == "READY_FOR_MERGE_PREFLIGHT"
+    assert review_result.profile_evidence is not None
+    assert review_result.profile_evidence.review is not None
+    assert review_result.profile_evidence.review.kind == policy.review_kind
+
+    receipt_store = lck_receipts.AuditReceiptStore(tmp_path)
+    review_view = lck_receipts._write_success_receipt(
+        review_result,
+        operation="review-complete",
+        task_number=159,
+        operation_id=review_result.review_id,
+        store=receipt_store,
+    )
+    review_receipt = receipt_store.read(review_view["receipt_reference"])
+    review_evidence = review_receipt["audit"]["profile_evidence"]
+    assert review_evidence["profile_id"] == policy.profile_id
+    assert review_evidence["review"]["kind"] == policy.review_kind
+
+    merge_sha = "f" * 40
+    closed_issue = dict(state.issue or {})
+    closed_issue.update(
+        {
+            "state": "CLOSED",
+            "issue_closure": {
+                "evidence_status": "complete",
+                "status": "closed-by-pr",
+                "closer_repository": state.repository,
+                "closer_number": 200,
+            },
         }
+    )
+    merged_pr = dict(state.open_pr or {})
+    merged_pr.update(
+        {
+            "state": "MERGED",
+            "mergeCommit": {"oid": merge_sha},
+            "mergedAt": "2026-09-02T00:00:00Z",
+            "closingIssuesReferences": [{"number": 159}],
+        }
+    )
+    resolver.state = replace(
+        state,
+        issue=closed_issue,
+        open_pr=None,
+        merged=True,
+        merged_pr=merged_pr,
+        merged_pr_numbers=(200,),
+    )
+
+    effect_events: list[str] = []
+
+    class FixedEffect:
+        def __init__(self, effect: str, action: str) -> None:
+            self.receipt = lck_models.EffectReceipt(effect, action, {})
+
+        def execute(self, *_args: Any, **_kwargs: Any) -> lck_models.EffectReceipt:
+            return self.receipt
+
+    def execute_effect(
+        descriptor: ProfileEffectDescriptor, **_kwargs: Any
+    ) -> lck_models.EffectReceipt:
+        effect_events.append(descriptor.effect_kind)
+        return lck_models.EffectReceipt(
+            descriptor.effect_kind, "executed", dict(descriptor.receipt)
+        )
+
+    closeout_result = lck_closeout.CloseoutCompleter(
+        resolver,
+        main_effect=cast(Any, FixedEffect("synchronize_main", "synchronized")),
+        metadata_effect=cast(
+            Any, FixedEffect("converge_task_metadata", "already-converged")
+        ),
+        cleanup_effect=cast(Any, FixedEffect("cleanup_task_refs", "already-clean")),
+        review_store=store,
+        effect_registry=lck_effects.EffectExecutorRegistry(
+            {"synthetic.noop.v1": execute_effect}
+        ),
+        policy_registry=registry,
+        profile_resolver=resolve_synthetic,
+    ).complete(159)
+    assert closeout_result.business_delivery == "COMPLETE"
+    assert closeout_result.profile_evidence is not None
+    assert closeout_result.profile_evidence.completion is not None
+    assert closeout_result.profile_evidence.completion.kind == policy.completion_kind
+    assert effect_events == ["synthetic.noop.v1"]
+
+    closeout_view = lck_receipts._write_success_receipt(
+        closeout_result,
+        operation="closeout",
+        task_number=159,
+        operation_id="c" * 32,
+        store=receipt_store,
+    )
+    closeout_receipt = receipt_store.read(closeout_view["receipt_reference"])
+    closeout_evidence = closeout_receipt["audit"]["profile_evidence"]
+    assert closeout_evidence["profile_id"] == policy.profile_id
+    assert closeout_evidence["completion"]["kind"] == policy.completion_kind
+    assert set(events) >= {"blocker", "contract", "review", "completion"}
 
 
 def test_merge_preflight_propagates_policy_injection_to_default_review_gate(
@@ -1262,7 +1307,8 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    policy = SyntheticPolicy()
+    events: list[str] = []
+    policy = SyntheticPolicy(events=events)
     registry = ProfilePolicyRegistry.from_policies(policy)
     profile = replace(
         issue_profiles.TASK_PROFILE,
@@ -1297,6 +1343,8 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
             **_: Any,
         ) -> CommandResult:
             args = tuple(str(item) for item in argv)
+            if args[:3] == ("git", "diff", "--quiet"):
+                return CommandResult(command_id, args, 1, "", "")
             if args == ("git", "branch", "--show-current"):
                 return CommandResult(command_id, args, 0, state.target_branch, "")
             if args == ("git", "rev-parse", "HEAD"):
@@ -1359,6 +1407,16 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
             )
 
     class ChecksGate:
+        def observe(self, _snapshot: lck_models.OperationSnapshot) -> dict[str, Any]:
+            return {
+                "status": "observed",
+                "pr": {
+                    "number": 200,
+                    "head_sha": candidate_head,
+                    "base_sha": start_head,
+                },
+            }
+
         def observe_exact_pr(
             self,
             _repository: str,
@@ -1383,6 +1441,23 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
     class Validation:
         def run(self, _base_sha: str) -> dict[str, Any]:
             return {"status": "pass"}
+
+    delivery_calls: list[lck_models.Phase] = []
+    original_delivery_complete = lck_delivery.DeliveryCompleter.complete
+
+    def observe_delivery_complete(
+        completer: lck_delivery.DeliveryCompleter,
+        task_number: int,
+        **kwargs: Any,
+    ) -> lck_delivery.DeliveryCompletionResult:
+        delivery_calls.append(kwargs.get("phase", lck_models.Phase.DELIVERY_COMPLETE))
+        return original_delivery_complete(completer, task_number, **kwargs)
+
+    monkeypatch.setattr(
+        lck_delivery.DeliveryCompleter,
+        "complete",
+        observe_delivery_complete,
+    )
 
     delivery = lck_delivery.DeliveryCompleter(
         resolver,
@@ -1418,6 +1493,7 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
         == policy.candidate_kind
     )
 
+    runner.head = start_head
     review_id = "b" * 32
     store = lck_remediation.ReviewInvocationStore(tmp_path)
     store.write_remediation_session(
@@ -1435,22 +1511,40 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
             "findings_source": "local-review-record",
         },
     )
-    captured: dict[str, Any] = {}
 
-    class RemediationDelivery:
-        def __init__(self, *_args: Any, **kwargs: Any) -> None:
-            captured.update(kwargs)
-            self.last_profile_evidence = delivery.profile_evidence
+    class ReusePrEffect:
+        def __init__(self, _resolver: Any) -> None:
+            pass
 
-        def complete(
-            self, *_args: Any, **_kwargs: Any
-        ) -> lck_delivery.DeliveryCompletionResult:
-            return delivery
+        def execute(self, _state: Any, **kwargs: Any) -> lck_models.EffectReceipt:
+            return lck_models.EffectReceipt(
+                "reuse_open_pr",
+                "reused-current-open-pr",
+                {
+                    "number": 200,
+                    "head_sha": kwargs["head_sha"],
+                    "base_sha": kwargs["expected_base_sha"],
+                },
+            )
 
-    monkeypatch.setattr(lck_remediation, "DeliveryCompleter", RemediationDelivery)
+    monkeypatch.setattr(
+        lck_delivery, "FormalValidationGate", lambda _resolver: Validation()
+    )
+    monkeypatch.setattr(
+        lck_delivery, "CommitCurrentTreeEffect", lambda _resolver: CommitEffect()
+    )
+    monkeypatch.setattr(
+        lck_delivery, "EnsureRemoteBranchEffect", lambda _resolver: RemoteEffect()
+    )
+    monkeypatch.setattr(
+        lck_delivery, "SetReviewStatusEffect", lambda _resolver: StatusEffect()
+    )
+    monkeypatch.setattr(lck_remediation, "ReuseExistingOpenPrEffect", ReusePrEffect)
+
     remediation = lck_remediation.RemediationCompleter(
         resolver,
         store=store,
+        checks_gate=ChecksGate(),
         policy_registry=registry,
         profile_resolver=resolve_synthetic,
     ).complete(
@@ -1459,7 +1553,14 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
         commit_message="synthetic remediation",
         summary="exercise remediation evidence propagation",
     )
-    assert captured["profile_resolver"] is resolve_synthetic
+    assert delivery_calls == [
+        lck_models.Phase.DELIVERY_COMPLETE,
+        lck_models.Phase.REMEDIATION_COMPLETE,
+    ]
+    assert remediation.delivery.status == "READY_FOR_REVIEW"
+    assert remediation.delivery.profile_evidence is not None
+    assert remediation.delivery.profile_evidence.candidate is not None
+    assert remediation.delivery.profile_evidence.candidate.kind == policy.candidate_kind
     remediation_receipt = lck_receipts._write_success_receipt(
         remediation,
         operation="remediation-complete",
@@ -1468,3 +1569,11 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
         store=lck_receipts.AuditReceiptStore(tmp_path),
     )
     assert remediation_receipt["profile_evidence"]["profile_id"] == policy.profile_id
+    stored_remediation = lck_receipts.AuditReceiptStore(tmp_path).read(
+        remediation_receipt["receipt_reference"]
+    )
+    assert (
+        stored_remediation["audit"]["profile_evidence"]["candidate"]["kind"]
+        == policy.candidate_kind
+    )
+    assert set(events) >= {"contract", "candidate"}
