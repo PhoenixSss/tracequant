@@ -33,9 +33,13 @@ from documentation_policy import (
 from research_policy import (
     RESEARCH_OUTCOME_FIELD,
     ResearchPolicyError,
+    architecture_decision_is_consistent,
     bind_research_outcome,
+    decision_contract_snapshot,
     evaluate_research_changes,
+    is_implementation_outcome,
     is_valid_research_contract,
+    parse_research_outcome,
     require_typed_research_outcome,
     research_artifact_binding,
     research_artifact_outcome,
@@ -50,6 +54,7 @@ from .issue_profiles import (
     resolve_leaf_issue_profile,
 )
 from .models import LckStopError
+from .shared_facts import canonical_project_field
 
 PROFILE_EVIDENCE_SCHEMA_VERSION: Final = 1
 PROFILE_EVIDENCE_STAGES: Final = ("contract", "candidate", "review", "completion")
@@ -387,6 +392,8 @@ class PolicyContext:
     phase: str | None = None
     issue: Mapping[str, Any] | None = None
     relationships: Mapping[str, Any] | None = None
+    repository: str | None = None
+    downstream_contract: Mapping[str, Any] | None = None
     repo_root: Path | None = None
     runner: Any = None
     base_sha: str | None = None
@@ -1343,6 +1350,71 @@ class _ResearchPolicy(_BuiltinPolicy):
             )
         return self._record(
             self.contract_kind, context, leaf_contract, contract=snapshot
+        )
+
+    def evaluate_blockers(
+        self,
+        context: PolicyContext,
+        leaf_contract: Mapping[str, Any],
+        contract_evidence: ProfileEvidenceRecord,
+    ) -> Iterable[PolicyBlocker]:
+        """Evaluate Research dependency semantics through the policy seam."""
+        _validate_policy_evidence(
+            self,
+            contract_evidence,
+            stage="contract",
+            leaf_contract=leaf_contract,
+        )
+        if str(leaf_contract.get("state", "")).upper() != "CLOSED":
+            return ()
+
+        outcome = leaf_contract.get("research_outcome")
+        if outcome is None:
+            outcome = canonical_project_field(
+                leaf_contract.get("project_items"),
+                repository=context.repository,
+                field_name=RESEARCH_OUTCOME_FIELD,
+            )
+        try:
+            parsed = parse_research_outcome(outcome)
+        except ResearchPolicyError as exc:
+            return (
+                PolicyBlocker(
+                    code="RESEARCH_OUTCOME_UNKNOWN",
+                    kind="research-outcome",
+                    detail=str(exc),
+                ),
+            )
+
+        if parsed.value == "ARCHITECTURE DECISION":
+            decision_contract = leaf_contract.get("decision_contract")
+            if not isinstance(decision_contract, Mapping):
+                body = leaf_contract.get("body")
+                decision_contract = decision_contract_snapshot(
+                    body if isinstance(body, str) else None,
+                    research=True,
+                )
+            if not architecture_decision_is_consistent(
+                decision_contract,
+                context.downstream_contract,
+            ):
+                return (
+                    PolicyBlocker(
+                        code="ARCHITECTURE_DECISION_UNMATCHED",
+                        kind="research-outcome",
+                        detail="Architecture Decision does not match the downstream contract",
+                    ),
+                )
+            return ()
+
+        if is_implementation_outcome(parsed):
+            return ()
+        return (
+            PolicyBlocker(
+                code="RESEARCH_OUTCOME_NOT_IMPLEMENTATION",
+                kind="research-outcome",
+                detail=f"Research Outcome {parsed.value!r} does not authorize implementation",
+            ),
         )
 
     def validate_candidate(

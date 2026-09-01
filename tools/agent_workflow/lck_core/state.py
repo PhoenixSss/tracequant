@@ -16,13 +16,6 @@ from workflow_common import (
     read_json_text,
     sha256_json,
 )
-from workflow_evidence import (
-    _git_snapshot,
-    _issue_view_with_contract,
-    _normalize_checks,
-    _relationship_snapshot,
-    _repository_slug,
-)
 
 from .issue_profiles import (
     LeafIssueWorkflowProfile,
@@ -47,6 +40,13 @@ from .models import (
     branch_matches_profile,
     canonical_task_branch,
     fact_profile_for_operation,
+)
+from .shared_facts import (
+    _git_snapshot,
+    _issue_view_with_contract,
+    _normalize_checks,
+    _relationship_snapshot,
+    _repository_slug,
 )
 
 
@@ -851,6 +851,20 @@ class OperationSnapshotBuilder:
             fact_profile=snapshot.fact_profile,
             acquired_facts=snapshot.acquired_facts,
         )
+
+
+def _policy_issue_from_state(state: LiveState) -> dict[str, Any]:
+    """Combine mechanical Issue facts with the operation-bound contract.
+
+    Shared fact acquisition keeps the raw Issue view and semantic contract
+    separate.  Policy entrypoints receive this explicit, operation-scoped
+    adapter so they can validate the contract without making the state owner
+    interpret profile semantics.
+    """
+    result = dict(state.issue) if isinstance(state.issue, Mapping) else {}
+    if isinstance(state.task_contract, Mapping):
+        result.update(state.task_contract)
+    return result
 
 
 def _task_contract_from_state(state: LiveState) -> dict[str, Any]:

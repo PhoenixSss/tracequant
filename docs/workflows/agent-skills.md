@@ -107,8 +107,9 @@ semantic owner；其历史内容由 Git 历史及 frozen migration / benchmark e
 | `CLAUDE.md` | ACTIVE | Claude-specific thin adapter 与 Skill discovery |
 | `.agents/skills/*-runner/`、`.agents/skills/task-closeout/`、`.agents/skills/feature-completion-audit/` | ACTIVE | Codex executable procedures |
 | `.claude/skills/` current four Skills | ACTIVE | Claude executable procedures |
+| `tools/agent_workflow/lck_core/shared_facts.py` | ACTIVE | authoritative profile-neutral Git/GitHub fact acquisition and normalization |
 | `tools/agent_workflow/wsl2_validation_runner.py`、`workflow_validation.py`、validation profiles 与 current tests | ACTIVE | deterministic validation plans、exit codes 与 bounded diagnostics |
-| `tools/agent_workflow/workflow_evidence.py` | AUDIT-ONLY | Feature audit evidence 与 LCK 使用的 read-only query helpers；不具备 Task lifecycle authority |
+| `tools/agent_workflow/workflow_evidence.py` | AUDIT-ONLY | Feature audit evidence and adapter over shared facts；不具备 Task lifecycle authority |
 | pre-LCK Task Evidence Runner、Task profiles、Codex Rules、dedicated Runner/Rules tests 与 `self_review.py` binder/test | REMOVED | 仅保留历史 publication / migration provenance；不属于当前 workflow entry point |
 | retired `.agents/skills/task-delivery/`、`.agents/skills/task-pr-review/` | DEAD / ABSENT | Legacy executable Skills 已退役；历史内容由 Git 历史及 frozen evidence 保留 |
 | `docs/workflows/task-skill-runner-migration/` 与 `docs/workflows/benchmarks/` | HISTORICAL EVIDENCE ONLY | frozen migration/benchmark/audit provenance |
@@ -128,9 +129,12 @@ Issue body (business specification)
   -> shared development docs (lifecycle / review semantics)
   -> agent-specific current Skills (executable procedure)
   -> LCK + Validation Runner (Task lifecycle control and deterministic validation)
-  -> workflow_evidence.py (Feature audit / read-only helpers only)
+  -> lck_core/shared_facts.py (authoritative profile-neutral Git/GitHub facts)
   -> Git / GitHub Issues, relationships, Projects, PRs and CI (durable state)
 ```
+
+Feature audit consumes `shared_facts.py` through the bounded
+`workflow_evidence.py` adapter; LCK core never imports the audit module.
 
 `.agents/evidence.local/`、`.agents/validation.local/` 与 `.workflow.local/lck/` 都是
 Git-ignored local artifacts，但 ownership 不同：前两者属于历史 Evidence / ordinary

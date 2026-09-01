@@ -159,7 +159,7 @@ inventory; their aggregate command counts are not added to current LOC.
 | Task-control support called by LCK | mechanics split across Skill/Runner/helpers | 1,241 LOC: `critical_outcome.py` 204 + `pr_resolve.py` 481 + `project_status.py` 153 + shared `workflow_common.py` 403 |
 | Combined active Task control code | no single deterministic boundary in #88 | current canonical-formatted `lck.py` LOC + 1,241 LOC direct support; reused validation/audit infrastructure excluded |
 | Reused Validation infrastructure | existing fixed Validation Runner | 1,163 LOC: `workflow_validation.py` 344 + `wsl2_validation_runner.py` 819; reused rather than duplicated |
-| Audit-only Evidence implementation | Task Evidence Runner was part of lifecycle control | `workflow_evidence.py` 1,649 LOC retained as read-only audit/shared-query code, not Task authority |
+| Audit-only Evidence implementation | Task Evidence Runner was part of lifecycle control | `workflow_evidence.py` remains the read-only Feature-audit adapter; authoritative shared queries/normalization are owned by `lck_core/shared_facts.py`, not Task authority |
 | Task Skill lifecycle mechanics | direct command/procedure paths | provider Skills remain byte-identical and are measured from canonical formatting when needed; no direct lifecycle writes |
 | Durable cross-phase control state | snapshots, freshness, handoff fields | 0 authoritative cross-phase state in LCK; only diagnostic records and invocation-local guards |
 | Snapshot/freshness/drift concepts | cross-phase snapshot/freshness/drift graph | 0 snapshot/freshness authority; one operation-local stale-guard family |

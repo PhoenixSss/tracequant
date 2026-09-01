@@ -39,6 +39,7 @@ from .profile_policies import (
 from .state import (
     LiveStateResolver,
     OperationSnapshotBuilder,
+    _policy_issue_from_state,
     _task_contract_from_state,
 )
 from .validation import (
@@ -326,11 +327,12 @@ class DeliveryCompleter:
         include_index: bool = False,
         head_sha: str | None = None,
     ) -> dict[str, Any] | None:
-        if not isinstance(state.issue, Mapping):
+        policy_issue = _policy_issue_from_state(state)
+        if not policy_issue:
             raise LckStopError("current leaf Issue workflow profile is unavailable")
         try:
             profile, _policy = resolve_issue_policy(
-                state.issue,
+                policy_issue,
                 registry=self.policy_registry,
                 profile_resolver=self.profile_resolver,
             )
@@ -348,7 +350,7 @@ class DeliveryCompleter:
                 head_sha=head_sha,
                 include_index=include_index,
                 progress=progress,
-                issue=state.issue,
+                issue=policy_issue,
                 registry=self.policy_registry,
                 repo_root=self.resolver.repo_root,
                 runner=self.resolver.runner,

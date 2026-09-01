@@ -30,8 +30,14 @@ def test_lck_decomposition_preserves_cli_and_responsibility_boundaries() -> None
     assert not (AGENT_WORKFLOW / "lck").exists()
 
     owners = {
+        "shared_facts.py": {
+            "_git_snapshot",
+            "_issue_view_with_contract",
+            "_relationship_snapshot",
+            "_normalize_checks",
+        },
         "state.py": {"LiveStateResolver", "OperationSnapshotBuilder"},
-        "eligibility.py": {"PhaseEligibilityResolver"},
+        "eligibility.py": {"PhaseEligibilityResolver", "evaluate_shared_blockers"},
         "validation.py": {"FormalValidationGate", "DeliveryChecksGate"},
         "effects.py": {"CommitCurrentTreeEffect", "EnsureRemoteBranchEffect"},
         "delivery.py": {"DeliveryPreparer", "DeliveryCompleter"},
@@ -74,3 +80,33 @@ def test_lck_decomposition_preserves_cli_and_responsibility_boundaries() -> None
     assert "review" in result.stdout
     assert "remediation" in result.stdout
     assert "closeout" in result.stdout
+
+
+def test_shared_facts_is_profile_neutral_and_lck_core_bypasses_audit_adapter() -> None:
+    shared = CORE / "shared_facts.py"
+    tree = ast.parse(shared.read_text(encoding="utf-8"))
+    forbidden = {
+        "issue_profiles",
+        "profile_policies",
+        "eligibility",
+        "delivery",
+        "review",
+        "remediation",
+        "closeout",
+        "workflow_evidence",
+    }
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported.add((node.module or "").split(".")[-1])
+    assert imported.isdisjoint(forbidden)
+
+    for path in CORE.glob("*.py"):
+        if path.name in {"shared_facts.py", "__init__.py"}:
+            continue
+        assert "workflow_evidence" not in path.read_text(encoding="utf-8"), path.name
+
+    evidence = (AGENT_WORKFLOW / "workflow_evidence.py").read_text(encoding="utf-8")
+    assert "from lck_core import shared_facts" in evidence
