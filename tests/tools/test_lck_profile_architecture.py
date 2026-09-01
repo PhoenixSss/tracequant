@@ -7,7 +7,7 @@ from __future__ import annotations
 import ast
 import json
 import sys
-from dataclasses import dataclass, fields, replace
+from dataclasses import FrozenInstanceError, dataclass, fields, replace
 from pathlib import Path
 from collections.abc import Mapping
 from types import SimpleNamespace
@@ -92,13 +92,17 @@ def _imported_modules(tree: ast.AST) -> set[str]:
 
 
 def _referenced_symbols(tree: ast.AST) -> set[str]:
-    """Return names used by code, independent of comments/string literals."""
+    """Return code and imported names, independent of comments/string literals."""
     symbols: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Name):
             symbols.add(node.id)
         elif isinstance(node, ast.Attribute):
             symbols.add(node.attr)
+        elif isinstance(node, ast.alias):
+            symbols.add(node.name.rsplit(".", 1)[-1])
+            if node.asname:
+                symbols.add(node.asname)
     return symbols
 
 
@@ -235,6 +239,32 @@ def test_all_phase_controllers_use_only_generic_policy_capabilities() -> None:
         "documentation_policy",
         "research_policy",
     } <= _imported_modules(policy_tree)
+
+
+def test_controller_import_guard_catches_concrete_policy_aliases() -> None:
+    """Concrete policy imports remain forbidden when imported under an alias."""
+    forbidden_capability_names = {
+        "CriticalOutcomeGate",
+        "DocumentationReclassificationRequired",
+        "DocumentationValidationGate",
+        "ResearchOutcomeEffect",
+        "ResearchOutcomeRequired",
+        "ResearchReclassificationRequired",
+        "ResearchValidationGate",
+        "_run_critical_outcome",
+    }
+    probes = (
+        "from profile_policies import ResearchOutcomeEffect",
+        "from profile_policies import ResearchOutcomeEffect as OutcomeEffect",
+        "from lck_core.profile_policies import ResearchOutcomeEffect",
+        "from .profile_policies import ResearchOutcomeEffect as OutcomeEffect",
+    )
+
+    for source in probes:
+        imported_symbols = _referenced_symbols(ast.parse(source))
+        assert forbidden_capability_names & imported_symbols == {
+            "ResearchOutcomeEffect"
+        }, source
 
 
 def test_phase_controllers_do_not_branch_on_profile_identity() -> None:
@@ -915,6 +945,25 @@ def test_generic_kernel_models_have_no_synthetic_fixed_slots() -> None:
     }
     for model, allowed_fields in expected_schemas.items():
         assert {field.name for field in fields(model)} == allowed_fields, model
+
+
+def test_kernel_snapshots_are_frozen_at_the_model_boundary() -> None:
+    """Live facts and operation snapshots cannot be mutated after acquisition."""
+    state = _review_state()
+    snapshots = (
+        (lck_models.LiveState, state, "issue_number", 160),
+        (
+            lck_models.OperationSnapshot,
+            lck_models.OperationSnapshot(operation="test", state=state),
+            "operation",
+            "changed",
+        ),
+    )
+
+    for model, snapshot, field_name, replacement in snapshots:
+        assert model.__dataclass_params__.frozen, model
+        with pytest.raises(FrozenInstanceError):
+            setattr(snapshot, field_name, replacement)
 
 
 def test_leaf_contract_is_canonical_input_not_profile_evidence_envelope() -> None:
