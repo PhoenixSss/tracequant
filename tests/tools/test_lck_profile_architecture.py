@@ -175,7 +175,8 @@ class SyntheticPolicy:
         leaf_contract: Mapping[str, Any],
         completion_input: Mapping[str, Any],
     ) -> ProfileEvidenceRecord:
-        del context, completion_input
+        assert context.runner is None
+        del completion_input
         descriptor = ProfileEffectDescriptor(
             effect_kind="synthetic.noop.v1",
             schema_version=1,
@@ -489,6 +490,11 @@ def test_synthetic_policy_review_completion_and_effect_are_generic_capabilities(
             "review_evidence": review.evidence,
         },
         registry=registry,
+        context=PolicyContext(
+            profile=profile,
+            issue=leaf_contract,
+            runner=object(),
+        ),
     )
     assert completion.effect is not None
     assert completion.profile_evidence is not None
@@ -508,12 +514,42 @@ def test_synthetic_policy_review_completion_and_effect_are_generic_capabilities(
         state=object(),
     )
     assert receipt.action == "executed"
+    assert receipt.is_complete
+    assert not lck_models.EffectReceipt("synthetic.noop.v1", "pending", {}).is_complete
     with pytest.raises(lck_models.LckStopError, match="unknown completion effect"):
         effects.execute(
             replace(completion.effect, effect_kind="synthetic.unknown.v1"),
             resolver=object(),
             state=object(),
         )
+
+
+def test_merge_preflight_propagates_policy_injection_to_default_review_gate(
+    tmp_path: Path,
+) -> None:
+    policy = SyntheticPolicy()
+    registry = ProfilePolicyRegistry.from_policies(policy)
+
+    def resolve_synthetic(_issue: Mapping[str, Any] | None) -> IssueProfileResolution:
+        return IssueProfileResolution(
+            status=IssueProfileResolutionStatus.RESOLVED,
+            profile=replace(
+                issue_profiles.TASK_PROFILE,
+                profile_id=policy.profile_id,
+                canonical_type_label=policy.canonical_type_label,
+            ),
+            type_labels=(policy.canonical_type_label,),
+        )
+
+    preflight = lck_review.MergePreflight(
+        StaticResolver(tmp_path, _review_state()),
+        policy_registry=registry,
+        profile_resolver=resolve_synthetic,
+    )
+
+    assert isinstance(preflight.review_gate, lck_review.ReviewPassGate)
+    assert preflight.review_gate.policy_registry is registry
+    assert preflight.review_gate.profile_resolver is resolve_synthetic
 
 
 def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(

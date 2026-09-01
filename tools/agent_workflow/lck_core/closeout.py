@@ -671,7 +671,6 @@ class CloseoutCompleter:
                     profile=profile,
                     phase="completion",
                     issue=state.issue,
-                    runner=self.resolver.runner,
                     review_record=review_record,
                     merged_pr=state.merged_pr,
                 ),
@@ -695,6 +694,7 @@ class CloseoutCompleter:
                     completion.effect.effect_kind,
                     "pending",
                     reason="main synchronization is incomplete",
+                    details=completion.effect.receipt,
                 )
             effects.append(completion_effect)
 
@@ -716,11 +716,7 @@ class CloseoutCompleter:
             and metadata.action in {"updated", "already-converged"}
             and cleanup.action in {"cleaned", "already-clean"}
         )
-        completion_complete = completion_effect is None or completion_effect.action in {
-            "updated",
-            "already-set",
-            "not-applicable",
-        }
+        completion_complete = completion_effect is None or completion_effect.is_complete
         return CloseoutResult(
             task_number=task_number,
             status="BUSINESS_DELIVERY_COMPLETE",

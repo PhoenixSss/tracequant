@@ -2005,6 +2005,9 @@ def validate_profile_completion(
         issue,
         context=context,
         phase="completion",
+        # Completion policies may declare effect intent only.  Do not allow a
+        # caller-provided command runner to cross the Kernel effect boundary.
+        runner=None,
         review_record=completion_input.get("review_record")
         if isinstance(completion_input.get("review_record"), Mapping)
         else None,

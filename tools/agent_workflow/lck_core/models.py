@@ -574,6 +574,16 @@ class EffectReceipt:
     action: str
     details: Mapping[str, Any]
 
+    @property
+    def is_complete(self) -> bool:
+        """Whether the effect produced a proven completion receipt.
+
+        Effect actions are executor-specific.  The kernel reserves only
+        ``pending`` for an effect whose postcondition is not proven, so
+        completion controllers must not maintain an action-name allowlist.
+        """
+        return self.action != "pending"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "effect": self.effect,

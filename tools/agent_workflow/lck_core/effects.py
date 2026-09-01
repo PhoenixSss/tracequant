@@ -308,7 +308,12 @@ class ProjectSingleSelectEffectExecutor:
             return _pending_effect(
                 cls.effect_kind,
                 reason="project field effect postcondition is not proven",
-                details={"field": params["field"], "value": params["value"]},
+                details={
+                    "field": params["field"],
+                    "value": params["value"],
+                    "effect_kind": descriptor.effect_kind,
+                    **dict(descriptor.receipt),
+                },
             )
         details = {
             "field": params["field"],

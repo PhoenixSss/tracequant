@@ -795,10 +795,18 @@ class MergePreflight:
         *,
         review_gate: ReviewPassGate | None = None,
         checks_gate: DeliveryChecksGate | None = None,
+        policy_registry: ProfilePolicyRegistry | None = None,
+        profile_resolver: ProfileResolver | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
-        self.review_gate = review_gate or ReviewPassGate(resolver)
+        self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
+        self.profile_resolver = profile_resolver
+        self.review_gate = review_gate or ReviewPassGate(
+            resolver,
+            policy_registry=self.policy_registry,
+            profile_resolver=self.profile_resolver,
+        )
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.last_snapshot: OperationSnapshot | None = None
         self.last_checks: dict[str, Any] | None = None

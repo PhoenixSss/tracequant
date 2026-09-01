@@ -844,6 +844,70 @@ def test_research_outcome_effect_uses_normalized_state_field_for_idempotency() -
     assert len(runner.calls) == 1
 
 
+def test_research_outcome_pending_receipt_preserves_descriptor_metadata() -> None:
+    class Runner:
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            if command[:3] == ("gh", "project", "item-edit"):
+                return CommandResult(command_id, command, 0, "", "")
+            if command[:3] == ("gh", "api", "graphql"):
+                return CommandResult(
+                    command_id,
+                    command,
+                    0,
+                    json.dumps(
+                        {
+                            "data": {
+                                "user": None,
+                                "organization": None,
+                            }
+                        }
+                    ),
+                    "",
+                )
+            raise AssertionError(f"unexpected command: {command}")
+
+    descriptor = ProfileEffectDescriptor(
+        effect_kind="project.single_select.set.v1",
+        schema_version=1,
+        parameters={
+            "repository": "owner/repo",
+            "task_number": 199,
+            "project_number": 1,
+            "field": "Research Outcome",
+            "value": "IMPLEMENT",
+        },
+        postcondition={
+            "kind": "project.single_select.equals",
+            "repository": "owner/repo",
+            "task_number": 199,
+            "project_number": 1,
+            "field": "Research Outcome",
+            "value": "IMPLEMENT",
+        },
+        receipt={"outcome": "IMPLEMENT"},
+    )
+    resolver = type("Resolver", (), {"runner": Runner()})()
+    state = type(
+        "State",
+        (),
+        {
+            "repository": "owner/repo",
+            "task_number": 199,
+            "issue": {},
+        },
+    )()
+
+    receipt = lck_effects.DEFAULT_EFFECT_EXECUTOR_REGISTRY.execute(
+        descriptor,
+        resolver=cast(Any, resolver),
+        state=cast(Any, state),
+    )
+
+    assert receipt.action == "pending"
+    assert receipt.details["outcome"] == "IMPLEMENT"
+
+
 def test_research_artifact_binding_rejects_non_utf8_as_policy_error(
     tmp_path: Path,
 ) -> None:
