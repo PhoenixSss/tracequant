@@ -28,7 +28,7 @@ from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     issue_profiles as lck_profiles,
 )
 from lck_core.models import Phase  # type: ignore[import-not-found]  # noqa: E402
-from lck_core.validation import (  # type: ignore[import-not-found]  # noqa: E402
+from lck_core.profile_policies import (  # type: ignore[import-not-found]  # noqa: E402
     DocumentationReclassificationRequired,
     DocumentationValidationGate,
 )
@@ -116,10 +116,7 @@ def test_documentation_profile_uses_shared_lifecycle_without_critical_outcome(
 
     completer = lck_delivery.DeliveryCompleter(
         resolver,
-        documentation_validation=cast(Any, DocumentationGate()),
-    )
-    completer._run_critical_outcome = lambda *_args, **_kwargs: pytest.fail(
-        "Documentation must not invoke Critical Outcome"
+        services=(DocumentationGate(),),
     )
     result = completer._run_profile_gates(
         state,

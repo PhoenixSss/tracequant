@@ -31,23 +31,6 @@ from .state import (
 )
 
 
-# Backward-compatible names for callers that imported the old adapters from
-# this module.  They are resolved lazily so the shared validation controller
-# does not import or hold any concrete profile implementation.
-def __getattr__(name: str) -> Any:
-    if name in {
-        "DocumentationReclassificationRequired",
-        "DocumentationValidationGate",
-        "ResearchReclassificationRequired",
-        "ResearchOutcomeRequired",
-        "ResearchValidationGate",
-    }:
-        from . import profile_policies
-
-        return getattr(profile_policies, name)
-    raise AttributeError(name)
-
-
 class FormalValidationGate:
     """Run the repository-owned deterministic Delivery validation plan."""
 

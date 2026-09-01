@@ -59,7 +59,7 @@ from lck_test_support import (  # noqa: E402
 
 
 def test_all_phase_controllers_use_only_generic_policy_capabilities() -> None:
-    """Shared lifecycle controllers must not import concrete profile policies."""
+    """Shared lifecycle controllers must not dispatch concrete profile capabilities."""
     controller_names = (
         "delivery.py",
         "review.py",
@@ -72,10 +72,24 @@ def test_all_phase_controllers_use_only_generic_policy_capabilities() -> None:
         "documentation_policy",
         "research_policy",
     }
+    forbidden_capability_names = {
+        "CriticalOutcomeGate",
+        "DocumentationReclassificationRequired",
+        "DocumentationValidationGate",
+        "ResearchOutcomeEffect",
+        "ResearchOutcomeRequired",
+        "ResearchReclassificationRequired",
+        "ResearchValidationGate",
+        "_run_critical_outcome",
+    }
     controller_root = ROOT / "tools" / "agent_workflow" / "lck_core"
 
     for name in controller_names:
-        tree = ast.parse((controller_root / name).read_text(encoding="utf-8"))
+        source = (controller_root / name).read_text(encoding="utf-8")
+        assert not any(
+            capability in source for capability in forbidden_capability_names
+        ), name
+        tree = ast.parse(source)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 imported = {alias.name.split(".", 1)[0] for alias in node.names}
@@ -83,6 +97,8 @@ def test_all_phase_controllers_use_only_generic_policy_capabilities() -> None:
             elif isinstance(node, ast.ImportFrom):
                 module = (node.module or "").split(".")[-1]
                 assert module not in forbidden_modules, name
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                assert node.name != "__getattr__", name
 
 
 @dataclass(frozen=True)

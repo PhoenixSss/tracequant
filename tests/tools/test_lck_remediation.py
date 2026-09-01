@@ -21,13 +21,11 @@ from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     effects as lck_effects,
     eligibility as lck_eligibility,
     models as lck_models,
+    profile_policies as lck_profile_policies,
     remediation as lck_remediation,
     review as lck_review,
     review_workspace as lck_review_workspace,
     validation as lck_validation,
-)
-from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
-    ProgressReporter,
 )
 from lck_test_support import (  # noqa: E402
     FakeRunner,
@@ -761,15 +759,16 @@ def test_remediation_complete_recovers_exact_owned_partial_effect_candidate(
     )
     calls = {"critical": 0, "validation": 0}
 
-    def critical_outcome(
-        _self: lck_delivery.DeliveryCompleter,
-        _state: lck_models.LiveState,
-        *,
-        progress: ProgressReporter | None = None,
-    ) -> dict[str, Any]:
-        del progress
+    class CriticalResult:
+        status = "pass"
+        exit_code = 0
+
+        def to_dict(self) -> dict[str, Any]:
+            return {"status": self.status, "exit_code": self.exit_code}
+
+    def verify_critical_outcome(*_args: Any, **_kwargs: Any) -> CriticalResult:
         calls["critical"] += 1
-        return {"status": "pass"}
+        return CriticalResult()
 
     def formal_validation(
         _self: lck_validation.FormalValidationGate, base_sha: str
@@ -779,7 +778,7 @@ def test_remediation_complete_recovers_exact_owned_partial_effect_candidate(
         return {"status": "pass"}
 
     monkeypatch.setattr(
-        lck_delivery.DeliveryCompleter, "_run_critical_outcome", critical_outcome
+        lck_profile_policies, "verify_critical_outcome", verify_critical_outcome
     )
     monkeypatch.setattr(lck_validation.FormalValidationGate, "run", formal_validation)
 

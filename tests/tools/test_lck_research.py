@@ -27,7 +27,6 @@ from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     models as lck_models,
     review as lck_review,
     review_workspace as lck_review_workspace,
-    validation as lck_validation,
 )
 from lck_test_support import FakeReviewWorkspace  # noqa: E402
 from research_policy import (  # type: ignore[import-not-found]  # noqa: E402
@@ -46,6 +45,7 @@ from research_policy import (  # type: ignore[import-not-found]  # noqa: E402
 )
 from lck_core.profile_policies import (  # type: ignore[import-not-found]  # noqa: E402
     ProfileEffectDescriptor,
+    ResearchValidationGate,
     validate_profile_completion,
 )
 from workflow_evidence import (  # type: ignore[import-not-found]  # noqa: E402
@@ -385,7 +385,7 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
         pr_effect=cast(Any, PR()),
         status_effect=cast(Any, Status()),
         checks_gate=cast(Any, Checks()),
-        research_validation=lck_validation.ResearchValidationGate(resolver),
+        services=(ResearchValidationGate(resolver),),
     )
     delivery_result = delivery.complete(
         199,
@@ -750,7 +750,9 @@ def test_research_outcome_postcondition_paginates_past_first_page() -> None:
     runner = Runner()
     resolver = type("Resolver", (), {"runner": runner})()
 
-    outcome = lck_closeout.ResearchOutcomeEffect(cast(Any, resolver))._query_outcome(
+    from lck_core.profile_policies import ResearchOutcomeEffect
+
+    outcome = ResearchOutcomeEffect(cast(Any, resolver))._query_outcome(
         "owner/repo", 199
     )
 

@@ -41,15 +41,6 @@ from .review_workspace import ReviewInvocationStore, _identity_from_mapping
 from .state import LiveStateResolver, OperationSnapshotBuilder
 
 
-def __getattr__(name: str) -> Any:
-    """Resolve the removed Research helper only for legacy callers."""
-    if name == "ResearchOutcomeEffect":
-        from .profile_policies import ResearchOutcomeEffect
-
-        return ResearchOutcomeEffect
-    raise AttributeError(name)
-
-
 def _label_names(issue: Mapping[str, Any] | None) -> set[str]:
     if not isinstance(issue, Mapping):
         return set()

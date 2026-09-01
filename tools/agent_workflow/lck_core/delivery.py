@@ -250,11 +250,6 @@ class DeliveryCompleter:
     Strict check evaluation remains owned by Review Complete and Merge Preflight.
     """
 
-    # Compatibility hook for deterministic callers that used to override the
-    # profile candidate callback.  Normal Delivery leaves this unset; the
-    # selected registry policy owns candidate execution.
-    _run_critical_outcome: Any = None
-
     def __init__(
         self,
         resolver: LiveStateResolver,
@@ -270,7 +265,7 @@ class DeliveryCompleter:
         profile_resolver: ProfileResolver | None = None,
         require_existing_open_pr: bool = False,
         candidate_recorder: Callable[[str, str], None] | None = None,
-        **legacy_profile_services: Any,
+        services: Sequence[Any] = (),
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
@@ -290,14 +285,7 @@ class DeliveryCompleter:
         self.pr_effect = pr_effect or EnsureOpenPrEffect(resolver)
         self.status_effect = status_effect or SetReviewStatusEffect(resolver)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
-        # Older callers may still inject a deterministic profile service by
-        # keyword.  Keep it as an opaque policy-service seam; no controller
-        # attribute is typed as or dispatches a concrete profile validator.
-        self.profile_services = tuple(
-            value
-            for key, value in legacy_profile_services.items()
-            if key.endswith("_validation") and value is not None
-        )
+        self.services = tuple(services)
         self.require_existing_open_pr = require_existing_open_pr
         self.candidate_recorder = candidate_recorder
         self.last_snapshot: OperationSnapshot | None = None
@@ -353,12 +341,6 @@ class DeliveryCompleter:
         self.last_documentation_validation = None
         self.last_research_validation = None
         self.last_profile_evidence = None
-        legacy_critical = getattr(self, "_run_critical_outcome", None)
-        critical_callback = (
-            (lambda: legacy_critical(state, progress=progress))
-            if callable(legacy_critical)
-            else None
-        )
         try:
             results = run_profile_delivery_gates(
                 profile,
@@ -370,8 +352,7 @@ class DeliveryCompleter:
                 registry=self.policy_registry,
                 repo_root=self.resolver.repo_root,
                 runner=self.resolver.runner,
-                services=self.profile_services,
-                critical_outcome=critical_callback,
+                services=self.services,
             )
         except ProfileGateFailure as exc:
             self.last_profile_evidence = exc.profile_evidence
@@ -379,14 +360,8 @@ class DeliveryCompleter:
                 target = f"last_{field}"
                 if isinstance(field, str) and hasattr(self, target):
                     setattr(self, target, value)
-            self.last_research_validation = getattr(
-                getattr(self, "research_validation", None), "last_result", None
-            )
             raise
         except LckStopError:
-            self.last_research_validation = getattr(
-                getattr(self, "research_validation", None), "last_result", None
-            )
             raise
         self.last_documentation_validation = results.documentation_validation
         self.last_research_validation = results.research_validation
