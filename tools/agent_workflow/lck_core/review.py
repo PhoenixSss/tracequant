@@ -142,13 +142,20 @@ class ReviewPreparer:
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
-        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
+        self.profile_resolver = (
+            profile_resolver
+            or getattr(eligibility, "profile_resolver", None)
+            or resolve_leaf_issue_profile
+        )
+        self.eligibility = eligibility or PhaseEligibilityResolver(
+            registry=self.policy_registry,
+            profile_resolver=self.profile_resolver,
+        )
         self.validation = validation or ReviewValidationGate(resolver)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.workspace = workspace or ReviewWorkspaceManager(resolver)
         self.store = store or ReviewInvocationStore(resolver.repo_root)
-        self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
-        self.profile_resolver = profile_resolver
         self.last_snapshot: OperationSnapshot | None = None
         self.last_validation: dict[str, Any] | None = None
         self.last_documentation_validation: dict[str, Any] | None = None
@@ -413,12 +420,19 @@ class ReviewCompleter:
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
-        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
+        self.profile_resolver = (
+            profile_resolver
+            or getattr(eligibility, "profile_resolver", None)
+            or resolve_leaf_issue_profile
+        )
+        self.eligibility = eligibility or PhaseEligibilityResolver(
+            registry=self.policy_registry,
+            profile_resolver=self.profile_resolver,
+        )
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.workspace = workspace or ReviewWorkspaceManager(resolver)
-        self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
-        self.profile_resolver = profile_resolver
         self.last_snapshot: OperationSnapshot | None = None
         self.last_checks: dict[str, Any] | None = None
         self.last_documentation_validation: dict[str, Any] | None = None

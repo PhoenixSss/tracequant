@@ -489,13 +489,20 @@ class CloseoutCompleter:
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
-        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
+        self.profile_resolver = (
+            profile_resolver
+            or getattr(eligibility, "profile_resolver", None)
+            or resolve_leaf_issue_profile
+        )
+        self.eligibility = eligibility or PhaseEligibilityResolver(
+            registry=self.policy_registry,
+            profile_resolver=self.profile_resolver,
+        )
         self.main_effect = main_effect or MainSynchronizationEffect(resolver)
         self.metadata_effect = metadata_effect or CloseoutMetadataEffect(resolver)
         self.cleanup_effect = cleanup_effect or CleanupTaskRefsEffect(resolver)
         self.effect_registry = effect_registry or DEFAULT_EFFECT_EXECUTOR_REGISTRY
-        self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
-        self.profile_resolver = profile_resolver
         self.review_store = review_store or ReviewInvocationStore(resolver.repo_root)
         self.last_snapshot: OperationSnapshot | None = None
         self.last_effects: list[EffectReceipt] = []

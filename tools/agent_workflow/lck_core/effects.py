@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -275,11 +276,14 @@ class ProjectSingleSelectEffectExecutor:
             raise LckStopError(
                 "project field effect identity does not match live state"
             )
-        current = (
-            state.issue.get(params["field"])
-            if isinstance(state.issue, Mapping)
-            else None
-        )
+        current = None
+        if isinstance(state.issue, Mapping):
+            current = state.issue.get(params["field"])
+            if current is None:
+                normalized_field = re.sub(
+                    r"[^a-z0-9]+", "_", params["field"].strip().lower()
+                ).strip("_")
+                current = state.issue.get(normalized_field)
         action = "already-set" if current == params["value"] else "updated"
         if action == "updated":
             try:

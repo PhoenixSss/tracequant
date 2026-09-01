@@ -1484,6 +1484,12 @@ class _ResearchPolicy(_BuiltinPolicy):
             raise ResearchOutcomeRequired(
                 "Research completion requires a reviewed artifact binding"
             )
+        self._validate_completion_artifact_binding(
+            artifact,
+            context=context,
+            leaf_contract=leaf_contract,
+            completion_input=completion_input,
+        )
         try:
             outcome = require_typed_research_outcome(artifact)
         except ResearchPolicyError as exc:
@@ -1532,6 +1538,83 @@ class _ResearchPolicy(_BuiltinPolicy):
             status="pass",
             effect=descriptor.to_dict(),
         )
+
+    @staticmethod
+    def _validate_completion_artifact_binding(
+        artifact: Mapping[str, Any],
+        *,
+        context: PolicyContext,
+        leaf_contract: Mapping[str, Any],
+        completion_input: Mapping[str, Any],
+    ) -> None:
+        """Keep a Research completion effect bound to the accepted Review.
+
+        Closeout has already validated the outer Review identity against the
+        merged PR.  The Research policy owns the separate artifact binding and
+        therefore verifies that the artifact selected for the effect matches
+        both that identity and the current merged PR before producing intent.
+        """
+        review_record = completion_input.get("review_record")
+        if not isinstance(review_record, Mapping):
+            raise ResearchOutcomeRequired(
+                "Research completion requires a reviewed identity"
+            )
+        reviewed_identity = review_record.get("identity")
+        if not isinstance(reviewed_identity, Mapping):
+            raise ResearchOutcomeRequired(
+                "Research completion requires a reviewed identity"
+            )
+        identity_artifact = reviewed_identity.get("research_artifact")
+        if not isinstance(identity_artifact, Mapping):
+            raise ResearchOutcomeRequired(
+                "Research completion requires an identity-bound artifact"
+            )
+
+        merged_pr = completion_input.get("merged_pr")
+        if not isinstance(merged_pr, Mapping):
+            merged_pr = context.merged_pr
+        if not isinstance(merged_pr, Mapping):
+            raise ResearchOutcomeRequired(
+                "Research completion requires the current merged PR identity"
+            )
+
+        def first_value(source: Mapping[str, Any], *names: str) -> Any:
+            for name in names:
+                value = source.get(name)
+                if value is not None:
+                    return value
+            return None
+
+        current_identity = {
+            "task_number": completion_input.get("task_number"),
+            "pr_number": merged_pr.get("number"),
+            "base_sha": first_value(merged_pr, "baseRefOid", "base_sha"),
+            "head_sha": first_value(merged_pr, "headRefOid", "head_sha"),
+            "task_body_sha256": leaf_contract.get("body_sha256"),
+        }
+        for field, current_value in current_identity.items():
+            reviewed_value = reviewed_identity.get(field)
+            artifact_value = artifact.get(field)
+            if (
+                current_value is None
+                or reviewed_value != current_value
+                or artifact_value != current_value
+            ):
+                raise ResearchOutcomeRequired(
+                    f"Research completion artifact is not bound to the current {field}"
+                )
+
+        for field in ("merge_base_sha", "effective_diff_sha256"):
+            reviewed_value = reviewed_identity.get(field)
+            if reviewed_value is None or artifact.get(field) != reviewed_value:
+                raise ResearchOutcomeRequired(
+                    f"Research completion artifact is not bound to the reviewed {field}"
+                )
+
+        if dict(identity_artifact) != dict(artifact):
+            raise ResearchOutcomeRequired(
+                "Research completion artifact diverges from the reviewed identity"
+            )
 
     def validate_evidence(self, record: ProfileEvidenceRecord) -> bool:
         if not super().validate_evidence(record):

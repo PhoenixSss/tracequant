@@ -19,12 +19,14 @@ if AGENT_WORKFLOW not in sys.path:
     sys.path.insert(0, AGENT_WORKFLOW)
 
 from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
+    closeout as lck_closeout,
     delivery as lck_delivery,
     effects as lck_effects,
     issue_profiles,
     models as lck_models,
     receipts as lck_receipts,
     remediation as lck_remediation,
+    review as lck_review,
 )
 from lck_core.issue_profiles import (  # type: ignore[import-not-found]  # noqa: E402
     IssueProfileResolution,
@@ -227,6 +229,54 @@ class SyntheticPolicy:
                 and isinstance(record.payload.get("effect"), Mapping)
             )
         return False
+
+
+def test_review_and_closeout_propagate_policy_injection_to_eligibility(
+    tmp_path: Path,
+) -> None:
+    policy = SyntheticPolicy()
+    registry = ProfilePolicyRegistry.from_policies(policy)
+    profile = replace(
+        issue_profiles.TASK_PROFILE,
+        profile_id=policy.profile_id,
+        canonical_type_label=policy.canonical_type_label,
+        candidate_capability="synthetic_candidate",
+        requires_critical_outcome=False,
+    )
+
+    def resolve_synthetic(_issue: Mapping[str, Any] | None) -> IssueProfileResolution:
+        return IssueProfileResolution(
+            status=IssueProfileResolutionStatus.RESOLVED,
+            profile=profile,
+            type_labels=(profile.canonical_type_label,),
+        )
+
+    resolver = StaticResolver(tmp_path, _review_state())
+    preparer = lck_review.ReviewPreparer(
+        resolver,
+        policy_registry=registry,
+        profile_resolver=resolve_synthetic,
+    )
+    completer = lck_review.ReviewCompleter(
+        resolver,
+        policy_registry=registry,
+        profile_resolver=resolve_synthetic,
+    )
+    closeout = lck_closeout.CloseoutCompleter(
+        resolver,
+        policy_registry=registry,
+        profile_resolver=resolve_synthetic,
+    )
+
+    for controller, phase in (
+        (preparer, lck_models.Phase.REVIEW_PREPARE),
+        (completer, lck_models.Phase.REVIEW_COMPLETE),
+        (closeout, lck_models.Phase.CLOSEOUT),
+    ):
+        assert controller.eligibility.registry is registry
+        assert controller.eligibility.profile_resolver is resolve_synthetic
+        decision = controller.eligibility.resolve(resolver.state, phase)
+        assert decision.issue_profile["profile"]["profile_id"] == policy.profile_id
 
 
 def test_synthetic_policy_contract_blocker_candidate_use_frozen_registry_and_envelope() -> (
