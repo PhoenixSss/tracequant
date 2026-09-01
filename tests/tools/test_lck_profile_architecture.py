@@ -18,6 +18,11 @@ AGENT_WORKFLOW = str(ROOT / "tools" / "agent_workflow")
 if AGENT_WORKFLOW not in sys.path:
     sys.path.insert(0, AGENT_WORKFLOW)
 
+import issue_form_contract  # type: ignore[import-not-found]  # noqa: E402
+from bug_policy import bug_contract_snapshot  # type: ignore[import-not-found]  # noqa: E402
+from documentation_policy import (  # type: ignore[import-not-found]  # noqa: E402
+    documentation_contract_snapshot,
+)
 from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     closeout as lck_closeout,
     delivery as lck_delivery,
@@ -49,6 +54,7 @@ from lck_core.profile_policies import (  # type: ignore[import-not-found]  # noq
     validate_profile_review,
     run_profile_delivery_gates,
 )
+from research_policy import research_contract_snapshot  # type: ignore[import-not-found]  # noqa: E402
 from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
     CommandResult,
     sha256_json,
@@ -100,6 +106,103 @@ def test_all_phase_controllers_use_only_generic_policy_capabilities() -> None:
                 assert module not in forbidden_modules, name
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 assert node.name != "__getattr__", name
+
+
+def test_typed_policies_share_one_issue_form_parser_over_markdown_sections(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All typed forms use one structural parser, including a new profile."""
+
+    calls: list[tuple[str, ...]] = []
+    original = issue_form_contract.extract_markdown_sections
+
+    def observe(body: str, *, canonical_names: Any = None) -> Any:
+        calls.append(tuple(canonical_names or ()))
+        return original(body, canonical_names=canonical_names)
+
+    monkeypatch.setattr(issue_form_contract, "extract_markdown_sections", observe)
+    bug_body = "\n\n".join(
+        f"### {heading}\n\ncontent"
+        for heading in (
+            "Observed",
+            "Expected",
+            "Reproduction / Evidence",
+            "Acceptance Criteria",
+        )
+    )
+    documentation_body = "\n\n".join(
+        f"# {heading}\n\ncontent"
+        for heading in ("Documentation Goal", "Requirements", "Acceptance Criteria")
+    )
+    research_body = "\n\n".join(
+        f"###### {heading}\n\ncontent"
+        for heading in (
+            "Question / Decision Needed",
+            "Context",
+            "Scope",
+            "Non-goals",
+            "Evidence / Evaluation Criteria",
+            "Expected Outcome / Artifact",
+        )
+    )
+
+    assert bug_contract_snapshot(bug_body)["status"] == "pass"
+    assert documentation_contract_snapshot(documentation_body)["status"] == "pass"
+    assert research_contract_snapshot(research_body)["status"] == "pass"
+
+    synthetic_template = tmp_path / "synthetic.yml"
+    synthetic_template.write_text(
+        """body:
+  - type: textarea
+    id: premise
+    attributes:
+      label: Premise
+    validations:
+      required: true
+""",
+        encoding="utf-8",
+    )
+    synthetic = issue_form_contract.issue_form_contract_snapshot(
+        "## Premise\n\nsynthetic contract",
+        template_path=synthetic_template,
+        form_name="Synthetic",
+    )
+    assert synthetic["status"] == "pass"
+    assert synthetic["required_sections"] == ["Premise"]
+
+    assert calls == [
+        ("Observed", "Expected", "Reproduction / Evidence", "Acceptance Criteria"),
+        ("Documentation Goal", "Requirements", "Acceptance Criteria"),
+        (
+            "Question / Decision Needed",
+            "Context",
+            "Scope",
+            "Non-goals",
+            "Evidence / Evaluation Criteria",
+            "Expected Outcome / Artifact",
+        ),
+        ("Premise",),
+    ]
+    generic_source = (
+        (ROOT / "tools" / "agent_workflow" / "issue_form_contract.py")
+        .read_text(encoding="utf-8")
+        .casefold()
+    )
+    assert not any(
+        profile_name in generic_source
+        for profile_name in ("bug", "documentation", "research")
+    )
+    for policy_name in (
+        "bug_policy.py",
+        "documentation_policy.py",
+        "research_policy.py",
+    ):
+        policy_source = (ROOT / "tools" / "agent_workflow" / policy_name).read_text(
+            encoding="utf-8"
+        )
+        assert "parse_issue_form_contract" in policy_source
+        assert "yaml.safe_load" not in policy_source
 
 
 def test_shared_facts_and_policy_blockers_follow_frozen_one_way_contract() -> None:

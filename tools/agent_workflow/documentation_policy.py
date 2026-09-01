@@ -12,8 +12,12 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final
 
-import yaml
-from markdown_sections import extract_markdown_sections
+from issue_form_contract import (
+    IssueFormTemplateContract,
+    IssueFormTemplateError,
+    load_issue_form_template,
+    parse_issue_form_contract,
+)
 
 
 class DocumentationPolicyStatus(StrEnum):
@@ -63,15 +67,10 @@ class DocumentationContract:
         }
 
 
-@dataclass(frozen=True)
-class DocumentationTemplateContract:
-    """The required textarea fields declared by the formal Issue form."""
-
-    field_ids: tuple[str, ...]
-    section_labels: tuple[str, ...]
+DocumentationTemplateContract = IssueFormTemplateContract
 
 
-class DocumentationTemplateError(ValueError):
+class DocumentationTemplateError(IssueFormTemplateError):
     """The repository-owned Documentation Issue form is not usable."""
 
 
@@ -107,60 +106,12 @@ def documentation_template_contract(
     """Load required Documentation fields from the formal Issue form."""
 
     path = template_path or _default_template_path()
-    try:
-        parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
-        raise DocumentationTemplateError(
-            f"cannot read {DOCUMENTATION_TEMPLATE_PATH.as_posix()}: {exc}"
-        ) from exc
-    if not isinstance(parsed, Mapping) or not isinstance(parsed.get("body"), list):
-        raise DocumentationTemplateError(
-            f"{DOCUMENTATION_TEMPLATE_PATH.as_posix()} must define a body list"
-        )
-
-    field_ids: list[str] = []
-    section_labels: list[str] = []
-    for field in parsed["body"]:
-        if not isinstance(field, Mapping):
-            raise DocumentationTemplateError("Documentation form body item is invalid")
-        validations = field.get("validations")
-        if (
-            not isinstance(validations, Mapping)
-            or validations.get("required") is not True
-        ):
-            continue
-        if field.get("type") != "textarea":
-            raise DocumentationTemplateError(
-                "required Documentation fields must be textarea sections"
-            )
-        field_id = field.get("id")
-        attributes = field.get("attributes")
-        label = attributes.get("label") if isinstance(attributes, Mapping) else None
-        if (
-            not isinstance(field_id, str)
-            or not field_id.strip()
-            or not isinstance(label, str)
-            or not label.strip()
-        ):
-            raise DocumentationTemplateError(
-                "required Documentation textarea must have an id and label"
-            )
-        normalized_id = field_id.strip()
-        normalized_label = " ".join(label.split())
-        if normalized_id in field_ids or normalized_label.casefold() in {
-            item.casefold() for item in section_labels
-        }:
-            raise DocumentationTemplateError(
-                "required Documentation fields must have unique ids and labels"
-            )
-        field_ids.append(normalized_id)
-        section_labels.append(normalized_label)
-
-    if not section_labels:
-        raise DocumentationTemplateError(
-            f"{DOCUMENTATION_TEMPLATE_PATH.as_posix()} has no required sections"
-        )
-    return DocumentationTemplateContract(tuple(field_ids), tuple(section_labels))
+    return load_issue_form_template(
+        path,
+        form_name="Documentation",
+        template_display_path=DOCUMENTATION_TEMPLATE_PATH.as_posix(),
+        error_type=DocumentationTemplateError,
+    )
 
 
 def documentation_contract_snapshot(
@@ -170,66 +121,23 @@ def documentation_contract_snapshot(
 ) -> dict[str, Any]:
     """Return a bounded typed snapshot of the Documentation Issue contract."""
 
-    try:
-        template = documentation_template_contract(template_path)
-    except DocumentationTemplateError as exc:
-        return DocumentationContract(
-            DocumentationPolicyStatus.RECLASSIFICATION_REQUIRED,
-            detail=f"Documentation template contract unavailable: {exc}",
-        ).to_dict()
-
-    if not isinstance(body, str) or not body.strip():
-        return DocumentationContract(
-            DocumentationPolicyStatus.RECLASSIFICATION_REQUIRED,
-            required_sections=template.section_labels,
-            detail="Documentation body is unavailable",
-        ).to_dict()
-
-    section_details = tuple(
-        (section.name, section.content)
-        for section in extract_markdown_sections(
-            body, canonical_names=template.section_labels
-        )
+    parsed = parse_issue_form_contract(
+        body,
+        template_path=template_path or _default_template_path(),
+        form_name="Documentation",
+        template_display_path=DOCUMENTATION_TEMPLATE_PATH.as_posix(),
+        error_type=DocumentationTemplateError,
+        valid_status=DocumentationPolicyStatus.PASS.value,
+        invalid_status=DocumentationPolicyStatus.RECLASSIFICATION_REQUIRED.value,
     )
-    section_keys = tuple(section.casefold() for section, _content in section_details)
-    required_keys = tuple(section.casefold() for section in template.section_labels)
-    missing = tuple(
-        required
-        for required, key in zip(template.section_labels, required_keys, strict=True)
-        if key not in section_keys
-    )
-    duplicates = tuple(
-        required
-        for required, key in zip(template.section_labels, required_keys, strict=True)
-        if section_keys.count(key) > 1
-    )
-    empty = tuple(
-        required
-        for required, key in zip(template.section_labels, required_keys, strict=True)
-        if any(
-            section.casefold() == key and not content
-            for section, content in section_details
-        )
-    )
-    if missing or duplicates or empty:
-        parts: list[str] = []
-        if missing:
-            parts.append("missing sections: " + ", ".join(missing))
-        if duplicates:
-            parts.append("duplicate sections: " + ", ".join(duplicates))
-        if empty:
-            parts.append("empty sections: " + ", ".join(empty))
-        return DocumentationContract(
-            DocumentationPolicyStatus.RECLASSIFICATION_REQUIRED,
-            required_sections=template.section_labels,
-            missing_sections=missing,
-            duplicate_sections=duplicates,
-            empty_sections=empty,
-            detail="; ".join(parts),
-        ).to_dict()
     return DocumentationContract(
-        DocumentationPolicyStatus.PASS,
-        required_sections=template.section_labels,
+        DocumentationPolicyStatus(parsed.status),
+        required_sections=parsed.required_sections,
+        missing_sections=parsed.missing_sections,
+        duplicate_sections=parsed.duplicate_sections,
+        empty_sections=parsed.empty_sections,
+        template_path=parsed.template_path,
+        detail=parsed.detail,
     ).to_dict()
 
 

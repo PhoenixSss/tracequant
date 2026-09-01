@@ -17,7 +17,12 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final
 
-import yaml
+from issue_form_contract import (
+    IssueFormTemplateContract,
+    IssueFormTemplateError,
+    load_issue_form_template,
+    parse_issue_form_contract,
+)
 from markdown_sections import extract_markdown_sections
 from workflow_common import sha256_json
 
@@ -62,15 +67,10 @@ class ResearchPolicyStatus(StrEnum):
     OUTCOME_REQUIRED = "outcome_required"
 
 
-@dataclass(frozen=True)
-class ResearchTemplateContract:
-    """The required sections declared by the repository Research Issue Form."""
-
-    field_ids: tuple[str, ...]
-    section_labels: tuple[str, ...]
+ResearchTemplateContract = IssueFormTemplateContract
 
 
-class ResearchTemplateError(ValueError):
+class ResearchTemplateError(IssueFormTemplateError):
     """The repository-owned Research Issue form is not usable."""
 
 
@@ -128,60 +128,12 @@ def research_template_contract(
     """Load required Research fields from the formal Issue form."""
 
     path = template_path or _default_research_template_path()
-    try:
-        parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
-        raise ResearchTemplateError(
-            f"cannot read {RESEARCH_TEMPLATE_PATH.as_posix()}: {exc}"
-        ) from exc
-    if not isinstance(parsed, Mapping) or not isinstance(parsed.get("body"), list):
-        raise ResearchTemplateError(
-            f"{RESEARCH_TEMPLATE_PATH.as_posix()} must define a body list"
-        )
-
-    field_ids: list[str] = []
-    section_labels: list[str] = []
-    for field in parsed["body"]:
-        if not isinstance(field, Mapping):
-            raise ResearchTemplateError("Research form body item is invalid")
-        validations = field.get("validations")
-        if (
-            not isinstance(validations, Mapping)
-            or validations.get("required") is not True
-        ):
-            continue
-        if field.get("type") != "textarea":
-            raise ResearchTemplateError(
-                "required Research fields must be textarea sections"
-            )
-        field_id = field.get("id")
-        attributes = field.get("attributes")
-        label = attributes.get("label") if isinstance(attributes, Mapping) else None
-        if (
-            not isinstance(field_id, str)
-            or not field_id.strip()
-            or not isinstance(label, str)
-            or not label.strip()
-        ):
-            raise ResearchTemplateError(
-                "required Research textarea must have an id and label"
-            )
-        normalized_id = field_id.strip()
-        normalized_label = " ".join(label.split())
-        if normalized_id in field_ids or normalized_label.casefold() in {
-            item.casefold() for item in section_labels
-        }:
-            raise ResearchTemplateError(
-                "required Research fields must have unique ids and labels"
-            )
-        field_ids.append(normalized_id)
-        section_labels.append(normalized_label)
-
-    if not section_labels:
-        raise ResearchTemplateError(
-            f"{RESEARCH_TEMPLATE_PATH.as_posix()} has no required sections"
-        )
-    return ResearchTemplateContract(tuple(field_ids), tuple(section_labels))
+    return load_issue_form_template(
+        path,
+        form_name="Research",
+        template_display_path=RESEARCH_TEMPLATE_PATH.as_posix(),
+        error_type=ResearchTemplateError,
+    )
 
 
 def research_contract_snapshot(
@@ -191,66 +143,23 @@ def research_contract_snapshot(
 ) -> dict[str, Any]:
     """Return a bounded typed snapshot of the Research Issue Form contract."""
 
-    try:
-        template = research_template_contract(template_path)
-    except ResearchTemplateError as exc:
-        return ResearchContract(
-            ResearchPolicyStatus.RECLASSIFICATION_REQUIRED,
-            detail=f"Research template contract unavailable: {exc}",
-        ).to_dict()
-
-    if not isinstance(body, str) or not body.strip():
-        return ResearchContract(
-            ResearchPolicyStatus.RECLASSIFICATION_REQUIRED,
-            required_sections=template.section_labels,
-            detail="Research body is unavailable",
-        ).to_dict()
-
-    section_details = tuple(
-        (section.name, section.content)
-        for section in extract_markdown_sections(
-            body, canonical_names=template.section_labels
-        )
+    parsed = parse_issue_form_contract(
+        body,
+        template_path=template_path or _default_research_template_path(),
+        form_name="Research",
+        template_display_path=RESEARCH_TEMPLATE_PATH.as_posix(),
+        error_type=ResearchTemplateError,
+        valid_status=ResearchPolicyStatus.PASS.value,
+        invalid_status=ResearchPolicyStatus.RECLASSIFICATION_REQUIRED.value,
     )
-    section_keys = tuple(section.casefold() for section, _content in section_details)
-    required_keys = tuple(section.casefold() for section in template.section_labels)
-    missing = tuple(
-        required
-        for required, key in zip(template.section_labels, required_keys, strict=True)
-        if key not in section_keys
-    )
-    duplicates = tuple(
-        required
-        for required, key in zip(template.section_labels, required_keys, strict=True)
-        if section_keys.count(key) > 1
-    )
-    empty = tuple(
-        required
-        for required, key in zip(template.section_labels, required_keys, strict=True)
-        if any(
-            section.casefold() == key and not content
-            for section, content in section_details
-        )
-    )
-    if missing or duplicates or empty:
-        parts: list[str] = []
-        if missing:
-            parts.append("missing sections: " + ", ".join(missing))
-        if duplicates:
-            parts.append("duplicate sections: " + ", ".join(duplicates))
-        if empty:
-            parts.append("empty sections: " + ", ".join(empty))
-        return ResearchContract(
-            ResearchPolicyStatus.RECLASSIFICATION_REQUIRED,
-            required_sections=template.section_labels,
-            missing_sections=missing,
-            duplicate_sections=duplicates,
-            empty_sections=empty,
-            detail="; ".join(parts),
-        ).to_dict()
     return ResearchContract(
-        ResearchPolicyStatus.PASS,
-        required_sections=template.section_labels,
+        ResearchPolicyStatus(parsed.status),
+        required_sections=parsed.required_sections,
+        missing_sections=parsed.missing_sections,
+        duplicate_sections=parsed.duplicate_sections,
+        empty_sections=parsed.empty_sections,
+        template_path=parsed.template_path,
+        detail=parsed.detail,
     ).to_dict()
 
 
@@ -459,7 +368,11 @@ def evaluate_research_changes(
             "Research candidate exceeds the repository-owned artifact policy; "
             "reclassification or split required for: " + ", ".join(disallowed)
         )
-        reasons = tuple(path_errors[path] for path in disallowed if path in path_errors)
+        reasons = tuple(
+            reason
+            for path in disallowed
+            if (reason := path_errors.get(path)) is not None
+        )
         if reasons:
             detail += "; " + "; ".join(reasons)
         return ResearchChangeResult(
