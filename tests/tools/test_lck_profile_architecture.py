@@ -5,11 +5,13 @@
 from __future__ import annotations
 
 import ast
+import json
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import FrozenInstanceError, dataclass, fields, replace
 from pathlib import Path
 from collections.abc import Mapping
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -33,6 +35,7 @@ from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     receipts as lck_receipts,
     remediation as lck_remediation,
     review as lck_review,
+    review_workspace as lck_review_workspace,
 )
 from lck_core.issue_profiles import (  # type: ignore[import-not-found]  # noqa: E402
     IssueProfileResolution,
@@ -45,8 +48,13 @@ from lck_core.profile_policies import (  # type: ignore[import-not-found]  # noq
     ProfileEffectDescriptor,
     ProfileEvidenceEnvelope,
     ProfileEvidenceRecord,
+    ProfileGateResults,
     ProfilePolicyError,
     ProfilePolicyRegistry,
+    ProfileCompletionResult,
+    ProfileContractCheck,
+    ProfileGateFailure,
+    ProfileReviewResult,
     evaluate_profile_blockers,
     validate_profile_completion,
     validate_profile_candidate,
@@ -60,22 +68,145 @@ from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
     sha256_json,
 )
 from lck_test_support import (  # noqa: E402
+    FakeReviewChecks,
+    FakeReviewValidation,
+    FakeReviewWorkspace,
     StaticResolver,
+    _review_identity_value,
     _review_state,
 )
+
+
+def _imported_modules(tree: ast.AST) -> set[str]:
+    """Return normalized module names from an AST import graph."""
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name.rsplit(".", 1)[-1] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                modules.add(node.module.rsplit(".", 1)[-1])
+            if node.level:
+                modules.update(alias.name.rsplit(".", 1)[-1] for alias in node.names)
+    return modules
+
+
+def _referenced_symbols(tree: ast.AST) -> set[str]:
+    """Return code and imported names, independent of comments/string literals."""
+    symbols: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            symbols.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            symbols.add(node.attr)
+        elif isinstance(node, ast.alias):
+            symbols.add(node.name.rsplit(".", 1)[-1])
+            if node.asname:
+                symbols.add(node.asname)
+    return symbols
+
+
+_PROFILE_SEMANTIC_MARKERS = frozenset(
+    {
+        "profile",
+        "profile_id",
+        "issue_profile",
+        "issue_kind",
+        "canonical_type_label",
+        "critical_outcome",
+        "research_outcome",
+        "research_artifact",
+        "bug_contract",
+        "documentation_contract",
+        "research_contract",
+        "requires_critical_outcome",
+        "supports_research_outcome",
+        "candidate_capability",
+        "contract_policy",
+        "change_policy",
+        "artifact_policy",
+        "policy_entrypoints",
+    }
+)
+
+
+def _profile_semantic_references(tree: ast.AST) -> list[ast.AST]:
+    """Find profile-owned identifiers and mapping keys in a shared module."""
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    references: list[ast.AST] = []
+    for node in ast.walk(tree):
+        identifier: str | None = None
+        if isinstance(node, ast.Name):
+            identifier = node.id
+        elif isinstance(node, ast.Attribute):
+            identifier = node.attr
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            identifier = node.name
+        elif isinstance(node, ast.arg):
+            identifier = node.arg
+        if identifier is not None:
+            token = identifier.casefold()
+            if token in _PROFILE_SEMANTIC_MARKERS or "profile" in token:
+                references.append(node)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            token = node.value.casefold()
+            parent = parents.get(node)
+            is_structural_string = isinstance(
+                parent, (ast.Call, ast.Dict, ast.keyword, ast.Subscript)
+            )
+            if is_structural_string and (
+                token in _PROFILE_SEMANTIC_MARKERS
+                or any(
+                    marker in token
+                    for marker in (
+                        "profile_",
+                        "_profile",
+                        "critical_outcome",
+                        "research_outcome",
+                        "research_artifact",
+                    )
+                )
+            ):
+                references.append(node)
+    return references
+
+
+def _profile_identity_references(tree: ast.AST) -> list[ast.AST]:
+    """Find every direct or string-keyed profile identity access."""
+    identity_attributes = {
+        "profile_id",
+        "issue_kind",
+        "canonical_type_label",
+    }
+    references: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in identity_attributes:
+            references.append(node)
+        elif isinstance(node, ast.Attribute) and node.attr in identity_attributes:
+            references.append(node)
+        elif isinstance(node, ast.Constant) and node.value in identity_attributes:
+            references.append(node)
+    return references
 
 
 def test_all_phase_controllers_use_only_generic_policy_capabilities() -> None:
     """Shared lifecycle controllers must not dispatch concrete profile capabilities."""
     controller_names = (
+        "eligibility.py",
         "delivery.py",
         "review.py",
         "review_workspace.py",
+        "remediation.py",
         "validation.py",
         "closeout.py",
     )
     forbidden_modules = {
         "critical_outcome",
+        "bug_policy",
         "documentation_policy",
         "research_policy",
     }
@@ -92,20 +223,78 @@ def test_all_phase_controllers_use_only_generic_policy_capabilities() -> None:
     controller_root = ROOT / "tools" / "agent_workflow" / "lck_core"
 
     for name in controller_names:
-        source = (controller_root / name).read_text(encoding="utf-8")
-        assert not any(
-            capability in source for capability in forbidden_capability_names
-        ), name
-        tree = ast.parse(source)
+        tree = ast.parse((controller_root / name).read_text(encoding="utf-8"))
+        assert _imported_modules(tree).isdisjoint(forbidden_modules), name
+        assert _referenced_symbols(tree).isdisjoint(forbidden_capability_names), name
         for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported = {alias.name.split(".", 1)[0] for alias in node.names}
-                assert imported.isdisjoint(forbidden_modules), name
-            elif isinstance(node, ast.ImportFrom):
-                module = (node.module or "").split(".")[-1]
-                assert module not in forbidden_modules, name
-            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 assert node.name != "__getattr__", name
+
+    policy_tree = ast.parse(
+        (controller_root / "profile_policies.py").read_text(encoding="utf-8")
+    )
+    assert {
+        "critical_outcome",
+        "bug_policy",
+        "documentation_policy",
+        "research_policy",
+    } <= _imported_modules(policy_tree)
+
+
+def test_controller_import_guard_catches_concrete_policy_aliases() -> None:
+    """Concrete policy imports remain forbidden when imported under an alias."""
+    forbidden_capability_names = {
+        "CriticalOutcomeGate",
+        "DocumentationReclassificationRequired",
+        "DocumentationValidationGate",
+        "ResearchOutcomeEffect",
+        "ResearchOutcomeRequired",
+        "ResearchReclassificationRequired",
+        "ResearchValidationGate",
+        "_run_critical_outcome",
+    }
+    probes = (
+        "from profile_policies import ResearchOutcomeEffect",
+        "from profile_policies import ResearchOutcomeEffect as OutcomeEffect",
+        "from lck_core.profile_policies import ResearchOutcomeEffect",
+        "from .profile_policies import ResearchOutcomeEffect as OutcomeEffect",
+    )
+
+    for source in probes:
+        imported_symbols = _referenced_symbols(ast.parse(source))
+        assert forbidden_capability_names & imported_symbols == {
+            "ResearchOutcomeEffect"
+        }, source
+
+
+def test_phase_controllers_do_not_branch_on_profile_identity() -> None:
+    """Profile-specific behavior belongs behind the generic policy seam."""
+    controller_root = ROOT / "tools" / "agent_workflow" / "lck_core"
+    controller_names = (
+        "eligibility.py",
+        "delivery.py",
+        "review.py",
+        "review_workspace.py",
+        "remediation.py",
+        "closeout.py",
+        "validation.py",
+    )
+    for name in controller_names:
+        tree = ast.parse((controller_root / name).read_text(encoding="utf-8"))
+        identity_references = _profile_identity_references(tree)
+        assert not identity_references, (name, identity_references)
+
+    probes = (
+        'if state.issue_profile["profile"]["profile_id"] == "task": pass',
+        'if getattr(state, "profile_id", None) == "task": pass',
+        'if state.issue_profile.get("canonical_type_label") == "type:task": pass',
+    )
+    for source in probes:
+        assert _profile_identity_references(ast.parse(source)), source
+
+    production_root = ROOT / "tools" / "agent_workflow" / "lck_core"
+    for path in production_root.glob("*.py"):
+        assert "synthetic" not in path.read_text(encoding="utf-8").casefold(), path
 
 
 def test_typed_policies_share_one_issue_form_parser_over_markdown_sections(
@@ -211,23 +400,32 @@ def test_shared_facts_and_policy_blockers_follow_frozen_one_way_contract() -> No
         ROOT / "tools" / "agent_workflow" / "lck_core" / "shared_facts.py"
     ).read_text(encoding="utf-8")
     shared_tree = ast.parse(shared_source)
+    assert not _profile_semantic_references(shared_tree)
     forbidden_imports = {
         "issue_profiles",
         "profile_policies",
         "eligibility",
         "workflow_evidence",
     }
-    imported: set[str] = set()
-    for node in ast.walk(shared_tree):
-        if isinstance(node, ast.Import):
-            imported.update(alias.name.split(".", 1)[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            imported.add((node.module or "").split(".")[-1])
-    assert imported.isdisjoint(forbidden_imports)
+    assert _imported_modules(shared_tree).isdisjoint(forbidden_imports)
 
-    for path in (ROOT / "tools" / "agent_workflow" / "lck_core").glob("*.py"):
+    core_root = ROOT / "tools" / "agent_workflow" / "lck_core"
+    for path in core_root.glob("*.py"):
         if path.name not in {"shared_facts.py", "__init__.py"}:
-            assert "workflow_evidence" not in path.read_text(encoding="utf-8")
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            assert "workflow_evidence" not in _imported_modules(tree), path.name
+
+    evidence_tree = ast.parse(
+        (ROOT / "tools" / "agent_workflow" / "workflow_evidence.py").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "lck_core"
+        and any(alias.name == "shared_facts" for alias in node.names)
+        for node in ast.walk(evidence_tree)
+    )
 
     open_gate = lck_eligibility.evaluate_shared_blockers(
         {
@@ -258,6 +456,18 @@ def test_shared_facts_and_policy_blockers_follow_frozen_one_way_contract() -> No
     assert callable(SyntheticPolicy().evaluate_blockers)
 
 
+@pytest.mark.parametrize(
+    "source",
+    (
+        'facts["research_outcome"] = "IMPLEMENT"',
+        'facts.get("critical_outcome")',
+        "def normalize_profile_specific_fact(value): return value",
+    ),
+)
+def test_shared_facts_guard_rejects_profile_owned_semantics(source: str) -> None:
+    assert _profile_semantic_references(ast.parse(source)), source
+
+
 @dataclass(frozen=True)
 class SyntheticPolicy:
     """A fifth policy proving the injection seam is independent of production."""
@@ -270,11 +480,39 @@ class SyntheticPolicy:
     completion_kind: str = "synthetic.completion.v1"
     blocker: PolicyBlocker | None = None
     blocker_numbers: tuple[int, ...] = ()
+    form_template_path: Path | None = None
+    events: list[str] | None = None
+
+    def _mark(self, stage: str) -> None:
+        if self.events is not None:
+            self.events.append(stage)
+
+    def _issue_form_snapshot(
+        self, leaf_contract: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        if self.form_template_path is None:
+            return {"status": "pass", "required_sections": ["Premise"]}
+        snapshot = issue_form_contract.issue_form_contract_snapshot(
+            leaf_contract.get("body")
+            if isinstance(leaf_contract.get("body"), str)
+            else None,
+            template_path=self.form_template_path,
+            template_display_path="synthetic.yml",
+            form_name="Synthetic",
+        )
+        if snapshot.get("status") != "pass":
+            raise ProfilePolicyError(
+                str(
+                    snapshot.get("detail") or "Synthetic Issue Form contract is invalid"
+                )
+            )
+        return cast(Mapping[str, Any], snapshot)
 
     def validate_contract(
         self, context: PolicyContext, leaf_contract: Mapping[str, Any]
     ) -> ProfileEvidenceRecord:
         del context
+        self._mark("contract")
         return ProfileEvidenceRecord(
             self.contract_kind,
             1,
@@ -285,6 +523,7 @@ class SyntheticPolicy:
                     "body_sha256": leaf_contract["body_sha256"],
                 },
                 "contract": {"status": "pass"},
+                "issue_form": self._issue_form_snapshot(leaf_contract),
                 "contract_digest": sha256_json(
                     {
                         "number": leaf_contract.get("number"),
@@ -301,6 +540,7 @@ class SyntheticPolicy:
         contract_evidence: ProfileEvidenceRecord,
     ) -> tuple[PolicyBlocker, ...]:
         del context, contract_evidence
+        self._mark("blocker")
         if (
             self.blocker is None
             or leaf_contract.get("number") not in self.blocker_numbers
@@ -315,6 +555,7 @@ class SyntheticPolicy:
         contract_evidence: ProfileEvidenceRecord,
     ) -> ProfileEvidenceRecord:
         del context, leaf_contract
+        self._mark("candidate")
         return ProfileEvidenceRecord(
             self.candidate_kind,
             1,
@@ -334,6 +575,7 @@ class SyntheticPolicy:
         review_input: Mapping[str, Any],
     ) -> ProfileEvidenceRecord:
         del context
+        self._mark("review")
         return ProfileEvidenceRecord(
             self.review_kind,
             1,
@@ -356,12 +598,23 @@ class SyntheticPolicy:
         completion_input: Mapping[str, Any],
     ) -> ProfileEvidenceRecord:
         assert context.runner is None
-        del completion_input
+        self._mark("completion")
+        repository = completion_input.get("repository")
+        task_number = completion_input.get("task_number")
+        if not isinstance(repository, str) or not isinstance(task_number, int):
+            raise ProfilePolicyError("synthetic completion identity is invalid")
+        parameters = {
+            "repository": repository,
+            "task_number": task_number,
+            "project_number": 1,
+            "field": "Status",
+            "value": "Done",
+        }
         descriptor = ProfileEffectDescriptor(
-            effect_kind="synthetic.noop.v1",
+            effect_kind="project.single_select.set.v1",
             schema_version=1,
-            parameters={"value": "complete"},
-            postcondition={"kind": "synthetic.completed", "value": "complete"},
+            parameters=parameters,
+            postcondition={"kind": "project.single_select.equals", **parameters},
             receipt={"source": "synthetic-policy"},
         )
         return ProfileEvidenceRecord(
@@ -387,9 +640,13 @@ class SyntheticPolicy:
             return False
         if record.kind == self.contract_kind:
             contract = record.payload.get("contract")
-            return isinstance(contract, Mapping) and dict(contract) == {
-                "status": "pass"
-            }
+            issue_form = record.payload.get("issue_form")
+            return (
+                isinstance(contract, Mapping)
+                and dict(contract) == {"status": "pass"}
+                and isinstance(issue_form, Mapping)
+                and issue_form.get("status") == "pass"
+            )
         if record.kind == self.candidate_kind:
             result = record.payload.get("result")
             return (
@@ -411,6 +668,302 @@ class SyntheticPolicy:
                 and isinstance(record.payload.get("effect"), Mapping)
             )
         return False
+
+
+def test_synthetic_fifth_profile_requires_only_allowed_extension_points(
+    tmp_path: Path,
+) -> None:
+    """A test-only profile must use every existing generic policy capability."""
+    template = tmp_path / "synthetic.yml"
+    template.write_text(
+        """body:
+  - type: textarea
+    id: premise
+    attributes:
+      label: Premise
+    validations:
+      required: true
+""",
+        encoding="utf-8",
+    )
+    events: list[str] = []
+    policy = SyntheticPolicy(form_template_path=template, events=events)
+    registry = ProfilePolicyRegistry.from_policies(policy)
+    profile = replace(
+        issue_profiles.TASK_PROFILE,
+        profile_id=policy.profile_id,
+        canonical_type_label=policy.canonical_type_label,
+        candidate_capability="synthetic_candidate",
+        requires_critical_outcome=False,
+    )
+    leaf_contract = {
+        "number": 223,
+        "title": "Synthetic fifth profile",
+        "body": "## Premise\n\nThe generic parser is part of this contract.",
+        "body_sha256": "a" * 64,
+    }
+    context = PolicyContext(profile=profile, issue=leaf_contract)
+
+    contract_check = validate_profile_contract(
+        profile, leaf_contract, registry=registry, context=context
+    )
+    assert contract_check.valid
+    assert contract_check.evidence is not None
+    assert contract_check.evidence.payload["issue_form"] == {
+        "status": "pass",
+        "required_sections": ["Premise"],
+        "missing_sections": [],
+        "duplicate_sections": [],
+        "empty_sections": [],
+        "template_path": "synthetic.yml",
+    }
+    contract = contract_check.evidence
+
+    assert (
+        evaluate_profile_blockers(
+            profile,
+            leaf_contract,
+            contract_evidence=contract,
+            registry=registry,
+            context=context,
+        )
+        == ()
+    )
+    candidate = validate_profile_candidate(
+        profile,
+        leaf_contract,
+        contract_evidence=contract,
+        registry=registry,
+        context=context,
+    )
+    review = validate_profile_review(
+        profile,
+        leaf_contract,
+        {"verdict": "PASS", "review_input": "bounded"},
+        registry=registry,
+        context=context,
+    )
+    assert review.evidence is not None
+    completion = validate_profile_completion(
+        profile,
+        leaf_contract,
+        {
+            "task_number": 223,
+            "repository": "owner/repo",
+            "review_evidence": review.evidence,
+        },
+        registry=registry,
+        context=replace(context, runner=object()),
+    )
+    assert completion.evidence is not None
+    assert completion.effect is not None
+
+    envelope = ProfileEvidenceEnvelope(
+        profile_id=policy.profile_id,
+        contract=contract,
+        candidate=candidate,
+        review=review.evidence,
+        completion=completion.evidence,
+    ).validated(registry, leaf_contract=leaf_contract)
+
+    assert {
+        stage
+        for stage in ("contract", "blocker", "candidate", "review", "completion")
+        if stage in events
+    } == {"contract", "blocker", "candidate", "review", "completion"}
+    assert envelope.profile_id == policy.profile_id
+    assert envelope.contract is contract
+    assert envelope.candidate is candidate
+    assert envelope.review is review.evidence
+    assert envelope.completion is completion.evidence
+    assert '"body":' not in envelope.serialize()
+    assert policy.profile_id in registry.policies
+    assert policy.canonical_type_label in registry.policies_by_type_label
+    assert policy.profile_id not in DEFAULT_PROFILE_POLICY_REGISTRY.policies
+
+
+def test_generic_kernel_models_have_no_synthetic_fixed_slots() -> None:
+    """Profile extensions add registrations/evidence, never shared schema fields."""
+    expected_schemas = {
+        ProfileEffectDescriptor: {
+            "effect_kind",
+            "schema_version",
+            "parameters",
+            "postcondition",
+            "receipt",
+        },
+        PolicyContext: {
+            "profile",
+            "profile_id",
+            "phase",
+            "issue",
+            "relationships",
+            "repository",
+            "downstream_contract",
+            "repo_root",
+            "runner",
+            "base_sha",
+            "head_sha",
+            "include_index",
+            "changed_files",
+            "progress",
+            "services",
+            "review_identity",
+            "review_record",
+            "merged_pr",
+            "review_verdict",
+            "research_outcome",
+            "critical_outcome",
+            "documentation_validation",
+            "research_validation",
+        },
+        ProfileEvidenceEnvelope: {
+            "profile_id",
+            "schema_version",
+            "contract",
+            "candidate",
+            "review",
+            "completion",
+        },
+        lck_models.LiveState: {
+            "issue_number",
+            "repository",
+            "issue",
+            "relationships",
+            "git",
+            "target_branch",
+            "local_issue_branch",
+            "local_issue_head",
+            "remote_issue_branch",
+            "remote_issue_oid",
+            "open_pr",
+            "merged_pr_numbers",
+            "merged",
+            "checks",
+            "cleanup",
+            "status",
+            "stop_reasons",
+            "warnings",
+            "merged_pr",
+            "leaf_contract",
+            "issue_profile",
+        },
+        lck_models.OperationSnapshot: {
+            "operation",
+            "state",
+            "required_checks",
+            "acquisition_warnings",
+            "fact_profile",
+            "acquired_facts",
+        },
+        lck_models.EffectReceipt: {"effect", "action", "details"},
+        ProfileEvidenceRecord: {"kind", "schema_version", "payload"},
+        PolicyBlocker: {"code", "kind", "detail", "evidence_ref"},
+        ProfileGateResults: {
+            "critical_outcome",
+            "documentation_validation",
+            "research_validation",
+            "profile_evidence",
+        },
+        ProfileGateFailure: {"detail", "profile_evidence", "legacy_results"},
+        ProfileContractCheck: {
+            "policy",
+            "label",
+            "valid",
+            "contract",
+            "detail",
+            "evidence",
+        },
+        ProfileReviewResult: {"evidence", "artifact", "profile_evidence"},
+        ProfileCompletionResult: {"evidence", "effect", "profile_evidence"},
+        lck_review_workspace.ReviewTargetRefs: {
+            "task_number",
+            "pr_number",
+            "base_sha",
+            "head_sha",
+            "task_body_sha256",
+        },
+        lck_review_workspace.ReviewIdentity: {
+            "task_number",
+            "pr_number",
+            "base_sha",
+            "head_sha",
+            "task_body_sha256",
+            "merge_base_sha",
+            "effective_diff_sha256",
+            "changed_files",
+            "research_artifact",
+        },
+        lck_review.ReviewContext: {
+            "review_id",
+            "task_contract",
+            "identity",
+            "checks",
+            "validation",
+            "review_root",
+            "issue_profile",
+            "profile_evidence",
+        },
+        lck_delivery.DeliveryCompletionResult: {
+            "task_number",
+            "status",
+            "branch",
+            "head_sha",
+            "critical_outcome",
+            "validation",
+            "checks",
+            "effects",
+            "operation_snapshot",
+            "research_artifact",
+            "profile_evidence",
+        },
+        lck_review.ReviewCompletionResult: {
+            "review_id",
+            "task_number",
+            "verdict",
+            "status",
+            "identity",
+            "record_path",
+            "issue_profile",
+            "profile_evidence",
+        },
+        lck_closeout.CloseoutResult: {
+            "task_number",
+            "status",
+            "business_delivery",
+            "cleanup",
+            "effects",
+            "operation_snapshot",
+            "research_outcome",
+            "profile_evidence",
+        },
+        lck_remediation.RemediationCompletionResult: {
+            "task_number",
+            "review_id",
+            "delivery",
+        },
+    }
+    for model, allowed_fields in expected_schemas.items():
+        assert {field.name for field in fields(model)} == allowed_fields, model
+
+
+def test_kernel_snapshots_are_frozen_at_the_model_boundary() -> None:
+    """Live facts and operation snapshots cannot be mutated after acquisition."""
+    state = _review_state()
+    snapshots = (
+        (lck_models.LiveState, state, "issue_number", 160),
+        (
+            lck_models.OperationSnapshot,
+            lck_models.OperationSnapshot(operation="test", state=state),
+            "operation",
+            "changed",
+        ),
+    )
+
+    for model, snapshot, field_name, replacement in snapshots:
+        assert model.__dataclass_params__.frozen, model
+        with pytest.raises(FrozenInstanceError):
+            setattr(snapshot, field_name, replacement)
 
 
 def test_leaf_contract_is_canonical_input_not_profile_evidence_envelope() -> None:
@@ -485,6 +1038,7 @@ def test_non_research_review_rejects_research_outcome_at_generic_policy_boundary
 def test_review_and_closeout_propagate_policy_injection_to_eligibility(
     tmp_path: Path,
 ) -> None:
+    events: list[str] = []
     policy = SyntheticPolicy(
         blocker=PolicyBlocker(
             code="SYNTHETIC_BLOCKED",
@@ -492,6 +1046,7 @@ def test_review_and_closeout_propagate_policy_injection_to_eligibility(
             detail="synthetic policy rejected this lifecycle operation",
         ),
         blocker_numbers=(159,),
+        events=events,
     )
     registry = ProfilePolicyRegistry.from_policies(policy)
     profile = replace(
@@ -534,11 +1089,13 @@ def test_review_and_closeout_propagate_policy_injection_to_eligibility(
         assert controller.eligibility.registry is registry
         assert controller.eligibility.profile_resolver is resolve_synthetic
         decision = controller.eligibility.resolve(resolver.state, phase)
+        assert not decision.eligible
         assert decision.issue_profile["profile"]["profile_id"] == policy.profile_id
         assert (
             "policy blocker [SYNTHETIC_BLOCKED]: synthetic policy rejected this "
             "lifecycle operation" in decision.reasons
         )
+    assert "blocker" in events
 
 
 def test_dependency_policy_blocker_is_dispatched_without_contract_policy_filter(
@@ -802,28 +1359,393 @@ def test_synthetic_policy_review_completion_and_effect_are_generic_capabilities(
     assert completion.profile_evidence is not None
     assert completion.profile_evidence.completion == completion.evidence
 
-    def execute_effect(
-        _descriptor: ProfileEffectDescriptor, **_kwargs: Any
-    ) -> lck_models.EffectReceipt:
-        return lck_models.EffectReceipt(
-            "synthetic.noop.v1", "executed", {"source": "test"}
-        )
+    class ProjectEffectRunner:
+        def __init__(self, repository: str, task_number: int, value: str) -> None:
+            self.repository = repository
+            self.task_number = task_number
+            self.value = value
 
-    effects = lck_effects.EffectExecutorRegistry({"synthetic.noop.v1": execute_effect})
+        def run(
+            self,
+            argv: list[str] | tuple[str, ...],
+            *,
+            command_id: str,
+            **_: Any,
+        ) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            if command[:3] == ("gh", "api", "graphql"):
+                return CommandResult(
+                    command_id,
+                    command,
+                    0,
+                    json.dumps(
+                        {
+                            "data": {
+                                "user": {
+                                    "projectV2": {
+                                        "items": {
+                                            "nodes": [
+                                                {
+                                                    "content": {
+                                                        "number": self.task_number,
+                                                        "repository": {
+                                                            "nameWithOwner": self.repository
+                                                        },
+                                                    },
+                                                    "fieldValueByName": {
+                                                        "name": self.value
+                                                    },
+                                                }
+                                            ],
+                                            "pageInfo": {"hasNextPage": False},
+                                        }
+                                    }
+                                },
+                                "organization": None,
+                            }
+                        }
+                    ),
+                    "",
+                )
+            return CommandResult(
+                command_id, command, 1, "", "unexpected effect command"
+            )
+
+    effect_resolver = SimpleNamespace(
+        runner=ProjectEffectRunner("PhoenixSss/tracequant", 219, "Done")
+    )
+    effect_state = lck_models.LiveState(
+        issue_number=219,
+        repository="PhoenixSss/tracequant",
+    )
+    effects = lck_effects.DEFAULT_EFFECT_EXECUTOR_REGISTRY
+    with pytest.raises(TypeError):
+        effects.executors["other"] = lambda *_args, **_kwargs: None
     receipt = effects.execute(
         completion.effect,
-        resolver=object(),
-        state=object(),
+        resolver=effect_resolver,
+        state=effect_state,
     )
-    assert receipt.action == "executed"
+    assert receipt.effect == completion.effect.effect_kind
+    assert receipt.action == "already-set"
+    assert receipt.details["source"] == "synthetic-policy"
     assert receipt.is_complete
-    assert not lck_models.EffectReceipt("synthetic.noop.v1", "pending", {}).is_complete
+    assert not lck_models.EffectReceipt(
+        "project.single_select.set.v1", "pending", {}
+    ).is_complete
+
+    with pytest.raises(lck_models.LckStopError, match="postcondition is invalid"):
+        effects.execute(
+            replace(completion.effect, postcondition={"kind": "invalid"}),
+            resolver=effect_resolver,
+            state=effect_state,
+        )
+    unauthorized_parameters = {
+        **completion.effect.parameters,
+        "task_number": 220,
+    }
+    with pytest.raises(lck_models.LckStopError, match="identity does not match"):
+        effects.execute(
+            replace(
+                completion.effect,
+                parameters=unauthorized_parameters,
+                postcondition={
+                    "kind": "project.single_select.equals",
+                    **unauthorized_parameters,
+                },
+            ),
+            resolver=effect_resolver,
+            state=effect_state,
+        )
+
+    def mismatched_executor(
+        _descriptor: ProfileEffectDescriptor, **_kwargs: Any
+    ) -> lck_models.EffectReceipt:
+        return lck_models.EffectReceipt("different.effect", "executed", {})
+
+    mismatch_registry = lck_effects.EffectExecutorRegistry(
+        {completion.effect.effect_kind: mismatched_executor}
+    )
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="receipt does not match its descriptor",
+    ):
+        mismatch_registry.execute(
+            completion.effect,
+            resolver=effect_resolver,
+            state=effect_state,
+        )
+    with pytest.raises(ProfilePolicyError, match="must be JSON data"):
+        ProfileEffectDescriptor(
+            effect_kind="project.single_select.set.v1",
+            schema_version=1,
+            parameters={"callable": mismatched_executor},
+            postcondition={},
+            receipt={},
+        )
     with pytest.raises(lck_models.LckStopError, match="unknown completion effect"):
         effects.execute(
             replace(completion.effect, effect_kind="synthetic.unknown.v1"),
-            resolver=object(),
-            state=object(),
+            resolver=effect_resolver,
+            state=effect_state,
         )
+
+
+def test_synthetic_profile_review_and_closeout_use_kernel_and_persist_receipts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review and Closeout must execute policy stages through their controllers."""
+    events: list[str] = []
+    policy = SyntheticPolicy(events=events)
+    registry = ProfilePolicyRegistry.from_policies(policy)
+    profile = replace(
+        issue_profiles.TASK_PROFILE,
+        profile_id=policy.profile_id,
+        canonical_type_label=policy.canonical_type_label,
+        candidate_capability="synthetic_candidate",
+        requires_critical_outcome=False,
+    )
+
+    def resolve_synthetic(_issue: Mapping[str, Any] | None) -> IssueProfileResolution:
+        return IssueProfileResolution(
+            status=IssueProfileResolutionStatus.RESOLVED,
+            profile=profile,
+            type_labels=(profile.canonical_type_label,),
+        )
+
+    state = _review_state()
+    resolver = StaticResolver(tmp_path, state)
+    identity = _review_identity_value()
+    monkeypatch.setattr(
+        lck_review, "_review_identity", lambda *_args, **_kwargs: identity
+    )
+    store = lck_review_workspace.ReviewInvocationStore(tmp_path)
+    workspace = FakeReviewWorkspace(tmp_path / "review-root")
+
+    review_context = lck_review.ReviewPreparer(
+        resolver,
+        validation=cast(Any, FakeReviewValidation()),
+        checks_gate=cast(Any, FakeReviewChecks()),
+        workspace=cast(Any, workspace),
+        store=store,
+        policy_registry=registry,
+        profile_resolver=resolve_synthetic,
+    ).prepare(159)
+    assert review_context.profile_evidence is not None
+    assert review_context.profile_evidence.review is not None
+    assert review_context.profile_evidence.review.kind == policy.review_kind
+
+    review_result = lck_review.ReviewCompleter(
+        resolver,
+        checks_gate=cast(Any, FakeReviewChecks()),
+        store=store,
+        workspace=cast(Any, workspace),
+        policy_registry=registry,
+        profile_resolver=resolve_synthetic,
+    ).complete(159, review_context.review_id, verdict="PASS")
+    assert review_result.status == "READY_FOR_MERGE_PREFLIGHT"
+    assert review_result.profile_evidence is not None
+    assert review_result.profile_evidence.review is not None
+    assert review_result.profile_evidence.review.kind == policy.review_kind
+
+    receipt_store = lck_receipts.AuditReceiptStore(tmp_path)
+    review_view = lck_receipts._write_success_receipt(
+        review_result,
+        operation="review-complete",
+        task_number=159,
+        operation_id=review_result.review_id,
+        store=receipt_store,
+    )
+    review_receipt = receipt_store.read(review_view["receipt_reference"])
+    review_evidence = review_receipt["audit"]["profile_evidence"]
+    assert review_evidence["profile_id"] == policy.profile_id
+    assert review_evidence["review"]["kind"] == policy.review_kind
+
+    merge_sha = "f" * 40
+    closed_issue = dict(state.issue or {})
+    closed_issue.update(
+        {
+            "state": "CLOSED",
+            "project_status": "Done",
+            "issue_closure": {
+                "evidence_status": "complete",
+                "status": "closed-by-pr",
+                "closer_repository": state.repository,
+                "closer_number": 200,
+            },
+        }
+    )
+    merged_pr = dict(state.open_pr or {})
+    merged_pr.update(
+        {
+            "state": "MERGED",
+            "mergeCommit": {"oid": merge_sha},
+            "mergedAt": "2026-09-02T00:00:00Z",
+            "closingIssuesReferences": [{"number": 159}],
+        }
+    )
+    resolver.state = replace(
+        state,
+        issue=closed_issue,
+        open_pr=None,
+        merged=True,
+        merged_pr=merged_pr,
+        merged_pr_numbers=(200,),
+    )
+
+    class CloseoutEffectRunner:
+        def __init__(self) -> None:
+            self.remote_branch_exists = True
+            self.commands: list[tuple[str, ...]] = []
+
+        def run(
+            self,
+            argv: list[str] | tuple[str, ...],
+            *,
+            command_id: str,
+            **_: Any,
+        ) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            self.commands.append(command)
+            if command[:3] == ("gh", "api", "graphql"):
+                return CommandResult(
+                    command_id,
+                    command,
+                    0,
+                    json.dumps(
+                        {
+                            "data": {
+                                "user": {
+                                    "projectV2": {
+                                        "items": {
+                                            "nodes": [
+                                                {
+                                                    "content": {
+                                                        "number": 159,
+                                                        "repository": {
+                                                            "nameWithOwner": "owner/repo"
+                                                        },
+                                                    },
+                                                    "fieldValueByName": {
+                                                        "name": "Done"
+                                                    },
+                                                }
+                                            ],
+                                            "pageInfo": {"hasNextPage": False},
+                                        }
+                                    }
+                                },
+                                "organization": None,
+                            }
+                        }
+                    ),
+                    "",
+                )
+            if command[:3] == ("gh", "issue", "view"):
+                return CommandResult(
+                    command_id,
+                    command,
+                    0,
+                    json.dumps(
+                        {
+                            "state": "CLOSED",
+                            "labels": [{"name": "codex:ready"}],
+                            "projectItems": [{"fields": {"Status": "Done"}}],
+                        }
+                    ),
+                    "",
+                )
+            if command == ("git", "rev-parse", "HEAD"):
+                return CommandResult(command_id, command, 0, f"{merge_sha}\n", "")
+            if command == ("git", "rev-parse", "refs/remotes/origin/main"):
+                return CommandResult(command_id, command, 0, f"{merge_sha}\n", "")
+            if command == (
+                "git",
+                "rev-parse",
+                "refs/heads/task/159-lck-core-live-state-resolution",
+            ):
+                return CommandResult(command_id, command, 0, f"{'a' * 40}\n", "")
+            if command == (
+                "git",
+                "ls-remote",
+                "--heads",
+                "origin",
+                "task/159-lck-core-live-state-resolution",
+            ):
+                output = (
+                    f"{'a' * 40}\trefs/heads/task/159-lck-core-live-state-resolution\n"
+                    if self.remote_branch_exists
+                    else ""
+                )
+                return CommandResult(command_id, command, 0, output, "")
+            if command == (
+                "git",
+                "push",
+                "origin",
+                "--delete",
+                "task/159-lck-core-live-state-resolution",
+            ):
+                self.remote_branch_exists = False
+                return CommandResult(command_id, command, 0, "", "")
+            if command[:3] in {
+                ("git", "switch", "main"),
+                ("git", "fetch", "--prune"),
+            }:
+                return CommandResult(command_id, command, 0, "", "")
+            if command[:3] == ("git", "merge", "--ff-only"):
+                return CommandResult(command_id, command, 0, "", "")
+            if command[:2] == ("git", "merge-base"):
+                return CommandResult(command_id, command, 0, "", "")
+            if command[:3] == ("git", "worktree", "list"):
+                return CommandResult(command_id, command, 0, "worktree /tmp/main\n", "")
+            if command[:3] == ("git", "diff", "--quiet"):
+                return CommandResult(command_id, command, 0, "", "")
+            if command[:3] == ("git", "branch", "-d"):
+                return CommandResult(command_id, command, 0, "", "")
+            return CommandResult(
+                command_id, command, 1, "", "unexpected closeout command"
+            )
+
+    closeout_runner = CloseoutEffectRunner()
+    resolver.runner = closeout_runner
+
+    closeout_result = lck_closeout.CloseoutCompleter(
+        resolver,
+        review_store=store,
+        policy_registry=registry,
+        profile_resolver=resolve_synthetic,
+    ).complete(159)
+    assert closeout_result.business_delivery == "COMPLETE"
+    assert closeout_result.profile_evidence is not None
+    assert closeout_result.profile_evidence.completion is not None
+    assert closeout_result.profile_evidence.completion.kind == policy.completion_kind
+    assert [effect.effect for effect in closeout_result.effects] == [
+        "synchronize_main",
+        "converge_task_metadata",
+        "project.single_select.set.v1",
+        "cleanup_task_refs",
+    ]
+    assert [effect.action for effect in closeout_result.effects] == [
+        "synchronized",
+        "already-converged",
+        "already-set",
+        "cleaned",
+    ]
+    assert closeout_result.effects[2].details["source"] == "synthetic-policy"
+
+    closeout_view = lck_receipts._write_success_receipt(
+        closeout_result,
+        operation="closeout",
+        task_number=159,
+        operation_id="c" * 32,
+        store=receipt_store,
+    )
+    closeout_receipt = receipt_store.read(closeout_view["receipt_reference"])
+    closeout_evidence = closeout_receipt["audit"]["profile_evidence"]
+    assert closeout_evidence["profile_id"] == policy.profile_id
+    assert closeout_evidence["completion"]["kind"] == policy.completion_kind
+    assert set(events) >= {"blocker", "contract", "review", "completion"}
 
 
 def test_merge_preflight_propagates_policy_injection_to_default_review_gate(
@@ -858,7 +1780,8 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    policy = SyntheticPolicy()
+    events: list[str] = []
+    policy = SyntheticPolicy(events=events)
     registry = ProfilePolicyRegistry.from_policies(policy)
     profile = replace(
         issue_profiles.TASK_PROFILE,
@@ -893,6 +1816,8 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
             **_: Any,
         ) -> CommandResult:
             args = tuple(str(item) for item in argv)
+            if args[:3] == ("git", "diff", "--quiet"):
+                return CommandResult(command_id, args, 1, "", "")
             if args == ("git", "branch", "--show-current"):
                 return CommandResult(command_id, args, 0, state.target_branch, "")
             if args == ("git", "rev-parse", "HEAD"):
@@ -955,6 +1880,16 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
             )
 
     class ChecksGate:
+        def observe(self, _snapshot: lck_models.OperationSnapshot) -> dict[str, Any]:
+            return {
+                "status": "observed",
+                "pr": {
+                    "number": 200,
+                    "head_sha": candidate_head,
+                    "base_sha": start_head,
+                },
+            }
+
         def observe_exact_pr(
             self,
             _repository: str,
@@ -979,6 +1914,23 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
     class Validation:
         def run(self, _base_sha: str) -> dict[str, Any]:
             return {"status": "pass"}
+
+    delivery_calls: list[lck_models.Phase] = []
+    original_delivery_complete = lck_delivery.DeliveryCompleter.complete
+
+    def observe_delivery_complete(
+        completer: lck_delivery.DeliveryCompleter,
+        task_number: int,
+        **kwargs: Any,
+    ) -> lck_delivery.DeliveryCompletionResult:
+        delivery_calls.append(kwargs.get("phase", lck_models.Phase.DELIVERY_COMPLETE))
+        return original_delivery_complete(completer, task_number, **kwargs)
+
+    monkeypatch.setattr(
+        lck_delivery.DeliveryCompleter,
+        "complete",
+        observe_delivery_complete,
+    )
 
     delivery = lck_delivery.DeliveryCompleter(
         resolver,
@@ -1014,6 +1966,7 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
         == policy.candidate_kind
     )
 
+    runner.head = start_head
     review_id = "b" * 32
     store = lck_remediation.ReviewInvocationStore(tmp_path)
     store.write_remediation_session(
@@ -1031,22 +1984,40 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
             "findings_source": "local-review-record",
         },
     )
-    captured: dict[str, Any] = {}
 
-    class RemediationDelivery:
-        def __init__(self, *_args: Any, **kwargs: Any) -> None:
-            captured.update(kwargs)
-            self.last_profile_evidence = delivery.profile_evidence
+    class ReusePrEffect:
+        def __init__(self, _resolver: Any) -> None:
+            pass
 
-        def complete(
-            self, *_args: Any, **_kwargs: Any
-        ) -> lck_delivery.DeliveryCompletionResult:
-            return delivery
+        def execute(self, _state: Any, **kwargs: Any) -> lck_models.EffectReceipt:
+            return lck_models.EffectReceipt(
+                "reuse_open_pr",
+                "reused-current-open-pr",
+                {
+                    "number": 200,
+                    "head_sha": kwargs["head_sha"],
+                    "base_sha": kwargs["expected_base_sha"],
+                },
+            )
 
-    monkeypatch.setattr(lck_remediation, "DeliveryCompleter", RemediationDelivery)
+    monkeypatch.setattr(
+        lck_delivery, "FormalValidationGate", lambda _resolver: Validation()
+    )
+    monkeypatch.setattr(
+        lck_delivery, "CommitCurrentTreeEffect", lambda _resolver: CommitEffect()
+    )
+    monkeypatch.setattr(
+        lck_delivery, "EnsureRemoteBranchEffect", lambda _resolver: RemoteEffect()
+    )
+    monkeypatch.setattr(
+        lck_delivery, "SetReviewStatusEffect", lambda _resolver: StatusEffect()
+    )
+    monkeypatch.setattr(lck_remediation, "ReuseExistingOpenPrEffect", ReusePrEffect)
+
     remediation = lck_remediation.RemediationCompleter(
         resolver,
         store=store,
+        checks_gate=ChecksGate(),
         policy_registry=registry,
         profile_resolver=resolve_synthetic,
     ).complete(
@@ -1055,7 +2026,14 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
         commit_message="synthetic remediation",
         summary="exercise remediation evidence propagation",
     )
-    assert captured["profile_resolver"] is resolve_synthetic
+    assert delivery_calls == [
+        lck_models.Phase.DELIVERY_COMPLETE,
+        lck_models.Phase.REMEDIATION_COMPLETE,
+    ]
+    assert remediation.delivery.status == "READY_FOR_REVIEW"
+    assert remediation.delivery.profile_evidence is not None
+    assert remediation.delivery.profile_evidence.candidate is not None
+    assert remediation.delivery.profile_evidence.candidate.kind == policy.candidate_kind
     remediation_receipt = lck_receipts._write_success_receipt(
         remediation,
         operation="remediation-complete",
@@ -1064,3 +2042,11 @@ def test_synthetic_policy_dispatches_through_delivery_remediation_and_receipts(
         store=lck_receipts.AuditReceiptStore(tmp_path),
     )
     assert remediation_receipt["profile_evidence"]["profile_id"] == policy.profile_id
+    stored_remediation = lck_receipts.AuditReceiptStore(tmp_path).read(
+        remediation_receipt["receipt_reference"]
+    )
+    assert (
+        stored_remediation["audit"]["profile_evidence"]["candidate"]["kind"]
+        == policy.candidate_kind
+    )
+    assert set(events) >= {"contract", "candidate"}

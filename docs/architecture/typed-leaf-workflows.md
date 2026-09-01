@@ -38,6 +38,39 @@ the typed policy modules. Phase controllers do not maintain a type allowlist;
 they call the shared adapter and retain one mechanical owner for live-state
 resolution, identity/freshness, validation, effects, receipts, and recovery.
 
+## Ordinary profile extension contract
+
+Adding an ordinary leaf profile is a registration change. The implementation
+may add a profile policy, one registration entry to the existing generic
+registry, profile-owned contract/evidence/blocker schema and codecs, and
+profile-specific tests. It must use the existing generic Issue Form parser,
+policy blocker contract, evidence envelope, effect descriptor/executor,
+phase controllers, and receipt infrastructure.
+
+The shared Delivery, Review, Remediation, and Closeout kernel must not gain a
+profile-specific branch, concrete policy import, fixed result/model/receipt
+field, or new profile semantics in shared facts. Eligibility must aggregate
+the generic shared blocker gate and registered policy blockers; it must not
+contain a special case for a profile or blocker. A profile cannot use an
+arbitrary callable or hidden side effect to bypass the registry, policy
+validation, bounded effect executor, postcondition, or receipt authority.
+
+The generic registry injection seam is test-only for architecture acceptance:
+a synthetic fifth profile is registered in an independent registry and is
+resolved by an injected profile resolver. The production canonical registry
+and its four supported profiles remain unchanged. This fixture must traverse
+the same contract, blocker, candidate, review, completion, effect, and
+receipt capabilities as a real profile.
+
+Extending a generic protocol or adding a previously absent generic blocker,
+evidence, effect, parser, or Kernel capability is an architecture exception.
+It requires a separately designed and reviewed architecture change; it is not
+part of an ordinary profile registration. The acceptance suite in
+`tests/tools/test_lck_profile_architecture.py` mechanically checks both sets
+of boundaries and the shared Kernel invariants, including immutable snapshots,
+fresh Review identity, maintainer-only merge, bounded effects, postconditions,
+and audit receipt authority.
+
 ## Activation evidence
 
 The typed activation implementations are merged and remain independently
