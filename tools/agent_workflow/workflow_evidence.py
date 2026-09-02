@@ -273,7 +273,16 @@ def _audit_relationship_snapshot(
             labels = item.get("labels") if isinstance(item.get("labels"), list) else []
             resolution = resolve_leaf_issue_profile({"labels": labels})
             profile = resolution.profile if resolution.resolved else None
-            body = item.get("body") if isinstance(item.get("body"), str) else None
+            complete_contract = shared_facts.relationship_contract(item)
+            if "contract" in item:
+                body = (
+                    complete_contract.get("body")
+                    if isinstance(complete_contract, Mapping)
+                    else None
+                )
+            else:
+                # Compatibility for already-normalized historical callers.
+                body = item.get("body") if isinstance(item.get("body"), str) else None
             is_bug = profile is not None and profile.contract_policy == "bug"
             is_documentation = (
                 profile is not None and profile.contract_policy == "documentation"
@@ -301,6 +310,9 @@ def _audit_relationship_snapshot(
             item["research_outcome_is_canonical"] = (
                 item["research_outcome"] is not None if is_research else None
             )
+            # The audit projection retains bounded metadata and typed contract
+            # snapshots, not the raw full Issue body used to derive them.
+            item.pop("contract", None)
     return result
 
 
