@@ -13,6 +13,7 @@ src/tracequant/
   logging.py
   core/time.py
   domain/models.py
+  data/public_history.py
 tests/
   test_config.py
   test_logging.py
@@ -54,6 +55,8 @@ Python standard library
 
 tracequant.domain.models ──> tracequant.core.time
 
+tracequant.data.public_history ──> tracequant.domain
+
 tests ──> tracequant public APIs
 tests ──> tests/fixtures/domain.py ──> tracequant.domain
 ```
@@ -76,6 +79,9 @@ primitives; test factories remain a separate test-support layer.
 - `tracequant.domain` owns immutable, risk-independent initial market-data
   value models. It may depend on `core.time`, but not on exchanges, network
   clients, logging setup, UI code, deployment code, or test fixtures.
+- `tracequant.data` owns typed source/request contracts at the data boundary.
+  It may depend on `tracequant.domain`, but does not perform network I/O,
+  filesystem I/O, archive parsing, persistence, or exchange-client work.
 - `tests` may import public production APIs and test-only factories. Fixtures
   must remain deterministic, function-scoped where exposed by `conftest.py`,
   and independent of production runtime imports.

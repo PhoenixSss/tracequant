@@ -38,6 +38,8 @@ The currently implemented public package is `tracequant` under `src/`:
   and formatting;
 - `tracequant.domain`: the initial immutable `InstrumentId`, `TimeRange`, and
   `OHLCVBar` models with validation and JSON-compatible serialization.
+- `tracequant.data`: typed Binance USDⓈ-M public-history request and source
+  identity contracts; it performs no network, file, or data-parsing work.
 
 The `apps/`, `packages/`, and `deploy/` directories currently establish future
 boundaries through small README files. They are not implemented product
@@ -123,6 +125,7 @@ src/tracequant/                 implemented bootstrap package
   logging.py                    structured JSON logging
   core/time.py                  UTC utilities
   domain/models.py              initial domain models
+  data/public_history.py        Binance public-history contracts
 tests/                          package and workflow tests
   fixtures/domain.py            deterministic domain factories, test-only
 apps/                           future research/runtime/console boundaries
