@@ -906,14 +906,87 @@ def _normalize_relationship_item(item: Any) -> dict[str, Any] | None:
         ]
         page = raw_labels.get("pageInfo")
         labels_complete = isinstance(page, Mapping) and page.get("hasNextPage") is False
+    number = item.get("number")
+    title = safe_text(item.get("title"))
+    state = safe_text(item.get("state"))
+    body = item.get("body") if isinstance(item.get("body"), str) else None
+    body_sha256 = sha256_json({"body": body}) if body is not None else None
+    # Relationship metadata is intentionally bounded below.  Keep the full
+    # canonical Issue contract in a separate, explicitly named value so the
+    # bounded display projection can never become semantic parser input.
+    contract = (
+        {
+            "number": number,
+            "title": title,
+            "state": state,
+            "body": body,
+            "body_sha256": body_sha256,
+            "body_characters": len(body),
+        }
+        if body is not None
+        else None
+    )
     return {
-        "number": item.get("number"),
-        "title": safe_text(item.get("title")),
-        "state": safe_text(item.get("state")),
+        "number": number,
+        "title": title,
+        "state": state,
         "labels": sorted(labels),
         "labels_complete": labels_complete,
-        "body": item.get("body") if isinstance(item.get("body"), str) else None,
+        "body": body,
+        "body_sha256": body_sha256,
+        "body_characters": len(body) if body is not None else None,
+        "contract": contract,
         "project_items": _normalize_project_items(item.get("projectItems")),
+    }
+
+
+def relationship_contract(item: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Return a verified complete raw contract from one relationship item.
+
+    Relationship items expose a bounded top-level metadata projection.  The
+    nested contract is the only value that may contain the complete Issue
+    body.  Verify both the relationship identity and body digest before any
+    profile policy is allowed to interpret it.
+    """
+
+    raw_contract = item.get("contract")
+    if not isinstance(raw_contract, Mapping):
+        return None
+    number = item.get("number")
+    contract_number = raw_contract.get("number")
+    if (
+        not isinstance(number, int)
+        or isinstance(number, bool)
+        or number <= 0
+        or contract_number != number
+    ):
+        return None
+    body = raw_contract.get("body")
+    body_sha256 = raw_contract.get("body_sha256")
+    if not isinstance(body, str) or not isinstance(body_sha256, str):
+        return None
+    if sha256_json({"body": body}) != body_sha256:
+        return None
+    item_sha256 = item.get("body_sha256")
+    if item_sha256 is not None and item_sha256 != body_sha256:
+        return None
+    body_characters = raw_contract.get("body_characters")
+    if (
+        not isinstance(body_characters, int)
+        or isinstance(body_characters, bool)
+        or body_characters != len(body)
+    ):
+        return None
+    item_characters = item.get("body_characters")
+    if item_characters is not None and item_characters != body_characters:
+        return None
+    return {
+        "number": number,
+        "title": raw_contract.get("title"),
+        "state": raw_contract.get("state"),
+        "body": body,
+        "body_sha256": body_sha256,
+        "body_characters": body_characters,
     }
 
 

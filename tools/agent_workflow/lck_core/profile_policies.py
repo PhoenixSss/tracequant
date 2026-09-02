@@ -54,7 +54,7 @@ from .issue_profiles import (
     resolve_leaf_issue_profile,
 )
 from .models import LckStopError
-from .shared_facts import canonical_project_field
+from .shared_facts import canonical_project_field, relationship_contract
 
 PROFILE_EVIDENCE_SCHEMA_VERSION: Final = 1
 PROFILE_EVIDENCE_STAGES: Final = ("contract", "candidate", "review", "completion")
@@ -731,11 +731,14 @@ class _BuiltinPolicy:
         field_name: str,
         snapshot: Callable[[str | None], Mapping[str, Any]],
     ) -> Mapping[str, Any]:
+        # Relationship metadata may expose a bounded legacy body. Typed
+        # policy parsers must use the separately verified complete contract.
+        if "contract" in leaf_contract:
+            return snapshot(_contract_body(leaf_contract))
         value = leaf_contract.get(field_name)
         if isinstance(value, Mapping):
             return value
-        body = leaf_contract.get("body")
-        return snapshot(body if isinstance(body, str) else None)
+        return snapshot(_contract_body(leaf_contract))
 
     def validate_evidence(self, record: ProfileEvidenceRecord) -> bool:
         if record.schema_version != PROFILE_EVIDENCE_SCHEMA_VERSION:
@@ -1389,10 +1392,8 @@ class _ResearchPolicy(_BuiltinPolicy):
         if parsed.value == "ARCHITECTURE DECISION":
             decision_contract = leaf_contract.get("decision_contract")
             if not isinstance(decision_contract, Mapping):
-                body = leaf_contract.get("body")
                 decision_contract = decision_contract_snapshot(
-                    body if isinstance(body, str) else None,
-                    research=True,
+                    _contract_body(leaf_contract), research=True
                 )
             if not architecture_decision_is_consistent(
                 decision_contract,
@@ -1808,6 +1809,17 @@ def _context_for(
     if context is not None:
         return context
     return PolicyContext(profile=profile, issue=issue, **updates)
+
+
+def _contract_body(leaf_contract: Mapping[str, Any]) -> str | None:
+    """Select only an identity-verified complete body for policy parsing."""
+
+    if "contract" in leaf_contract:
+        complete = relationship_contract(leaf_contract)
+        body = complete.get("body") if isinstance(complete, Mapping) else None
+        return body if isinstance(body, str) else None
+    body = leaf_contract.get("body")
+    return body if isinstance(body, str) else None
 
 
 def _raw_contract_snapshot(
