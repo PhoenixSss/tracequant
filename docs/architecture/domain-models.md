@@ -75,6 +75,28 @@ reject naive values; callers remain responsible for validating external event
 time semantics before constructing a model. No domain model consults the
 machine's local timezone.
 
+## Binance public-history boundary
+
+`tracequant.data` adds the first venue-specific data contract without changing
+the generic domain models. `BinancePublicHistoryRequest` reuses
+`InstrumentId` and `TimeRange`, and admits only the four currently scoped
+Binance USDⓈ-M instruments and data families:
+
+- 1m contract, mark-price, and index-price Klines;
+- settled funding-rate records, which have no Kline interval.
+
+`BinanceArchiveObjectBoundary` identifies an upstream UTC calendar day or
+month. It is serialized separately from the caller's `[start, end)`
+`request_range`; an archive object boundary is not a claim about the request's
+actual coverage. Daily archive sources are limited to the three Kline
+families, while monthly archive and REST sources also represent settled
+funding.
+
+The request and its `source_identity` have deterministic JSON-compatible
+serialization. The module contains only value validation and serialization;
+URL resolution, HTTP, archive parsing, persistence, and completeness checks
+remain outside this contract.
+
 ## Test-factory boundary
 
 One-off values stay in the owning test. Deterministic factories reused across
