@@ -1,10 +1,30 @@
 # TraceQuant
 
-TraceQuant is intended to become an auditable research-to-live quantitative
-trading system for cryptocurrency perpetual futures. The current repository is
-the Research MVP foundation: it contains a small, validated Python package and
-the engineering documentation around it. It does not contain a trading system
-or an executable strategy yet.
+TraceQuant is an actively developed open-source project intended to become an
+auditable research-to-live quantitative trading system for cryptocurrency
+perpetual futures. The current repository is the Research MVP foundation: it
+contains a small, validated Python package and the engineering documentation
+around it. It does not contain a trading system or an executable strategy yet.
+
+## LCK: an engineering capability within TraceQuant
+
+While building and maintaining TraceQuant, the project is developing the Local
+Control Kernel (LCK): an engineering capability for making Codex-centered,
+AI-assisted development deterministic, auditable, and human-controlled. LCK
+separates semantic Agent work—understanding, designing, implementing, and
+reviewing—from deterministic lifecycle control such as resolving current
+repository and GitHub state, validating a candidate, and carrying out bounded
+delivery effects.
+
+LCK is part of TraceQuant. It is not an independent product, general Agent
+platform, trading module, or risk authority, and it does not make the current
+repository a trading system. LCK is provider-neutral by design: Codex is a
+primary use case, while other supported Agent providers can use the same
+lifecycle contract. The capability is intended to offer reusable engineering
+value to other open-source projects, but this repository does not claim
+drop-in installation, external adoption, or unsupported portability. See the
+[public LCK overview](docs/guides/LCK-overview.md) for the lifecycle and
+boundaries.
 
 ## Current capability and boundary
 
@@ -301,6 +321,8 @@ backfilled or replayed typed lifecycle receipts.
 
 ## Documentation map
 
+- [LCK overview](docs/guides/LCK-overview.md): public explanation of the LCK
+  engineering capability, lifecycle, responsibilities, and reuse boundaries.
 - [Technical baseline](docs/architecture/technical-baseline.md): current
   implementation facts and explicitly deferred research/trading architecture.
 - [Repository structure](docs/architecture/repository-structure.md): current
@@ -311,8 +333,13 @@ backfilled or replayed typed lifecycle receipts.
   navigation, not proof that planned capabilities are implemented.
 - [Issue workflow](docs/development/issue-workflow.md): repository lifecycle
   semantics for implementation work.
+- [Independent PR Review](docs/development/pr-review.md): fresh Review,
+  remediation, and merge-preflight semantics.
 - [Agent workflow Skills](docs/workflows/agent-skills.md): current workflow
   controls, separate from the business architecture.
+- [LCK v1 Design Charter](docs/workflows/LCK-v1-Design-Charter.md): design
+  baseline and responsibility model; it is not evidence of completed product
+  capability.
 - [WSL2 Codex environment](docs/workflows/wsl2-codex-environment/README.md):
   environment-specific setup and diagnostics.
 
