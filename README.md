@@ -318,5 +318,6 @@ backfilled or replayed typed lifecycle receipts.
 
 ## License
 
-TraceQuant is publicly accessible but is not currently distributed under an
-open-source license. See [LICENSE](LICENSE).
+TraceQuant is distributed under the [Apache License, Version 2.0](LICENSE)
+(SPDX identifier: `Apache-2.0`). This license applies to TraceQuant itself;
+third-party dependencies retain their respective licenses.

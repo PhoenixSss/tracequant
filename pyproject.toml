@@ -7,6 +7,8 @@ name = "tracequant"
 version = "0.1.0"
 description = "An auditable research-to-live quantitative trading system for cryptocurrency perpetual futures."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.13,<3.14"
 dependencies = []
 
