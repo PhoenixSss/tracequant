@@ -14,6 +14,8 @@ from tracequant.data import (
     BinanceArchiveObjectPlan,
     BinanceContractKlineBackfill,
     BinanceContractKlineStatus,
+    RawArtifactNotFoundError,
+    RawArtifactValidationError,
     RawObjectIdentity,
     RawStore,
     plan_binance_contract_kline_archives,
@@ -283,6 +285,11 @@ def test_backfill_contract_klines_publishes_verified_raw_artifact(
         "source_object_coverage_verified",
     )
     assert provenance.acquired_at.tzinfo is not None
+    assert artifact.archive_path.read_bytes() == archive
+    assert (
+        artifact.checksum_response_path.read_bytes()
+        == responses[plan.checksum_url].body
+    )
     assert all(timeout == 2.5 for _, timeout in transport.calls)
 
 
@@ -493,11 +500,33 @@ def test_verified_existing_object_is_reconciled_with_upstream(tmp_path: Path) ->
     plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
     archive = _full_daily_archive(plan, 1709164800000, header=False)
     store = RawStore(tmp_path)
-    first_http = FixtureHttp(_responses(plan.url, archive))
+    first_responses = _responses(plan.url, archive)
+    first_responses[plan.url] = ArchiveHttpResponse(
+        200,
+        archive,
+        {"Content-Type": "application/zip", "Date": "Sat, 01 Mar 2024 00:00:00 GMT"},
+    )
+    first_responses[plan.checksum_url] = ArchiveHttpResponse(
+        200,
+        first_responses[plan.checksum_url].body,
+        {"Content-Type": "text/plain", "Date": "Sat, 01 Mar 2024 00:00:00 GMT"},
+    )
+    first_http = FixtureHttp(first_responses)
     backfill = BinanceContractKlineBackfill(store, http_get=first_http)
     assert backfill.run(InstrumentId("BTCUSDT"), request_range).completed
 
-    current_http = FixtureHttp(_responses(plan.url, archive))
+    current_responses = _responses(plan.url, archive)
+    current_responses[plan.url] = ArchiveHttpResponse(
+        200,
+        archive,
+        {"Content-Type": "application/zip", "Date": "Sun, 02 Mar 2024 00:00:00 GMT"},
+    )
+    current_responses[plan.checksum_url] = ArchiveHttpResponse(
+        200,
+        current_responses[plan.checksum_url].body,
+        {"Content-Type": "text/plain", "Date": "Sun, 02 Mar 2024 00:00:00 GMT"},
+    )
+    current_http = FixtureHttp(current_responses)
     second = BinanceContractKlineBackfill(store, http_get=current_http).run(
         InstrumentId("BTCUSDT"), request_range
     )
@@ -505,6 +534,54 @@ def test_verified_existing_object_is_reconciled_with_upstream(tmp_path: Path) ->
     assert second.completed
     assert second.objects[0].status is BinanceContractKlineStatus.EXISTING
     assert [url for url, _ in current_http.calls] == [plan.checksum_url, plan.url]
+
+
+@pytest.mark.parametrize(
+    ("component", "message"),
+    [
+        ("archive", "upstream archive checksum"),
+        ("checksum", "checksum response digest"),
+    ],
+)
+def test_raw_store_revalidates_persisted_source_bodies(
+    tmp_path: Path, component: str, message: str
+) -> None:
+    request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
+    archive = _full_daily_archive(plan, 1709164800000)
+    responses = _responses(plan.url, archive)
+    store = RawStore(tmp_path)
+
+    BinanceContractKlineBackfill(store, http_get=FixtureHttp(responses)).run(
+        InstrumentId("BTCUSDT"), request_range
+    )
+    artifact = store.read_request(plan.request)
+    source_path = (
+        artifact.archive_path
+        if component == "archive"
+        else artifact.checksum_response_path
+    )
+    source_path.write_bytes(source_path.read_bytes() + b"tampered")
+
+    with pytest.raises(RawArtifactValidationError, match=message):
+        store.read_request(plan.request)
+
+
+def test_raw_store_requires_persisted_source_bodies_for_provenance(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
+    archive = _full_daily_archive(plan, 1709164800000)
+    store = RawStore(tmp_path)
+    BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, archive))
+    ).run(InstrumentId("BTCUSDT"), request_range)
+    artifact = store.read_request(plan.request)
+    artifact.archive_path.unlink()
+
+    with pytest.raises(RawArtifactNotFoundError, match="requires source.zip"):
+        store.read_request(plan.request)
 
 
 def test_upstream_revision_conflicts_without_replacing_existing_artifact(
