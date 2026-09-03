@@ -139,6 +139,24 @@ def test_manifest_contains_complete_source_and_provenance_evidence(
     assert payload["provenance"] is None
 
 
+def test_reader_accepts_schema_one_manifest_without_provenance(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    artifact = store.write(_source_object())
+    legacy_payload = json.loads(artifact.manifest_path.read_text(encoding="utf-8"))
+    legacy_payload["manifest_schema_version"] = 1
+    del legacy_payload["provenance"]
+    artifact.manifest_path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+    restored = store.read(_source_object().identity)
+
+    assert restored.frame.equals(artifact.frame)
+    assert restored.manifest.manifest_schema_version == 1
+    assert restored.manifest.provenance is None
+    assert restored.manifest.to_dict() == legacy_payload
+
+
 def test_raw_parquet_preserves_parsed_source_columns_values_and_dtypes(
     tmp_path: Path,
 ) -> None:
