@@ -117,12 +117,14 @@ flowchart LR
 ### LCK releases and manual adoption
 
 LCK is actively developed within TraceQuant. The [GitHub Releases
-page](https://github.com/PhoenixSss/tracequant/releases) lists the versioned
-LCK previews; select the current supported preview rather than relying on an
-unversioned branch or arbitrary commit. Each supported preview is a
-manifest-backed source snapshot for manual evaluation and adaptation. Before
-adopting one, verify its exact tag, source commit, manifest, archive digest,
-release metadata, and compatibility guidance in the [release
+page](https://github.com/PhoenixSss/tracequant/releases) is the authority for
+whether a named LCK archive has actually been published. The corrected
+`lck-v0.1.0-preview.2` archive is not published yet; until a named Release is
+listed, use the repository-copy path in the [LCK adoption
+guide](docs/guides/LCK-adoption.md) rather than relying on an unversioned
+branch, arbitrary commit, or nonexistent archive. Before adopting a published
+preview, verify its exact tag, source commit, manifest, archive digest, release
+metadata, and compatibility guidance in the [release
 policy](docs/guides/release-policy.md) and [LCK adoption guide](docs/guides/LCK-adoption.md).
 
 For manual evaluation and repository-specific adaptation, see the [LCK

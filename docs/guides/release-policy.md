@@ -1,7 +1,8 @@
 # TraceQuant and LCK release policy
 
-> **Status:** Current release policy and LCK preview record
-> **Current LCK preview:** `lck-v0.1.0-preview.2`
+> **Status:** Current release policy and pre-publication LCK preview record
+> **Published LCK preview:** `lck-v0.1.0-preview.1`
+> **Corrected preview:** `lck-v0.1.0-preview.2` (not yet published)
 > **Last repository-state check:** 2026-09-03
 
 This policy defines how releases of the TraceQuant project and previews of the
@@ -37,12 +38,13 @@ other track's stability claim.
 
 The first LCK preview, [`lck-v0.1.0-preview.1`](https://github.com/PhoenixSss/tracequant/releases/tag/lck-v0.1.0-preview.1),
 was published and remains an immutable historical release. The corrected
-current preview is [`lck-v0.1.0-preview.2`](https://github.com/PhoenixSss/tracequant/releases/tag/lck-v0.1.0-preview.2),
-which supersedes `preview.1` without reusing its tag, source commit, manifest,
-or archive. Preview number `N` increases for another published candidate in
-the same preview series. A stable LCK identity removes the `-preview.N` suffix
-only after the stable criteria in Section 8 are met. A version or tag is never
-reused for a different commit, manifest, or archive digest.
+`lck-v0.1.0-preview.2` identity is planned but has not yet been published. If
+published, it will supersede `preview.1` without reusing its tag, source
+commit, manifest, or archive. Preview number `N` increases for another
+published candidate in the same preview series. A stable LCK identity removes
+the `-preview.N` suffix only after the stable criteria in Section 8 are met. A
+version or tag is never reused for a different commit, manifest, or archive
+digest.
 
 The `version = "0.1.0"` value currently in `pyproject.toml` identifies the
 `tracequant` Python project. It is not automatically the LCK version, and
@@ -51,19 +53,20 @@ preview.
 
 ## 2. Current availability and source-of-truth boundaries
 
-At the state check recorded above, `preview.1` and the corrected `preview.2`
-are distinct GitHub pre-releases. `preview.2` is the current supported LCK
-source archive for manual evaluation and adaptation; `preview.1` remains an
-immutable historical release and is clearly marked as superseded. The
-repository-copy path remains available as an alternative. A GitHub-generated
-source archive for an arbitrary commit, branch, or tag is not by itself an LCK
-release archive.
+At the state check recorded above, `preview.1` is the only published LCK
+pre-release listed. The corrected `preview.2` is planned but not yet
+published, so no supported `preview.2` source archive or Release record exists
+for manual evaluation. The repository-copy path remains available. A
+GitHub-generated source archive for an arbitrary commit, branch, or tag is not
+by itself an LCK release archive.
 
-The live [GitHub Release record](https://github.com/PhoenixSss/tracequant/releases/tag/lck-v0.1.0-preview.2)
-is authoritative for `preview.2`'s exact source commit, included-path
-manifest, manifest digest, archive digest, metadata, checksums, and validation
-records. This policy records the meaning and continuity of those facts; it
-does not silently replace or rewrite the `preview.1` tag or assets.
+The live [GitHub Release record](https://github.com/PhoenixSss/tracequant/releases/tag/lck-v0.1.0-preview.1)
+is authoritative for the published `preview.1` identity and any recorded
+source commit, included-path manifest, digests, metadata, checksums, and
+validation records. When `preview.2` is later published, its own Release
+record will be authoritative for those facts. This policy records the meaning
+and continuity of those facts; it does not silently replace or rewrite the
+`preview.1` tag or assets.
 
 The documents have deliberately different responsibilities:
 
@@ -284,10 +287,10 @@ evidence of those outcomes.
 ## 8. Preview and stable status
 
 The LCK preview series remains **pre-release** and actively evolving.
-`lck-v0.1.0-preview.2` is the current corrected preview and its public
-adoption surface is a fixed source snapshot for manual copying and adaptation,
-not a stable universal interface. `preview.1` remains visible as an immutable
-historical release and is superseded by `preview.2`.
+`lck-v0.1.0-preview.1` is the only published preview and remains an immutable
+historical release. The corrected `lck-v0.1.0-preview.2` is planned but not yet
+published; when published, its adoption surface must be a fixed source
+snapshot for manual copying and adaptation, not a stable universal interface.
 
 An LCK stable release requires, at minimum:
 
