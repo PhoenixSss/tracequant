@@ -46,6 +46,7 @@ __all__ = [
 ]
 
 _LAYOUT_VERSION: Final = "v1"
+_LEGACY_MANIFEST_VERSION: Final = 1
 _MANIFEST_VERSION: Final = 3
 _DATA_FILENAME: Final = "data.parquet"
 _MANIFEST_FILENAME: Final = "manifest.json"
@@ -697,7 +698,7 @@ class RawManifest:
     provenance: RawSourceProvenance | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "manifest_schema_version": self.manifest_schema_version,
             "completed": self.completed,
             "object_identity": self.object_identity.to_dict(),
@@ -711,14 +712,16 @@ class RawManifest:
             "raw_schema_identifier": self.raw_schema_identifier,
             "producer_version": self.producer_version,
             "created_at": format_utc(self.created_at),
-            "provenance": (
-                self.provenance.to_dict() if self.provenance is not None else None
-            ),
         }
+        if self.manifest_schema_version == _MANIFEST_VERSION:
+            payload["provenance"] = (
+                self.provenance.to_dict() if self.provenance is not None else None
+            )
+        return payload
 
     @classmethod
     def from_dict(cls, value: object) -> Self:
-        names = frozenset(
+        common_names = frozenset(
             {
                 "manifest_schema_version",
                 "completed",
@@ -733,15 +736,24 @@ class RawManifest:
                 "raw_schema_identifier",
                 "producer_version",
                 "created_at",
-                "provenance",
             }
         )
-        fields = _exact_mapping(value, fields=names, model="RawManifest")
-        version = fields["manifest_schema_version"]
-        if type(version) is not int or version != _MANIFEST_VERSION:
+        if not isinstance(value, dict):
+            raise RawArtifactValidationError("RawManifest must be a JSON object")
+        version = value.get("manifest_schema_version")
+        if type(version) is not int or version not in {
+            _LEGACY_MANIFEST_VERSION,
+            _MANIFEST_VERSION,
+        }:
             raise RawArtifactValidationError(
                 f"unsupported manifest schema version {version!r}"
             )
+        names = (
+            common_names
+            if version == _LEGACY_MANIFEST_VERSION
+            else common_names | {"provenance"}
+        )
+        fields = _exact_mapping(value, fields=names, model="RawManifest")
         if fields["completed"] is not True:
             raise RawArtifactValidationError("manifest is not completed")
         record_count = fields["record_count"]
@@ -781,7 +793,7 @@ class RawManifest:
             object_identity = RawObjectIdentity.from_dict(fields["object_identity"])
             caller_request_range = TimeRange.from_dict(fields["caller_request_range"])
             actual_record_range = TimeRange.from_dict(fields["actual_record_range"])
-            provenance_value = fields["provenance"]
+            provenance_value = fields.get("provenance")
             provenance = (
                 None
                 if provenance_value is None
