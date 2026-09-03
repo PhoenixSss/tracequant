@@ -250,6 +250,34 @@ def test_verified_existing_object_is_skipped_without_network(tmp_path: Path) -> 
     assert no_network.calls == []
 
 
+def test_incomplete_existing_artifact_is_reported_as_local_failure(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
+    plan = plan_binance_contract_kline_archives(InstrumentId("BTCUSDT"), request_range)[
+        0
+    ]
+    archive = _archive(plan.member_name, [_row(1709164800000)])
+    store = RawStore(tmp_path)
+    incomplete_path = store.path_for(RawObjectIdentity.from_request(plan.request))
+    incomplete_path.mkdir(parents=True)
+    sentinel = incomplete_path / "interrupted-write"
+    sentinel.write_text("preserve", encoding="utf-8")
+
+    result = BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, archive))
+    ).run(InstrumentId("BTCUSDT"), request_range)
+
+    assert result.completed is False
+    assert result.objects[0].status is BinanceContractKlineStatus.LOCAL_FAILURE
+    assert result.objects[0].artifact_path is None
+    assert result.objects[0].detail == (
+        "Raw artifact requires both data.parquet and manifest.json"
+    )
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
+    assert {path.name for path in incomplete_path.iterdir()} == {"interrupted-write"}
+
+
 def test_existing_object_must_cover_the_current_wider_request(tmp_path: Path) -> None:
     narrow_range = _range("2024-02-29T00:00:00", "2024-02-29T00:02:00")
     narrow_plan = plan_binance_contract_kline_archives(
