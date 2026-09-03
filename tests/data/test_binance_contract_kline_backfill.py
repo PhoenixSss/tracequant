@@ -185,6 +185,29 @@ def test_invalid_archive_member_and_row_shape_are_rejected(tmp_path: Path) -> No
     assert result.objects[0].status is BinanceContractKlineStatus.INVALID_CONTENT
 
 
+def test_missing_minute_is_reported_as_coverage_gap_and_not_published(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:03:00")
+    plan = plan_binance_contract_kline_archives(InstrumentId("BTCUSDT"), request_range)[
+        0
+    ]
+    archive = _archive(
+        plan.member_name,
+        [_row(1709164800000), _row(1709164920000)],
+    )
+    store = RawStore(tmp_path)
+
+    result = BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, archive))
+    ).run(InstrumentId("BTCUSDT"), request_range)
+
+    assert result.completed is False
+    assert result.objects[0].status is BinanceContractKlineStatus.COVERAGE_GAP
+    assert result.objects[0].detail == "archive rows contain a missing 1m timestamp"
+    assert not store.path_for(RawObjectIdentity.from_request(plan.request)).exists()
+
+
 def test_cross_object_partial_failure_keeps_published_object_and_is_not_complete(
     tmp_path: Path,
 ) -> None:
@@ -224,4 +247,37 @@ def test_verified_existing_object_is_skipped_without_network(tmp_path: Path) -> 
 
     assert second.completed
     assert second.objects[0].status is BinanceContractKlineStatus.EXISTING
+    assert no_network.calls == []
+
+
+def test_existing_object_must_cover_the_current_wider_request(tmp_path: Path) -> None:
+    narrow_range = _range("2024-02-29T00:00:00", "2024-02-29T00:02:00")
+    narrow_plan = plan_binance_contract_kline_archives(
+        InstrumentId("BTCUSDT"), narrow_range
+    )[0]
+    archive = _archive(
+        narrow_plan.member_name,
+        [_row(1709164800000), _row(1709164860000)],
+    )
+    store = RawStore(tmp_path)
+    first_http = FixtureHttp(_responses(narrow_plan.url, archive))
+
+    first = BinanceContractKlineBackfill(store, http_get=first_http).run(
+        InstrumentId("BTCUSDT"), narrow_range
+    )
+
+    assert first.completed is True
+
+    wider_range = _range("2024-02-29T00:00:00", "2024-02-29T00:03:00")
+    no_network = FixtureHttp({})
+    second = BinanceContractKlineBackfill(store, http_get=no_network).run(
+        InstrumentId("BTCUSDT"), wider_range
+    )
+
+    assert second.completed is False
+    assert second.objects[0].status is BinanceContractKlineStatus.COVERAGE_GAP
+    assert second.objects[0].artifact_path is not None
+    assert second.objects[0].detail == (
+        "archive rows do not cover the caller range within this source object"
+    )
     assert no_network.calls == []
