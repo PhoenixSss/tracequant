@@ -449,6 +449,36 @@ def test_invalid_archive_member_and_row_shape_are_rejected(tmp_path: Path) -> No
     assert result.objects[0].status is BinanceContractKlineStatus.INVALID_CONTENT
 
 
+def test_oversized_numeric_field_is_quarantined_as_invalid_content(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2024-02-29T00:00:00", "2024-03-01T00:00:00")
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
+    oversized_open_time = "1" * 5000
+    row = (
+        f"{oversized_open_time},61000.0,61020.0,60990.0,61010.0,12.5,"
+        f"1709164859999,762500.0,42,6.0,366000.0,0\n"
+    )
+    archive = _archive(plan.member_name, [row])
+    store = RawStore(tmp_path)
+
+    result = BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, archive))
+    ).run(InstrumentId("BTCUSDT"), request_range)
+
+    assert result.completed is False
+    assert result.objects[0].status is BinanceContractKlineStatus.INVALID_CONTENT
+    identity = RawObjectIdentity.from_request(plan.request)
+    assert not store.path_for(identity).exists()
+    record = store.list_acquisition_manifests(identity)[0]
+    assert record.completed is False
+    assert record.status == BinanceContractKlineStatus.INVALID_CONTENT.value
+    assert record.detail == "open_time exceeds signed 64-bit range"
+    record_path = store.acquisition_path_for(identity) / record.record_id
+    assert (record_path / "manifest.json").is_file()
+    assert (record_path / "source.zip").read_bytes() == archive
+
+
 def test_missing_minute_is_reported_as_coverage_gap_and_not_published(
     tmp_path: Path,
 ) -> None:
