@@ -367,7 +367,7 @@ def _validate_decimal(value: str, *, field: str, nonnegative: bool = False) -> N
         raise _InvalidContentError(f"{field} has an invalid numeric value")
 
 
-def _required_record_range(plan: BinanceArchiveObjectPlan) -> TimeRange:
+def _archive_object_range(plan: BinanceArchiveObjectPlan) -> TimeRange:
     boundary = plan.request.archive_object_boundary
     assert boundary is not None
     object_start = _utc_midnight(boundary.period_start)
@@ -377,9 +377,27 @@ def _required_record_range(plan: BinanceArchiveObjectPlan) -> TimeRange:
         else object_start + timedelta(days=1)
     )
     return TimeRange(
-        start=max(plan.request.request_range.start, object_start),
-        end=min(plan.request.request_range.end, object_end),
+        start=object_start,
+        end=object_end,
     )
+
+
+def _required_record_range(plan: BinanceArchiveObjectPlan) -> TimeRange:
+    object_range = _archive_object_range(plan)
+    return TimeRange(
+        start=max(plan.request.request_range.start, object_range.start),
+        end=min(plan.request.request_range.end, object_range.end),
+    )
+
+
+def _validate_complete_object_coverage(
+    plan: BinanceArchiveObjectPlan, actual_range: TimeRange
+) -> None:
+    object_range = _archive_object_range(plan)
+    if actual_range != object_range:
+        raise _CoverageGapError(
+            "archive rows do not cover the complete source object boundary"
+        )
 
 
 def _validate_required_coverage(
@@ -428,16 +446,9 @@ def _parse_archive(
 
     columns: dict[str, list[str | int]] = {name: [] for name in _COLUMNS}
     previous_open: int | None = None
-    boundary = plan.request.archive_object_boundary
-    assert boundary is not None
-    object_start = _utc_midnight(boundary.period_start)
-    object_end = (
-        _utc_midnight(_next_month(boundary.period_start))
-        if boundary.granularity.value == "month"
-        else object_start + timedelta(days=1)
-    )
-    object_start_ms = int(object_start.timestamp() * 1000)
-    object_end_ms = int(object_end.timestamp() * 1000)
+    object_range = _archive_object_range(plan)
+    object_start_ms = int(object_range.start.timestamp() * 1000)
+    object_end_ms = int(object_range.end.timestamp() * 1000)
     for row_number, row in enumerate(parsed_rows, start=1):
         if len(row) != len(_COLUMNS):
             raise _InvalidContentError(f"CSV row {row_number} does not have 12 columns")
@@ -498,6 +509,7 @@ def _parse_archive(
         start=datetime.fromtimestamp(first_open / 1000, tz=UTC),
         end=datetime.fromtimestamp((last_open + _ONE_MINUTE_MS) / 1000, tz=UTC),
     )
+    _validate_complete_object_coverage(plan, actual_range)
     _validate_required_coverage(plan, actual_range)
     return frame, actual_range
 
@@ -548,6 +560,9 @@ class BinanceContractKlineBackfill:
             )
         else:
             try:
+                _validate_complete_object_coverage(
+                    plan, existing.manifest.actual_record_range
+                )
                 _validate_required_coverage(plan, existing.manifest.actual_record_range)
             except _CoverageGapError as error:
                 return BinanceContractKlineObjectResult(

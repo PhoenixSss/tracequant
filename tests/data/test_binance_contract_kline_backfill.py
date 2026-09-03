@@ -23,6 +23,7 @@ HEADER = (
     "open_time,open,high,low,close,volume,close_time,quote_volume,count,"
     "taker_buy_volume,taker_buy_quote_volume,ignore\n"
 )
+ONE_MINUTE_MS = 60_000
 
 
 class FixtureHttp:
@@ -63,6 +64,20 @@ def _row(open_time: int, close: str = "61010.0") -> str:
         f"{open_time},61000.0,61020.0,60990.0,{close},12.5,"
         f"{open_time + 59_999},762500.0,42,6.0,366000.0,0\n"
     )
+
+
+def _full_daily_archive(
+    plan: BinanceArchiveObjectPlan,
+    start_open_time: int,
+    *,
+    first_close: str = "61010.0",
+    second_close: str = "61010.0",
+    header: bool = True,
+) -> bytes:
+    rows = [_row(start_open_time + offset * ONE_MINUTE_MS) for offset in range(24 * 60)]
+    rows[0] = _row(start_open_time, close=first_close)
+    rows[1] = _row(start_open_time + ONE_MINUTE_MS, close=second_close)
+    return _archive(plan.member_name, rows, header=header)
 
 
 def _responses(url: str, archive: bytes) -> dict[str, ArchiveHttpResponse]:
@@ -142,7 +157,7 @@ def test_backfill_preserves_available_daily_object_beside_lower_boundary_gap(
     plans = plan_binance_contract_kline_archives(InstrumentId("BTCUSDT"), request_range)
     assert isinstance(plans[0], BinanceArchiveCoverageGapPlan)
     assert isinstance(plans[1], BinanceArchiveObjectPlan)
-    archive = _archive(plans[1].member_name, [_row(1577750400000)])
+    archive = _full_daily_archive(plans[1], 1577750400000)
     transport = FixtureHttp(_responses(plans[1].url, archive))
 
     result = BinanceContractKlineBackfill(RawStore(tmp_path), http_get=transport).run(
@@ -196,9 +211,10 @@ def test_backfill_contract_klines_publishes_verified_raw_artifact(
 ) -> None:
     request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:02:00")
     plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
-    archive = _archive(
-        plan.member_name,
-        [_row(1709164800000), _row(1709164860000, close="61011.0")],
+    archive = _full_daily_archive(
+        plan,
+        1709164800000,
+        second_close="61011.0",
     )
     transport = FixtureHttp(_responses(plan.url, archive))
     store = RawStore(tmp_path)
@@ -226,8 +242,8 @@ def test_backfill_contract_klines_publishes_verified_raw_artifact(
         "taker_buy_quote_volume",
         "ignore",
     ]
-    assert artifact.frame["close"].to_list() == ["61010.0", "61011.0"]
-    assert artifact.frame["count"].to_list() == [42, 42]
+    assert artifact.frame["close"].head(2).to_list() == ["61010.0", "61011.0"]
+    assert artifact.frame["count"].head(2).to_list() == [42, 42]
     assert artifact.manifest.upstream_checksum == (
         f"sha256:{hashlib.sha256(archive).hexdigest()}"
     )
@@ -251,6 +267,46 @@ def test_checksum_mismatch_does_not_publish_completed_artifact(tmp_path: Path) -
 
     assert result.completed is False
     assert result.objects[0].status is BinanceContractKlineStatus.INVALID_CONTENT
+    assert not store.path_for(RawObjectIdentity.from_request(plan.request)).exists()
+
+
+def test_truncated_daily_archive_is_not_published_as_completed(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:02:00")
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
+    archive = _archive(plan.member_name, [_row(1709164800000)])
+    store = RawStore(tmp_path)
+
+    result = BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, archive))
+    ).run(InstrumentId("BTCUSDT"), request_range)
+
+    assert result.completed is False
+    assert result.objects[0].status is BinanceContractKlineStatus.COVERAGE_GAP
+    assert result.objects[0].detail == (
+        "archive rows do not cover the complete source object boundary"
+    )
+    assert not store.path_for(RawObjectIdentity.from_request(plan.request)).exists()
+
+
+def test_truncated_monthly_archive_is_not_published_as_completed(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2024-02-01T00:00:00", "2024-03-01T00:00:00")
+    plan = _archive_plans(InstrumentId("ETHUSDT"), request_range)[0]
+    archive = _archive(plan.member_name, [_row(1706745600000)])
+    store = RawStore(tmp_path)
+
+    result = BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, archive))
+    ).run(InstrumentId("ETHUSDT"), request_range)
+
+    assert result.completed is False
+    assert result.objects[0].status is BinanceContractKlineStatus.COVERAGE_GAP
+    assert result.objects[0].detail == (
+        "archive rows do not cover the complete source object boundary"
+    )
     assert not store.path_for(RawObjectIdentity.from_request(plan.request)).exists()
 
 
@@ -293,7 +349,7 @@ def test_cross_object_partial_failure_keeps_published_object_and_is_not_complete
 ) -> None:
     request_range = _range("2024-02-29T23:59:00", "2024-03-01T00:01:00")
     plans = _archive_plans(InstrumentId("BTCUSDT"), request_range)
-    first_archive = _archive(plans[0].member_name, [_row(1709251140000)])
+    first_archive = _full_daily_archive(plans[0], 1709164800000)
     transport = FixtureHttp(_responses(plans[0].url, first_archive))
     store = RawStore(tmp_path)
 
@@ -306,7 +362,7 @@ def test_cross_object_partial_failure_keeps_published_object_and_is_not_complete
         BinanceContractKlineStatus.PUBLISHED,
         BinanceContractKlineStatus.NOT_FOUND,
     ]
-    assert store.read_request(plans[0].request).frame.height == 1
+    assert store.read_request(plans[0].request).frame.height == 24 * 60
 
 
 def test_cross_object_incomplete_read_keeps_earlier_published_result(
@@ -314,7 +370,7 @@ def test_cross_object_incomplete_read_keeps_earlier_published_result(
 ) -> None:
     request_range = _range("2024-02-29T23:59:00", "2024-03-01T00:01:00")
     plans = _archive_plans(InstrumentId("BTCUSDT"), request_range)
-    first_archive = _archive(plans[0].member_name, [_row(1709251140000)])
+    first_archive = _full_daily_archive(plans[0], 1709164800000)
     responses = _responses(plans[0].url, first_archive)
 
     def transport(url: str, timeout: float) -> ArchiveHttpResponse:
@@ -333,7 +389,7 @@ def test_cross_object_incomplete_read_keeps_earlier_published_result(
         BinanceContractKlineStatus.PUBLISHED,
         BinanceContractKlineStatus.RETRYABLE_FAILURE,
     ]
-    assert store.read_request(plans[0].request).frame.height == 1
+    assert store.read_request(plans[0].request).frame.height == 24 * 60
 
 
 def test_unsupported_zip_compression_is_reported_as_invalid_content(
@@ -359,7 +415,7 @@ def test_unsupported_zip_compression_is_reported_as_invalid_content(
 def test_verified_existing_object_is_reconciled_with_upstream(tmp_path: Path) -> None:
     request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
     plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
-    archive = _archive(plan.member_name, [_row(1709164800000)], header=False)
+    archive = _full_daily_archive(plan, 1709164800000, header=False)
     store = RawStore(tmp_path)
     first_http = FixtureHttp(_responses(plan.url, archive))
     backfill = BinanceContractKlineBackfill(store, http_get=first_http)
@@ -380,8 +436,8 @@ def test_upstream_revision_conflicts_without_replacing_existing_artifact(
 ) -> None:
     request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
     plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
-    original = _archive(plan.member_name, [_row(1709164800000)])
-    revised = _archive(plan.member_name, [_row(1709164800000, close="62000.0")])
+    original = _full_daily_archive(plan, 1709164800000)
+    revised = _full_daily_archive(plan, 1709164800000, first_close="62000.0")
     store = RawStore(tmp_path)
     first = BinanceContractKlineBackfill(
         store, http_get=FixtureHttp(_responses(plan.url, original))
@@ -399,7 +455,7 @@ def test_upstream_revision_conflicts_without_replacing_existing_artifact(
     assert second.objects[0].artifact_path is None
     preserved = store.read_request(plan.request)
     assert preserved.manifest.project_sha256 == original_checksum
-    assert preserved.frame["close"].to_list() == ["61010.0"]
+    assert preserved.frame["close"].head(2).to_list() == ["61010.0", "61010.0"]
 
 
 def test_incomplete_existing_artifact_is_reported_as_local_failure(
@@ -407,7 +463,7 @@ def test_incomplete_existing_artifact_is_reported_as_local_failure(
 ) -> None:
     request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
     plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
-    archive = _archive(plan.member_name, [_row(1709164800000)])
+    archive = _full_daily_archive(plan, 1709164800000)
     store = RawStore(tmp_path)
     incomplete_path = store.path_for(RawObjectIdentity.from_request(plan.request))
     incomplete_path.mkdir(parents=True)
@@ -428,13 +484,10 @@ def test_incomplete_existing_artifact_is_reported_as_local_failure(
     assert {path.name for path in incomplete_path.iterdir()} == {"interrupted-write"}
 
 
-def test_existing_object_must_cover_the_current_wider_request(tmp_path: Path) -> None:
+def test_existing_object_is_reconciled_when_request_widens(tmp_path: Path) -> None:
     narrow_range = _range("2024-02-29T00:00:00", "2024-02-29T00:02:00")
     narrow_plan = _archive_plans(InstrumentId("BTCUSDT"), narrow_range)[0]
-    archive = _archive(
-        narrow_plan.member_name,
-        [_row(1709164800000), _row(1709164860000)],
-    )
+    archive = _full_daily_archive(narrow_plan, 1709164800000)
     store = RawStore(tmp_path)
     first_http = FixtureHttp(_responses(narrow_plan.url, archive))
 
@@ -445,15 +498,13 @@ def test_existing_object_must_cover_the_current_wider_request(tmp_path: Path) ->
     assert first.completed is True
 
     wider_range = _range("2024-02-29T00:00:00", "2024-02-29T00:03:00")
-    no_network = FixtureHttp({})
-    second = BinanceContractKlineBackfill(store, http_get=no_network).run(
+    current_http = FixtureHttp({})
+    second = BinanceContractKlineBackfill(store, http_get=current_http).run(
         InstrumentId("BTCUSDT"), wider_range
     )
 
     assert second.completed is False
-    assert second.objects[0].status is BinanceContractKlineStatus.COVERAGE_GAP
-    assert second.objects[0].artifact_path is not None
-    assert second.objects[0].detail == (
-        "archive rows do not cover the caller range within this source object"
-    )
-    assert no_network.calls == []
+    assert second.objects[0].status is BinanceContractKlineStatus.NOT_FOUND
+    assert second.objects[0].artifact_path is None
+    assert [url for url, _ in current_http.calls] == [narrow_plan.checksum_url]
+    assert store.read_request(narrow_plan.request).frame.height == 24 * 60
