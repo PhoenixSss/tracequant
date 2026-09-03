@@ -1,5 +1,14 @@
 """Public-history source contracts and immutable local Raw persistence."""
 
+from tracequant.data.binance_contract_kline import (
+    ArchiveHttpResponse,
+    BinanceArchiveObjectPlan,
+    BinanceContractKlineBackfill,
+    BinanceContractKlineObjectResult,
+    BinanceContractKlineRunResult,
+    BinanceContractKlineStatus,
+    plan_binance_contract_kline_archives,
+)
 from tracequant.data.public_history import (
     BinanceArchiveObjectBoundary,
     BinanceArchiveObjectGranularity,
@@ -24,8 +33,14 @@ from tracequant.data.raw_store import (
 )
 
 __all__ = [
+    "ArchiveHttpResponse",
+    "BinanceArchiveObjectPlan",
     "BinanceArchiveObjectBoundary",
     "BinanceArchiveObjectGranularity",
+    "BinanceContractKlineBackfill",
+    "BinanceContractKlineObjectResult",
+    "BinanceContractKlineRunResult",
+    "BinanceContractKlineStatus",
     "BinanceKlineInterval",
     "BinanceMarket",
     "BinancePublicHistoryDataType",
@@ -42,4 +57,5 @@ __all__ = [
     "RawSourceObject",
     "RawStore",
     "RawStoreError",
+    "plan_binance_contract_kline_archives",
 ]
