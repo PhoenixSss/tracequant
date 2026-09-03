@@ -41,7 +41,9 @@ The public foundation consists of:
 5. typed Binance public-history request, source-identity, and archive-boundary
    contracts;
 6. an immutable filesystem Raw store that publishes and revalidates Parquet
-   plus a provenance/checksum manifest;
+   plus a provenance/checksum manifest, and durably records non-completed
+   acquisition outcomes in separate manifests with optional quarantined
+   response bodies;
 7. an explicit Binance USDⓈ-M public-archive backfill adapter for BTCUSDT and
    ETHUSDT 1m contract Klines, including bounded HTTP, upstream checksum
    verification, ZIP/CSV validation, and complete 12-field Raw parsing;

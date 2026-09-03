@@ -197,6 +197,32 @@ def test_backfill_reports_unproven_dates_without_accessing_archive_urls(
     assert transport.calls == []
 
 
+def test_coverage_gap_is_persisted_as_incomplete_acquisition_manifest(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2026-08-30T00:00:00", "2026-09-01T00:00:00")
+    plans = plan_binance_contract_kline_archives(InstrumentId("ETHUSDT"), request_range)
+    assert isinstance(plans[0], BinanceArchiveCoverageGapPlan)
+    store = RawStore(tmp_path)
+
+    result = BinanceContractKlineBackfill(store, http_get=FixtureHttp({})).run(
+        InstrumentId("ETHUSDT"), request_range
+    )
+
+    assert result.objects[0].status is BinanceContractKlineStatus.COVERAGE_GAP
+    record = store.list_acquisition_manifests(
+        RawObjectIdentity.from_request(plans[0].request)
+    )[0]
+    assert record.completed is False
+    assert record.status == BinanceContractKlineStatus.COVERAGE_GAP.value
+    assert record.detail == plans[0].detail
+    assert record.source_url is None
+    assert record.checksum_url is None
+    record_path = store.acquisition_path_for(record.object_identity) / record.record_id
+    assert (record_path / "manifest.json").is_file()
+    assert not store.path_for(record.object_identity).exists()
+
+
 def test_planner_rejects_instrument_outside_the_adapter_supported_set() -> None:
     try:
         plan_binance_contract_kline_archives(
@@ -310,6 +336,23 @@ def test_checksum_mismatch_does_not_publish_completed_artifact(tmp_path: Path) -
     assert result.completed is False
     assert result.objects[0].status is BinanceContractKlineStatus.INVALID_CONTENT
     assert not store.path_for(RawObjectIdentity.from_request(plan.request)).exists()
+
+    record = store.list_acquisition_manifests(
+        RawObjectIdentity.from_request(plan.request)
+    )[0]
+    assert record.completed is False
+    assert record.status == BinanceContractKlineStatus.INVALID_CONTENT.value
+    assert record.detail == "archive SHA-256 does not match upstream checksum"
+    assert record.source_body_sha256 == hashlib.sha256(archive).hexdigest()
+    assert (
+        record.checksum_response_sha256
+        == hashlib.sha256(responses[plan.checksum_url].body).hexdigest()
+    )
+    record_path = store.acquisition_path_for(record.object_identity) / record.record_id
+    assert (record_path / "source.zip").read_bytes() == archive
+    assert (record_path / "source.CHECKSUM").read_bytes() == responses[
+        plan.checksum_url
+    ].body
 
 
 def test_missing_checksum_is_distinct_from_missing_archive(

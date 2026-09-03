@@ -36,10 +36,13 @@ from tracequant.data.public_history import (
     BinancePublicHistorySourceKind,
 )
 from tracequant.data.raw_store import (
+    RawAcquisitionManifest,
+    RawAcquisitionResponse,
     RawArtifact,
     RawArtifactConflictError,
     RawArtifactNotFoundError,
     RawArtifactValidationError,
+    RawObjectIdentity,
     RawSourceObject,
     RawSourceProvenance,
     RawStore,
@@ -140,6 +143,18 @@ class BinanceArchiveCoverageGapPlan:
     boundary: BinanceArchiveObjectBoundary
     detail: str
 
+    @property
+    def request(self) -> BinancePublicHistoryRequest:
+        """Return the source request identity represented by this gap."""
+        return BinancePublicHistoryRequest(
+            instrument=self.instrument,
+            data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+            request_range=self.request_range,
+            source_kind=BinancePublicHistorySourceKind.ARCHIVE_DAILY,
+            interval=BinanceKlineInterval.ONE_MINUTE,
+            archive_object_boundary=self.boundary,
+        )
+
 
 type BinanceContractKlinePlan = BinanceArchiveObjectPlan | BinanceArchiveCoverageGapPlan
 
@@ -183,7 +198,11 @@ class BinanceContractKlineRunResult:
 
 
 class _InvalidContentError(ValueError):
-    pass
+    def __init__(
+        self, message: str, *, response: ArchiveHttpResponse | None = None
+    ) -> None:
+        super().__init__(message)
+        self.response = response
 
 
 class _CoverageGapError(ValueError):
@@ -191,7 +210,16 @@ class _CoverageGapError(ValueError):
 
 
 class _RetryableDownloadError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        resource: str,
+        response: ArchiveHttpResponse | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.resource = resource
+        self.response = response
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,9 +230,16 @@ class _DownloadedResponse:
 
 
 class _DownloadNotFoundError(FileNotFoundError):
-    def __init__(self, url: str, *, resource: str) -> None:
+    def __init__(
+        self,
+        url: str,
+        *,
+        resource: str,
+        response: ArchiveHttpResponse | None = None,
+    ) -> None:
         super().__init__(url)
         self.resource = resource
+        self.response = response
 
 
 def _next_month(value: date) -> date:
@@ -325,8 +360,8 @@ def _default_http_get(url: str, timeout: float) -> ArchiveHttpResponse:
             body=error.read(4096),
             headers=dict(error.headers.items()) if error.headers is not None else {},
         )
-    except (TimeoutError, urllib.error.URLError) as error:
-        raise _RetryableDownloadError(str(error)) from error
+    except (TimeoutError, urllib.error.URLError):
+        raise
 
 
 def _download(
@@ -346,15 +381,21 @@ def _download(
         OSError,
         http.client.HTTPException,
     ) as error:
-        raise _RetryableDownloadError(str(error)) from error
+        raise _RetryableDownloadError(str(error), resource=resource) from error
     if response.status == 404:
-        raise _DownloadNotFoundError(url, resource=resource)
+        raise _DownloadNotFoundError(url, resource=resource, response=response)
     if response.status == 429 or 500 <= response.status <= 599:
-        raise _RetryableDownloadError(f"HTTP {response.status} for {url}")
+        raise _RetryableDownloadError(
+            f"HTTP {response.status} for {url}",
+            resource=resource,
+            response=response,
+        )
     if response.status < 200 or response.status >= 300:
-        raise _InvalidContentError(f"unexpected HTTP {response.status} for {url}")
+        raise _InvalidContentError(
+            f"unexpected HTTP {response.status} for {url}", response=response
+        )
     if not response.body:
-        raise _InvalidContentError(f"empty response for {url}")
+        raise _InvalidContentError(f"empty response for {url}", response=response)
     return _DownloadedResponse(
         body=response.body,
         status=response.status,
@@ -569,12 +610,77 @@ class BinanceContractKlineBackfill:
             request_range=request_range, objects=results
         )
 
+    @staticmethod
+    def _to_raw_response(
+        response: ArchiveHttpResponse | _DownloadedResponse | None,
+    ) -> RawAcquisitionResponse | None:
+        if response is None:
+            return None
+        return RawAcquisitionResponse(
+            status=response.status,
+            headers=response.headers,
+            body=response.body,
+        )
+
+    def _failure_result(
+        self,
+        plan: BinanceContractKlinePlan,
+        status: BinanceContractKlineStatus,
+        detail: str,
+        *,
+        artifact_path: Path | None = None,
+        source_response: RawAcquisitionResponse | None = None,
+        checksum_response: RawAcquisitionResponse | None = None,
+    ) -> BinanceContractKlineObjectResult:
+        request = plan.request
+        manifest = RawAcquisitionManifest(
+            manifest_schema_version=1,
+            completed=False,
+            object_identity=RawObjectIdentity.from_request(request),
+            caller_request_range=request.request_range,
+            status=status.value,
+            detail=detail,
+            recorded_at=self._clock(),
+            source_url=plan.url if isinstance(plan, BinanceArchiveObjectPlan) else None,
+            checksum_url=(
+                plan.checksum_url
+                if isinstance(plan, BinanceArchiveObjectPlan)
+                else None
+            ),
+            source_http_status=(
+                source_response.status if source_response is not None else None
+            ),
+            source_http_headers=(
+                source_response.headers if source_response is not None else {}
+            ),
+            source_body_sha256=(
+                source_response.body_sha256 if source_response is not None else None
+            ),
+            checksum_http_status=(
+                checksum_response.status if checksum_response is not None else None
+            ),
+            checksum_http_headers=(
+                checksum_response.headers if checksum_response is not None else {}
+            ),
+            checksum_response_sha256=(
+                checksum_response.body_sha256 if checksum_response is not None else None
+            ),
+        )
+        self._store.write_acquisition_manifest(
+            manifest,
+            source_response=source_response,
+            checksum_response=checksum_response,
+        )
+        return BinanceContractKlineObjectResult(
+            plan, status, artifact_path=artifact_path, detail=detail
+        )
+
     def _process(
         self, plan: BinanceContractKlinePlan
     ) -> BinanceContractKlineObjectResult:
         if isinstance(plan, BinanceArchiveCoverageGapPlan):
-            return BinanceContractKlineObjectResult(
-                plan, BinanceContractKlineStatus.COVERAGE_GAP, detail=plan.detail
+            return self._failure_result(
+                plan, BinanceContractKlineStatus.COVERAGE_GAP, plan.detail
             )
 
         existing: RawArtifact | None = None
@@ -583,8 +689,8 @@ class BinanceContractKlineBackfill:
         except RawArtifactNotFoundError:
             pass
         except (RawArtifactValidationError, OSError) as error:
-            return BinanceContractKlineObjectResult(
-                plan, BinanceContractKlineStatus.LOCAL_FAILURE, detail=str(error)
+            return self._failure_result(
+                plan, BinanceContractKlineStatus.LOCAL_FAILURE, str(error)
             )
         else:
             try:
@@ -593,13 +699,18 @@ class BinanceContractKlineBackfill:
                 )
                 _validate_required_coverage(plan, existing.manifest.actual_record_range)
             except _CoverageGapError as error:
-                return BinanceContractKlineObjectResult(
+                return self._failure_result(
                     plan,
                     BinanceContractKlineStatus.COVERAGE_GAP,
+                    str(error),
                     artifact_path=existing.path,
-                    detail=str(error),
                 )
 
+        checksum_payload: _DownloadedResponse | None = None
+        archive_payload: _DownloadedResponse | None = None
+        checksum_response: RawAcquisitionResponse | None = None
+        archive_response: RawAcquisitionResponse | None = None
+        resource = "checksum"
         try:
             checksum_payload = _download(
                 self._http_get,
@@ -610,6 +721,7 @@ class BinanceContractKlineBackfill:
             declared = _declared_checksum(
                 checksum_payload.body, plan.url.rsplit("/", 1)[-1]
             )
+            resource = "archive"
             archive_payload = _download(
                 self._http_get,
                 plan.url,
@@ -662,30 +774,84 @@ class BinanceContractKlineBackfill:
                 if error.resource == "checksum"
                 else BinanceContractKlineStatus.NOT_FOUND
             )
-            return BinanceContractKlineObjectResult(plan, status, detail=str(error))
+            if error.resource == "checksum":
+                checksum_response = self._to_raw_response(error.response)
+            else:
+                archive_response = self._to_raw_response(error.response)
+            return self._failure_result(
+                plan,
+                status,
+                str(error),
+                source_response=self._to_raw_response(archive_payload)
+                or archive_response,
+                checksum_response=self._to_raw_response(checksum_payload)
+                or checksum_response,
+            )
         except _RetryableDownloadError as error:
-            return BinanceContractKlineObjectResult(
-                plan, BinanceContractKlineStatus.RETRYABLE_FAILURE, detail=str(error)
+            if error.resource == "checksum":
+                checksum_response = self._to_raw_response(error.response)
+            else:
+                archive_response = self._to_raw_response(error.response)
+            return self._failure_result(
+                plan,
+                BinanceContractKlineStatus.RETRYABLE_FAILURE,
+                str(error),
+                source_response=self._to_raw_response(archive_payload)
+                or archive_response,
+                checksum_response=self._to_raw_response(checksum_payload)
+                or checksum_response,
             )
         except _CoverageGapError as error:
-            return BinanceContractKlineObjectResult(
-                plan, BinanceContractKlineStatus.COVERAGE_GAP, detail=str(error)
+            return self._failure_result(
+                plan,
+                BinanceContractKlineStatus.COVERAGE_GAP,
+                str(error),
+                source_response=self._to_raw_response(archive_payload),
+                checksum_response=self._to_raw_response(checksum_payload),
             )
         except (csv.Error, _InvalidContentError) as error:
-            return BinanceContractKlineObjectResult(
-                plan, BinanceContractKlineStatus.INVALID_CONTENT, detail=str(error)
+            response = (
+                error.response if isinstance(error, _InvalidContentError) else None
+            )
+            if response is not None:
+                if resource == "checksum" and checksum_payload is None:
+                    checksum_payload = _DownloadedResponse(
+                        body=response.body,
+                        status=response.status,
+                        headers=response.headers,
+                    )
+                elif resource == "archive" and archive_payload is None:
+                    archive_payload = _DownloadedResponse(
+                        body=response.body,
+                        status=response.status,
+                        headers=response.headers,
+                    )
+            return self._failure_result(
+                plan,
+                BinanceContractKlineStatus.INVALID_CONTENT,
+                str(error),
+                source_response=self._to_raw_response(archive_payload),
+                checksum_response=self._to_raw_response(checksum_payload),
             )
         except RawArtifactConflictError as error:
-            return BinanceContractKlineObjectResult(
-                plan, BinanceContractKlineStatus.CONFLICT, detail=str(error)
+            return self._failure_result(
+                plan,
+                BinanceContractKlineStatus.CONFLICT,
+                str(error),
+                source_response=self._to_raw_response(archive_payload),
+                checksum_response=self._to_raw_response(checksum_payload),
             )
         except (
             RawArtifactNotFoundError,
             RawArtifactValidationError,
             OSError,
         ) as error:
-            return BinanceContractKlineObjectResult(
-                plan, BinanceContractKlineStatus.LOCAL_FAILURE, detail=str(error)
+            return self._failure_result(
+                plan,
+                BinanceContractKlineStatus.LOCAL_FAILURE,
+                str(error),
+                source_response=self._to_raw_response(archive_payload),
+                checksum_response=self._to_raw_response(checksum_payload),
             )
         status = (
             BinanceContractKlineStatus.EXISTING

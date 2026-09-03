@@ -22,6 +22,8 @@ from tracequant.data.public_history import (
     PublicHistoryContractError,
 )
 from tracequant.data.raw_store import (
+    RawAcquisitionManifest,
+    RawAcquisitionResponse,
     RawArtifact,
     RawArtifactConflictError,
     RawArtifactNotFoundError,
@@ -55,6 +57,8 @@ __all__ = [
     "RawArtifactConflictError",
     "RawArtifactNotFoundError",
     "RawArtifactValidationError",
+    "RawAcquisitionManifest",
+    "RawAcquisitionResponse",
     "RawManifest",
     "RawObjectIdentity",
     "RawSourceProvenance",
