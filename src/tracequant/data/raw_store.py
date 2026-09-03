@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, Self
 
 import polars as pl
@@ -35,13 +36,14 @@ __all__ = [
     "RawArtifactValidationError",
     "RawManifest",
     "RawObjectIdentity",
+    "RawSourceProvenance",
     "RawSourceObject",
     "RawStore",
     "RawStoreError",
 ]
 
 _LAYOUT_VERSION: Final = "v1"
-_MANIFEST_VERSION: Final = 1
+_MANIFEST_VERSION: Final = 2
 _DATA_FILENAME: Final = "data.parquet"
 _MANIFEST_FILENAME: Final = "manifest.json"
 
@@ -103,6 +105,200 @@ def _require_string(value: object, *, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise RawArtifactValidationError(f"{field} must be a non-empty string")
     return value
+
+
+def _require_sha256(value: object, *, field: str) -> str:
+    digest = _require_string(value, field=field)
+    if len(digest) != 64 or any(
+        character not in "0123456789abcdef" for character in digest
+    ):
+        raise RawArtifactValidationError(f"{field} must be a lowercase SHA-256 digest")
+    return digest
+
+
+def _normalize_headers(value: object, *, field: str) -> Mapping[str, str]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{field} must be a mapping")
+    headers: dict[str, str] = {}
+    for name, header_value in value.items():
+        if not isinstance(name, str) or not name:
+            raise TypeError(f"{field} names must be non-empty strings")
+        if not isinstance(header_value, str):
+            raise TypeError(f"{field} values must be strings")
+        headers[name] = header_value
+    return MappingProxyType(headers)
+
+
+def _require_http_status(value: object, *, field: str) -> int:
+    if type(value) is not int or not 100 <= value <= 599:
+        raise RawArtifactValidationError(f"{field} must be an HTTP status code")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class RawSourceProvenance:
+    """Immutable acquisition evidence retained with one Raw source object."""
+
+    object_key: str
+    source_url: str
+    acquired_at: datetime
+    source_http_status: int
+    source_http_headers: Mapping[str, str]
+    checksum_url: str
+    checksum_http_status: int
+    checksum_http_headers: Mapping[str, str]
+    checksum_response_sha256: str
+    archive_sha256: str
+    csv_member: str
+    validation_evidence: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        for field in (
+            "object_key",
+            "source_url",
+            "checksum_url",
+            "csv_member",
+        ):
+            value = getattr(self, field)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{field} must be a non-empty string")
+        if not isinstance(self.acquired_at, datetime):
+            raise TypeError("acquired_at must be a datetime")
+        try:
+            acquired_at = to_utc(self.acquired_at)
+        except ValueError as error:
+            raise ValueError("acquired_at must be timezone-aware") from error
+        object.__setattr__(self, "acquired_at", acquired_at)
+        for field in ("source_http_status", "checksum_http_status"):
+            status = getattr(self, field)
+            if type(status) is not int or not 100 <= status <= 599:
+                raise ValueError(f"{field} must be an HTTP status code")
+        for field in ("source_http_headers", "checksum_http_headers"):
+            object.__setattr__(
+                self,
+                field,
+                _normalize_headers(getattr(self, field), field=field),
+            )
+        for field in ("checksum_response_sha256", "archive_sha256"):
+            digest = getattr(self, field)
+            if (
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(character not in "0123456789abcdef" for character in digest)
+            ):
+                raise ValueError(f"{field} must be a lowercase SHA-256 digest")
+        if isinstance(self.validation_evidence, str):
+            raise TypeError("validation_evidence must be a sequence of strings")
+        try:
+            evidence = tuple(self.validation_evidence)
+        except TypeError as error:
+            raise TypeError(
+                "validation_evidence must be a sequence of strings"
+            ) from error
+        if not evidence or any(
+            not isinstance(item, str) or not item for item in evidence
+        ):
+            raise ValueError("validation_evidence must contain non-empty strings")
+        if len(set(evidence)) != len(evidence):
+            raise ValueError("validation_evidence must not contain duplicates")
+        object.__setattr__(self, "validation_evidence", evidence)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "object_key": self.object_key,
+            "source_url": self.source_url,
+            "acquired_at": format_utc(self.acquired_at),
+            "source_http_status": self.source_http_status,
+            "source_http_headers": dict(self.source_http_headers),
+            "checksum_url": self.checksum_url,
+            "checksum_http_status": self.checksum_http_status,
+            "checksum_http_headers": dict(self.checksum_http_headers),
+            "checksum_response_sha256": self.checksum_response_sha256,
+            "archive_sha256": self.archive_sha256,
+            "csv_member": self.csv_member,
+            "validation_evidence": list(self.validation_evidence),
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> Self:
+        fields = _exact_mapping(
+            value,
+            fields=frozenset(
+                {
+                    "object_key",
+                    "source_url",
+                    "acquired_at",
+                    "source_http_status",
+                    "source_http_headers",
+                    "checksum_url",
+                    "checksum_http_status",
+                    "checksum_http_headers",
+                    "checksum_response_sha256",
+                    "archive_sha256",
+                    "csv_member",
+                    "validation_evidence",
+                }
+            ),
+            model="RawSourceProvenance",
+        )
+        try:
+            acquired_at = parse_utc(
+                _require_string(fields["acquired_at"], field="acquired_at")
+            )
+            source_http_headers = _normalize_headers(
+                fields["source_http_headers"], field="source_http_headers"
+            )
+            checksum_http_headers = _normalize_headers(
+                fields["checksum_http_headers"], field="checksum_http_headers"
+            )
+            raw_evidence = fields["validation_evidence"]
+            if isinstance(raw_evidence, str) or not isinstance(raw_evidence, list):
+                raise TypeError("validation_evidence must be a list of strings")
+            if any(not isinstance(item, str) for item in raw_evidence):
+                raise TypeError("validation_evidence must be a list of strings")
+            validation_evidence: tuple[str, ...] = tuple(raw_evidence)
+        except (TypeError, ValueError) as error:
+            raise RawArtifactValidationError(
+                "provenance contains invalid timestamp, headers, or validation evidence"
+            ) from error
+        try:
+            return cls(
+                object_key=_require_string(fields["object_key"], field="object_key"),
+                source_url=_require_string(fields["source_url"], field="source_url"),
+                acquired_at=acquired_at,
+                source_http_status=_require_http_status(
+                    fields["source_http_status"], field="source_http_status"
+                ),
+                source_http_headers=source_http_headers,
+                checksum_url=_require_string(
+                    fields["checksum_url"], field="checksum_url"
+                ),
+                checksum_http_status=_require_http_status(
+                    fields["checksum_http_status"], field="checksum_http_status"
+                ),
+                checksum_http_headers=checksum_http_headers,
+                checksum_response_sha256=_require_sha256(
+                    fields["checksum_response_sha256"],
+                    field="checksum_response_sha256",
+                ),
+                archive_sha256=_require_sha256(
+                    fields["archive_sha256"], field="archive_sha256"
+                ),
+                csv_member=_require_string(fields["csv_member"], field="csv_member"),
+                validation_evidence=validation_evidence,
+            )
+        except (TypeError, ValueError) as error:
+            raise RawArtifactValidationError(
+                "provenance contains invalid acquisition evidence"
+            ) from error
+
+    def matches_except_acquired_at(self, other: object) -> bool:
+        """Compare stable evidence while ignoring the new acquisition time."""
+        if not isinstance(other, RawSourceProvenance):
+            return False
+        return self.to_dict() | {"acquired_at": None} == (
+            other.to_dict() | {"acquired_at": None}
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +383,7 @@ class RawSourceObject:
     producer_version: str
     upstream_checksum: str | None = None
     upstream_revision: str | None = None
+    provenance: RawSourceProvenance | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.request, BinancePublicHistoryRequest):
@@ -203,6 +400,10 @@ class RawSourceObject:
             value = getattr(self, field)
             if value is not None and (not isinstance(value, str) or not value):
                 raise ValueError(f"{field} must be None or a non-empty string")
+        if self.provenance is not None and not isinstance(
+            self.provenance, RawSourceProvenance
+        ):
+            raise TypeError("provenance must be a RawSourceProvenance or None")
 
     @property
     def identity(self) -> RawObjectIdentity:
@@ -226,6 +427,7 @@ class RawManifest:
     raw_schema_identifier: str
     producer_version: str
     created_at: datetime
+    provenance: RawSourceProvenance | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -242,6 +444,9 @@ class RawManifest:
             "raw_schema_identifier": self.raw_schema_identifier,
             "producer_version": self.producer_version,
             "created_at": format_utc(self.created_at),
+            "provenance": (
+                self.provenance.to_dict() if self.provenance is not None else None
+            ),
         }
 
     @classmethod
@@ -261,6 +466,7 @@ class RawManifest:
                 "raw_schema_identifier",
                 "producer_version",
                 "created_at",
+                "provenance",
             }
         )
         fields = _exact_mapping(value, fields=names, model="RawManifest")
@@ -308,6 +514,12 @@ class RawManifest:
             object_identity = RawObjectIdentity.from_dict(fields["object_identity"])
             caller_request_range = TimeRange.from_dict(fields["caller_request_range"])
             actual_record_range = TimeRange.from_dict(fields["actual_record_range"])
+            provenance_value = fields["provenance"]
+            provenance = (
+                None
+                if provenance_value is None
+                else RawSourceProvenance.from_dict(provenance_value)
+            )
         except (TypeError, ValueError) as error:
             raise RawArtifactValidationError(
                 "manifest contains invalid typed identity or UTC range fields"
@@ -330,6 +542,7 @@ class RawManifest:
                 fields["producer_version"], field="producer_version"
             ),
             created_at=created_at,
+            provenance=provenance,
         )
 
 
@@ -423,6 +636,7 @@ class RawStore:
                 raw_schema_identifier=source_object.raw_schema_identifier,
                 producer_version=source_object.producer_version,
                 created_at=created_at,
+                provenance=source_object.provenance,
             )
             manifest_path = temporary_path / _MANIFEST_FILENAME
             manifest_path.write_text(
@@ -479,6 +693,19 @@ class RawStore:
             getattr(existing.manifest, field) != getattr(candidate_manifest, field)
             for field in comparable
         ):
+            raise RawArtifactConflictError(
+                f"Raw identity {candidate_manifest.object_identity.object_id} "
+                "already exists with different content or provenance"
+            )
+        existing_provenance = existing.manifest.provenance
+        candidate_provenance = candidate_manifest.provenance
+        if existing_provenance is None or candidate_provenance is None:
+            provenance_matches = existing_provenance is candidate_provenance
+        else:
+            provenance_matches = existing_provenance.matches_except_acquired_at(
+                candidate_provenance
+            )
+        if not provenance_matches:
             raise RawArtifactConflictError(
                 f"Raw identity {candidate_manifest.object_identity.object_id} "
                 "already exists with different content or provenance"

@@ -289,8 +289,8 @@ UTC utilities, initial domain models, and test fixtures are covered in the
 - The shared fixtures cover only the initial domain models. They do not model
   exchange responses, missing or duplicated market data, fills, accounts, or
   production state.
-- The current repository does not provide database storage, raw/canonical data
-  layers, factors, labels, backtesting, model training, execution, risk
+- The current repository does not provide database storage, a canonical data
+  layer, factors, labels, backtesting, model training, execution, risk
   decisions, monitoring, or multi-exchange adapters. Those are future Issues,
   not available capabilities.
 - Documentation and Agent workflow controls have separate responsibilities.
