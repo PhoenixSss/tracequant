@@ -1,4 +1,4 @@
-"""Typed public-history contracts for the first Binance USDⓈ-M sources."""
+"""Public-history source contracts and immutable local Raw persistence."""
 
 from tracequant.data.public_history import (
     BinanceArchiveObjectBoundary,
@@ -11,6 +11,17 @@ from tracequant.data.public_history import (
     BinancePublicHistorySourceKind,
     PublicHistoryContractError,
 )
+from tracequant.data.raw_store import (
+    RawArtifact,
+    RawArtifactConflictError,
+    RawArtifactNotFoundError,
+    RawArtifactValidationError,
+    RawManifest,
+    RawObjectIdentity,
+    RawSourceObject,
+    RawStore,
+    RawStoreError,
+)
 
 __all__ = [
     "BinanceArchiveObjectBoundary",
@@ -22,4 +33,13 @@ __all__ = [
     "BinancePublicHistorySourceIdentity",
     "BinancePublicHistorySourceKind",
     "PublicHistoryContractError",
+    "RawArtifact",
+    "RawArtifactConflictError",
+    "RawArtifactNotFoundError",
+    "RawArtifactValidationError",
+    "RawManifest",
+    "RawObjectIdentity",
+    "RawSourceObject",
+    "RawStore",
+    "RawStoreError",
 ]
