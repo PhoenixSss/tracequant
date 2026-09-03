@@ -6,6 +6,8 @@ from pathlib import Path
 
 from tracequant.data import (
     ArchiveHttpResponse,
+    BinanceArchiveCoverageGapPlan,
+    BinanceArchiveObjectPlan,
     BinanceContractKlineBackfill,
     BinanceContractKlineStatus,
     RawObjectIdentity,
@@ -37,6 +39,14 @@ def _range(start: str, end: str) -> TimeRange:
     )
 
 
+def _archive_plans(
+    instrument: InstrumentId, request_range: TimeRange
+) -> tuple[BinanceArchiveObjectPlan, ...]:
+    plans = plan_binance_contract_kline_archives(instrument, request_range)
+    assert all(isinstance(plan, BinanceArchiveObjectPlan) for plan in plans)
+    return tuple(plan for plan in plans if isinstance(plan, BinanceArchiveObjectPlan))
+
+
 def _archive(member: str, rows: list[str], *, header: bool = True) -> bytes:
     payload = ((HEADER if header else "") + "".join(rows)).encode()
     output = io.BytesIO()
@@ -64,7 +74,7 @@ def _responses(url: str, archive: bytes) -> dict[str, ArchiveHttpResponse]:
 
 
 def test_planner_uses_monthly_objects_for_complete_months_and_daily_edges() -> None:
-    plans = plan_binance_contract_kline_archives(
+    plans = _archive_plans(
         InstrumentId("ETHUSDT"),
         _range("2024-01-31T23:30:00", "2024-03-01T00:30:00"),
     )
@@ -93,23 +103,96 @@ def test_planner_uses_monthly_objects_for_complete_months_and_daily_edges() -> N
     )
 
 
-def test_planner_does_not_infer_monthly_availability_after_research_cutoff() -> None:
+def test_planner_uses_only_daily_objects_proven_at_publication_boundary() -> None:
     plans = plan_binance_contract_kline_archives(
         InstrumentId("BTCUSDT"),
         _range("2026-08-01T00:00:00", "2026-09-01T00:00:00"),
     )
 
     assert len(plans) == 31
-    assert {plan.request.source_kind.value for plan in plans} == {"archive_daily"}
+    assert all(isinstance(plan, BinanceArchiveObjectPlan) for plan in plans[:29])
+    assert all(
+        plan.request.source_kind.value == "archive_daily"
+        for plan in plans[:29]
+        if isinstance(plan, BinanceArchiveObjectPlan)
+    )
+    assert all(isinstance(plan, BinanceArchiveCoverageGapPlan) for plan in plans[29:])
+
+
+def test_planner_uses_daily_lower_boundary_and_marks_earlier_days_as_gaps() -> None:
+    plans = plan_binance_contract_kline_archives(
+        InstrumentId("BTCUSDT"),
+        _range("2019-12-01T00:00:00", "2020-01-01T00:00:00"),
+    )
+
+    assert len(plans) == 31
+    assert all(isinstance(plan, BinanceArchiveCoverageGapPlan) for plan in plans[:30])
+    assert isinstance(plans[-1], BinanceArchiveObjectPlan)
+    assert plans[-1].request.source_kind.value == "archive_daily"
+    assert plans[-1].object_key.endswith("BTCUSDT-1m-2019-12-31.zip")
+
+
+def test_backfill_preserves_available_daily_object_beside_lower_boundary_gap(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2019-12-30T23:59:00", "2019-12-31T00:01:00")
+    plans = plan_binance_contract_kline_archives(InstrumentId("BTCUSDT"), request_range)
+    assert isinstance(plans[0], BinanceArchiveCoverageGapPlan)
+    assert isinstance(plans[1], BinanceArchiveObjectPlan)
+    archive = _archive(plans[1].member_name, [_row(1577750400000)])
+    transport = FixtureHttp(_responses(plans[1].url, archive))
+
+    result = BinanceContractKlineBackfill(RawStore(tmp_path), http_get=transport).run(
+        InstrumentId("BTCUSDT"), request_range
+    )
+
+    assert [item.status for item in result.objects] == [
+        BinanceContractKlineStatus.COVERAGE_GAP,
+        BinanceContractKlineStatus.PUBLISHED,
+    ]
+    assert [url for url, _ in transport.calls] == [
+        plans[1].checksum_url,
+        plans[1].url,
+    ]
+
+
+def test_backfill_reports_unproven_dates_without_accessing_archive_urls(
+    tmp_path: Path,
+) -> None:
+    transport = FixtureHttp({})
+
+    result = BinanceContractKlineBackfill(RawStore(tmp_path), http_get=transport).run(
+        InstrumentId("ETHUSDT"),
+        _range("2026-08-30T00:00:00", "2026-09-01T00:00:00"),
+    )
+
+    assert result.completed is False
+    assert [item.status for item in result.objects] == [
+        BinanceContractKlineStatus.COVERAGE_GAP,
+        BinanceContractKlineStatus.COVERAGE_GAP,
+    ]
+    assert transport.calls == []
+
+
+def test_planner_rejects_instrument_outside_the_adapter_supported_set() -> None:
+    try:
+        plan_binance_contract_kline_archives(
+            InstrumentId("BTCUSDC"),
+            _range("2024-01-04T00:00:00", "2024-01-05T00:00:00"),
+        )
+    except ValueError as error:
+        assert str(error) == (
+            "instrument BTCUSDC has no frozen contract-Kline archive coverage"
+        )
+    else:
+        raise AssertionError("BTCUSDC must remain outside this adapter's scope")
 
 
 def test_backfill_contract_klines_publishes_verified_raw_artifact(
     tmp_path: Path,
 ) -> None:
     request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:02:00")
-    plan = plan_binance_contract_kline_archives(InstrumentId("BTCUSDT"), request_range)[
-        0
-    ]
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
     archive = _archive(
         plan.member_name,
         [_row(1709164800000), _row(1709164860000, close="61011.0")],
@@ -151,9 +234,7 @@ def test_backfill_contract_klines_publishes_verified_raw_artifact(
 
 def test_checksum_mismatch_does_not_publish_completed_artifact(tmp_path: Path) -> None:
     request_range = _range("2024-02-29T00:00:00", "2024-03-01T00:00:00")
-    plan = plan_binance_contract_kline_archives(InstrumentId("BTCUSDT"), request_range)[
-        0
-    ]
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
     archive = _archive(plan.member_name, [_row(1709164800000)])
     responses = _responses(plan.url, archive)
     responses[plan.checksum_url] = ArchiveHttpResponse(
@@ -172,9 +253,7 @@ def test_checksum_mismatch_does_not_publish_completed_artifact(tmp_path: Path) -
 
 def test_invalid_archive_member_and_row_shape_are_rejected(tmp_path: Path) -> None:
     request_range = _range("2024-02-29T00:00:00", "2024-03-01T00:00:00")
-    plan = plan_binance_contract_kline_archives(InstrumentId("ETHUSDT"), request_range)[
-        0
-    ]
+    plan = _archive_plans(InstrumentId("ETHUSDT"), request_range)[0]
     malformed = _archive("unexpected.csv", ["1,2,3\n"])
 
     result = BinanceContractKlineBackfill(
@@ -189,9 +268,7 @@ def test_missing_minute_is_reported_as_coverage_gap_and_not_published(
     tmp_path: Path,
 ) -> None:
     request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:03:00")
-    plan = plan_binance_contract_kline_archives(InstrumentId("BTCUSDT"), request_range)[
-        0
-    ]
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
     archive = _archive(
         plan.member_name,
         [_row(1709164800000), _row(1709164920000)],
@@ -212,7 +289,7 @@ def test_cross_object_partial_failure_keeps_published_object_and_is_not_complete
     tmp_path: Path,
 ) -> None:
     request_range = _range("2024-02-29T23:59:00", "2024-03-01T00:01:00")
-    plans = plan_binance_contract_kline_archives(InstrumentId("BTCUSDT"), request_range)
+    plans = _archive_plans(InstrumentId("BTCUSDT"), request_range)
     first_archive = _archive(plans[0].member_name, [_row(1709251140000)])
     transport = FixtureHttp(_responses(plans[0].url, first_archive))
     store = RawStore(tmp_path)
@@ -231,9 +308,7 @@ def test_cross_object_partial_failure_keeps_published_object_and_is_not_complete
 
 def test_verified_existing_object_is_reconciled_with_upstream(tmp_path: Path) -> None:
     request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
-    plan = plan_binance_contract_kline_archives(InstrumentId("BTCUSDT"), request_range)[
-        0
-    ]
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
     archive = _archive(plan.member_name, [_row(1709164800000)], header=False)
     store = RawStore(tmp_path)
     first_http = FixtureHttp(_responses(plan.url, archive))
@@ -254,9 +329,7 @@ def test_upstream_revision_conflicts_without_replacing_existing_artifact(
     tmp_path: Path,
 ) -> None:
     request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
-    plan = plan_binance_contract_kline_archives(InstrumentId("BTCUSDT"), request_range)[
-        0
-    ]
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
     original = _archive(plan.member_name, [_row(1709164800000)])
     revised = _archive(plan.member_name, [_row(1709164800000, close="62000.0")])
     store = RawStore(tmp_path)
@@ -283,9 +356,7 @@ def test_incomplete_existing_artifact_is_reported_as_local_failure(
     tmp_path: Path,
 ) -> None:
     request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
-    plan = plan_binance_contract_kline_archives(InstrumentId("BTCUSDT"), request_range)[
-        0
-    ]
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
     archive = _archive(plan.member_name, [_row(1709164800000)])
     store = RawStore(tmp_path)
     incomplete_path = store.path_for(RawObjectIdentity.from_request(plan.request))
@@ -309,9 +380,7 @@ def test_incomplete_existing_artifact_is_reported_as_local_failure(
 
 def test_existing_object_must_cover_the_current_wider_request(tmp_path: Path) -> None:
     narrow_range = _range("2024-02-29T00:00:00", "2024-02-29T00:02:00")
-    narrow_plan = plan_binance_contract_kline_archives(
-        InstrumentId("BTCUSDT"), narrow_range
-    )[0]
+    narrow_plan = _archive_plans(InstrumentId("BTCUSDT"), narrow_range)[0]
     archive = _archive(
         narrow_plan.member_name,
         [_row(1709164800000), _row(1709164860000)],

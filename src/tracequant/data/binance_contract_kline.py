@@ -45,6 +45,7 @@ from tracequant.domain import InstrumentId, TimeRange
 
 __all__ = [
     "ArchiveHttpResponse",
+    "BinanceArchiveCoverageGapPlan",
     "BinanceArchiveObjectPlan",
     "BinanceContractKlineBackfill",
     "BinanceContractKlineObjectResult",
@@ -58,10 +59,18 @@ _SCHEMA_IDENTIFIER: Final = "binance.um.contract-kline.csv.v1"
 _PRODUCER_VERSION: Final = "tracequant/0.1.0"
 _ONE_MINUTE_MS: Final = 60_000
 _MAX_ARCHIVE_BYTES: Final = 512 * 1024 * 1024
-# The bounded Research probe observed monthly objects through 2026-07.  Months
-# beyond this point stay on the daily path until a later approved source-policy
-# update; the downloader must not infer new monthly availability from wall time.
-_RESEARCH_MONTHLY_THROUGH: Final = date(2026, 7, 1)
+# Frozen per-instrument archive coverage from the approved Research contract.
+# These are observed object boundaries, not values to advance from wall time.
+_RESEARCH_ARCHIVE_COVERAGE: Final = {
+    "BTCUSDT": {
+        "monthly": (date(2020, 1, 1), date(2026, 7, 1)),
+        "daily": (date(2019, 12, 31), date(2026, 8, 29)),
+    },
+    "ETHUSDT": {
+        "monthly": (date(2020, 1, 1), date(2026, 7, 1)),
+        "daily": (date(2019, 12, 31), date(2026, 8, 29)),
+    },
+}
 _CHECKSUM_PATTERN: Final = re.compile(
     r"\A([0-9A-Fa-f]{64})[ \t]+[*]?([^\r\n]+)[\r\n]*\Z"
 )
@@ -119,6 +128,19 @@ class BinanceArchiveObjectPlan:
     member_name: str
 
 
+@dataclass(frozen=True, slots=True)
+class BinanceArchiveCoverageGapPlan:
+    """One UTC day for which Research did not prove an archive object exists."""
+
+    instrument: InstrumentId
+    request_range: TimeRange
+    boundary: BinanceArchiveObjectBoundary
+    detail: str
+
+
+type BinanceContractKlinePlan = BinanceArchiveObjectPlan | BinanceArchiveCoverageGapPlan
+
+
 class BinanceContractKlineStatus(StrEnum):
     PUBLISHED = "published"
     EXISTING = "existing"
@@ -132,7 +154,7 @@ class BinanceContractKlineStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class BinanceContractKlineObjectResult:
-    plan: BinanceArchiveObjectPlan
+    plan: BinanceContractKlinePlan
     status: BinanceContractKlineStatus
     artifact_path: Path | None = None
     detail: str | None = None
@@ -216,21 +238,29 @@ def _build_plan(
 def plan_binance_contract_kline_archives(
     instrument: InstrumentId,
     request_range: TimeRange,
-) -> tuple[BinanceArchiveObjectPlan, ...]:
-    """Map a UTC ``[start, end)`` range to non-overlapping daily/monthly objects."""
+) -> tuple[BinanceContractKlinePlan, ...]:
+    """Map a UTC ``[start, end)`` range to proven objects or explicit gaps."""
     if not isinstance(instrument, InstrumentId):
         raise TypeError("instrument must be an InstrumentId")
     if not isinstance(request_range, TimeRange):
         raise TypeError("request_range must be a TimeRange")
 
+    coverage = _RESEARCH_ARCHIVE_COVERAGE.get(str(instrument))
+    if coverage is None:
+        raise ValueError(
+            f"instrument {instrument!s} has no frozen contract-Kline archive coverage"
+        )
+
+    monthly_first, monthly_last = coverage["monthly"]
+    daily_first, daily_last = coverage["daily"]
     cursor = request_range.start.date()
     final_day = (request_range.end - timedelta(microseconds=1)).date()
-    plans: list[BinanceArchiveObjectPlan] = []
+    plans: list[BinanceContractKlinePlan] = []
     while cursor <= final_day:
         following_month = _next_month(cursor)
         can_use_month = (
             cursor.day == 1
-            and cursor <= _RESEARCH_MONTHLY_THROUGH
+            and monthly_first <= cursor <= monthly_last
             and request_range.start <= _utc_midnight(cursor)
             and request_range.end >= _utc_midnight(following_month)
         )
@@ -240,7 +270,23 @@ def plan_binance_contract_kline_archives(
         else:
             boundary = BinanceArchiveObjectBoundary.day(cursor)
             cursor += timedelta(days=1)
-        plans.append(_build_plan(instrument, request_range, boundary))
+        if (
+            boundary.granularity.value == "month"
+            or daily_first <= boundary.period_start <= daily_last
+        ):
+            plans.append(_build_plan(instrument, request_range, boundary))
+        else:
+            plans.append(
+                BinanceArchiveCoverageGapPlan(
+                    instrument=instrument,
+                    request_range=request_range,
+                    boundary=boundary,
+                    detail=(
+                        "Research did not prove a contract-Kline archive object "
+                        f"for {instrument!s} on {boundary.period_start.isoformat()}"
+                    ),
+                )
+            )
     return tuple(plans)
 
 
@@ -478,8 +524,13 @@ class BinanceContractKlineBackfill:
         )
 
     def _process(
-        self, plan: BinanceArchiveObjectPlan
+        self, plan: BinanceContractKlinePlan
     ) -> BinanceContractKlineObjectResult:
+        if isinstance(plan, BinanceArchiveCoverageGapPlan):
+            return BinanceContractKlineObjectResult(
+                plan, BinanceContractKlineStatus.COVERAGE_GAP, detail=plan.detail
+            )
+
         existing: RawArtifact | None = None
         try:
             existing = self._store.read_request(plan.request)

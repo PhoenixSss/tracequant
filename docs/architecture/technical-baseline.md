@@ -175,6 +175,11 @@ missing/duplicate/out-of-order policy, feature pipeline, label pipeline, or
 future-data-leakage check. The preserved Binance 12-field wire schema is Raw
 source data and must not be treated as a canonical schema.
 
+Archive planning is bounded by the per-instrument daily and monthly coverage
+frozen in the approved Research contract. Dates outside those observed bounds
+produce explicit coverage-gap results and are not requested as speculative
+archive URLs.
+
 ### Backtesting, models, and experiments
 
 There is no backtester, strategy, factor library, model training, or experiment
