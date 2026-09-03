@@ -229,7 +229,7 @@ def test_cross_object_partial_failure_keeps_published_object_and_is_not_complete
     assert store.read_request(plans[0].request).frame.height == 1
 
 
-def test_verified_existing_object_is_skipped_without_network(tmp_path: Path) -> None:
+def test_verified_existing_object_is_reconciled_with_upstream(tmp_path: Path) -> None:
     request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
     plan = plan_binance_contract_kline_archives(InstrumentId("BTCUSDT"), request_range)[
         0
@@ -240,14 +240,43 @@ def test_verified_existing_object_is_skipped_without_network(tmp_path: Path) -> 
     backfill = BinanceContractKlineBackfill(store, http_get=first_http)
     assert backfill.run(InstrumentId("BTCUSDT"), request_range).completed
 
-    no_network = FixtureHttp({})
-    second = BinanceContractKlineBackfill(store, http_get=no_network).run(
+    current_http = FixtureHttp(_responses(plan.url, archive))
+    second = BinanceContractKlineBackfill(store, http_get=current_http).run(
         InstrumentId("BTCUSDT"), request_range
     )
 
     assert second.completed
     assert second.objects[0].status is BinanceContractKlineStatus.EXISTING
-    assert no_network.calls == []
+    assert [url for url, _ in current_http.calls] == [plan.checksum_url, plan.url]
+
+
+def test_upstream_revision_conflicts_without_replacing_existing_artifact(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
+    plan = plan_binance_contract_kline_archives(InstrumentId("BTCUSDT"), request_range)[
+        0
+    ]
+    original = _archive(plan.member_name, [_row(1709164800000)])
+    revised = _archive(plan.member_name, [_row(1709164800000, close="62000.0")])
+    store = RawStore(tmp_path)
+    first = BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, original))
+    ).run(InstrumentId("BTCUSDT"), request_range)
+    original_artifact = store.read_request(plan.request)
+    original_checksum = original_artifact.manifest.project_sha256
+
+    second = BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, revised))
+    ).run(InstrumentId("BTCUSDT"), request_range)
+
+    assert first.completed
+    assert second.completed is False
+    assert second.objects[0].status is BinanceContractKlineStatus.CONFLICT
+    assert second.objects[0].artifact_path is None
+    preserved = store.read_request(plan.request)
+    assert preserved.manifest.project_sha256 == original_checksum
+    assert preserved.frame["close"].to_list() == ["61010.0"]
 
 
 def test_incomplete_existing_artifact_is_reported_as_local_failure(
