@@ -543,7 +543,11 @@ class BinanceContractKlineBackfill:
             return BinanceContractKlineObjectResult(
                 plan, BinanceContractKlineStatus.CONFLICT, detail=str(error)
             )
-        except (RawArtifactValidationError, OSError) as error:
+        except (
+            RawArtifactNotFoundError,
+            RawArtifactValidationError,
+            OSError,
+        ) as error:
             return BinanceContractKlineObjectResult(
                 plan, BinanceContractKlineStatus.LOCAL_FAILURE, detail=str(error)
             )
