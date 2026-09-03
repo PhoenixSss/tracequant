@@ -64,6 +64,7 @@ _ARCHIVE_ROOT: Final = "https://data.binance.vision"
 _SCHEMA_IDENTIFIER: Final = "binance.um.contract-kline.csv.v1"
 _PRODUCER_VERSION: Final = "tracequant/0.1.0"
 _ONE_MINUTE_MS: Final = 60_000
+_MAX_SIGNED_INT64_TEXT: Final = str(2**63 - 1)
 _MAX_ARCHIVE_BYTES: Final = 512 * 1024 * 1024
 # Frozen per-instrument archive coverage from the approved Research contract.
 # These are observed object boundaries, not values to advance from wall time.
@@ -419,10 +420,13 @@ def _declared_checksum(payload: bytes, expected_filename: str) -> str:
 def _parse_nonnegative_int(value: str, *, field: str) -> int:
     if not value.isascii() or not value.isdigit():
         raise _InvalidContentError(f"{field} must be a non-negative integer")
-    parsed = int(value)
-    if parsed > 2**63 - 1:
+    normalized = value.lstrip("0") or "0"
+    if len(normalized) > len(_MAX_SIGNED_INT64_TEXT) or (
+        len(normalized) == len(_MAX_SIGNED_INT64_TEXT)
+        and normalized > _MAX_SIGNED_INT64_TEXT
+    ):
         raise _InvalidContentError(f"{field} exceeds signed 64-bit range")
-    return parsed
+    return int(normalized)
 
 
 def _validate_decimal(value: str, *, field: str, nonnegative: bool = False) -> None:
