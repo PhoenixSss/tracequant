@@ -12,6 +12,7 @@ from tracequant.data import (
     BinancePublicHistoryRequest,
     BinancePublicHistorySourceKind,
     RawArtifactConflictError,
+    RawArtifactIncompleteError,
     RawArtifactNotFoundError,
     RawArtifactValidationError,
     RawObjectIdentity,
@@ -267,7 +268,7 @@ def test_reader_rejects_missing_final_component(
     artifact = store.write(_source_object())
     (artifact.path / missing_name).unlink()
 
-    with pytest.raises(RawArtifactNotFoundError, match="requires both"):
+    with pytest.raises(RawArtifactIncompleteError, match="requires both"):
         store.read(_source_object().identity)
 
 

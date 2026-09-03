@@ -33,6 +33,7 @@ from tracequant.domain import TimeRange
 __all__ = [
     "RawArtifact",
     "RawArtifactConflictError",
+    "RawArtifactIncompleteError",
     "RawArtifactNotFoundError",
     "RawArtifactValidationError",
     "RawAcquisitionManifest",
@@ -65,7 +66,11 @@ class RawArtifactConflictError(RawStoreError):
 
 
 class RawArtifactNotFoundError(RawStoreError):
-    """Raised when a final Raw artifact is incomplete or absent."""
+    """Raised when a final Raw artifact is absent."""
+
+
+class RawArtifactIncompleteError(RawArtifactNotFoundError):
+    """Raised when a final Raw artifact path exists but is incomplete."""
 
 
 class RawArtifactValidationError(RawStoreError):
@@ -1061,7 +1066,11 @@ class RawStore:
             raise TypeError("identity must be a RawObjectIdentity")
         path = self.path_for(identity)
         if not path.is_dir():
-            raise RawArtifactNotFoundError(f"Raw artifact is not complete: {path}")
+            if path.exists():
+                raise RawArtifactIncompleteError(
+                    f"Raw artifact is not a directory: {path}"
+                )
+            raise RawArtifactNotFoundError(f"Raw artifact does not exist: {path}")
         return self._validate_path(path, expected_identity=identity)
 
     def read_request(self, request: BinancePublicHistoryRequest) -> RawArtifact:
@@ -1178,7 +1187,7 @@ class RawStore:
         data_path = path / _DATA_FILENAME
         manifest_path = path / _MANIFEST_FILENAME
         if not data_path.is_file() or not manifest_path.is_file():
-            raise RawArtifactNotFoundError(
+            raise RawArtifactIncompleteError(
                 "Raw artifact requires both data.parquet and manifest.json"
             )
         try:
@@ -1196,7 +1205,7 @@ class RawStore:
             archive_path = path / _ARCHIVE_FILENAME
             checksum_response_path = path / _CHECKSUM_FILENAME
             if not archive_path.is_file() or not checksum_response_path.is_file():
-                raise RawArtifactNotFoundError(
+                raise RawArtifactIncompleteError(
                     "Raw artifact with provenance requires source.zip and "
                     "source.CHECKSUM"
                 )
