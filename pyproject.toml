@@ -10,7 +10,9 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.13,<3.14"
-dependencies = []
+dependencies = [
+    "polars>=1.0,<2.0",
+]
 
 [dependency-groups]
 dev = [
