@@ -114,6 +114,20 @@ flowchart LR
     DECISION -->|PASS| PREFLIGHT --> MERGE --> CLOSEOUT
 ```
 
+### LCK releases and manual adoption
+
+LCK is actively developed within TraceQuant. Versioned LCK previews and their
+release notes are listed on the [GitHub Releases page](https://github.com/PhoenixSss/tracequant/releases).
+The release page is the stable entry point for selecting a specific version;
+this README intentionally does not pin a version that would need to change
+with every release.
+
+For manual evaluation and repository-specific adaptation, see the [LCK
+adoption guide](docs/guides/LCK-adoption.md). LCK is not a standalone product,
+one-click installation package, or universal portability promise: adopters
+must inspect the selected snapshot, adapt repository-specific contracts and
+integrations, and validate the result themselves.
+
 ## Current capability and boundary
 
 The currently implemented public package is `tracequant` under `src/`:
