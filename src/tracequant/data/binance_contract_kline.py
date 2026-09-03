@@ -34,6 +34,7 @@ from tracequant.data.public_history import (
     BinancePublicHistorySourceKind,
 )
 from tracequant.data.raw_store import (
+    RawArtifact,
     RawArtifactConflictError,
     RawArtifactNotFoundError,
     RawArtifactValidationError,
@@ -479,6 +480,7 @@ class BinanceContractKlineBackfill:
     def _process(
         self, plan: BinanceArchiveObjectPlan
     ) -> BinanceContractKlineObjectResult:
+        existing: RawArtifact | None = None
         try:
             existing = self._store.read_request(plan.request)
         except RawArtifactNotFoundError:
@@ -497,9 +499,6 @@ class BinanceContractKlineBackfill:
                     artifact_path=existing.path,
                     detail=str(error),
                 )
-            return BinanceContractKlineObjectResult(
-                plan, BinanceContractKlineStatus.EXISTING, artifact_path=existing.path
-            )
 
         try:
             checksum_payload = _download(
@@ -551,6 +550,11 @@ class BinanceContractKlineBackfill:
             return BinanceContractKlineObjectResult(
                 plan, BinanceContractKlineStatus.LOCAL_FAILURE, detail=str(error)
             )
+        status = (
+            BinanceContractKlineStatus.EXISTING
+            if existing is not None
+            else BinanceContractKlineStatus.PUBLISHED
+        )
         return BinanceContractKlineObjectResult(
-            plan, BinanceContractKlineStatus.PUBLISHED, artifact_path=artifact.path
+            plan, status, artifact_path=artifact.path
         )
