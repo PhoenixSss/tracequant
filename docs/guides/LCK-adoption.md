@@ -33,14 +33,14 @@ implications:
 | Path | Current status | What it means |
 | --- | --- | --- |
 | Repository copy | Available for manual evaluation and adaptation | Inspect a chosen TraceQuant revision, copy the coherent LCK source and workflow material, then adapt every repository-specific integration point. |
-| Versioned release archive | Planned / unavailable | No supported LCK release archive was listed for `PhoenixSss/tracequant` when this guide was checked on 2026-09-02. Re-check the repository's [GitHub Releases](https://github.com/PhoenixSss/tracequant/releases) before using this path. |
+| Versioned release archive | Available: [`lck-v0.1.0-preview.2`](https://github.com/PhoenixSss/tracequant/releases/tag/lck-v0.1.0-preview.2) | Use the corrected, manifest-backed preview for manual evaluation and adaptation. The release record contains the exact source commit, manifest, archive digest, compatibility information, and validation summary. |
 
-The absence of a supported release archive is intentional in this guide. A
-GitHub-generated source archive for an arbitrary commit or tag is not by itself
-a supported LCK distribution. When a supported archive is eventually
-published, use its exact release version, record the tag and archive digest,
-extract that version into the adopting repository, and follow its compatibility
-and upgrade notes. Do not imply that an archive exists before it is published.
+The versioned path is a supported LCK source snapshot, not a generic GitHub
+source archive for an arbitrary commit or tag. `preview.1` remains immutable
+and is clearly superseded; do not replace its tag or assets. Use the exact
+`preview.2` release identity, record its source commit and archive digest,
+extract that snapshot into the adopting repository, and follow its
+compatibility and upgrade notes.
 
 ## Path A: repository-copy adoption
 
@@ -114,22 +114,23 @@ alternate LCK lifecycle entry point.
 
 ## Path B: versioned release-archive adoption
 
-This path is conditional on a supported archive being published in a GitHub
-Release. Once available, the manual sequence is:
+The current supported archive is the pre-release
+[`lck-v0.1.0-preview.2`](https://github.com/PhoenixSss/tracequant/releases/tag/lck-v0.1.0-preview.2).
+Its archive is a fixed source snapshot, not a floating view of `main`. Use the
+following manual sequence:
 
-1. Select a named supported release rather than an unversioned branch or
-   arbitrary commit.
-2. Download the archive from that release's assets or documented release
-   location; verify and record the release tag, version, and digest.
+1. Select `preview.2` rather than an unversioned branch or arbitrary commit.
+2. Download its named archive and metadata assets; verify and record the tag,
+   exact source commit, manifest digest, archive digest, and pre-release status.
 3. Extract the archive into a controlled location in the adopting repository.
 4. Read the archive's compatibility and upgrade guidance before replacing an
    earlier snapshot.
 5. Adapt the repository integration points listed in the matrix below and run
    non-destructive validation before any lifecycle write.
 
-Until such a release is actually listed, this path stops at availability
-checking. It does not authorize downloading a nonexistent LCK artifact, and it
-does not turn TraceQuant's current source snapshot into a standalone product.
+The archive does not authorize automatic installation, and it does not turn
+TraceQuant's current source snapshot into a standalone product. A later
+correction or changed digest requires a new immutable release identity.
 
 ## Reuse and adaptation matrix
 
