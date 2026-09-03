@@ -1,6 +1,7 @@
 """Immutable local persistence for parsed public-history source objects.
 
-The store deliberately accepts an already parsed Polars frame.  It does not
+The store deliberately accepts an already parsed Polars frame and, when
+provided, the exact upstream response bodies that produced it.  It does not
 download, normalize, repair, aggregate, or otherwise reinterpret source data.
 Filesystem work occurs only when a public method is called.
 """
@@ -43,9 +44,11 @@ __all__ = [
 ]
 
 _LAYOUT_VERSION: Final = "v1"
-_MANIFEST_VERSION: Final = 2
+_MANIFEST_VERSION: Final = 3
 _DATA_FILENAME: Final = "data.parquet"
 _MANIFEST_FILENAME: Final = "manifest.json"
+_ARCHIVE_FILENAME: Final = "source.zip"
+_CHECKSUM_FILENAME: Final = "source.CHECKSUM"
 
 
 class RawStoreError(Exception):
@@ -293,12 +296,30 @@ class RawSourceProvenance:
             ) from error
 
     def matches_except_acquired_at(self, other: object) -> bool:
-        """Compare stable evidence while ignoring the new acquisition time."""
+        """Compare stable evidence while ignoring acquisition metadata.
+
+        HTTP headers are retained for auditability but are transport metadata;
+        values such as ``Date`` may change between identical acquisitions and
+        must not turn an immutable-content retry into a conflict.
+        """
         if not isinstance(other, RawSourceProvenance):
             return False
-        return self.to_dict() | {"acquired_at": None} == (
-            other.to_dict() | {"acquired_at": None}
-        )
+        volatile_fields = {
+            "acquired_at",
+            "source_http_headers",
+            "checksum_http_headers",
+        }
+        left = {
+            key: value
+            for key, value in self.to_dict().items()
+            if key not in volatile_fields
+        }
+        right = {
+            key: value
+            for key, value in other.to_dict().items()
+            if key not in volatile_fields
+        }
+        return left == right
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,7 +395,13 @@ class RawObjectIdentity:
 
 @dataclass(frozen=True, slots=True)
 class RawSourceObject:
-    """An already parsed source frame plus its acquisition evidence."""
+    """An already parsed source frame plus its acquisition evidence.
+
+    A source object with provenance must carry the exact checksum response and
+    archive bodies.  The Raw store persists those bytes beside the parsed
+    frame, while the provenance digests in the manifest bind the files to the
+    acquisition that produced the frame.
+    """
 
     request: BinancePublicHistoryRequest
     rows: pl.DataFrame
@@ -384,6 +411,8 @@ class RawSourceObject:
     upstream_checksum: str | None = None
     upstream_revision: str | None = None
     provenance: RawSourceProvenance | None = None
+    archive_payload: bytes | None = None
+    checksum_response_body: bytes | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.request, BinancePublicHistoryRequest):
@@ -404,6 +433,31 @@ class RawSourceObject:
             self.provenance, RawSourceProvenance
         ):
             raise TypeError("provenance must be a RawSourceProvenance or None")
+        if self.provenance is None:
+            if (
+                self.archive_payload is not None
+                or self.checksum_response_body is not None
+            ):
+                raise ValueError(
+                    "source response bodies require acquisition provenance"
+                )
+        else:
+            if not isinstance(self.archive_payload, bytes):
+                raise TypeError("archive_payload must be bytes with provenance")
+            if not isinstance(self.checksum_response_body, bytes):
+                raise TypeError("checksum_response_body must be bytes with provenance")
+            if (
+                hashlib.sha256(self.archive_payload).hexdigest()
+                != self.provenance.archive_sha256
+            ):
+                raise ValueError("archive_payload does not match provenance digest")
+            if (
+                hashlib.sha256(self.checksum_response_body).hexdigest()
+                != self.provenance.checksum_response_sha256
+            ):
+                raise ValueError(
+                    "checksum_response_body does not match provenance digest"
+                )
 
     @property
     def identity(self) -> RawObjectIdentity:
@@ -562,6 +616,16 @@ class RawArtifact:
     def manifest_path(self) -> Path:
         return self.path / _MANIFEST_FILENAME
 
+    @property
+    def archive_path(self) -> Path:
+        """Return the persisted upstream archive body."""
+        return self.path / _ARCHIVE_FILENAME
+
+    @property
+    def checksum_response_path(self) -> Path:
+        """Return the persisted upstream checksum response body."""
+        return self.path / _CHECKSUM_FILENAME
+
 
 class RawStore:
     """Filesystem-backed immutable Raw Parquet object store."""
@@ -621,6 +685,13 @@ class RawStore:
             data_path = temporary_path / _DATA_FILENAME
             source_object.rows.write_parquet(data_path)
             checksum = _sha256(data_path)
+            if source_object.provenance is not None:
+                archive_path = temporary_path / _ARCHIVE_FILENAME
+                checksum_response_path = temporary_path / _CHECKSUM_FILENAME
+                assert isinstance(source_object.archive_payload, bytes)
+                assert isinstance(source_object.checksum_response_body, bytes)
+                archive_path.write_bytes(source_object.archive_payload)
+                checksum_response_path.write_bytes(source_object.checksum_response_body)
             created_at = to_utc(self._clock())
             manifest = RawManifest(
                 manifest_schema_version=_MANIFEST_VERSION,
@@ -643,6 +714,9 @@ class RawStore:
                 _canonical_json(manifest.to_dict()) + "\n", encoding="utf-8"
             )
             self._sync_file(data_path)
+            if source_object.provenance is not None:
+                self._sync_file(archive_path)
+                self._sync_file(checksum_response_path)
             self._sync_file(manifest_path)
             self._validate_path(temporary_path, expected_identity=identity)
             self._sync_directory(temporary_path)
@@ -732,6 +806,25 @@ class RawStore:
             raise RawArtifactValidationError(
                 "manifest object identity does not match path"
             )
+        if manifest.provenance is not None:
+            archive_path = path / _ARCHIVE_FILENAME
+            checksum_response_path = path / _CHECKSUM_FILENAME
+            if not archive_path.is_file() or not checksum_response_path.is_file():
+                raise RawArtifactNotFoundError(
+                    "Raw artifact with provenance requires source.zip and "
+                    "source.CHECKSUM"
+                )
+            if _sha256(archive_path) != manifest.provenance.archive_sha256:
+                raise RawArtifactValidationError(
+                    "upstream archive checksum does not match provenance"
+                )
+            if (
+                _sha256(checksum_response_path)
+                != manifest.provenance.checksum_response_sha256
+            ):
+                raise RawArtifactValidationError(
+                    "checksum response digest does not match provenance"
+                )
         size = data_path.stat().st_size
         if size != manifest.parquet_file_size:
             raise RawArtifactValidationError(

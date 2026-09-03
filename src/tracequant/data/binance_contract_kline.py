@@ -652,6 +652,8 @@ class BinanceContractKlineBackfill:
                         "source_object_coverage_verified",
                     ),
                 ),
+                archive_payload=archive_payload.body,
+                checksum_response_body=checksum_payload.body,
             )
             artifact = self._store.write(source)
         except _DownloadNotFoundError as error:

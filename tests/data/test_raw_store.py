@@ -123,7 +123,7 @@ def test_manifest_contains_complete_source_and_provenance_evidence(
     artifact = _store(tmp_path).write(_source_object())
     payload = json.loads(artifact.manifest_path.read_text(encoding="utf-8"))
 
-    assert payload["manifest_schema_version"] == 2
+    assert payload["manifest_schema_version"] == 3
     assert payload["completed"] is True
     assert payload["object_identity"]["source"] == _request().source_identity.to_dict()
     assert payload["caller_request_range"] == _request().request_range.to_dict()
@@ -232,7 +232,7 @@ def test_reader_rejects_corrupt_or_unsupported_artifact(
         if mutation == "checksum":
             payload["project_sha256"] = "0" * 64
         elif mutation == "version":
-            payload["manifest_schema_version"] = 3
+            payload["manifest_schema_version"] = 4
         else:
             payload["completed"] = False
         artifact.manifest_path.write_text(json.dumps(payload), encoding="utf-8")
