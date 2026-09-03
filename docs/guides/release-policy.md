@@ -1,13 +1,15 @@
 # TraceQuant and LCK release policy
 
-> **Status:** Current policy for future releases
-> **First LCK preview:** `lck-v0.1.0-preview.1`
-> **Last repository-state check:** 2026-09-02
+> **Status:** Current release policy and pre-publication LCK preview record
+> **Published LCK preview:** `lck-v0.1.0-preview.1`
+> **Corrected preview:** `lck-v0.1.0-preview.2` (not yet published)
+> **Last repository-state check:** 2026-09-03
 
 This policy defines how releases of the TraceQuant project and previews of the
 Local Control Kernel (LCK) are identified, checked, documented, and kept
 traceable. It is a release decision and record-keeping policy, not release
-automation and not a promise that an artifact currently exists.
+automation. The GitHub Release record and its named assets are the authority
+for the exact source commit, manifest, and digest of each published preview.
 
 ## 1. One repository, two release tracks
 
@@ -34,11 +36,15 @@ other track's stability claim.
 | TraceQuant project | A reviewed TraceQuant repository state and, when applicable, its project package | `tracequant-v<MAJOR>.<MINOR>.<PATCH>`; the package version remains the value in `pyproject.toml` | A project release. It must not imply that planned quantitative or trading capabilities are implemented. |
 | LCK component preview | A deliberately scoped, manifest-backed LCK source archive, if one is published | `lck-v<MAJOR>.<MINOR>.<PATCH>-preview.<N>` | A versioned LCK snapshot for manual evaluation and adaptation inside TraceQuant's project context. |
 
-The first proposed LCK identity is `lck-v0.1.0-preview.1`. Preview number
-`N` increases for another published candidate in the same preview series. A
-stable LCK identity removes the `-preview.N` suffix only after the stable
-criteria in Section 8 are met. A version or tag is never reused for a
-different commit, manifest, or archive digest.
+The first LCK preview, [`lck-v0.1.0-preview.1`](https://github.com/PhoenixSss/tracequant/releases/tag/lck-v0.1.0-preview.1),
+was published and remains an immutable historical release. The corrected
+`lck-v0.1.0-preview.2` identity is planned but has not yet been published. If
+published, it will supersede `preview.1` without reusing its tag, source
+commit, manifest, or archive. Preview number `N` increases for another
+published candidate in the same preview series. A stable LCK identity removes
+the `-preview.N` suffix only after the stable criteria in Section 8 are met. A
+version or tag is never reused for a different commit, manifest, or archive
+digest.
 
 The `version = "0.1.0"` value currently in `pyproject.toml` identifies the
 `tracequant` Python project. It is not automatically the LCK version, and
@@ -47,16 +53,20 @@ preview.
 
 ## 2. Current availability and source-of-truth boundaries
 
-At the state check recorded above, the repository has no Git tag, no GitHub
-Release, and no supported LCK release archive. The repository-copy adoption
-path is therefore the available path: a maintainer or adopter selects a
-coherent commit and manually adapts it. A GitHub-generated source archive for
-an arbitrary branch, commit, or tag is not by itself an LCK release archive.
+At the state check recorded above, `preview.1` is the only published LCK
+pre-release listed. The corrected `preview.2` is planned but not yet
+published, so no supported `preview.2` source archive or Release record exists
+for manual evaluation. The repository-copy path remains available. A
+GitHub-generated source archive for an arbitrary commit, branch, or tag is not
+by itself an LCK release archive.
 
-Before preparing any release, re-check the live tags, GitHub Releases, and
-candidate commit. The dated statement above is an audit point, not a permanent
-inventory. This documentation change does not create a tag, GitHub Release, or
-release asset.
+The live [GitHub Release record](https://github.com/PhoenixSss/tracequant/releases/tag/lck-v0.1.0-preview.1)
+is authoritative for the published `preview.1` identity and any recorded
+source commit, included-path manifest, digests, metadata, checksums, and
+validation records. When `preview.2` is later published, its own Release
+record will be authoritative for those facts. This policy records the meaning
+and continuity of those facts; it does not silently replace or rewrite the
+`preview.1` tag or assets.
 
 The documents have deliberately different responsibilities:
 
@@ -65,7 +75,7 @@ The documents have deliberately different responsibilities:
 - The [LCK overview](LCK-overview.md) explains what LCK is, how the lifecycle
   is divided, and where LCK stops.
 - The [manual adoption guide](LCK-adoption.md) explains repository-copy
-  adoption, adaptation points, and the conditional archive-adoption path.
+  adoption, adaptation points, and the versioned archive-adoption path.
 - The [technical baseline](../architecture/technical-baseline.md) is the
   authority for current TraceQuant implementation facts and deferred product
   boundaries.
@@ -276,10 +286,11 @@ evidence of those outcomes.
 
 ## 8. Preview and stable status
 
-The initial LCK release is a **pre-release**: `lck-v0.1.0-preview.1` must be
-marked as a GitHub pre-release and described as actively evolving. Its public
-adoption surface is a manually copied and adapted source snapshot, not yet a
-stable universal interface.
+The LCK preview series remains **pre-release** and actively evolving.
+`lck-v0.1.0-preview.1` is the only published preview and remains an immutable
+historical release. The corrected `lck-v0.1.0-preview.2` is planned but not yet
+published; when published, its adoption surface must be a fixed source
+snapshot for manual copying and adaptation, not a stable universal interface.
 
 An LCK stable release requires, at minimum:
 

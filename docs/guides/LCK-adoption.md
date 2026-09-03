@@ -33,14 +33,14 @@ implications:
 | Path | Current status | What it means |
 | --- | --- | --- |
 | Repository copy | Available for manual evaluation and adaptation | Inspect a chosen TraceQuant revision, copy the coherent LCK source and workflow material, then adapt every repository-specific integration point. |
-| Versioned release archive | Planned / unavailable | No supported LCK release archive was listed for `PhoenixSss/tracequant` when this guide was checked on 2026-09-02. Re-check the repository's [GitHub Releases](https://github.com/PhoenixSss/tracequant/releases) before using this path. |
+| Corrected versioned release archive | Not yet published: `lck-v0.1.0-preview.2` | The corrected archive path is planned, but no supported `preview.2` archive is available before its named GitHub Release is published. Until then, use the repository-copy path; the existing `preview.1` is historical and is not the corrected candidate. |
 
-The absence of a supported release archive is intentional in this guide. A
-GitHub-generated source archive for an arbitrary commit or tag is not by itself
-a supported LCK distribution. When a supported archive is eventually
-published, use its exact release version, record the tag and archive digest,
-extract that version into the adopting repository, and follow its compatibility
-and upgrade notes. Do not imply that an archive exists before it is published.
+An eventual versioned path is a supported LCK source snapshot, not a generic
+GitHub source archive for an arbitrary commit or tag. The existing
+[`lck-v0.1.0-preview.1`](https://github.com/PhoenixSss/tracequant/releases/tag/lck-v0.1.0-preview.1)
+release remains immutable historical evidence. Do not represent it as
+`preview.2`, replace its tag or assets, or download a corrected archive before
+the named `preview.2` Release is actually listed.
 
 ## Path A: repository-copy adoption
 
@@ -114,22 +114,25 @@ alternate LCK lifecycle entry point.
 
 ## Path B: versioned release-archive adoption
 
-This path is conditional on a supported archive being published in a GitHub
-Release. Once available, the manual sequence is:
+The corrected `preview.2` archive is not yet published. This path becomes
+available only after a named `preview.2` GitHub Release is actually listed;
+until then, stop at the availability check and use Path A. Once the Release is
+listed, its archive is a fixed source snapshot, not a floating view of `main`.
+Use the following manual sequence:
 
-1. Select a named supported release rather than an unversioned branch or
+1. Select the named `preview.2` Release rather than an unversioned branch or
    arbitrary commit.
-2. Download the archive from that release's assets or documented release
-   location; verify and record the release tag, version, and digest.
+2. Download its named archive and metadata assets; verify and record the tag,
+   exact source commit, manifest digest, archive digest, and pre-release status.
 3. Extract the archive into a controlled location in the adopting repository.
 4. Read the archive's compatibility and upgrade guidance before replacing an
    earlier snapshot.
 5. Adapt the repository integration points listed in the matrix below and run
    non-destructive validation before any lifecycle write.
 
-Until such a release is actually listed, this path stops at availability
-checking. It does not authorize downloading a nonexistent LCK artifact, and it
-does not turn TraceQuant's current source snapshot into a standalone product.
+The archive does not authorize automatic installation, and it does not turn
+TraceQuant's current source snapshot into a standalone product. A later
+correction or changed digest requires a new immutable release identity.
 
 ## Reuse and adaptation matrix
 
@@ -309,10 +312,12 @@ with future TraceQuant main.
 
 ### Future portability work
 
-A separately published archive, standalone LCK repository, package extraction,
-one-click installer, zero-configuration setup, universal compatibility, and
-automatic external adoption are not provided by this guide. They remain future
-portability or distribution work, not current implementation facts.
+No separately published corrected `preview.2` archive is currently available
+through this guide. A standalone LCK repository, package
+extraction, one-click installer, zero-configuration setup, universal
+compatibility, and automatic external adoption are not provided by this guide.
+They remain future portability or distribution work, not current implementation
+facts.
 
 Manual adoption also does not decouple LCK core from TraceQuant, change
 TraceQuant's product identity, or grant an adopting repository any of
