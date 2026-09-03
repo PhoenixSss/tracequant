@@ -118,14 +118,20 @@ flowchart LR
 
 LCK is actively developed within TraceQuant. The [GitHub Releases
 page](https://github.com/PhoenixSss/tracequant/releases) is the authority for
-whether a named LCK archive has actually been published. The corrected
-`lck-v0.1.0-preview.2` archive is not published yet; until a named Release is
-listed, use the repository-copy path in the [LCK adoption
-guide](docs/guides/LCK-adoption.md) rather than relying on an unversioned
-branch, arbitrary commit, or nonexistent archive. Before adopting a published
-preview, verify its exact tag, source commit, manifest, archive digest, release
-metadata, and compatibility guidance in the [release
-policy](docs/guides/release-policy.md) and [LCK adoption guide](docs/guides/LCK-adoption.md).
+whether a named LCK archive has actually been published. The current corrected
+preview is the published [`lck-v0.1.0-preview.2`
+Release](https://github.com/PhoenixSss/tracequant/releases/tag/lck-v0.1.0-preview.2),
+a pre-release fixed to source commit
+`850ce58c24646c69379d83d79c13d39b145280b5`. Its Release record and named
+assets are authoritative for the manifest, archive digest, publication state,
+and compatibility guidance; the snapshot does not float with later changes on
+`main`. The historical `preview.1` is superseded and remains immutable.
+
+Public LCK guidance is organized as the [LCK overview](docs/guides/LCK-overview.md),
+[manual adoption guide](docs/guides/LCK-adoption.md), and [release
+policy](docs/guides/release-policy.md). Before adopting a preview, use those
+guides and the exact Release record to verify its tag, source commit, manifest,
+archive digest, release metadata, and compatibility guidance.
 
 For manual evaluation and repository-specific adaptation, see the [LCK
 adoption guide](docs/guides/LCK-adoption.md). LCK is not a standalone product,
