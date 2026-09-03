@@ -40,6 +40,7 @@ from tracequant.data.raw_store import (
     RawAcquisitionResponse,
     RawArtifact,
     RawArtifactConflictError,
+    RawArtifactIncompleteError,
     RawArtifactNotFoundError,
     RawArtifactValidationError,
     RawObjectIdentity,
@@ -382,7 +383,10 @@ def _download(
         OSError,
         http.client.HTTPException,
     ) as error:
-        raise _RetryableDownloadError(str(error), resource=resource) from error
+        detail = str(error).strip() or (
+            f"{type(error).__name__} while downloading {resource}"
+        )
+        raise _RetryableDownloadError(detail, resource=resource) from error
     if response.status == 404:
         raise _DownloadNotFoundError(url, resource=resource, response=response)
     if response.status == 429 or 500 <= response.status <= 599:
@@ -690,6 +694,10 @@ class BinanceContractKlineBackfill:
         existing: RawArtifact | None = None
         try:
             existing = self._store.read_request(plan.request)
+        except RawArtifactIncompleteError as error:
+            return self._failure_result(
+                plan, BinanceContractKlineStatus.LOCAL_FAILURE, str(error)
+            )
         except RawArtifactNotFoundError:
             pass
         except (RawArtifactValidationError, OSError) as error:

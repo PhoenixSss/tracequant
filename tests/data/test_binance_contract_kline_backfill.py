@@ -696,9 +696,10 @@ def test_incomplete_existing_artifact_is_reported_as_local_failure(
     sentinel = incomplete_path / "interrupted-write"
     sentinel.write_text("preserve", encoding="utf-8")
 
-    result = BinanceContractKlineBackfill(
-        store, http_get=FixtureHttp(_responses(plan.url, archive))
-    ).run(InstrumentId("BTCUSDT"), request_range)
+    transport = FixtureHttp(_responses(plan.url, archive))
+    result = BinanceContractKlineBackfill(store, http_get=transport).run(
+        InstrumentId("BTCUSDT"), request_range
+    )
 
     assert result.completed is False
     assert result.objects[0].status is BinanceContractKlineStatus.LOCAL_FAILURE
@@ -706,8 +707,33 @@ def test_incomplete_existing_artifact_is_reported_as_local_failure(
     assert result.objects[0].detail == (
         "Raw artifact requires both data.parquet and manifest.json"
     )
+    assert transport.calls == []
     assert sentinel.read_text(encoding="utf-8") == "preserve"
     assert {path.name for path in incomplete_path.iterdir()} == {"interrupted-write"}
+
+
+def test_empty_retryable_transport_message_is_persisted_as_failure(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
+
+    def transport(url: str, timeout: float) -> ArchiveHttpResponse:
+        del url, timeout
+        raise TimeoutError()
+
+    store = RawStore(tmp_path)
+    result = BinanceContractKlineBackfill(store, http_get=transport).run(
+        InstrumentId("BTCUSDT"), request_range
+    )
+
+    assert result.completed is False
+    assert result.objects[0].status is BinanceContractKlineStatus.RETRYABLE_FAILURE
+    assert result.objects[0].detail == "TimeoutError while downloading checksum"
+    record = store.list_acquisition_manifests(
+        RawObjectIdentity.from_request(plan.request)
+    )[0]
+    assert record.detail == result.objects[0].detail
 
 
 def test_existing_object_is_reconciled_when_request_widens(tmp_path: Path) -> None:
