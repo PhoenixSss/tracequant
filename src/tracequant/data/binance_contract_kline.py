@@ -13,6 +13,7 @@ import csv
 import hashlib
 import http.client
 import io
+import math
 import re
 import urllib.error
 import urllib.request
@@ -552,8 +553,8 @@ class BinanceContractKlineBackfill:
     ) -> None:
         if not isinstance(store, RawStore):
             raise TypeError("store must be a RawStore")
-        if timeout <= 0:
-            raise ValueError("timeout must be greater than zero")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be finite and greater than zero")
         self._store = store
         self._http_get = http_get or _default_http_get
         self._timeout = timeout

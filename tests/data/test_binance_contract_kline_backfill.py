@@ -5,6 +5,7 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from pytest import MonkeyPatch
 
 from tracequant.data import (
@@ -206,6 +207,14 @@ def test_planner_rejects_instrument_outside_the_adapter_supported_set() -> None:
         )
     else:
         raise AssertionError("BTCUSDC must remain outside this adapter's scope")
+
+
+@pytest.mark.parametrize("timeout", [float("-inf"), float("nan"), float("inf")])
+def test_backfill_rejects_non_finite_timeout(tmp_path: Path, timeout: float) -> None:
+    with pytest.raises(
+        ValueError, match="^timeout must be finite and greater than zero$"
+    ):
+        BinanceContractKlineBackfill(RawStore(tmp_path), timeout=timeout)
 
 
 def test_backfill_contract_klines_publishes_verified_raw_artifact(
