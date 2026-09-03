@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import http.client
 import io
 import re
 import urllib.error
@@ -317,7 +318,12 @@ def _download(http_get: ArchiveHttpGet, url: str, timeout: float) -> bytes:
         response = http_get(url, timeout)
     except _InvalidContentError:
         raise
-    except (TimeoutError, ConnectionError, OSError) as error:
+    except (
+        TimeoutError,
+        ConnectionError,
+        OSError,
+        http.client.HTTPException,
+    ) as error:
         raise _RetryableDownloadError(str(error)) from error
     if response.status == 404:
         raise FileNotFoundError(url)
@@ -407,7 +413,7 @@ def _parse_archive(
             csv_payload = archive.read(member)
             if len(csv_payload) > _MAX_ARCHIVE_BYTES:
                 raise _InvalidContentError("CSV member exceeds the size limit")
-    except (zipfile.BadZipFile, RuntimeError, OSError) as error:
+    except (zipfile.BadZipFile, RuntimeError, OSError, NotImplementedError) as error:
         raise _InvalidContentError("archive is not a readable ZIP") from error
     try:
         text = csv_payload.decode("utf-8-sig")

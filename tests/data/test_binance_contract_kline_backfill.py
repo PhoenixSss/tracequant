@@ -1,8 +1,11 @@
 import hashlib
+import http.client
 import io
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
+
+from pytest import MonkeyPatch
 
 from tracequant.data import (
     ArchiveHttpResponse,
@@ -304,6 +307,53 @@ def test_cross_object_partial_failure_keeps_published_object_and_is_not_complete
         BinanceContractKlineStatus.NOT_FOUND,
     ]
     assert store.read_request(plans[0].request).frame.height == 1
+
+
+def test_cross_object_incomplete_read_keeps_earlier_published_result(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2024-02-29T23:59:00", "2024-03-01T00:01:00")
+    plans = _archive_plans(InstrumentId("BTCUSDT"), request_range)
+    first_archive = _archive(plans[0].member_name, [_row(1709251140000)])
+    responses = _responses(plans[0].url, first_archive)
+
+    def transport(url: str, timeout: float) -> ArchiveHttpResponse:
+        del timeout
+        if url == plans[1].checksum_url:
+            raise http.client.IncompleteRead(b"truncated")
+        return responses.get(url, ArchiveHttpResponse(404, b"missing", {}))
+
+    store = RawStore(tmp_path)
+    result = BinanceContractKlineBackfill(store, http_get=transport).run(
+        InstrumentId("BTCUSDT"), request_range
+    )
+
+    assert result.completed is False
+    assert [item.status for item in result.objects] == [
+        BinanceContractKlineStatus.PUBLISHED,
+        BinanceContractKlineStatus.RETRYABLE_FAILURE,
+    ]
+    assert store.read_request(plans[0].request).frame.height == 1
+
+
+def test_unsupported_zip_compression_is_reported_as_invalid_content(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
+    plan = _archive_plans(InstrumentId("ETHUSDT"), request_range)[0]
+    archive = _archive(plan.member_name, [_row(1709164800000)])
+
+    def unsupported_read(self: zipfile.ZipFile, member: zipfile.ZipInfo) -> bytes:
+        del self, member
+        raise NotImplementedError("unsupported compression method")
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", unsupported_read)
+    result = BinanceContractKlineBackfill(
+        RawStore(tmp_path), http_get=FixtureHttp(_responses(plan.url, archive))
+    ).run(InstrumentId("ETHUSDT"), request_range)
+
+    assert result.completed is False
+    assert result.objects[0].status is BinanceContractKlineStatus.INVALID_CONTENT
 
 
 def test_verified_existing_object_is_reconciled_with_upstream(tmp_path: Path) -> None:
