@@ -26,6 +26,110 @@ drop-in installation, external adoption, or unsupported portability. See the
 [public LCK overview](docs/guides/LCK-overview.md) for the lifecycle and
 boundaries.
 
+### Why TraceQuant developed LCK
+
+TraceQuant is intended to become a long-lived, auditable quantitative system.
+That kind of project needs more than an Agent that can produce a plausible
+patch: the current Issue, branch, commit, pull request, validation result, and
+recovery action must be resolved deterministically; semantic work must remain
+reviewable; and a human must retain authority over the irreversible merge.
+LCK was formed while building TraceQuant to provide those boundaries for
+Codex-assisted maintenance without turning the workflow controller into a
+trading or risk component.
+
+```mermaid
+flowchart LR
+    TQ["TraceQuant<br/>primary project identity<br/>auditable research-to-live goal"]
+    LCK["LCK<br/>engineering capability developed<br/>and used within TraceQuant"]
+    DELIVERY["Repository delivery and review<br/>deterministic, auditable,<br/>human-controlled"]
+    QUANT["Future quantitative capabilities<br/>research → live"]
+    REUSE["Other open-source projects<br/>intended manual study and adaptation"]
+    BOUNDARY["LCK does not provide<br/>trading decisions, exchange orders,<br/>or risk authority"]
+
+    TQ --> LCK
+    TQ --> QUANT
+    LCK --> DELIVERY
+    LCK -.->|reuse direction, not adoption claim| REUSE
+    LCK -.-> BOUNDARY
+```
+
+The diagram shows the relationship, not an implementation claim: the future
+quantitative system remains TraceQuant's product goal, while LCK governs the
+engineering workflow used to build and maintain it.
+
+### Current LCK capability surface
+
+The current capability is a repository workflow contract, not a separately
+released product. Its implemented surface includes:
+
+- an Issue-driven lifecycle with readiness, typed leaf contracts, and fresh
+  resolution of the current Git and GitHub state;
+- an explicit work-item contract, including the Task `Critical Outcome` gate
+  where that typed profile requires it, with Documentation, Bug, and Research
+  profiles using their own contracts;
+- a strict execution boundary: Agents perform semantic work, while LCK owns
+  bounded workspace preparation, lifecycle gates, formal validation, commit,
+  push, and pull-request effects;
+- exact-candidate validation and check observation before the lifecycle reaches
+  the human Review boundary;
+- a fresh, read-only Independent Review that independently judges the current
+  candidate rather than inheriting Delivery's correctness judgment;
+- human-controlled merge authority: Review PASS can make a change ready for
+  manual Squash Merge, but no Agent, Skill, or LCK operation merges it;
+- bounded Audit Receipts that explain lifecycle effects without becoming
+  permission tokens or a substitute for current live state; and
+- fail-closed recovery with explicit remediation after Review FAIL and a fresh
+  Review requirement for every repaired head.
+
+The [Issue workflow](docs/development/issue-workflow.md),
+[Independent PR Review](docs/development/pr-review.md), and
+[LCK Overview](docs/guides/LCK-overview.md) describe the current contract in
+more detail.
+
+### LCK lifecycle at a glance
+
+The human stops are intentional: Delivery does not start Review automatically,
+Review FAIL does not start repair automatically, and merge remains a manual
+maintainer action.
+
+```mermaid
+flowchart LR
+    ISSUE["Current Issue<br/>contract + readiness"]
+    PREPARE["LCK Delivery Prepare<br/>live state + workspace"]
+    IMPLEMENT["Implementation Agent<br/>scoped semantic change"]
+    COMPLETE["LCK Delivery Complete<br/>gates + formal validation + PR"]
+    HUMAN_REVIEW["HUMAN STOP<br/>start a fresh review"]
+    REVIEW["Fresh Independent Review<br/>read-only judgement"]
+    DECISION{"Review result"}
+    FAIL_STOP["HUMAN STOP<br/>findings; no auto-repair"]
+    REMEDIATE["Explicit remediation<br/>LCK reacquires state + Agent repairs"]
+    NEW_HEAD["LCK validates and updates<br/>the existing PR with a new head"]
+    PREFLIGHT["LCK Merge Preflight"]
+    MERGE["HUMAN SQUASH MERGE"]
+    CLOSEOUT["LCK Closeout<br/>state convergence + cleanup"]
+
+    ISSUE --> PREPARE --> IMPLEMENT --> COMPLETE --> HUMAN_REVIEW --> REVIEW
+    REVIEW --> DECISION
+    DECISION -->|FAIL| FAIL_STOP --> REMEDIATE --> NEW_HEAD --> REVIEW
+    DECISION -->|PASS| PREFLIGHT --> MERGE --> CLOSEOUT
+```
+
+### LCK releases and manual adoption
+
+LCK is actively developed within TraceQuant. The [GitHub Releases
+page](https://github.com/PhoenixSss/tracequant/releases) records versioned LCK
+release entries, but this README does not establish that a supported archive is
+currently available or pin a version. Before selecting a versioned distribution
+path, verify its live release status, exact tag, artifact integrity, and
+compatibility guidance in the [release policy](docs/guides/release-policy.md)
+and [LCK adoption guide](docs/guides/LCK-adoption.md).
+
+For manual evaluation and repository-specific adaptation, see the [LCK
+adoption guide](docs/guides/LCK-adoption.md). LCK is not a standalone product,
+one-click installation package, or universal portability promise: adopters
+must inspect the selected snapshot, adapt repository-specific contracts and
+integrations, and validate the result themselves.
+
 ## Current capability and boundary
 
 The currently implemented public package is `tracequant` under `src/`:
@@ -141,114 +245,12 @@ The `tests/tools/` subtree tests the repository workflow tooling. It is not a
 runtime dependency of `tracequant`. The intended boundaries and dependency
 direction are described in [Repository structure](docs/architecture/repository-structure.md).
 
-## Public API quick start
+## Python package quick start
 
-### Configuration
-
-Loading is explicit. The `environ` argument makes a deterministic isolated
-mapping useful in tests; omitting it reads the process environment at call
-time:
-
-```python
-from tracequant.config import Environment, Settings, load_settings
-
-settings = load_settings(environ={"TRACEQUANT_ENV": "development"})
-assert settings == Settings(environment=Environment.DEVELOPMENT)
-```
-
-Explicit arguments take precedence over environment values, which take
-precedence over defaults. `TRACEQUANT_ENV` is required. Importing the config
-module does not read environment values, load dotenv files, create directories,
-or create a global settings object.
-
-### Structured logging
-
-Configure logging explicitly after loading settings:
-
-```python
-from tracequant.config import Environment, Settings
-from tracequant.logging import configure_logging
-
-settings = Settings(environment=Environment.DEVELOPMENT)
-configure_logging(settings)
-```
-
-The current logging implementation emits one-line JSON records to stderr. It
-can additionally append to `tracequant.jsonl` below an explicitly configured
-directory. It only accepts `LogFormat.JSON`; although the configuration parser
-accepts both `text` and `json` as values for `TRACEQUANT_LOG_FORMAT`, passing
-`LogFormat.TEXT` to `configure_logging` raises `LoggingConfigError`. Use JSON
-for the current logging path.
-
-Known sensitive mapping keys are redacted case-insensitively, and
-`SecretValue` is representation-safe. This is not encryption or a secret
-manager, and redaction cannot reliably detect a credential manually
-concatenated into a free-text message. Never put credentials in log messages.
-
-### UTC time
-
-All domain timestamps must be timezone-aware. Utilities accept aware non-UTC
-values and normalize them to UTC; naive values are rejected:
-
-```python
-from datetime import UTC, datetime
-
-from tracequant.core.time import format_utc, parse_utc
-
-when = datetime(2024, 2, 29, 23, 45, tzinfo=UTC)
-assert format_utc(when) == "2024-02-29T23:45:00Z"
-assert parse_utc("2024-02-29T23:45:00Z") == when
-```
-
-### Initial domain models
-
-The public import path is:
-
-```python
-import json
-from datetime import UTC, datetime
-
-from tracequant.domain import InstrumentId, OHLCVBar
-
-bar = OHLCVBar(
-    instrument=InstrumentId("BTCUSDT"),
-    start=datetime(2024, 2, 29, 23, 45, tzinfo=UTC),
-    end=datetime(2024, 3, 1, 0, 0, tzinfo=UTC),
-    open=100.0,
-    high=110.0,
-    low=90.0,
-    close=105.0,
-    volume=12.5,
-)
-json.dumps(bar.to_dict(), allow_nan=False)
-```
-
-Models are immutable and validate their inputs. `InstrumentId` is a trimmed,
-ASCII uppercase letters-and-digits identifier of at most 32 characters;
-`TimeRange` is a UTC half-open interval; and `OHLCVBar` contains finite float
-OHLCV values with non-negative volume and consistent high/low bounds. These
-models intentionally do not represent venues, order books, orders, accounts,
-timeframes, persistence schemas, or exchange metadata. See [Initial public
-domain models](docs/architecture/domain-models.md) for the full boundary.
-
-### Shared test fixtures
-
-Reusable deterministic factories belong to `tests/fixtures/domain.py`, not to
-the production package. `tests/conftest.py` exposes them as function-scoped
-pytest fixtures:
-
-```python
-from fixtures.domain import BarFactory
-
-
-def test_example_bar(bar_factory: BarFactory) -> None:
-    bar = bar_factory()
-    assert str(bar.instrument) == "BTCUSDT"
-```
-
-Use explicit symbols, UTC timestamps, and prices when those values matter to a
-test. The fixed factory defaults are test conveniences and are not production
-data or runtime configuration.
+The current `tracequant` package is a small, validated bootstrap foundation,
+not a complete quantitative trading system. Configuration, structured logging,
+UTC utilities, initial domain models, and test fixtures are covered in the
+[Python package getting started guide](docs/guides/getting-started.md).
 
 ## Security and known limitations
 
