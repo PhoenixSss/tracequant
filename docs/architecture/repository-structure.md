@@ -14,6 +14,8 @@ src/tracequant/
   core/time.py
   domain/models.py
   data/public_history.py
+  data/raw_store.py
+  data/binance_contract_kline.py
 tests/
   test_config.py
   test_logging.py
@@ -56,6 +58,13 @@ Python standard library
 tracequant.domain.models ──> tracequant.core.time
 
 tracequant.data.public_history ──> tracequant.domain
+tracequant.data.raw_store ──────> tracequant.data.public_history
+                             └──> tracequant.core.time
+                             └──> Polars
+tracequant.data.binance_contract_kline ──> tracequant.data.public_history
+                                      ├──> tracequant.data.raw_store
+                                      ├──> tracequant.domain
+                                      └──> Polars + Python HTTP/ZIP/CSV libraries
 
 tests ──> tracequant public APIs
 tests ──> tests/fixtures/domain.py ──> tracequant.domain
@@ -79,9 +88,12 @@ primitives; test factories remain a separate test-support layer.
 - `tracequant.domain` owns immutable, risk-independent initial market-data
   value models. It may depend on `core.time`, but not on exchanges, network
   clients, logging setup, UI code, deployment code, or test fixtures.
-- `tracequant.data` owns typed source/request contracts at the data boundary.
-  It may depend on `tracequant.domain`, but does not perform network I/O,
-  filesystem I/O, archive parsing, persistence, or exchange-client work.
+- `tracequant.data` owns typed source/request contracts, immutable local Raw
+  Parquet/manifest persistence, and the Binance public-archive adapter. The
+  adapter supports only USDⓈ-M BTCUSDT and ETHUSDT 1m contract Klines and may
+  perform bounded HTTP, checksum verification, ZIP/CSV parsing, and filesystem
+  persistence only after an explicit caller invocation. Importing the package
+  performs no I/O, creates no directories, and starts no background work.
 - `tests` may import public production APIs and test-only factories. Fixtures
   must remain deterministic, function-scoped where exposed by `conftest.py`,
   and independent of production runtime imports.
@@ -103,9 +115,10 @@ When implemented by separately scoped Issues, the directory boundaries mean:
 - `deploy/research`, `deploy/staging`, and `deploy/live`: explicit,
   environment-specific deployment assets.
 
-None of these future boundaries currently provides data ingestion, factors,
-backtesting, model training, order execution, account state, risk decisions,
-or multi-exchange support.
+None of these future scaffold directories currently provides additional data
+ingestion, factors, backtesting, model training, order execution, account
+state, risk decisions, or multi-exchange support. The narrow archive path in
+`tracequant.data` is the only implemented ingestion capability.
 
 ## Import and side-effect rules
 
