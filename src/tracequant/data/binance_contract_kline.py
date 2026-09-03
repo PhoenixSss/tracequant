@@ -121,6 +121,7 @@ class BinanceArchiveObjectPlan:
 class BinanceContractKlineStatus(StrEnum):
     PUBLISHED = "published"
     EXISTING = "existing"
+    COVERAGE_GAP = "coverage_gap"
     NOT_FOUND = "not_found"
     RETRYABLE_FAILURE = "retryable_failure"
     INVALID_CONTENT = "invalid_content"
@@ -155,6 +156,10 @@ class BinanceContractKlineRunResult:
 
 
 class _InvalidContentError(ValueError):
+    pass
+
+
+class _CoverageGapError(ValueError):
     pass
 
 
@@ -309,6 +314,34 @@ def _validate_decimal(value: str, *, field: str, nonnegative: bool = False) -> N
         raise _InvalidContentError(f"{field} has an invalid numeric value")
 
 
+def _required_record_range(plan: BinanceArchiveObjectPlan) -> TimeRange:
+    boundary = plan.request.archive_object_boundary
+    assert boundary is not None
+    object_start = _utc_midnight(boundary.period_start)
+    object_end = (
+        _utc_midnight(_next_month(boundary.period_start))
+        if boundary.granularity.value == "month"
+        else object_start + timedelta(days=1)
+    )
+    return TimeRange(
+        start=max(plan.request.request_range.start, object_start),
+        end=min(plan.request.request_range.end, object_end),
+    )
+
+
+def _validate_required_coverage(
+    plan: BinanceArchiveObjectPlan, actual_range: TimeRange
+) -> None:
+    required_range = _required_record_range(plan)
+    if (
+        actual_range.start > required_range.start
+        or actual_range.end < required_range.end
+    ):
+        raise _CoverageGapError(
+            "archive rows do not cover the caller range within this source object"
+        )
+
+
 def _parse_archive(
     plan: BinanceArchiveObjectPlan, payload: bytes
 ) -> tuple[pl.DataFrame, TimeRange]:
@@ -374,10 +407,13 @@ def _parse_archive(
             raise _InvalidContentError(
                 "row open_time is outside the archive object boundary"
             )
-        if previous_open is not None and open_time <= previous_open:
-            raise _InvalidContentError(
-                "row open_time values must be strictly increasing"
-            )
+        if previous_open is not None:
+            if open_time <= previous_open:
+                raise _InvalidContentError(
+                    "row open_time values must be strictly increasing"
+                )
+            if open_time != previous_open + _ONE_MINUTE_MS:
+                raise _CoverageGapError("archive rows contain a missing 1m timestamp")
         previous_open = open_time
         for index in (1, 2, 3, 4, 5, 7, 9, 10, 11):
             _validate_decimal(
@@ -409,12 +445,7 @@ def _parse_archive(
         start=datetime.fromtimestamp(first_open / 1000, tz=UTC),
         end=datetime.fromtimestamp((last_open + _ONE_MINUTE_MS) / 1000, tz=UTC),
     )
-    required_start = max(plan.request.request_range.start, object_start)
-    required_end = min(plan.request.request_range.end, object_end)
-    if actual_range.start > required_start or actual_range.end < required_end:
-        raise _InvalidContentError(
-            "archive rows do not cover the caller range within this source object"
-        )
+    _validate_required_coverage(plan, actual_range)
     return frame, actual_range
 
 
@@ -457,6 +488,15 @@ class BinanceContractKlineBackfill:
                 plan, BinanceContractKlineStatus.LOCAL_FAILURE, detail=str(error)
             )
         else:
+            try:
+                _validate_required_coverage(plan, existing.manifest.actual_record_range)
+            except _CoverageGapError as error:
+                return BinanceContractKlineObjectResult(
+                    plan,
+                    BinanceContractKlineStatus.COVERAGE_GAP,
+                    artifact_path=existing.path,
+                    detail=str(error),
+                )
             return BinanceContractKlineObjectResult(
                 plan, BinanceContractKlineStatus.EXISTING, artifact_path=existing.path
             )
@@ -490,6 +530,10 @@ class BinanceContractKlineBackfill:
         except _RetryableDownloadError as error:
             return BinanceContractKlineObjectResult(
                 plan, BinanceContractKlineStatus.RETRYABLE_FAILURE, detail=str(error)
+            )
+        except _CoverageGapError as error:
+            return BinanceContractKlineObjectResult(
+                plan, BinanceContractKlineStatus.COVERAGE_GAP, detail=str(error)
             )
         except (csv.Error, _InvalidContentError) as error:
             return BinanceContractKlineObjectResult(
