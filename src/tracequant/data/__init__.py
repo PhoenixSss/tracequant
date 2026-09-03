@@ -2,6 +2,7 @@
 
 from tracequant.data.binance_contract_kline import (
     ArchiveHttpResponse,
+    BinanceArchiveCoverageGapPlan,
     BinanceArchiveObjectPlan,
     BinanceContractKlineBackfill,
     BinanceContractKlineObjectResult,
@@ -34,6 +35,7 @@ from tracequant.data.raw_store import (
 
 __all__ = [
     "ArchiveHttpResponse",
+    "BinanceArchiveCoverageGapPlan",
     "BinanceArchiveObjectPlan",
     "BinanceArchiveObjectBoundary",
     "BinanceArchiveObjectGranularity",
