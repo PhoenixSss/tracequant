@@ -89,11 +89,12 @@ primitives; test factories remain a separate test-support layer.
   value models. It may depend on `core.time`, but not on exchanges, network
   clients, logging setup, UI code, deployment code, or test fixtures.
 - `tracequant.data` owns typed source/request contracts, immutable local Raw
-  Parquet/manifest persistence, and the Binance public-archive adapter. The
-  adapter supports only USDⓈ-M BTCUSDT and ETHUSDT 1m contract Klines and may
-  perform bounded HTTP, checksum verification, ZIP/CSV parsing, and filesystem
-  persistence only after an explicit caller invocation. Importing the package
-  performs no I/O, creates no directories, and starts no background work.
+  Parquet/manifest persistence, durable non-completed acquisition manifests,
+  and the Binance public-archive adapter. The adapter supports only USDⓈ-M
+  BTCUSDT and ETHUSDT 1m contract Klines and may perform bounded HTTP,
+  checksum verification, ZIP/CSV parsing, and filesystem persistence only
+  after an explicit caller invocation. Importing the package performs no I/O,
+  creates no directories, and starts no background work.
 - `tests` may import public production APIs and test-only factories. Fixtures
   must remain deterministic, function-scoped where exposed by `conftest.py`,
   and independent of production runtime imports.

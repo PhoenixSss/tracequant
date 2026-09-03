@@ -35,6 +35,8 @@ __all__ = [
     "RawArtifactConflictError",
     "RawArtifactNotFoundError",
     "RawArtifactValidationError",
+    "RawAcquisitionManifest",
+    "RawAcquisitionResponse",
     "RawManifest",
     "RawObjectIdentity",
     "RawSourceProvenance",
@@ -49,6 +51,8 @@ _DATA_FILENAME: Final = "data.parquet"
 _MANIFEST_FILENAME: Final = "manifest.json"
 _ARCHIVE_FILENAME: Final = "source.zip"
 _CHECKSUM_FILENAME: Final = "source.CHECKSUM"
+_ACQUISITION_DIRNAME: Final = "acquisition"
+_ACQUISITION_MANIFEST_VERSION: Final = 1
 
 
 class RawStoreError(Exception):
@@ -65,6 +69,34 @@ class RawArtifactNotFoundError(RawStoreError):
 
 class RawArtifactValidationError(RawStoreError):
     """Raised when a completed Raw artifact fails integrity validation."""
+
+
+@dataclass(frozen=True, slots=True)
+class RawAcquisitionResponse:
+    """One bounded HTTP response retained with an acquisition outcome."""
+
+    status: int
+    headers: Mapping[str, str]
+    body: bytes | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.status) is not int or not 100 <= self.status <= 599:
+            raise ValueError("status must be an HTTP status code")
+        object.__setattr__(
+            self, "headers", _normalize_headers(self.headers, field="headers")
+        )
+        if self.body is not None and not isinstance(self.body, bytes):
+            raise TypeError("body must be bytes or None")
+
+    @property
+    def body_sha256(self) -> str | None:
+        return None if self.body is None else hashlib.sha256(self.body).hexdigest()
+
+
+def _optional_sha256(value: object, *, field: str) -> str | None:
+    if value is None:
+        return None
+    return _require_sha256(value, field=field)
 
 
 def _canonical_json(value: object) -> str:
@@ -110,6 +142,12 @@ def _require_string(value: object, *, field: str) -> str:
     return value
 
 
+def _optional_string(value: object, *, field: str) -> str | None:
+    if value is None:
+        return None
+    return _require_string(value, field=field)
+
+
 def _require_sha256(value: object, *, field: str) -> str:
     digest = _require_string(value, field=field)
     if len(digest) != 64 or any(
@@ -136,6 +174,12 @@ def _require_http_status(value: object, *, field: str) -> int:
     if type(value) is not int or not 100 <= value <= 599:
         raise RawArtifactValidationError(f"{field} must be an HTTP status code")
     return value
+
+
+def _optional_http_status(value: object, *, field: str) -> int | None:
+    if value is None:
+        return None
+    return _require_http_status(value, field=field)
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,6 +432,175 @@ class RawObjectIdentity:
     @property
     def object_id(self) -> str:
         """Return a platform-independent identifier from canonical fields."""
+        return hashlib.sha256(
+            _canonical_json(self.to_dict()).encode("ascii")
+        ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class RawAcquisitionManifest:
+    """Durable, non-completed state for one attempted Raw acquisition."""
+
+    manifest_schema_version: int
+    completed: bool
+    object_identity: RawObjectIdentity
+    caller_request_range: TimeRange
+    status: str
+    detail: str
+    recorded_at: datetime
+    source_url: str | None
+    checksum_url: str | None
+    source_http_status: int | None
+    source_http_headers: Mapping[str, str]
+    source_body_sha256: str | None
+    checksum_http_status: int | None
+    checksum_http_headers: Mapping[str, str]
+    checksum_response_sha256: str | None
+
+    def __post_init__(self) -> None:
+        if self.manifest_schema_version != _ACQUISITION_MANIFEST_VERSION:
+            raise ValueError("unsupported acquisition manifest schema version")
+        if self.completed is not False:
+            raise ValueError("acquisition manifest must not be completed")
+        if not isinstance(self.object_identity, RawObjectIdentity):
+            raise TypeError("object_identity must be a RawObjectIdentity")
+        if not isinstance(self.caller_request_range, TimeRange):
+            raise TypeError("caller_request_range must be a TimeRange")
+        for field in ("status", "detail"):
+            value = getattr(self, field)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{field} must be a non-empty string")
+        if not isinstance(self.recorded_at, datetime):
+            raise TypeError("recorded_at must be a datetime")
+        try:
+            recorded_at = to_utc(self.recorded_at)
+        except ValueError as error:
+            raise ValueError("recorded_at must be timezone-aware") from error
+        object.__setattr__(self, "recorded_at", recorded_at)
+        for field in ("source_url", "checksum_url"):
+            value = getattr(self, field)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(f"{field} must be None or a non-empty string")
+        for field in ("source_http_status", "checksum_http_status"):
+            status = getattr(self, field)
+            if status is not None and (
+                type(status) is not int or not 100 <= status <= 599
+            ):
+                raise ValueError(f"{field} must be None or an HTTP status code")
+        for field in ("source_http_headers", "checksum_http_headers"):
+            object.__setattr__(
+                self,
+                field,
+                _normalize_headers(getattr(self, field), field=field),
+            )
+        for field in ("source_body_sha256", "checksum_response_sha256"):
+            object.__setattr__(
+                self,
+                field,
+                _optional_sha256(getattr(self, field), field=field),
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "manifest_schema_version": self.manifest_schema_version,
+            "completed": self.completed,
+            "object_identity": self.object_identity.to_dict(),
+            "caller_request_range": self.caller_request_range.to_dict(),
+            "status": self.status,
+            "detail": self.detail,
+            "recorded_at": format_utc(self.recorded_at),
+            "source_url": self.source_url,
+            "checksum_url": self.checksum_url,
+            "source_http_status": self.source_http_status,
+            "source_http_headers": dict(self.source_http_headers),
+            "source_body_sha256": self.source_body_sha256,
+            "checksum_http_status": self.checksum_http_status,
+            "checksum_http_headers": dict(self.checksum_http_headers),
+            "checksum_response_sha256": self.checksum_response_sha256,
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> Self:
+        fields = _exact_mapping(
+            value,
+            fields=frozenset(
+                {
+                    "manifest_schema_version",
+                    "completed",
+                    "object_identity",
+                    "caller_request_range",
+                    "status",
+                    "detail",
+                    "recorded_at",
+                    "source_url",
+                    "checksum_url",
+                    "source_http_status",
+                    "source_http_headers",
+                    "source_body_sha256",
+                    "checksum_http_status",
+                    "checksum_http_headers",
+                    "checksum_response_sha256",
+                }
+            ),
+            model="RawAcquisitionManifest",
+        )
+        try:
+            recorded_at = parse_utc(
+                _require_string(fields["recorded_at"], field="recorded_at")
+            )
+            object_identity = RawObjectIdentity.from_dict(fields["object_identity"])
+            caller_request_range = TimeRange.from_dict(fields["caller_request_range"])
+        except (TypeError, ValueError) as error:
+            raise RawArtifactValidationError(
+                "acquisition manifest contains invalid identity, range, or timestamp"
+            ) from error
+        try:
+            version = fields["manifest_schema_version"]
+            if type(version) is not int:
+                raise TypeError("manifest_schema_version must be an integer")
+            completed = fields["completed"]
+            if type(completed) is not bool:
+                raise TypeError("completed must be a boolean")
+            return cls(
+                manifest_schema_version=version,
+                completed=completed,
+                object_identity=object_identity,
+                caller_request_range=caller_request_range,
+                status=_require_string(fields["status"], field="status"),
+                detail=_require_string(fields["detail"], field="detail"),
+                recorded_at=recorded_at,
+                source_url=_optional_string(fields["source_url"], field="source_url"),
+                checksum_url=_optional_string(
+                    fields["checksum_url"], field="checksum_url"
+                ),
+                source_http_status=_optional_http_status(
+                    fields["source_http_status"], field="source_http_status"
+                ),
+                source_http_headers=_normalize_headers(
+                    fields["source_http_headers"], field="source_http_headers"
+                ),
+                source_body_sha256=_optional_sha256(
+                    fields["source_body_sha256"], field="source_body_sha256"
+                ),
+                checksum_http_status=_optional_http_status(
+                    fields["checksum_http_status"], field="checksum_http_status"
+                ),
+                checksum_http_headers=_normalize_headers(
+                    fields["checksum_http_headers"], field="checksum_http_headers"
+                ),
+                checksum_response_sha256=_optional_sha256(
+                    fields["checksum_response_sha256"],
+                    field="checksum_response_sha256",
+                ),
+            )
+        except (TypeError, ValueError) as error:
+            raise RawArtifactValidationError(
+                "acquisition manifest contains invalid outcome evidence"
+            ) from error
+
+    @property
+    def record_id(self) -> str:
+        """Return the deterministic identifier for this acquisition attempt."""
         return hashlib.sha256(
             _canonical_json(self.to_dict()).encode("ascii")
         ).hexdigest()
@@ -669,6 +882,101 @@ class RawStore:
     def path_for(self, identity: RawObjectIdentity) -> Path:
         return self._root / self.relative_path(identity)
 
+    def acquisition_path_for(self, identity: RawObjectIdentity) -> Path:
+        """Return the root for durable non-completed acquisition attempts."""
+        return self._root / _ACQUISITION_DIRNAME / self.relative_path(identity)
+
+    def write_acquisition_manifest(
+        self,
+        manifest: RawAcquisitionManifest,
+        *,
+        source_response: RawAcquisitionResponse | None = None,
+        checksum_response: RawAcquisitionResponse | None = None,
+    ) -> RawAcquisitionManifest:
+        """Persist one failed, gap, or quarantined acquisition attempt.
+
+        Acquisition manifests are stored outside the completed Raw object path.
+        Optional response bodies are retained beside the manifest as quarantine
+        evidence, so this method never makes an incomplete attempt readable as
+        a completed Raw artifact.
+        """
+        if not isinstance(manifest, RawAcquisitionManifest):
+            raise TypeError("manifest must be a RawAcquisitionManifest")
+        self._validate_acquisition_response(
+            manifest,
+            source_response,
+            prefix="source",
+        )
+        self._validate_acquisition_response(
+            manifest,
+            checksum_response,
+            prefix="checksum",
+        )
+
+        parent_path = self.acquisition_path_for(manifest.object_identity)
+        parent_path.mkdir(parents=True, exist_ok=True)
+        final_path = parent_path / manifest.record_id
+        temporary_path = Path(
+            tempfile.mkdtemp(prefix=f".{manifest.record_id}.tmp-", dir=parent_path)
+        )
+        try:
+            if source_response is not None and source_response.body is not None:
+                (temporary_path / _ARCHIVE_FILENAME).write_bytes(source_response.body)
+            if checksum_response is not None and checksum_response.body is not None:
+                (temporary_path / _CHECKSUM_FILENAME).write_bytes(
+                    checksum_response.body
+                )
+            manifest_path = temporary_path / _MANIFEST_FILENAME
+            manifest_path.write_text(
+                _canonical_json(manifest.to_dict()) + "\n", encoding="utf-8"
+            )
+            if source_response is not None and source_response.body is not None:
+                self._sync_file(temporary_path / _ARCHIVE_FILENAME)
+            if checksum_response is not None and checksum_response.body is not None:
+                self._sync_file(temporary_path / _CHECKSUM_FILENAME)
+            self._sync_file(manifest_path)
+            self._sync_directory(temporary_path)
+
+            if final_path.exists():
+                return self._read_acquisition_manifest(
+                    final_path, expected_identity=manifest.object_identity
+                )
+            try:
+                self._publish_directory(temporary_path, final_path)
+            except OSError:
+                if not final_path.exists():
+                    raise
+                return self._read_acquisition_manifest(
+                    final_path, expected_identity=manifest.object_identity
+                )
+            self._sync_directory(parent_path)
+            return self._read_acquisition_manifest(
+                final_path, expected_identity=manifest.object_identity
+            )
+        finally:
+            if temporary_path.exists():
+                shutil.rmtree(temporary_path)
+
+    def list_acquisition_manifests(
+        self, identity: RawObjectIdentity
+    ) -> tuple[RawAcquisitionManifest, ...]:
+        """Read all durable acquisition outcomes for one Raw identity."""
+        if not isinstance(identity, RawObjectIdentity):
+            raise TypeError("identity must be a RawObjectIdentity")
+        root = self.acquisition_path_for(identity)
+        if not root.is_dir():
+            return ()
+        records = []
+        for path in sorted(root.iterdir(), key=lambda item: item.name):
+            if not path.is_dir():
+                raise RawArtifactValidationError(
+                    "acquisition evidence contains an unexpected file"
+                )
+            records.append(
+                self._read_acquisition_manifest(path, expected_identity=identity)
+            )
+        return tuple(records)
+
     def write(self, source_object: RawSourceObject) -> RawArtifact:
         """Atomically publish or idempotently return one verified Raw object."""
         if not isinstance(source_object, RawSourceObject):
@@ -746,6 +1054,72 @@ class RawStore:
 
     def read_request(self, request: BinancePublicHistoryRequest) -> RawArtifact:
         return self.read(RawObjectIdentity.from_request(request))
+
+    @staticmethod
+    def _validate_acquisition_response(
+        manifest: RawAcquisitionManifest,
+        response: RawAcquisitionResponse | None,
+        *,
+        prefix: str,
+    ) -> None:
+        status_field = f"{prefix}_http_status"
+        headers_field = f"{prefix}_http_headers"
+        digest_field = (
+            "source_body_sha256" if prefix == "source" else "checksum_response_sha256"
+        )
+        if response is None:
+            if (
+                getattr(manifest, status_field) is not None
+                or getattr(manifest, headers_field)
+                or getattr(manifest, digest_field) is not None
+            ):
+                raise ValueError(f"{prefix} evidence is missing its response")
+            return
+        if getattr(manifest, status_field) != response.status:
+            raise ValueError(f"{prefix} response status does not match manifest")
+        if dict(getattr(manifest, headers_field)) != dict(response.headers):
+            raise ValueError(f"{prefix} response headers do not match manifest")
+        if getattr(manifest, digest_field) != response.body_sha256:
+            raise ValueError(f"{prefix} response digest does not match manifest")
+
+    def _read_acquisition_manifest(
+        self, path: Path, *, expected_identity: RawObjectIdentity
+    ) -> RawAcquisitionManifest:
+        manifest_path = path / _MANIFEST_FILENAME
+        if not manifest_path.is_file():
+            raise RawArtifactNotFoundError(
+                "acquisition evidence requires manifest.json"
+            )
+        try:
+            value = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise RawArtifactValidationError(
+                "acquisition manifest is not valid UTF-8 JSON"
+            ) from error
+        manifest = RawAcquisitionManifest.from_dict(value)
+        if manifest.object_identity != expected_identity:
+            raise RawArtifactValidationError(
+                "acquisition manifest object identity does not match path"
+            )
+        for filename, digest in (
+            (_ARCHIVE_FILENAME, manifest.source_body_sha256),
+            (_CHECKSUM_FILENAME, manifest.checksum_response_sha256),
+        ):
+            body_path = path / filename
+            if digest is None:
+                if body_path.exists():
+                    raise RawArtifactValidationError(
+                        f"acquisition evidence has unexpected {filename}"
+                    )
+            elif not body_path.is_file():
+                raise RawArtifactNotFoundError(
+                    f"acquisition evidence requires {filename}"
+                )
+            elif _sha256(body_path) != digest:
+                raise RawArtifactValidationError(
+                    f"acquisition evidence {filename} checksum does not match manifest"
+                )
+        return manifest
 
     def _resolve_existing(
         self, final_path: Path, candidate_manifest: RawManifest
