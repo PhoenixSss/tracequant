@@ -71,6 +71,7 @@ flowchart TB
         RESOLVE["Resolve live Issue / Git / GitHub identity"]
         GATES["Profile gates + formal validation"]
         EFFECTS["Bounded branch, commit, push,<br/>PR, and lifecycle effects"]
+        REVIEW_COMPLETE["Review Complete<br/>accept applicable PASS"]
         PREFLIGHT["Fresh merge preflight"]
         RECEIPT["Bounded Audit Receipt<br/>evidence, not authority"]
         RECOVERY["Fail-closed recovery<br/>explicit remediation boundary"]
@@ -88,8 +89,8 @@ flowchart TB
     GATES --> RECEIPT
     STATE --> REVIEWER
     CANDIDATE --> REVIEWER
-    REVIEWER --> VERDICT --> MERGE
-    RESOLVE --> PREFLIGHT --> MERGE
+    REVIEWER --> VERDICT
+    VERDICT -->|PASS| REVIEW_COMPLETE --> PREFLIGHT --> MERGE
     MERGE --> STATE
     RECOVERY --> RESOLVE
 ```
