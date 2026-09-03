@@ -17,7 +17,7 @@ import re
 import urllib.error
 import urllib.request
 import zipfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
@@ -40,6 +40,7 @@ from tracequant.data.raw_store import (
     RawArtifactNotFoundError,
     RawArtifactValidationError,
     RawSourceObject,
+    RawSourceProvenance,
     RawStore,
 )
 from tracequant.domain import InstrumentId, TimeRange
@@ -147,6 +148,7 @@ class BinanceContractKlineStatus(StrEnum):
     EXISTING = "existing"
     COVERAGE_GAP = "coverage_gap"
     NOT_FOUND = "not_found"
+    CHECKSUM_NOT_FOUND = "checksum_not_found"
     RETRYABLE_FAILURE = "retryable_failure"
     INVALID_CONTENT = "invalid_content"
     LOCAL_FAILURE = "local_failure"
@@ -189,6 +191,19 @@ class _CoverageGapError(ValueError):
 
 class _RetryableDownloadError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class _DownloadedResponse:
+    body: bytes
+    status: int
+    headers: Mapping[str, str]
+
+
+class _DownloadNotFoundError(FileNotFoundError):
+    def __init__(self, url: str, *, resource: str) -> None:
+        super().__init__(url)
+        self.resource = resource
 
 
 def _next_month(value: date) -> date:
@@ -313,7 +328,13 @@ def _default_http_get(url: str, timeout: float) -> ArchiveHttpResponse:
         raise _RetryableDownloadError(str(error)) from error
 
 
-def _download(http_get: ArchiveHttpGet, url: str, timeout: float) -> bytes:
+def _download(
+    http_get: ArchiveHttpGet,
+    url: str,
+    timeout: float,
+    *,
+    resource: str,
+) -> _DownloadedResponse:
     try:
         response = http_get(url, timeout)
     except _InvalidContentError:
@@ -326,14 +347,18 @@ def _download(http_get: ArchiveHttpGet, url: str, timeout: float) -> bytes:
     ) as error:
         raise _RetryableDownloadError(str(error)) from error
     if response.status == 404:
-        raise FileNotFoundError(url)
+        raise _DownloadNotFoundError(url, resource=resource)
     if response.status == 429 or 500 <= response.status <= 599:
         raise _RetryableDownloadError(f"HTTP {response.status} for {url}")
     if response.status < 200 or response.status >= 300:
         raise _InvalidContentError(f"unexpected HTTP {response.status} for {url}")
     if not response.body:
         raise _InvalidContentError(f"empty response for {url}")
-    return response.body
+    return _DownloadedResponse(
+        body=response.body,
+        status=response.status,
+        headers=dict(response.headers),
+    )
 
 
 def _declared_checksum(payload: bytes, expected_filename: str) -> str:
@@ -523,6 +548,7 @@ class BinanceContractKlineBackfill:
         *,
         http_get: ArchiveHttpGet | None = None,
         timeout: float = 30.0,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         if not isinstance(store, RawStore):
             raise TypeError("store must be a RawStore")
@@ -531,6 +557,7 @@ class BinanceContractKlineBackfill:
         self._store = store
         self._http_get = http_get or _default_http_get
         self._timeout = timeout
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     def run(
         self, instrument: InstrumentId, request_range: TimeRange
@@ -574,16 +601,26 @@ class BinanceContractKlineBackfill:
 
         try:
             checksum_payload = _download(
-                self._http_get, plan.checksum_url, self._timeout
+                self._http_get,
+                plan.checksum_url,
+                self._timeout,
+                resource="checksum",
             )
-            declared = _declared_checksum(checksum_payload, plan.url.rsplit("/", 1)[-1])
-            archive_payload = _download(self._http_get, plan.url, self._timeout)
-            actual = hashlib.sha256(archive_payload).hexdigest()
+            declared = _declared_checksum(
+                checksum_payload.body, plan.url.rsplit("/", 1)[-1]
+            )
+            archive_payload = _download(
+                self._http_get,
+                plan.url,
+                self._timeout,
+                resource="archive",
+            )
+            actual = hashlib.sha256(archive_payload.body).hexdigest()
             if actual != declared:
                 raise _InvalidContentError(
                     "archive SHA-256 does not match upstream checksum"
                 )
-            frame, actual_range = _parse_archive(plan, archive_payload)
+            frame, actual_range = _parse_archive(plan, archive_payload.body)
             source = RawSourceObject(
                 request=plan.request,
                 rows=frame,
@@ -592,12 +629,37 @@ class BinanceContractKlineBackfill:
                 producer_version=_PRODUCER_VERSION,
                 upstream_checksum=f"sha256:{declared}",
                 upstream_revision=plan.url,
+                provenance=RawSourceProvenance(
+                    object_key=plan.object_key,
+                    source_url=plan.url,
+                    acquired_at=self._clock(),
+                    source_http_status=archive_payload.status,
+                    source_http_headers=archive_payload.headers,
+                    checksum_url=plan.checksum_url,
+                    checksum_http_status=checksum_payload.status,
+                    checksum_http_headers=checksum_payload.headers,
+                    checksum_response_sha256=hashlib.sha256(
+                        checksum_payload.body
+                    ).hexdigest(),
+                    archive_sha256=actual,
+                    csv_member=plan.member_name,
+                    validation_evidence=(
+                        "checksum_response_verified",
+                        "archive_sha256_matches_checksum",
+                        "zip_member_structure_verified",
+                        "csv_schema_and_rows_verified",
+                        "source_object_coverage_verified",
+                    ),
+                ),
             )
             artifact = self._store.write(source)
-        except FileNotFoundError as error:
-            return BinanceContractKlineObjectResult(
-                plan, BinanceContractKlineStatus.NOT_FOUND, detail=str(error)
+        except _DownloadNotFoundError as error:
+            status = (
+                BinanceContractKlineStatus.CHECKSUM_NOT_FOUND
+                if error.resource == "checksum"
+                else BinanceContractKlineStatus.NOT_FOUND
             )
+            return BinanceContractKlineObjectResult(plan, status, detail=str(error))
         except _RetryableDownloadError as error:
             return BinanceContractKlineObjectResult(
                 plan, BinanceContractKlineStatus.RETRYABLE_FAILURE, detail=str(error)

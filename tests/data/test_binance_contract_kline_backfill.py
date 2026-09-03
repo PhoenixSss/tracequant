@@ -86,7 +86,9 @@ def _responses(url: str, archive: bytes) -> dict[str, ArchiveHttpResponse]:
     return {
         url: ArchiveHttpResponse(200, archive, {"Content-Type": "application/zip"}),
         f"{url}.CHECKSUM": ArchiveHttpResponse(
-            200, f"{checksum}  {filename}\n".encode(), {}
+            200,
+            f"{checksum}  {filename}\n".encode(),
+            {"Content-Type": "text/plain"},
         ),
     }
 
@@ -216,7 +218,8 @@ def test_backfill_contract_klines_publishes_verified_raw_artifact(
         1709164800000,
         second_close="61011.0",
     )
-    transport = FixtureHttp(_responses(plan.url, archive))
+    responses = _responses(plan.url, archive)
+    transport = FixtureHttp(responses)
     store = RawStore(tmp_path)
 
     result = BinanceContractKlineBackfill(store, http_get=transport, timeout=2.5).run(
@@ -248,6 +251,29 @@ def test_backfill_contract_klines_publishes_verified_raw_artifact(
         f"sha256:{hashlib.sha256(archive).hexdigest()}"
     )
     assert artifact.manifest.upstream_revision == plan.url
+    provenance = artifact.manifest.provenance
+    assert provenance is not None
+    assert provenance.object_key == plan.object_key
+    assert provenance.source_url == plan.url
+    assert provenance.source_http_status == 200
+    assert dict(provenance.source_http_headers) == {"Content-Type": "application/zip"}
+    assert provenance.checksum_url == plan.checksum_url
+    assert provenance.checksum_http_status == 200
+    assert dict(provenance.checksum_http_headers) == {"Content-Type": "text/plain"}
+    assert (
+        provenance.checksum_response_sha256
+        == hashlib.sha256(responses[plan.checksum_url].body).hexdigest()
+    )
+    assert provenance.archive_sha256 == hashlib.sha256(archive).hexdigest()
+    assert provenance.csv_member == plan.member_name
+    assert provenance.validation_evidence == (
+        "checksum_response_verified",
+        "archive_sha256_matches_checksum",
+        "zip_member_structure_verified",
+        "csv_schema_and_rows_verified",
+        "source_object_coverage_verified",
+    )
+    assert provenance.acquired_at.tzinfo is not None
     assert all(timeout == 2.5 for _, timeout in transport.calls)
 
 
@@ -268,6 +294,47 @@ def test_checksum_mismatch_does_not_publish_completed_artifact(tmp_path: Path) -
     assert result.completed is False
     assert result.objects[0].status is BinanceContractKlineStatus.INVALID_CONTENT
     assert not store.path_for(RawObjectIdentity.from_request(plan.request)).exists()
+
+
+def test_missing_checksum_is_distinct_from_missing_archive(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2024-02-29T00:00:00", "2024-03-01T00:00:00")
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
+    archive = _full_daily_archive(plan, 1709164800000)
+    responses = _responses(plan.url, archive)
+    responses.pop(plan.checksum_url)
+
+    result = BinanceContractKlineBackfill(
+        RawStore(tmp_path), http_get=FixtureHttp(responses)
+    ).run(InstrumentId("BTCUSDT"), request_range)
+
+    assert result.completed is False
+    assert result.objects[0].status is BinanceContractKlineStatus.CHECKSUM_NOT_FOUND
+    assert result.objects[0].detail == plan.checksum_url
+    assert (
+        not RawStore(tmp_path)
+        .path_for(RawObjectIdentity.from_request(plan.request))
+        .exists()
+    )
+
+
+def test_missing_archive_remains_not_found_after_checksum_is_verified(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2024-02-29T00:00:00", "2024-03-01T00:00:00")
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
+    archive = _full_daily_archive(plan, 1709164800000)
+    responses = _responses(plan.url, archive)
+    responses.pop(plan.url)
+
+    result = BinanceContractKlineBackfill(
+        RawStore(tmp_path), http_get=FixtureHttp(responses)
+    ).run(InstrumentId("BTCUSDT"), request_range)
+
+    assert result.completed is False
+    assert result.objects[0].status is BinanceContractKlineStatus.NOT_FOUND
+    assert result.objects[0].detail == plan.url
 
 
 def test_truncated_daily_archive_is_not_published_as_completed(
@@ -360,7 +427,7 @@ def test_cross_object_partial_failure_keeps_published_object_and_is_not_complete
     assert result.completed is False
     assert [item.status for item in result.objects] == [
         BinanceContractKlineStatus.PUBLISHED,
-        BinanceContractKlineStatus.NOT_FOUND,
+        BinanceContractKlineStatus.CHECKSUM_NOT_FOUND,
     ]
     assert store.read_request(plans[0].request).frame.height == 24 * 60
 
@@ -504,7 +571,7 @@ def test_existing_object_is_reconciled_when_request_widens(tmp_path: Path) -> No
     )
 
     assert second.completed is False
-    assert second.objects[0].status is BinanceContractKlineStatus.NOT_FOUND
+    assert second.objects[0].status is BinanceContractKlineStatus.CHECKSUM_NOT_FOUND
     assert second.objects[0].artifact_path is None
     assert [url for url, _ in current_http.calls] == [narrow_plan.checksum_url]
     assert store.read_request(narrow_plan.request).frame.height == 24 * 60

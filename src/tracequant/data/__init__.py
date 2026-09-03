@@ -29,6 +29,7 @@ from tracequant.data.raw_store import (
     RawManifest,
     RawObjectIdentity,
     RawSourceObject,
+    RawSourceProvenance,
     RawStore,
     RawStoreError,
 )
@@ -56,6 +57,7 @@ __all__ = [
     "RawArtifactValidationError",
     "RawManifest",
     "RawObjectIdentity",
+    "RawSourceProvenance",
     "RawSourceObject",
     "RawStore",
     "RawStoreError",
