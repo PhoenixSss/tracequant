@@ -310,10 +310,12 @@ with future TraceQuant main.
 
 ### Future portability work
 
-A separately published archive, standalone LCK repository, package extraction,
-one-click installer, zero-configuration setup, universal compatibility, and
-automatic external adoption are not provided by this guide. They remain future
-portability or distribution work, not current implementation facts.
+The separately published `preview.2` archive is available through the
+versioned path described above. A standalone LCK repository, package
+extraction, one-click installer, zero-configuration setup, universal
+compatibility, and automatic external adoption are not provided by this guide.
+They remain future portability or distribution work, not current implementation
+facts.
 
 Manual adoption also does not decouple LCK core from TraceQuant, change
 TraceQuant's product identity, or grant an adopting repository any of

@@ -72,7 +72,7 @@ The documents have deliberately different responsibilities:
 - The [LCK overview](LCK-overview.md) explains what LCK is, how the lifecycle
   is divided, and where LCK stops.
 - The [manual adoption guide](LCK-adoption.md) explains repository-copy
-  adoption, adaptation points, and the conditional archive-adoption path.
+  adoption, adaptation points, and the versioned archive-adoption path.
 - The [technical baseline](../architecture/technical-baseline.md) is the
   authority for current TraceQuant implementation facts and deferred product
   boundaries.
