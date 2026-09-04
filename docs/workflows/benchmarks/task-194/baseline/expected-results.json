@@ -1,0 +1,48 @@
+{
+  "corpus_id": "task-194-review-benchmark-v1",
+  "fixtures": {
+    "task-194:defect-rich-v1": {
+      "control_status": "known-findings-covered",
+      "minimum_known_findings": 3,
+      "repetitions": 2,
+      "verdict": "FAIL"
+    },
+    "task-194:stable-v1": {
+      "control_status": "repeated-pass-control",
+      "new_finding_policy": "adjudicate-before-classification",
+      "repetitions": 2,
+      "verdict": "PASS"
+    }
+  },
+  "protocol": {
+    "protocol_id": "tracequant-production-equivalent-review",
+    "protocol_steps": [
+      "Inspect",
+      "Reason",
+      "Judge",
+      "Report"
+    ],
+    "protocol_version": "v1"
+  },
+  "receipt_required_fields": [
+    "fixture.fixture_id",
+    "fixture.fixture_digest",
+    "fixture.base_sha",
+    "fixture.head_sha",
+    "fixture.effective_diff_sha256",
+    "fixture.task_contract_sha256",
+    "fixture.deterministic_evidence_sha256",
+    "fixture.repository_artifact_sha256",
+    "fixture.fixture_manifest_sha256",
+    "run.run_id",
+    "run.harness_sha",
+    "run.protocol_version",
+    "run.model",
+    "run.config",
+    "run.token_usage",
+    "run.wall_clock_ms",
+    "run.findings",
+    "run.verdict"
+  ],
+  "schema_version": 1
+}

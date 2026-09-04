@@ -1,0 +1,26 @@
+{
+  "artifacts": {
+    "deterministic_evidence": {
+      "path": "deterministic-evidence.json",
+      "sha256": "7ae493163c02a0880cc8d3ca20c0b7f0368aac4db360220d7a52356e83005857"
+    },
+    "repository_bundle": {
+      "path": "repository.bundle",
+      "sha256": "dd89385169baf4bc64aaeebd1ed6d32d4562cf737d2e2507abf2c9d51ed93d1b"
+    },
+    "task_contract": {
+      "path": "task-contract.json",
+      "sha256": "70f12a5e36ca17b4e67cf1da3c2d1446f0de34826b0610457b7cb15dcc519db2"
+    }
+  },
+  "base_sha": "fd9946e1c7773c33c2cabbd08e084fb18c236525",
+  "deterministic_evidence_sha256": "7ae493163c02a0880cc8d3ca20c0b7f0368aac4db360220d7a52356e83005857",
+  "effective_diff_sha256": "8a3af6358cda120221aae9503afafa7b2bdc73007b5c95a2914bdd9331ca6ab5",
+  "fixture_digest": "e4475a128516752169b203dea840caf84e24646d13b452e7299604188b70ef52",
+  "fixture_id": "task-194:defect-rich-v1",
+  "fixture_manifest_sha256": "2ce125186c9103583756b229b8a06d30db2681f34c2e8bba80a58288a22664e3",
+  "fixture_schema_version": 1,
+  "head_sha": "929ce3dfc71846c4d40a3ce8a05215345be8bc33",
+  "repository_artifact_sha256": "dd89385169baf4bc64aaeebd1ed6d32d4562cf737d2e2507abf2c9d51ed93d1b",
+  "task_contract_sha256": "70f12a5e36ca17b4e67cf1da3c2d1446f0de34826b0610457b7cb15dcc519db2"
+}

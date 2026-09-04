@@ -1,0 +1,67 @@
+{
+  "boundary": "scorer-only",
+  "fixtures": {
+    "task-194:defect-rich-v1": {
+      "baseline_expectation": {
+        "verdict": "FAIL",
+        "purpose": "known-finding recall"
+      },
+      "known_findings": [
+        {
+          "applicability": "Confirmed on the frozen 929ce3d head: a very long numeric field reaches int(value) before the parser can classify invalid content, so the historical run can raise an interpreter conversion exception. The later c3b8f85 fix bounds the textual integer before conversion.",
+          "category": "integer-range-exception",
+          "evidence": [
+            "929ce3dfc71846c4d40a3ce8a05215345be8bc33: src/tracequant/data/binance_contract_kline.py _parse_nonnegative_int uses int(value) directly.",
+            "c3b8f85320e355cc16b4007c1bf4310874e5ec8b: later fix adds a signed-64 textual bound and regression coverage."
+          ],
+          "finding_id": "task194-known-001",
+          "fixed_head": "c3b8f85320e355cc16b4007c1bf4310874e5ec8b",
+          "introduced_head": "929ce3dfc71846c4d40a3ce8a05215345be8bc33",
+          "path": "src/tracequant/data/binance_contract_kline.py",
+          "severity": "High",
+          "symbol": "_parse_nonnegative_int",
+          "title": "Oversized integer input escapes the invalid-content boundary"
+        },
+        {
+          "applicability": "Confirmed on the frozen 929ce3d head: RawManifest.from_dict accepts only the current schema version and requires the current manifest shape, so a completed schema-one manifest without provenance is rejected. The later d050544 fix restores an explicit legacy read path.",
+          "category": "manifest-backward-compatibility",
+          "evidence": [
+            "929ce3dfc71846c4d40a3ce8a05215345be8bc33: src/tracequant/data/raw_store.py rejects a manifest version different from the current version.",
+            "d050544c9437abb11ef8ce3b7468db4a65ecd6c1: later fix accepts the legacy version and omits provenance when serializing it."
+          ],
+          "finding_id": "task194-known-002",
+          "fixed_head": "d050544c9437abb11ef8ce3b7468db4a65ecd6c1",
+          "introduced_head": "929ce3dfc71846c4d40a3ce8a05215345be8bc33",
+          "path": "src/tracequant/data/raw_store.py",
+          "severity": "Medium",
+          "symbol": "RawManifest.from_dict",
+          "title": "Reader is not backward compatible with the completed legacy manifest"
+        },
+        {
+          "applicability": "Confirmed on the frozen 929ce3d head: an existing directory missing a final artifact component is reported through RawArtifactNotFoundError, which the Binance backfill treats as absent and may proceed to network acquisition. The later 3b1cbbd fix introduces a distinct incomplete-artifact failure.",
+          "category": "incomplete-local-artifact-semantics",
+          "evidence": [
+            "929ce3dfc71846c4d40a3ce8a05215345be8bc33: RawStore reports missing final components as RawArtifactNotFoundError and the backfill catches that as a miss.",
+            "3b1cbbd6db08ae81506c9b70ebfc7eabd7b8cf70: later fix distinguishes RawArtifactIncompleteError and avoids transport calls."
+          ],
+          "finding_id": "task194-known-003",
+          "fixed_head": "3b1cbbd6db08ae81506c9b70ebfc7eabd7b8cf70",
+          "introduced_head": "929ce3dfc71846c4d40a3ce8a05215345be8bc33",
+          "path": "src/tracequant/data/binance_contract_kline.py",
+          "severity": "High",
+          "symbol": "BinanceContractKlineBackfill.run",
+          "title": "Incomplete local artifacts are treated as absent"
+        }
+      ]
+    },
+    "task-194:stable-v1": {
+      "baseline_expectation": {
+        "verdict": "PASS",
+        "purpose": "historical repeated-PASS control",
+        "new_finding_policy": "adjudicate before classification"
+      },
+      "known_findings": []
+    }
+  },
+  "schema_version": 1
+}

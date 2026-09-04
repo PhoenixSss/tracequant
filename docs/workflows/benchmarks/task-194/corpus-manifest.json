@@ -1,0 +1,34 @@
+{
+  "corpus_id": "task-194-review-benchmark-v1",
+  "fixtures": [
+    {
+      "expected_fixture_digest": "e4475a128516752169b203dea840caf84e24646d13b452e7299604188b70ef52",
+      "fixture_id": "task-194:defect-rich-v1",
+      "kind": "defect-rich",
+      "path": "fixtures/task-194-defect-rich-v1"
+    },
+    {
+      "expected_fixture_digest": "cedce9c02aa6851a04b58225cf44c96b4a9fb03d3170be201366fe856e688126",
+      "fixture_id": "task-194:stable-v1",
+      "kind": "stable",
+      "path": "fixtures/task-194-stable-v1"
+    }
+  ],
+  "manifest_sha256": "b042206aecf56a0d9878a52673aa1bab00a7b35f9da838b1e0640343574c1cb4",
+  "oracle_path": "oracle/known-findings.json",
+  "oracle_sha256": "75a9810094f2a663c4022b60b34cb8a8106e61d36705a6583ede12defef6204a",
+  "protocol": {
+    "protocol_id": "tracequant-production-equivalent-review",
+    "protocol_steps": [
+      "Inspect",
+      "Reason",
+      "Judge",
+      "Report"
+    ],
+    "protocol_version": "v1",
+    "subject_boundary": "frozen fixture materialized into a read-only independent Run"
+  },
+  "schema_version": 1,
+  "task_number": 194,
+  "task_title": "[Task] 实现 Binance USDⓈ-M 1m 合约 K 线官方历史文件回填"
+}
