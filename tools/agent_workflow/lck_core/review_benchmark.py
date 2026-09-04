@@ -42,6 +42,8 @@ from .review_eval import (
     GitFrozenSubjectMaterializer,
     ReviewEvalRunContext,
     ReviewEvalRunner,
+    VerifiedHarnessSnapshot,
+    _verified_harness_snapshot,
 )
 from .review_fixture import FrozenReviewFixture, load_frozen_review_fixture
 
@@ -675,12 +677,23 @@ class ReviewBenchmarkRunner:
             raise LckStopError("Review benchmark Harness SHA is unavailable")
         return harness_sha
 
-    def _copy_harness_snapshot(self, destination: Path) -> None:
-        """Copy the current tracked Harness while excluding corpus data."""
+    def _copy_harness_snapshot(self, destination: Path, harness_sha: str) -> None:
+        """Materialize the exact committed Harness while excluding corpus data."""
+        index_path = destination.parent / "harness-index"
+        index_env = {"GIT_INDEX_FILE": str(index_path)}
+        read_tree = CommandRunner(self.harness_root).run(
+            ["git", "read-tree", harness_sha],
+            command_id="review-benchmark-harness-read-tree",
+            cwd=self.harness_root,
+            env=index_env,
+        )
+        if read_tree.returncode != 0:
+            raise LckStopError("Review benchmark Harness commit tree is unavailable")
         result = CommandRunner(self.harness_root).run(
             ["git", "ls-files", "--cached", "-z"],
             command_id="review-benchmark-harness-files",
             cwd=self.harness_root,
+            env=index_env,
         )
         if result.returncode != 0:
             raise LckStopError("Review benchmark Harness file inventory is unavailable")
@@ -693,47 +706,62 @@ class ReviewBenchmarkRunner:
         if corpus_relative == Path("."):
             raise LckStopError("Review benchmark corpus cannot be the Harness root")
 
+        relative_paths: list[Path] = []
         for raw_path in result.stdout.split("\0"):
             if not raw_path:
                 continue
             relative = Path(raw_path)
             if relative.is_absolute() or ".." in relative.parts:
                 raise LckStopError("Review benchmark Harness file path is invalid")
-            if relative.parts[0] in _HARNESS_EXCLUDED_ROOTS:
-                continue
-            if corpus_relative is not None and (
-                relative == corpus_relative or corpus_relative in relative.parents
-            ):
-                continue
-            source = self.harness_root / relative
-            if source.is_symlink():
-                continue
-            if not source.is_file():
-                continue
+            relative_paths.append(relative)
+
+        checkout = CommandRunner(self.harness_root).run(
+            ["git", "checkout-index", "--all", f"--prefix={destination}/"],
+            command_id="review-benchmark-harness-checkout",
+            cwd=self.harness_root,
+            env=index_env,
+        )
+        if checkout.returncode != 0:
+            raise LckStopError("Review benchmark Harness snapshot is unavailable")
+
+        def remove_snapshot_path(path: Path) -> None:
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+            elif path.is_dir():
+                shutil.rmtree(path)
+
+        for excluded_root in _HARNESS_EXCLUDED_ROOTS:
+            remove_snapshot_path(destination / excluded_root)
+        if corpus_relative is not None:
+            remove_snapshot_path(destination / corpus_relative)
+
+        for relative in relative_paths:
             target = destination / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
+            if target.is_symlink():
+                target.unlink()
+
+        index_path.unlink(missing_ok=True)
+        (index_path.with_name(index_path.name + ".lock")).unlink(missing_ok=True)
 
     @contextmanager
-    def _isolated_harness(self) -> Iterator[tuple[Path, str]]:
+    def _isolated_harness(self) -> Iterator[VerifiedHarnessSnapshot]:
         """Yield a disposable Harness view that cannot resolve corpus files."""
         harness_sha = self._current_harness_sha()
         temporary_root = Path(tempfile.mkdtemp(prefix="tracequant-lck-review-harness-"))
         snapshot = temporary_root / "harness"
         try:
             snapshot.mkdir()
-            self._copy_harness_snapshot(snapshot)
-            yield snapshot, harness_sha
+            self._copy_harness_snapshot(snapshot, harness_sha)
+            yield _verified_harness_snapshot(snapshot, harness_sha)
         finally:
             shutil.rmtree(temporary_root, ignore_errors=True)
 
     def replay(self, fixture_id: str, protocol: ReviewProtocol) -> ReplayResult:
         fixture = self.corpus.fixture(fixture_id)
-        with self._isolated_harness() as (harness_root, harness_sha):
+        with self._isolated_harness() as harness_snapshot:
             runner = ReviewEvalRunner(
-                harness_root,
+                harness_snapshot,
                 workspace_root=self.workspace_root,
-                harness_sha=harness_sha,
             )
             started = time.perf_counter_ns()
             execution = runner.run(
@@ -746,6 +774,10 @@ class ReviewBenchmarkRunner:
                 if not isinstance(observation, ReviewObservation):
                     raise TypeError(
                         "Review benchmark protocol returned an invalid observation"
+                    )
+                if execution.run.harness_sha != harness_snapshot.sha:
+                    raise LckStopError(
+                        "Review benchmark Harness identity is not bound to snapshot"
                     )
                 elapsed_ms = max((time.perf_counter_ns() - started) / 1_000_000, 0.001)
                 authority = execution.run.authority
@@ -768,7 +800,7 @@ class ReviewBenchmarkRunner:
                     or "",
                     fixture_manifest_sha256=authority.fixture_manifest_sha256 or "",
                     run_id=execution.run.run_id,
-                    harness_sha=execution.run.harness_sha or harness_sha,
+                    harness_sha=execution.run.harness_sha,
                     protocol_id=self.corpus.protocol_id,
                     protocol_version=self.corpus.protocol_version,
                     protocol_steps=PROTOCOL_STEPS,

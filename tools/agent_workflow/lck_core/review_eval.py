@@ -41,6 +41,32 @@ from .review_fixture import (
 T = TypeVar("T")
 _RECEIPT_NAME: Final = "run-receipt.json"
 _RECEIPT_STATUSES: Final = frozenset({"READY_FOR_EVAL", "COMPLETED"})
+_VERIFIED_HARNESS_TOKEN = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class VerifiedHarnessSnapshot:
+    """A Harness tree materialized from the commit identified by ``sha``.
+
+    The private token keeps raw SHA strings out of the public
+    :class:`ReviewEvalRunner` override surface.  Benchmark callers obtain this
+    value only after materializing the exact committed tree.
+    """
+
+    root: Path
+    sha: str
+
+    def __init__(self, root: Path, sha: str, *, _token: object) -> None:
+        if _token is not _VERIFIED_HARNESS_TOKEN:
+            raise TypeError("VerifiedHarnessSnapshot is not directly constructible")
+        if not is_sha(sha) or len(sha) != 40:
+            raise LckStopError("Review Eval Harness SHA is invalid")
+        object.__setattr__(self, "root", root.resolve())
+        object.__setattr__(self, "sha", sha)
+
+
+def _verified_harness_snapshot(root: Path, sha: str) -> VerifiedHarnessSnapshot:
+    return VerifiedHarnessSnapshot(root, sha, _token=_VERIFIED_HARNESS_TOKEN)
 
 
 class SubjectMaterializer(Protocol):
@@ -622,23 +648,24 @@ class ReviewEvalRunner:
 
     def __init__(
         self,
-        harness_root: Path | None = None,
+        harness_root: Path | VerifiedHarnessSnapshot | None = None,
         *,
         workspace: ReviewEvalWorkspaceManager | None = None,
         workspace_root: Path | None = None,
         command_runner: CommandRunner | None = None,
-        harness_sha: str | None = None,
     ) -> None:
-        self.harness_root = (harness_root or Path.cwd()).resolve()
+        self._verified_harness_sha: str | None = None
+        if isinstance(harness_root, VerifiedHarnessSnapshot):
+            self.harness_root = harness_root.root
+            self._verified_harness_sha = harness_root.sha
+        else:
+            self.harness_root = (harness_root or Path.cwd()).resolve()
         if not self.harness_root.is_dir():
             raise LckStopError("Review Eval Harness checkout is unavailable")
         if workspace is not None and workspace_root is not None:
             raise ValueError("provide workspace or workspace_root, not both")
-        if harness_sha is not None and not is_sha(harness_sha):
-            raise LckStopError("Review Eval Harness SHA is invalid")
         self.workspace = workspace or ReviewEvalWorkspaceManager(workspace_root)
         self.command_runner = command_runner or CommandRunner(self.harness_root)
-        self._harness_sha_override = harness_sha
 
     def start(
         self,
@@ -667,11 +694,9 @@ class ReviewEvalRunner:
             )
         if materializer is None:
             raise TypeError("Review Eval Subject materializer is required")
-        harness_sha = (
-            self._harness_sha_override
-            if self._harness_sha_override is not None
-            else self._harness_sha()
-        )
+        harness_sha = self._harness_sha()
+        if harness_sha is None:
+            harness_sha = self._verified_harness_sha
         if fixture is not None and harness_sha is None:
             raise LckStopError("Review Eval Harness SHA is unavailable")
         run = self.workspace.reserve(
@@ -824,7 +849,16 @@ class ReviewEvalRunner:
             cwd=self.harness_root,
         )
         value = result.stdout.strip()
-        return value if result.returncode == 0 and is_sha(value) else None
+        if result.returncode != 0 or not is_sha(value):
+            return None
+        if (
+            self._verified_harness_sha is not None
+            and value != self._verified_harness_sha
+        ):
+            raise LckStopError(
+                "Review Eval Harness SHA does not match snapshot identity"
+            )
+        return value
 
 
 __all__ = [
@@ -834,6 +868,7 @@ __all__ = [
     "ReviewEvalRunner",
     "ReviewEvalWorkspaceManager",
     "SubjectMaterializer",
+    "VerifiedHarnessSnapshot",
     "FrozenReviewFixture",
     "ReviewFixtureBuilder",
 ]

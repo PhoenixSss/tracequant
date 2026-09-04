@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -126,6 +127,55 @@ def test_task_194_fixture_replay_is_oracle_isolated_and_reproducible(
             item.fixture_id
         ]
         assert item.fixture.verify().fixture_digest == item.fixture.fixture_digest
+
+
+def test_benchmark_replay_uses_locked_harness_tree_not_working_tree(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).parents[2]
+    harness = tmp_path / "harness"
+    harness.mkdir()
+
+    def git(*args: str) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=harness,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    git("init", "--quiet")
+    git("config", "user.name", "Review Benchmark Test")
+    git("config", "user.email", "review-benchmark@example.invalid")
+    marker = harness / "harness-marker.txt"
+    marker.write_text("committed harness\n", encoding="utf-8")
+    git("add", "harness-marker.txt")
+    git("commit", "--quiet", "-m", "harness")
+    harness_sha = git("rev-parse", "HEAD")
+
+    marker.write_text("staged working-tree override\n", encoding="utf-8")
+    git("add", "harness-marker.txt")
+
+    corpus = load_task_194_benchmark(repo_root)
+    seen_harness_contents: list[str] = []
+    benchmark = ReviewBenchmarkRunner(
+        corpus,
+        harness,
+        workspace_root=tmp_path / "review-eval-runs",
+    )
+
+    def reviewer(run: Any) -> Any:
+        seen_harness_contents.append(
+            (run.harness_root / "harness-marker.txt").read_text(encoding="utf-8")
+        )
+        return Task194ProductionEquivalentReviewer()(run)
+
+    result = benchmark.replay("task-194:stable-v1", reviewer)
+
+    assert seen_harness_contents == ["committed harness\n"]
+    assert result.receipt.harness_sha == harness_sha
 
 
 def test_stable_fixture_unknown_finding_requires_adjudication() -> None:
