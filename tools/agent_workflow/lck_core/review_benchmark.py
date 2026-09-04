@@ -20,13 +20,22 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
+import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Protocol
 
-from workflow_common import atomic_write_json, is_sha, read_json_file, sha256_json
+from workflow_common import (
+    CommandRunner,
+    atomic_write_json,
+    is_sha,
+    read_json_file,
+    sha256_json,
+)
 
 from .models import LckStopError
 from .review_eval import (
@@ -44,6 +53,17 @@ PROTOCOL_VERSION: Final = "v1"
 PROTOCOL_STEPS: Final = ("Inspect", "Reason", "Judge", "Report")
 _SEVERITIES: Final = frozenset({"Blocking", "High", "Medium", "Low", "Nit"})
 _FIXTURE_KINDS: Final = frozenset({"defect-rich", "stable"})
+_HARNESS_EXCLUDED_ROOTS: Final = frozenset(
+    {
+        ".agents",
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        ".workflow.local",
+    }
+)
 _HEX64: Final = re.compile(r"\A[0-9a-fA-F]{64}\Z")
 
 
@@ -89,6 +109,83 @@ def _read_object(path: Path, *, field: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise LckStopError(f"Review benchmark {field} is not an object")
     return value
+
+
+def _load_scorer_oracle(
+    oracle_path: Path, expected_oracle_digest: str
+) -> dict[str, tuple[KnownFinding, ...]]:
+    """Load and validate the oracle only from the post-Review scorer path."""
+    try:
+        oracle_bytes = oracle_path.read_bytes()
+    except OSError as exc:
+        raise LckStopError("Review benchmark scorer oracle is unavailable") from exc
+    if hashlib.sha256(oracle_bytes).hexdigest() != expected_oracle_digest:
+        raise LckStopError("Review benchmark oracle digest mismatch")
+    oracle = _read_object(oracle_path, field="scorer oracle")
+    if oracle.get("schema_version") != BENCHMARK_SCHEMA_VERSION:
+        raise LckStopError("Review benchmark oracle schema version is unsupported")
+    if oracle.get("boundary") != "scorer-only":
+        raise LckStopError("Review benchmark oracle boundary is invalid")
+    raw_entries = oracle.get("fixtures")
+    if not isinstance(raw_entries, Mapping):
+        raise LckStopError("Review benchmark oracle fixtures are unavailable")
+    parsed_oracle: dict[str, tuple[KnownFinding, ...]] = {}
+    for fixture_id in ("task-194:defect-rich-v1", "task-194:stable-v1"):
+        entry = raw_entries.get(fixture_id)
+        if not isinstance(entry, Mapping):
+            raise LckStopError(
+                f"Review benchmark oracle entry is unavailable: {fixture_id}"
+            )
+        raw_findings = entry.get("known_findings")
+        if not isinstance(raw_findings, Sequence) or isinstance(
+            raw_findings, (str, bytes)
+        ):
+            raise LckStopError(
+                f"Review benchmark known findings are unavailable: {fixture_id}"
+            )
+        parsed: list[KnownFinding] = []
+        for raw in raw_findings:
+            if not isinstance(raw, Mapping):
+                raise LckStopError("Review benchmark known finding is invalid")
+            evidence = raw.get("evidence")
+            if not isinstance(evidence, Sequence) or isinstance(evidence, (str, bytes)):
+                raise LckStopError("Review benchmark known finding evidence is invalid")
+            parsed.append(
+                KnownFinding(
+                    finding_id=_required_text(
+                        raw.get("finding_id"), field="finding ID"
+                    ),
+                    title=_required_text(raw.get("title"), field="finding title"),
+                    severity=_required_text(
+                        raw.get("severity"), field="finding severity"
+                    ),
+                    path=_required_text(raw.get("path"), field="finding path"),
+                    symbol=_required_text(raw.get("symbol"), field="finding symbol"),
+                    category=_required_text(
+                        raw.get("category"), field="finding category"
+                    ),
+                    applicability=_required_text(
+                        raw.get("applicability"), field="finding applicability"
+                    ),
+                    evidence=tuple(str(item) for item in evidence),
+                    introduced_head=_required_text(
+                        raw.get("introduced_head"), field="finding introduced head"
+                    ),
+                    fixed_head=_required_text(
+                        raw.get("fixed_head"), field="finding fixed head"
+                    ),
+                )
+            )
+        if len({item.finding_id for item in parsed}) != len(parsed):
+            raise LckStopError("Review benchmark known finding IDs are duplicated")
+        if len({item.fingerprint for item in parsed}) != len(parsed):
+            raise LckStopError(
+                "Review benchmark known finding fingerprints are duplicated"
+            )
+        parsed_oracle[fixture_id] = tuple(parsed)
+    if len(parsed_oracle["task-194:defect-rich-v1"]) < 3:
+        raise LckStopError("defect-rich oracle must contain at least three findings")
+    return parsed_oracle
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,7 +353,13 @@ class FindingScore:
 
     @property
     def matched_count(self) -> int:
-        return sum(item.known_finding_id is not None for item in self.matches)
+        return len(
+            {
+                item.known_finding_id
+                for item in self.matches
+                if item.known_finding_id is not None
+            }
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -371,14 +474,15 @@ class ReplayResult:
 
 @dataclass(frozen=True, slots=True)
 class ReviewBenchmarkCorpus:
-    """Verified Task #194 corpus with a private scorer-only oracle."""
+    """Verified Task #194 corpus with a deferred scorer-only oracle."""
 
     root: Path
     corpus_id: str
     protocol_id: str
     protocol_version: str
     fixtures: tuple[BenchmarkFixture, ...]
-    _oracle: Mapping[str, tuple[KnownFinding, ...]] = field(repr=False, compare=False)
+    _oracle_path: Path = field(repr=False, compare=False)
+    _oracle_sha256: str = field(repr=False, compare=False)
 
     @classmethod
     def from_manifest(cls, path: Path) -> ReviewBenchmarkCorpus:
@@ -463,90 +567,20 @@ class ReviewBenchmarkCorpus:
         expected_oracle_digest = _required_digest(
             value.get("oracle_sha256"), field="oracle digest"
         )
-        if (
-            hashlib.sha256(oracle_path.read_bytes()).hexdigest()
-            != expected_oracle_digest
-        ):
+        try:
+            oracle_digest = hashlib.sha256(oracle_path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise LckStopError("Review benchmark scorer oracle is unavailable") from exc
+        if oracle_digest != expected_oracle_digest:
             raise LckStopError("Review benchmark oracle digest mismatch")
-        oracle = _read_object(oracle_path, field="scorer oracle")
-        if oracle.get("schema_version") != BENCHMARK_SCHEMA_VERSION:
-            raise LckStopError("Review benchmark oracle schema version is unsupported")
-        if oracle.get("boundary") != "scorer-only":
-            raise LckStopError("Review benchmark oracle boundary is invalid")
-        raw_entries = oracle.get("fixtures")
-        if not isinstance(raw_entries, Mapping):
-            raise LckStopError("Review benchmark oracle fixtures are unavailable")
-        parsed_oracle: dict[str, tuple[KnownFinding, ...]] = {}
-        for fixture_id in ("task-194:defect-rich-v1", "task-194:stable-v1"):
-            entry = raw_entries.get(fixture_id)
-            if not isinstance(entry, Mapping):
-                raise LckStopError(
-                    f"Review benchmark oracle entry is unavailable: {fixture_id}"
-                )
-            raw_findings = entry.get("known_findings")
-            if not isinstance(raw_findings, Sequence) or isinstance(
-                raw_findings, (str, bytes)
-            ):
-                raise LckStopError(
-                    f"Review benchmark known findings are unavailable: {fixture_id}"
-                )
-            parsed: list[KnownFinding] = []
-            for raw in raw_findings:
-                if not isinstance(raw, Mapping):
-                    raise LckStopError("Review benchmark known finding is invalid")
-                evidence = raw.get("evidence")
-                if not isinstance(evidence, Sequence) or isinstance(
-                    evidence, (str, bytes)
-                ):
-                    raise LckStopError(
-                        "Review benchmark known finding evidence is invalid"
-                    )
-                parsed.append(
-                    KnownFinding(
-                        finding_id=_required_text(
-                            raw.get("finding_id"), field="finding ID"
-                        ),
-                        title=_required_text(raw.get("title"), field="finding title"),
-                        severity=_required_text(
-                            raw.get("severity"), field="finding severity"
-                        ),
-                        path=_required_text(raw.get("path"), field="finding path"),
-                        symbol=_required_text(
-                            raw.get("symbol"), field="finding symbol"
-                        ),
-                        category=_required_text(
-                            raw.get("category"), field="finding category"
-                        ),
-                        applicability=_required_text(
-                            raw.get("applicability"), field="finding applicability"
-                        ),
-                        evidence=tuple(str(item) for item in evidence),
-                        introduced_head=_required_text(
-                            raw.get("introduced_head"), field="finding introduced head"
-                        ),
-                        fixed_head=_required_text(
-                            raw.get("fixed_head"), field="finding fixed head"
-                        ),
-                    )
-                )
-            if len({item.finding_id for item in parsed}) != len(parsed):
-                raise LckStopError("Review benchmark known finding IDs are duplicated")
-            if len({item.fingerprint for item in parsed}) != len(parsed):
-                raise LckStopError(
-                    "Review benchmark known finding fingerprints are duplicated"
-                )
-            parsed_oracle[fixture_id] = tuple(parsed)
-        if len(parsed_oracle["task-194:defect-rich-v1"]) < 3:
-            raise LckStopError(
-                "defect-rich oracle must contain at least three findings"
-            )
         return cls(
             root=root,
             corpus_id=corpus_id,
             protocol_id=protocol_id,
             protocol_version=protocol_version,
             fixtures=tuple(fixtures),
-            _oracle=parsed_oracle,
+            _oracle_path=oracle_path,
+            _oracle_sha256=expected_oracle_digest,
         )
 
     def fixture(self, fixture_id: str) -> BenchmarkFixture:
@@ -563,7 +597,9 @@ class ReviewBenchmarkCorpus:
     ) -> FindingScore:
         """Match findings after Review, while preserving unknown stable findings."""
         fixture = self.fixture(fixture_id)
-        known = self._oracle[fixture.fixture_id]
+        known = _load_scorer_oracle(self._oracle_path, self._oracle_sha256)[
+            fixture.fixture_id
+        ]
         by_fingerprint = {item.fingerprint: item for item in known}
         verified = {item.fingerprint for item in verified_findings}
         matches: list[FindingMatch] = []
@@ -581,6 +617,12 @@ class ReviewBenchmarkCorpus:
                     ),
                 )
             )
+        matched_ids = {
+            item.known_finding_id
+            for item in matches
+            if item.known_finding_id is not None
+        }
+        known_ids = {item.finding_id for item in known}
         unmatched = any(item.known_finding_id is None for item in matches)
         adjudication_required = unmatched and fixture.kind == "stable"
         if fixture.kind == "stable":
@@ -593,7 +635,7 @@ class ReviewBenchmarkCorpus:
             control_status = (
                 "known-findings-covered"
                 if len(matches) == len(known)
-                and all(item.known_finding_id is not None for item in matches)
+                and matched_ids == known_ids
                 and all(item.verification == "verified" for item in matches)
                 else "known-findings-incomplete"
             )
@@ -622,61 +664,127 @@ class ReviewBenchmarkRunner:
         self.harness_root = harness_root.resolve()
         self.workspace_root = workspace_root
 
+    def _current_harness_sha(self) -> str:
+        result = CommandRunner(self.harness_root).run(
+            ["git", "rev-parse", "HEAD"],
+            command_id="review-benchmark-harness-head",
+            cwd=self.harness_root,
+        )
+        harness_sha = result.stdout.strip()
+        if result.returncode != 0 or not is_sha(harness_sha) or len(harness_sha) != 40:
+            raise LckStopError("Review benchmark Harness SHA is unavailable")
+        return harness_sha
+
+    def _copy_harness_snapshot(self, destination: Path) -> None:
+        """Copy the current tracked Harness while excluding corpus data."""
+        result = CommandRunner(self.harness_root).run(
+            ["git", "ls-files", "--cached", "-z"],
+            command_id="review-benchmark-harness-files",
+            cwd=self.harness_root,
+        )
+        if result.returncode != 0:
+            raise LckStopError("Review benchmark Harness file inventory is unavailable")
+
+        corpus_root = self.corpus.root.resolve()
+        try:
+            corpus_relative = corpus_root.relative_to(self.harness_root)
+        except ValueError:
+            corpus_relative = None
+        if corpus_relative == Path("."):
+            raise LckStopError("Review benchmark corpus cannot be the Harness root")
+
+        for raw_path in result.stdout.split("\0"):
+            if not raw_path:
+                continue
+            relative = Path(raw_path)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise LckStopError("Review benchmark Harness file path is invalid")
+            if relative.parts[0] in _HARNESS_EXCLUDED_ROOTS:
+                continue
+            if corpus_relative is not None and (
+                relative == corpus_relative or corpus_relative in relative.parents
+            ):
+                continue
+            source = self.harness_root / relative
+            if source.is_symlink():
+                continue
+            if not source.is_file():
+                continue
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+
+    @contextmanager
+    def _isolated_harness(self) -> Iterator[tuple[Path, str]]:
+        """Yield a disposable Harness view that cannot resolve corpus files."""
+        harness_sha = self._current_harness_sha()
+        temporary_root = Path(tempfile.mkdtemp(prefix="tracequant-lck-review-harness-"))
+        snapshot = temporary_root / "harness"
+        try:
+            snapshot.mkdir()
+            self._copy_harness_snapshot(snapshot)
+            yield snapshot, harness_sha
+        finally:
+            shutil.rmtree(temporary_root, ignore_errors=True)
+
     def replay(self, fixture_id: str, protocol: ReviewProtocol) -> ReplayResult:
         fixture = self.corpus.fixture(fixture_id)
-        runner = ReviewEvalRunner(self.harness_root, workspace_root=self.workspace_root)
-        started = time.perf_counter_ns()
-        execution = runner.run(
-            fixture.fixture,
-            GitFrozenSubjectMaterializer(fixture=fixture.fixture),
-            protocol,
-        )
-        try:
-            observation = execution.value
-            if not isinstance(observation, ReviewObservation):
-                raise TypeError(
-                    "Review benchmark protocol returned an invalid observation"
-                )
-            elapsed_ms = max((time.perf_counter_ns() - started) / 1_000_000, 0.001)
-            authority = execution.run.authority
-            harness_sha = execution.run.harness_sha
-            if harness_sha is None:
-                raise LckStopError("Review benchmark Harness SHA is unavailable")
-            findings_digest = sha256_json(
-                [item.to_dict() for item in observation.findings]
-            )
-            receipt = BaselineRunReceipt(
-                fixture_id=fixture.fixture_id,
-                fixture_kind=fixture.kind,
-                fixture_digest=authority.fixture_digest
-                or authority.computed_fixture_digest,
-                base_sha=authority.base_sha,
-                head_sha=authority.head_sha,
-                effective_diff_sha256=authority.effective_diff_sha256 or "",
-                task_contract_sha256=authority.task_contract_sha256 or "",
-                deterministic_evidence_sha256=(
-                    authority.effective_deterministic_evidence_sha256 or ""
-                ),
-                repository_artifact_sha256=authority.repository_artifact_sha256 or "",
-                fixture_manifest_sha256=authority.fixture_manifest_sha256 or "",
-                run_id=execution.run.run_id,
+        with self._isolated_harness() as (harness_root, harness_sha):
+            runner = ReviewEvalRunner(
+                harness_root,
+                workspace_root=self.workspace_root,
                 harness_sha=harness_sha,
-                protocol_id=self.corpus.protocol_id,
-                protocol_version=self.corpus.protocol_version,
-                protocol_steps=PROTOCOL_STEPS,
-                model=observation.model,
-                config=observation.config,
-                token_usage=observation.token_usage,
-                wall_clock_ms=elapsed_ms,
-                verdict=observation.verdict,
-                findings=observation.findings,
-                findings_sha256=findings_digest,
-                subject_clean_exact_head=True,
-                run_workspace_cleaned=True,
             )
-            return ReplayResult(observation=observation, receipt=receipt)
-        finally:
-            execution.close()
+            started = time.perf_counter_ns()
+            execution = runner.run(
+                fixture.fixture,
+                GitFrozenSubjectMaterializer(fixture=fixture.fixture),
+                protocol,
+            )
+            try:
+                observation = execution.value
+                if not isinstance(observation, ReviewObservation):
+                    raise TypeError(
+                        "Review benchmark protocol returned an invalid observation"
+                    )
+                elapsed_ms = max((time.perf_counter_ns() - started) / 1_000_000, 0.001)
+                authority = execution.run.authority
+                findings_digest = sha256_json(
+                    [item.to_dict() for item in observation.findings]
+                )
+                receipt = BaselineRunReceipt(
+                    fixture_id=fixture.fixture_id,
+                    fixture_kind=fixture.kind,
+                    fixture_digest=authority.fixture_digest
+                    or authority.computed_fixture_digest,
+                    base_sha=authority.base_sha,
+                    head_sha=authority.head_sha,
+                    effective_diff_sha256=authority.effective_diff_sha256 or "",
+                    task_contract_sha256=authority.task_contract_sha256 or "",
+                    deterministic_evidence_sha256=(
+                        authority.effective_deterministic_evidence_sha256 or ""
+                    ),
+                    repository_artifact_sha256=authority.repository_artifact_sha256
+                    or "",
+                    fixture_manifest_sha256=authority.fixture_manifest_sha256 or "",
+                    run_id=execution.run.run_id,
+                    harness_sha=execution.run.harness_sha or harness_sha,
+                    protocol_id=self.corpus.protocol_id,
+                    protocol_version=self.corpus.protocol_version,
+                    protocol_steps=PROTOCOL_STEPS,
+                    model=observation.model,
+                    config=observation.config,
+                    token_usage=observation.token_usage,
+                    wall_clock_ms=elapsed_ms,
+                    verdict=observation.verdict,
+                    findings=observation.findings,
+                    findings_sha256=findings_digest,
+                    subject_clean_exact_head=True,
+                    run_workspace_cleaned=True,
+                )
+                return ReplayResult(observation=observation, receipt=receipt)
+            finally:
+                execution.close()
 
     def replay_repeated(
         self,

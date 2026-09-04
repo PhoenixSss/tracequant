@@ -627,14 +627,18 @@ class ReviewEvalRunner:
         workspace: ReviewEvalWorkspaceManager | None = None,
         workspace_root: Path | None = None,
         command_runner: CommandRunner | None = None,
+        harness_sha: str | None = None,
     ) -> None:
         self.harness_root = (harness_root or Path.cwd()).resolve()
         if not self.harness_root.is_dir():
             raise LckStopError("Review Eval Harness checkout is unavailable")
         if workspace is not None and workspace_root is not None:
             raise ValueError("provide workspace or workspace_root, not both")
+        if harness_sha is not None and not is_sha(harness_sha):
+            raise LckStopError("Review Eval Harness SHA is invalid")
         self.workspace = workspace or ReviewEvalWorkspaceManager(workspace_root)
         self.command_runner = command_runner or CommandRunner(self.harness_root)
+        self._harness_sha_override = harness_sha
 
     def start(
         self,
@@ -663,7 +667,11 @@ class ReviewEvalRunner:
             )
         if materializer is None:
             raise TypeError("Review Eval Subject materializer is required")
-        harness_sha = self._harness_sha()
+        harness_sha = (
+            self._harness_sha_override
+            if self._harness_sha_override is not None
+            else self._harness_sha()
+        )
         if fixture is not None and harness_sha is None:
             raise LckStopError("Review Eval Harness SHA is unavailable")
         run = self.workspace.reserve(

@@ -43,6 +43,10 @@ def test_task_194_fixture_replay_is_oracle_isolated_and_reproducible(
         seen_subjects.append(subject)
         assert subject != corpus.root
         assert corpus.root not in subject.parents
+        assert run.harness_root != repo_root
+        assert repo_root not in run.harness_root.parents
+        assert not (run.harness_root / "docs/workflows/benchmarks/task-194").exists()
+        assert not hasattr(corpus, "_oracle")
         assert not (subject / "oracle").exists()
         assert not (subject / "known-findings.json").exists()
         serialized_run = json.dumps(run.to_dict(), ensure_ascii=False)
@@ -142,6 +146,34 @@ def test_stable_fixture_unknown_finding_requires_adjudication() -> None:
     assert score.control_status == "needs-adjudication"
     assert score.matches[0].match_type == "unmatched-candidate"
     assert score.matches[0].known_finding_id is None
+
+
+def test_defect_rich_coverage_counts_unique_known_findings() -> None:
+    corpus = load_task_194_benchmark(Path(__file__).parents[2])
+    first = CandidateFinding(
+        severity="High",
+        path="src/tracequant/data/binance_contract_kline.py",
+        symbol="_parse_nonnegative_int",
+        category="integer-range-exception",
+        summary="Oversized numeric input can raise before the parser's invalid-content boundary.",
+    )
+    second = CandidateFinding(
+        severity="Medium",
+        path="src/tracequant/data/raw_store.py",
+        symbol="RawManifest.from_dict",
+        category="manifest-backward-compatibility",
+        summary="The manifest reader rejects the earlier completed manifest shape.",
+    )
+    duplicate_candidates = (first, first, second)
+
+    score = corpus.score(
+        "task-194:defect-rich-v1",
+        duplicate_candidates,
+        duplicate_candidates,
+    )
+
+    assert score.matched_count == 2
+    assert score.control_status == "known-findings-incomplete"
 
 
 def test_benchmark_replay_rejects_invalid_repetition_count() -> None:
