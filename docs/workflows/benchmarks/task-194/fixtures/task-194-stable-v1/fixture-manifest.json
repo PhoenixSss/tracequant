@@ -1,0 +1,26 @@
+{
+  "artifacts": {
+    "deterministic_evidence": {
+      "path": "deterministic-evidence.json",
+      "sha256": "388787aaf922fc5332945225cd1535e4610ad1bdf8579109ebd753b146d75a6f"
+    },
+    "repository_bundle": {
+      "path": "repository.bundle",
+      "sha256": "86d0716a9591ce1ffa89b5ce8fe9d1e88d8ba910451026d8f9e8510189bcc58f"
+    },
+    "task_contract": {
+      "path": "task-contract.json",
+      "sha256": "70f12a5e36ca17b4e67cf1da3c2d1446f0de34826b0610457b7cb15dcc519db2"
+    }
+  },
+  "base_sha": "fd9946e1c7773c33c2cabbd08e084fb18c236525",
+  "deterministic_evidence_sha256": "388787aaf922fc5332945225cd1535e4610ad1bdf8579109ebd753b146d75a6f",
+  "effective_diff_sha256": "eb1636ad79bd0ba2965060a5bba7efa79ffa23986c4e32235550582af36904fa",
+  "fixture_digest": "cedce9c02aa6851a04b58225cf44c96b4a9fb03d3170be201366fe856e688126",
+  "fixture_id": "task-194:stable-v1",
+  "fixture_manifest_sha256": "17b5b42bacc6f06e61b66fbf3f20523dd6dacf286bdda4179dea6430bb66bd74",
+  "fixture_schema_version": 1,
+  "head_sha": "3b1cbbd6db08ae81506c9b70ebfc7eabd7b8cf70",
+  "repository_artifact_sha256": "86d0716a9591ce1ffa89b5ce8fe9d1e88d8ba910451026d8f9e8510189bcc58f",
+  "task_contract_sha256": "70f12a5e36ca17b4e67cf1da3c2d1446f0de34826b0610457b7cb15dcc519db2"
+}
