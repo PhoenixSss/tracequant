@@ -1668,6 +1668,14 @@ class ReviewRunReceipt:
             self.assurance_obligations
         ):
             return False
+        coverage_required = set(self.coverage.required)
+        coverage_covered = set(self.coverage.covered)
+        if any(
+            not set(obligation.required_surfaces).issubset(coverage_required)
+            or not set(obligation.required_surfaces).issubset(coverage_covered)
+            for obligation in self.assurance_obligations
+        ):
+            return False
         return all(
             results_by_id[item.obligation_id].status
             in (AssuranceStatus.PASS, AssuranceStatus.NOT_APPLICABLE)

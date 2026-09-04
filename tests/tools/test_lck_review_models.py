@@ -196,6 +196,43 @@ def test_surface_plan_does_not_hide_uncovered_required_surfaces() -> None:
         )
 
 
+def test_review_completion_requires_obligation_surfaces_in_coverage() -> None:
+    receipt = ReviewRunReceipt(
+        run_id="run-1",
+        authority=_authority(),
+        harness_config={"subject_only": True},
+        protocol_config={"sequence": ("Inspect", "Reason", "Judge", "Report")},
+        model_config={"temperature": 0},
+        coverage=ReviewSurfacePlan(
+            required=ALWAYS_ON_SURFACES,
+            covered=ALWAYS_ON_SURFACES,
+        ),
+        candidate_findings=(),
+        verified_findings=(),
+        token_usage=TokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+        wall_clock_ms=1,
+        assurance_obligations=(
+            AssuranceObligation(
+                obligation_id="security",
+                description="Security must be reviewed.",
+                required_surfaces=(ReviewSurface.SECURITY,),
+            ),
+        ),
+        assurance_results=(
+            AssuranceResult(
+                obligation_id="security",
+                status=AssuranceStatus.PASS,
+                evidence_refs=(),
+                summary="Security review passed.",
+            ),
+        ),
+    )
+
+    assert receipt.review_complete is False
+    assert receipt.review_status == "incomplete"
+    assert ReviewRunReceipt.from_json(receipt.to_json()) == receipt
+
+
 def test_candidate_severity_cannot_become_a_verified_blocker_implicitly() -> None:
     candidate = _candidate()
 
