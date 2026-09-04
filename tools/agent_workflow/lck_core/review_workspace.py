@@ -32,6 +32,7 @@ from .profile_policies import (
     build_profile_review_artifact,
     resolve_issue_policy,
 )
+from .review_authority import LiveReviewAuthority
 from .state import LiveStateResolver
 
 
@@ -88,25 +89,13 @@ def _review_target_refs(
     task_contract: Mapping[str, Any],
 ) -> ReviewTargetRefs:
     """Extract immutable Git/GitHub identities without requiring local Git objects."""
-    pr = state.open_pr
-    if not isinstance(pr, Mapping):
-        raise LckStopError("Review target has no current OPEN PR")
-    pr_number = pr.get("number")
-    base_sha = pr.get("baseRefOid")
-    head_sha = pr.get("headRefOid")
-    task_body_sha256 = task_contract.get("body_sha256")
-    if not isinstance(pr_number, int) or isinstance(pr_number, bool) or pr_number <= 0:
-        raise LckStopError("Review target PR number is unavailable")
-    if not is_sha(base_sha) or not is_sha(head_sha):
-        raise LckStopError("Review target base/head identity is unavailable")
-    if not isinstance(task_body_sha256, str) or not task_body_sha256:
-        raise LckStopError("Review target Task Contract identity is unavailable")
+    authority = LiveReviewAuthority.from_state(state, task_contract)
     return ReviewTargetRefs(
-        task_number=state.issue_number,
-        pr_number=pr_number,
-        base_sha=str(base_sha),
-        head_sha=str(head_sha),
-        task_body_sha256=task_body_sha256,
+        task_number=authority.task_number,
+        pr_number=authority.pr_number,
+        base_sha=authority.base_sha,
+        head_sha=authority.head_sha,
+        task_body_sha256=authority.task_body_sha256,
     )
 
 
