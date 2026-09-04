@@ -13,6 +13,7 @@ src/tracequant/
   logging.py
   core/time.py
   domain/models.py
+  contracts/review.py
   data/public_history.py
 tests/
   test_config.py
@@ -27,7 +28,7 @@ apps/
   runtime/                       boundary README only
   console/                       boundary README only
 packages/
-  contracts/                     boundary README only
+  contracts/                     boundary README and contract docs
   domain/                        boundary README only
   adapters/                      boundary README only
 deploy/
@@ -41,6 +42,10 @@ docs/                            architecture and project documentation
 modules into a product package requires a separate behavior-preserving change
 with import compatibility validation. The repository is not currently split
 into independently installable application or package projects.
+
+`tracequant.contracts` contains the current provider-neutral Review vNext value
+contracts. The contracts are versioned and JSON round-trippable, while detailed
+evidence remains behind explicit retrieval references.
 
 ## Current dependency direction
 
