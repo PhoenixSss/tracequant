@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from workflow_common import is_sha
+from workflow_common import is_sha, sha256_json
 
 from .models import LckStopError, LiveState
 
@@ -127,11 +127,11 @@ class LiveReviewAuthority:
 class FrozenReviewAuthority:
     """Explicit authority for one frozen Review Eval Subject.
 
-    Fixture packaging and manifest semantics deliberately remain outside this
-    contract.  The current Task only needs a stable fixture identifier and
-    explicit historical base/head identities.  Optional digests reserve
-    identity slots for the fixture Task without allowing a live PR to fill
-    them implicitly.
+    The complete fixture package is represented by
+    :class:`FrozenReviewFixture`; this compact authority is the value passed
+    across the Eval boundary.  The legacy optional digest spellings remain
+    accepted for callers that only exercise the authority separation, while a
+    strict fixture identity supplies every digest and schema field.
     """
 
     fixture_id: str
@@ -141,6 +141,10 @@ class FrozenReviewAuthority:
     task_contract_sha256: str | None = None
     evidence_sha256: str | None = None
     repository_artifact_sha256: str | None = None
+    fixture_schema_version: int | None = None
+    deterministic_evidence_sha256: str | None = None
+    fixture_manifest_sha256: str | None = None
+    fixture_digest: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id.strip():
@@ -160,12 +164,61 @@ class FrozenReviewAuthority:
             "task_contract_sha256",
             "evidence_sha256",
             "repository_artifact_sha256",
+            "deterministic_evidence_sha256",
+            "fixture_manifest_sha256",
+            "fixture_digest",
         ):
             object.__setattr__(
                 self,
                 field,
                 _optional_digest(getattr(self, field), field=field),
             )
+        if (
+            self.evidence_sha256 is not None
+            and self.deterministic_evidence_sha256 is not None
+            and self.evidence_sha256 != self.deterministic_evidence_sha256
+        ):
+            raise LckStopError("frozen Review authority evidence digests do not match")
+        if self.fixture_schema_version is not None and (
+            not isinstance(self.fixture_schema_version, int)
+            or isinstance(self.fixture_schema_version, bool)
+            or self.fixture_schema_version <= 0
+        ):
+            raise ValueError(
+                "frozen Review authority requires a fixture schema version"
+            )
+
+    @property
+    def effective_deterministic_evidence_sha256(self) -> str | None:
+        """Return the canonical spelling for deterministic evidence identity."""
+        return self.deterministic_evidence_sha256 or self.evidence_sha256
+
+    @property
+    def identity_payload(self) -> dict[str, Any]:
+        """Return the content identity that a fixture must bind."""
+        return {
+            "fixture_schema_version": self.fixture_schema_version,
+            "fixture_id": self.fixture_id,
+            "base_sha": self.base_sha,
+            "head_sha": self.head_sha,
+            "effective_diff_sha256": self.effective_diff_sha256,
+            "task_contract_sha256": self.task_contract_sha256,
+            "deterministic_evidence_sha256": (
+                self.effective_deterministic_evidence_sha256
+            ),
+            "repository_artifact_sha256": self.repository_artifact_sha256,
+            "fixture_manifest_sha256": self.fixture_manifest_sha256,
+        }
+
+    @property
+    def computed_fixture_digest(self) -> str:
+        """Compute the digest of the complete frozen identity.
+
+        A strict fixture compares this value with its recorded digest before
+        any semantic evaluator is started.  The property remains available for
+        the earlier minimal authority form used by production boundary tests.
+        """
+        return sha256_json(self.identity_payload)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> FrozenReviewAuthority:
@@ -180,6 +233,10 @@ class FrozenReviewAuthority:
             task_contract_sha256=value.get("task_contract_sha256"),
             evidence_sha256=value.get("evidence_sha256"),
             repository_artifact_sha256=value.get("repository_artifact_sha256"),
+            fixture_schema_version=value.get("fixture_schema_version"),
+            deterministic_evidence_sha256=value.get("deterministic_evidence_sha256"),
+            fixture_manifest_sha256=value.get("fixture_manifest_sha256"),
+            fixture_digest=value.get("fixture_digest"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -194,10 +251,20 @@ class FrozenReviewAuthority:
             "task_contract_sha256",
             "evidence_sha256",
             "repository_artifact_sha256",
+            "fixture_schema_version",
+            "deterministic_evidence_sha256",
+            "fixture_manifest_sha256",
+            "fixture_digest",
         ):
             value = getattr(self, field)
             if value is not None:
                 result[field] = value
+        if (
+            self.deterministic_evidence_sha256 is not None
+            and "evidence_sha256" in result
+        ):
+            # Keep old readers useful while making the new spelling explicit.
+            result["deterministic_evidence_sha256"] = self.deterministic_evidence_sha256
         return result
 
 

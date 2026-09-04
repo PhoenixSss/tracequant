@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import tempfile
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -22,6 +23,7 @@ from workflow_common import (
     CommandRunner,
     WorkflowToolError,
     atomic_write_json,
+    is_sha,
     read_json_file,
 )
 
@@ -29,6 +31,11 @@ from .models import LCK_SCHEMA_VERSION, LckStopError
 from .review_authority import (
     FrozenReviewAuthority,
     require_frozen_review_authority,
+)
+from .review_fixture import (
+    FrozenReviewFixture,
+    ReviewFixtureBuilder,
+    load_frozen_review_fixture,
 )
 
 T = TypeVar("T")
@@ -62,6 +69,57 @@ def _assert_distinct_workspaces(harness_root: Path, subject_root: Path) -> None:
         )
 
 
+def _assert_contained_symlinks(root: Path) -> None:
+    """Reject a Subject symlink that could write outside its Run."""
+    resolved_root = root.resolve(strict=False)
+    for current, dirs, files in os.walk(root, topdown=True, followlinks=False):
+        current_path = Path(current)
+        for name in (*dirs, *files):
+            candidate = current_path / name
+            if candidate.is_symlink() and not _within(
+                candidate.resolve(), resolved_root
+            ):
+                raise LckStopError("Review Eval Subject contains an escaping symlink")
+
+
+def _make_read_only(root: Path) -> None:
+    """Seal a Detection Subject while leaving its Run results writable."""
+    for current, dirs, files in os.walk(root, topdown=False, followlinks=False):
+        current_path = Path(current)
+        for name in (*files, *dirs):
+            target = current_path / name
+            if not target.is_symlink():
+                mode = stat.S_IMODE(target.stat().st_mode)
+                os.chmod(target, mode & ~0o222)
+    mode = stat.S_IMODE(root.stat().st_mode)
+    os.chmod(root, mode & ~0o222)
+
+
+def _authority_input(
+    value: FrozenReviewAuthority | FrozenReviewFixture | Path,
+) -> tuple[FrozenReviewAuthority, FrozenReviewFixture | None]:
+    if isinstance(value, Path):
+        value = load_frozen_review_fixture(value)
+    if isinstance(value, FrozenReviewFixture):
+        value.verify()
+        return value.authority, value
+    authority = require_frozen_review_authority(value)
+    if authority.fixture_schema_version is not None:
+        required = (
+            authority.effective_diff_sha256,
+            authority.task_contract_sha256,
+            authority.effective_deterministic_evidence_sha256,
+            authority.repository_artifact_sha256,
+            authority.fixture_manifest_sha256,
+            authority.fixture_digest,
+        )
+        if any(item is None for item in required):
+            raise LckStopError("strict Review Eval fixture identity is incomplete")
+        if authority.fixture_digest != authority.computed_fixture_digest:
+            raise LckStopError("Review Eval fixture identity digest mismatch")
+    return authority, None
+
+
 @dataclass(frozen=True, slots=True)
 class ReviewEvalRunContext:
     """Immutable identity and paths for one isolated Review Eval Run."""
@@ -72,6 +130,8 @@ class ReviewEvalRunContext:
     run_root: Path
     subject_root: Path
     result_root: Path
+    harness_sha: str | None
+    run_kind: str
     _workspace: ReviewEvalWorkspaceManager = field(repr=False, compare=False)
 
     @property
@@ -90,6 +150,8 @@ class ReviewEvalRunContext:
             "run_root": str(self.run_root),
             "subject_root": str(self.subject_root),
             "result_root": str(self.result_root),
+            "harness_sha": self.harness_sha,
+            "run_kind": self.run_kind,
             "planes": {
                 "harness": "current-checkout",
                 "subject": "frozen-fixture-materialization",
@@ -110,6 +172,66 @@ class ReviewEvalRunContext:
         if not _within(candidate, self.result_root) or candidate == self.result_root:
             raise LckStopError("Review Eval result path must remain inside the Run")
         return candidate
+
+    @property
+    def receipt_path(self) -> Path:
+        return self.result_root / "run-receipt.json"
+
+    def write_receipt(self, *, status: str = "COMPLETED") -> Path:
+        """Persist bounded identity evidence in the Run result area."""
+        fixture_digest = self.authority.fixture_digest
+        if fixture_digest is None:
+            fixture_digest = self.authority.computed_fixture_digest
+        payload = {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "kind": "review-eval-run-receipt",
+            "status": status,
+            "run_id": self.run_id,
+            "run_identity": {
+                "run_id": self.run_id,
+                "fixture_id": self.authority.fixture_id,
+                "fixture_digest": fixture_digest,
+                "base_sha": self.authority.base_sha,
+                "head_sha": self.authority.head_sha,
+            },
+            "fixture_id": self.authority.fixture_id,
+            "fixture_digest": fixture_digest,
+            "harness_sha": self.harness_sha,
+            "run_kind": self.run_kind,
+            "subject_root": str(self.subject_root),
+            "result_root": str(self.result_root),
+        }
+        atomic_write_json(self.receipt_path, payload)
+        return self.receipt_path
+
+    def write_result(self, name: str, value: Mapping[str, Any]) -> Path:
+        """Write an Eval result without granting access to fixture or Subject."""
+        path = self.result_path(name)
+        atomic_write_json(path, value)
+        return path
+
+    def materialize_remediation(
+        self,
+        materializer: SubjectMaterializer | SubjectMaterializerCallable,
+    ) -> Path:
+        """Create a unique writable, Run-owned remediation copy."""
+        self._workspace._assert_owned(self)
+        remediation_root = self.run_root / "remediation"
+        remediation_root.mkdir(exist_ok=True)
+        destination = remediation_root / uuid.uuid4().hex
+        destination.mkdir()
+        try:
+            _call_materializer(materializer, self.authority, destination)
+            if not _within(destination.resolve(), self.run_root.resolve()):
+                raise LckStopError(
+                    "Review Eval remediation copy escaped its Run workspace"
+                )
+            _assert_contained_symlinks(destination)
+            return destination
+        except BaseException:
+            ReviewEvalWorkspaceManager._make_removable(destination)
+            shutil.rmtree(destination, ignore_errors=True)
+            raise
 
     def close(self) -> None:
         self._workspace.close(self)
@@ -162,6 +284,9 @@ class ReviewEvalWorkspaceManager:
         self,
         authority: FrozenReviewAuthority,
         harness_root: Path,
+        *,
+        harness_sha: str | None = None,
+        run_kind: str = "detection",
     ) -> ReviewEvalRunContext:
         authority = require_frozen_review_authority(authority)
         harness_root = harness_root.resolve()
@@ -189,6 +314,8 @@ class ReviewEvalWorkspaceManager:
                 "run_root": str(run_root),
                 "subject_root": str(subject_root),
                 "result_root": str(result_root),
+                "harness_sha": harness_sha,
+                "run_kind": run_kind,
                 "authority_note": (
                     "frozen Eval authority only; never a production Review target"
                 ),
@@ -201,6 +328,8 @@ class ReviewEvalWorkspaceManager:
             run_root=run_root,
             subject_root=subject_root,
             result_root=result_root,
+            harness_sha=harness_sha,
+            run_kind=run_kind,
             _workspace=self,
         )
 
@@ -263,14 +392,32 @@ class GitFrozenSubjectMaterializer:
 
     def __init__(
         self,
-        source_repository: Path,
+        source_repository: Path | None = None,
         *,
         runner: CommandRunner | None = None,
+        fixture: FrozenReviewFixture | Path | None = None,
     ) -> None:
-        self.source_repository = source_repository.resolve()
-        self.runner = runner or CommandRunner(self.source_repository)
+        if source_repository is None and fixture is None:
+            raise ValueError("provide source_repository or frozen fixture")
+        if source_repository is not None and fixture is not None:
+            raise ValueError("provide source_repository or frozen fixture, not both")
+        if isinstance(fixture, Path):
+            fixture = load_frozen_review_fixture(fixture)
+        self.fixture = fixture
+        self.source_repository = (
+            source_repository.resolve() if source_repository is not None else None
+        )
+        if self.source_repository is not None:
+            runner_root = self.source_repository
+        elif fixture is not None:
+            runner_root = fixture.root
+        else:
+            raise ValueError("provide source_repository or frozen fixture")
+        self.runner = runner or CommandRunner(runner_root)
 
-    def _ensure_commit(self, destination: Path, sha: str, label: str) -> None:
+    def _ensure_commit(
+        self, destination: Path, sha: str, label: str, *, allow_fetch: bool = True
+    ) -> None:
         available = self.runner.run(
             ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
             command_id=f"review-eval-subject-{label}-available",
@@ -278,6 +425,8 @@ class GitFrozenSubjectMaterializer:
         )
         if available.returncode == 0:
             return
+        if not allow_fetch:
+            raise LckStopError(f"frozen Subject does not contain its {label} commit")
         fetched = self.runner.run(
             ["git", "fetch", "--no-tags", "origin", sha],
             command_id=f"review-eval-subject-{label}-fetch",
@@ -299,15 +448,27 @@ class GitFrozenSubjectMaterializer:
 
     def materialize(
         self,
-        authority: FrozenReviewAuthority,
+        authority: FrozenReviewAuthority | FrozenReviewFixture,
         destination: Path,
     ) -> None:
-        authority = require_frozen_review_authority(authority)
+        authority, fixture_input = _authority_input(authority)
+        fixture = self.fixture
+        if (
+            fixture is not None
+            and fixture_input is not None
+            and fixture != fixture_input
+        ):
+            raise LckStopError("Review Eval fixture authorities do not match")
+        fixture = fixture or fixture_input
+        if fixture is not None:
+            fixture.verify(self.runner)
         source = self.source_repository
         destination = destination.resolve()
-        if not source.is_dir() or not (source / ".git").exists():
+        if source is not None and (
+            not source.is_dir() or not (source / ".git").exists()
+        ):
             raise LckStopError("frozen Subject source repository is unavailable")
-        if (
+        if source is not None and (
             source == destination
             or _within(destination, source)
             or _within(source, destination)
@@ -315,13 +476,19 @@ class GitFrozenSubjectMaterializer:
             raise LckStopError(
                 "frozen Subject destination must not be inside its source"
             )
+        if fixture is not None:
+            clone_source = str(fixture.repository_bundle_path)
+        elif source is not None:
+            clone_source = str(source)
+        else:
+            raise LckStopError("frozen Subject source repository is unavailable")
         clone = self.runner.run(
             [
                 "git",
                 "clone",
                 "--no-checkout",
                 "--no-hardlinks",
-                str(source),
+                clone_source,
                 str(destination),
             ],
             command_id="review-eval-subject-clone",
@@ -333,8 +500,18 @@ class GitFrozenSubjectMaterializer:
                 + (clone.stderr.strip() or f"exit {clone.returncode}")
             )
         try:
-            self._ensure_commit(destination, authority.base_sha, "base")
-            self._ensure_commit(destination, authority.head_sha, "head")
+            self._ensure_commit(
+                destination,
+                authority.base_sha,
+                "base",
+                allow_fetch=fixture is None,
+            )
+            self._ensure_commit(
+                destination,
+                authority.head_sha,
+                "head",
+                allow_fetch=fixture is None,
+            )
             checkout = self.runner.run(
                 ["git", "checkout", "--detach", authority.head_sha],
                 command_id="review-eval-subject-checkout",
@@ -359,6 +536,7 @@ class GitFrozenSubjectMaterializer:
                 raise LckStopError("cannot verify frozen Review Eval Subject")
             if status.stdout.strip() or head.stdout.strip() != authority.head_sha:
                 raise LckStopError("frozen Review Eval Subject is not clean and exact")
+            _assert_contained_symlinks(destination)
         except BaseException:
             ReviewEvalWorkspaceManager._make_removable(destination)
             shutil.rmtree(destination, ignore_errors=True)
@@ -400,11 +578,32 @@ class ReviewEvalRunner:
 
     def start(
         self,
-        authority: FrozenReviewAuthority,
-        materializer: SubjectMaterializer | SubjectMaterializerCallable,
+        authority: FrozenReviewAuthority | FrozenReviewFixture | Path,
+        materializer: SubjectMaterializer | SubjectMaterializerCallable | None = None,
+        *,
+        run_kind: str = "detection",
+        writable: bool | None = None,
     ) -> ReviewEvalRunContext:
-        authority = require_frozen_review_authority(authority)
-        run = self.workspace.reserve(authority, self.harness_root)
+        authority, fixture = _authority_input(authority)
+        if run_kind not in {"detection", "remediation"}:
+            raise ValueError("Review Eval run_kind must be detection or remediation")
+        if writable is None:
+            writable = run_kind == "remediation"
+        if fixture is not None and materializer is None:
+            materializer = GitFrozenSubjectMaterializer(
+                fixture=fixture, runner=self.command_runner
+            )
+        if materializer is None:
+            raise TypeError("Review Eval Subject materializer is required")
+        harness_sha = self._harness_sha()
+        if fixture is not None and harness_sha is None:
+            raise LckStopError("Review Eval Harness SHA is unavailable")
+        run = self.workspace.reserve(
+            authority,
+            self.harness_root,
+            harness_sha=harness_sha,
+            run_kind=run_kind,
+        )
         try:
             _call_materializer(materializer, authority, run.subject_root)
             subject = run.subject_root.resolve()
@@ -413,6 +612,12 @@ class ReviewEvalRunner:
                 raise LckStopError(
                     "Review Eval Subject materializer escaped its Run workspace"
                 )
+            _assert_contained_symlinks(run.subject_root)
+            if fixture is not None:
+                fixture.verify(self.command_runner)
+            if not writable:
+                _make_read_only(run.subject_root)
+            run.write_receipt(status="READY_FOR_EVAL")
             return run
         except BaseException:
             self.workspace.close(run)
@@ -420,36 +625,57 @@ class ReviewEvalRunner:
 
     def prepare(
         self,
-        authority: FrozenReviewAuthority,
-        materializer: SubjectMaterializer | SubjectMaterializerCallable,
+        authority: FrozenReviewAuthority | FrozenReviewFixture | Path,
+        materializer: SubjectMaterializer | SubjectMaterializerCallable | None = None,
+        *,
+        run_kind: str = "detection",
+        writable: bool | None = None,
     ) -> ReviewEvalRunContext:
         """Named entrypoint for callers that separate prepare from execution."""
-        return self.start(authority, materializer)
+        return self.start(
+            authority,
+            materializer,
+            run_kind=run_kind,
+            writable=writable,
+        )
 
     def run(
         self,
-        authority: FrozenReviewAuthority,
-        materializer: SubjectMaterializer | SubjectMaterializerCallable,
+        authority: FrozenReviewAuthority | FrozenReviewFixture | Path,
+        materializer: SubjectMaterializer | SubjectMaterializerCallable | None,
         evaluator: Callable[[ReviewEvalRunContext], T],
+        *,
+        run_kind: str = "detection",
+        writable: bool | None = None,
     ) -> ReviewEvalExecution[T]:
         """Materialize a Subject, then invoke the evaluator from the Harness."""
         if not callable(evaluator):
             raise TypeError("Review Eval evaluator is not callable")
-        run = self.start(authority, materializer)
+        run = self.start(
+            authority,
+            materializer,
+            run_kind=run_kind,
+            writable=writable,
+        )
         try:
             value = evaluator(run)
         except BaseException:
             self.workspace.close(run)
             raise
+        run.write_receipt(status="COMPLETED")
+        if isinstance(value, Mapping):
+            run.write_result("eval-result.json", value)
         return ReviewEvalExecution(run=run, value=value)
 
     def execute_command(
         self,
-        authority: FrozenReviewAuthority,
-        materializer: SubjectMaterializer | SubjectMaterializerCallable,
+        authority: FrozenReviewAuthority | FrozenReviewFixture | Path,
+        materializer: SubjectMaterializer | SubjectMaterializerCallable | None,
         argv: Sequence[str],
         *,
         env: Mapping[str, str] | None = None,
+        run_kind: str = "detection",
+        writable: bool | None = None,
     ) -> ReviewEvalExecution[CommandResult]:
         """Execute a Harness-owned command with the Subject as explicit input.
 
@@ -460,7 +686,12 @@ class ReviewEvalRunner:
         """
         if not argv:
             raise ValueError("Review Eval command argv cannot be empty")
-        run = self.start(authority, materializer)
+        run = self.start(
+            authority,
+            materializer,
+            run_kind=run_kind,
+            writable=writable,
+        )
         command_env = dict(env or {})
         command_env.update(
             {
@@ -472,6 +703,9 @@ class ReviewEvalRunner:
                 "TRACEQUANT_REVIEW_EVAL_HARNESS_ROOT": str(run.harness_root),
             }
         )
+        if run.run_kind == "detection":
+            command_env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+            command_env.setdefault("GIT_OPTIONAL_LOCKS", "0")
         existing_pythonpath = command_env.get("PYTHONPATH") or os.environ.get(
             "PYTHONPATH"
         )
@@ -498,7 +732,17 @@ class ReviewEvalRunner:
         except BaseException:
             self.workspace.close(run)
             raise
+        run.write_receipt(status="COMPLETED")
         return ReviewEvalExecution(run=run, value=result)
+
+    def _harness_sha(self) -> str | None:
+        result = self.command_runner.run(
+            ["git", "rev-parse", "HEAD"],
+            command_id="review-eval-harness-head",
+            cwd=self.harness_root,
+        )
+        value = result.stdout.strip()
+        return value if result.returncode == 0 and is_sha(value) else None
 
 
 __all__ = [
@@ -508,4 +752,6 @@ __all__ = [
     "ReviewEvalRunner",
     "ReviewEvalWorkspaceManager",
     "SubjectMaterializer",
+    "FrozenReviewFixture",
+    "ReviewFixtureBuilder",
 ]
