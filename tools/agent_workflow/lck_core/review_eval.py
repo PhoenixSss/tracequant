@@ -99,11 +99,16 @@ def _make_read_only(root: Path) -> None:
 
 def _authority_input(
     value: FrozenReviewAuthority | FrozenReviewFixture | Path,
+    *,
+    expected_fixture_digest: str | None = None,
 ) -> tuple[FrozenReviewAuthority, FrozenReviewFixture | None]:
     if isinstance(value, Path):
-        value = load_frozen_review_fixture(value)
+        value = load_frozen_review_fixture(
+            value,
+            expected_fixture_digest=expected_fixture_digest,
+        )
     if isinstance(value, FrozenReviewFixture):
-        value.verify()
+        value.verify(expected_fixture_digest=expected_fixture_digest)
         return value.authority, value
     authority = require_frozen_review_authority(value)
     if authority.fixture_schema_version is not None:
@@ -434,14 +439,19 @@ class GitFrozenSubjectMaterializer:
         *,
         runner: CommandRunner | None = None,
         fixture: FrozenReviewFixture | Path | None = None,
+        expected_fixture_digest: str | None = None,
     ) -> None:
         if source_repository is None and fixture is None:
             raise ValueError("provide source_repository or frozen fixture")
         if source_repository is not None and fixture is not None:
             raise ValueError("provide source_repository or frozen fixture, not both")
         if isinstance(fixture, Path):
-            fixture = load_frozen_review_fixture(fixture)
+            fixture = load_frozen_review_fixture(
+                fixture,
+                expected_fixture_digest=expected_fixture_digest,
+            )
         self.fixture = fixture
+        self.expected_fixture_digest = expected_fixture_digest
         self.source_repository = (
             source_repository.resolve() if source_repository is not None else None
         )
@@ -489,7 +499,10 @@ class GitFrozenSubjectMaterializer:
         authority: FrozenReviewAuthority | FrozenReviewFixture,
         destination: Path,
     ) -> None:
-        authority, fixture_input = _authority_input(authority)
+        authority, fixture_input = _authority_input(
+            authority,
+            expected_fixture_digest=self.expected_fixture_digest,
+        )
         fixture = self.fixture
         if (
             fixture is not None
@@ -505,7 +518,10 @@ class GitFrozenSubjectMaterializer:
                 or authority.fixture_digest != expected_authority.fixture_digest
             ):
                 raise LckStopError("Review Eval fixture authorities do not match")
-            fixture.verify(self.runner)
+            fixture.verify(
+                self.runner,
+                expected_fixture_digest=self.expected_fixture_digest,
+            )
         source = self.source_repository
         destination = destination.resolve()
         if source is not None and (
@@ -627,8 +643,12 @@ class ReviewEvalRunner:
         *,
         run_kind: str = "detection",
         writable: bool | None = None,
+        expected_fixture_digest: str | None = None,
     ) -> ReviewEvalRunContext:
-        authority, fixture = _authority_input(authority)
+        authority, fixture = _authority_input(
+            authority,
+            expected_fixture_digest=expected_fixture_digest,
+        )
         if run_kind not in {"detection", "remediation"}:
             raise ValueError("Review Eval run_kind must be detection or remediation")
         if run_kind == "detection" and writable is True:
@@ -637,7 +657,9 @@ class ReviewEvalRunner:
             writable = run_kind == "remediation"
         if fixture is not None and materializer is None:
             materializer = GitFrozenSubjectMaterializer(
-                fixture=fixture, runner=self.command_runner
+                fixture=fixture,
+                runner=self.command_runner,
+                expected_fixture_digest=expected_fixture_digest,
             )
         if materializer is None:
             raise TypeError("Review Eval Subject materializer is required")
@@ -676,6 +698,7 @@ class ReviewEvalRunner:
         *,
         run_kind: str = "detection",
         writable: bool | None = None,
+        expected_fixture_digest: str | None = None,
     ) -> ReviewEvalRunContext:
         """Named entrypoint for callers that separate prepare from execution."""
         return self.start(
@@ -683,6 +706,7 @@ class ReviewEvalRunner:
             materializer,
             run_kind=run_kind,
             writable=writable,
+            expected_fixture_digest=expected_fixture_digest,
         )
 
     def run(
@@ -693,6 +717,7 @@ class ReviewEvalRunner:
         *,
         run_kind: str = "detection",
         writable: bool | None = None,
+        expected_fixture_digest: str | None = None,
     ) -> ReviewEvalExecution[T]:
         """Materialize a Subject, then invoke the evaluator from the Harness."""
         if not callable(evaluator):
@@ -702,6 +727,7 @@ class ReviewEvalRunner:
             materializer,
             run_kind=run_kind,
             writable=writable,
+            expected_fixture_digest=expected_fixture_digest,
         )
         try:
             value = evaluator(run)
@@ -722,6 +748,7 @@ class ReviewEvalRunner:
         env: Mapping[str, str] | None = None,
         run_kind: str = "detection",
         writable: bool | None = None,
+        expected_fixture_digest: str | None = None,
     ) -> ReviewEvalExecution[CommandResult]:
         """Execute a Harness-owned command with the Subject as explicit input.
 
@@ -737,6 +764,7 @@ class ReviewEvalRunner:
             materializer,
             run_kind=run_kind,
             writable=writable,
+            expected_fixture_digest=expected_fixture_digest,
         )
         command_env = dict(env or {})
         command_env.update(

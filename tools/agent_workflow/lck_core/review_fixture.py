@@ -2,7 +2,8 @@
 
 The fixture is the authority for Eval.  A branch or tag may help a human find
 the package, but the manifest, its digests, and the self-contained Git bundle
-are the only inputs accepted by the materializer.
+are only accepted after a Path load is checked against an independently
+retained fixture digest.
 """
 
 from __future__ import annotations
@@ -94,6 +95,24 @@ def _manifest_payload(value: Mapping[str, Any]) -> dict[str, Any]:
         for key, item in value.items()
         if key not in {"fixture_manifest_sha256", "fixture_digest"}
     }
+
+
+def _expected_fixture_digest(value: Any) -> str:
+    if value is None:
+        raise LckStopError(
+            "Review fixture requires an independently trusted expected fixture digest"
+        )
+    return _required_digest(value, field="expected fixture digest")
+
+
+def _verify_expected_fixture_digest(
+    fixture: FrozenReviewFixture, expected_fixture_digest: Any
+) -> None:
+    expected = _expected_fixture_digest(expected_fixture_digest)
+    if fixture.fixture_digest != expected:
+        raise LckStopError(
+            "Review fixture identity does not match independently trusted digest"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,7 +276,14 @@ class FrozenReviewFixture:
         )
 
     @classmethod
-    def from_manifest(cls, path: Path) -> FrozenReviewFixture:
+    def from_manifest(
+        cls,
+        path: Path,
+        *,
+        expected_fixture_digest: str | None = None,
+    ) -> FrozenReviewFixture:
+        """Load a manifest only when its identity has an external anchor."""
+        expected = _expected_fixture_digest(expected_fixture_digest)
         manifest = path
         if manifest.is_dir():
             manifest = manifest / FIXTURE_MANIFEST_NAME
@@ -268,10 +294,19 @@ class FrozenReviewFixture:
             value = read_json_file(manifest)
         except WorkflowToolError as exc:
             raise LckStopError("Review fixture manifest cannot be read") from exc
-        return cls.from_mapping(manifest.parent, value)
+        fixture = cls.from_mapping(manifest.parent, value)
+        _verify_expected_fixture_digest(fixture, expected)
+        return fixture.verify(expected_fixture_digest=expected)
 
-    def verify(self, runner: Any | None = None) -> FrozenReviewFixture:
+    def verify(
+        self,
+        runner: Any | None = None,
+        *,
+        expected_fixture_digest: str | None = None,
+    ) -> FrozenReviewFixture:
         """Verify the manifest and every protected artifact before Eval."""
+        if expected_fixture_digest is not None:
+            _verify_expected_fixture_digest(self, expected_fixture_digest)
         try:
             recorded = read_json_file(self.manifest_path)
         except WorkflowToolError as exc:
@@ -488,7 +523,10 @@ class ReviewFixtureBuilder:
                 "fixture_digest": fixture_digest,
             },
         )
-        return FrozenReviewFixture.from_manifest(destination).verify(self.runner)
+        return FrozenReviewFixture.from_manifest(
+            destination,
+            expected_fixture_digest=fixture_digest,
+        ).verify(self.runner, expected_fixture_digest=fixture_digest)
 
 
 def _canonical_artifact_text(value: Any) -> str:
@@ -502,9 +540,14 @@ def _canonical_artifact_text(value: Any) -> str:
     )
 
 
-def load_frozen_review_fixture(path: Path) -> FrozenReviewFixture:
-    """Load a fixture manifest without treating a branch/tag as authority."""
-    return FrozenReviewFixture.from_manifest(path)
+def load_frozen_review_fixture(
+    path: Path, *, expected_fixture_digest: str | None = None
+) -> FrozenReviewFixture:
+    """Load a fixture only against an independently retained identity digest."""
+    return FrozenReviewFixture.from_manifest(
+        path,
+        expected_fixture_digest=expected_fixture_digest,
+    )
 
 
 ReviewFixture = FrozenReviewFixture

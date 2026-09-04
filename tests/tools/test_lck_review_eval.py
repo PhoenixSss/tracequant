@@ -31,9 +31,11 @@ from lck_core.review_eval import (  # type: ignore[import-not-found]
 )
 from lck_core.review_fixture import (  # type: ignore[import-not-found]
     ReviewFixtureBuilder,
+    load_frozen_review_fixture,
 )
 from lck_core.review_workspace import _review_target_refs  # type: ignore[import-not-found]
 from lck_test_support import _review_state
+from workflow_common import sha256_json  # type: ignore[import-not-found]
 
 
 SHA = "a" * 40
@@ -298,6 +300,69 @@ def test_fixture_digest_and_fresh_run_isolation_are_fail_closed(tmp_path: Path) 
         deterministic_evidence={"checks": ["deterministic"]},
     )
     fixture_digest = fixture.fixture_digest
+    loaded = load_frozen_review_fixture(
+        fixture.root,
+        expected_fixture_digest=fixture_digest,
+    )
+    assert loaded.fixture_digest == fixture_digest
+
+    manifest_path = fixture.root / "fixture-manifest.json"
+    forged_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    forged_manifest["fixture_id"] = "forged-fixture"
+    manifest_payload = {
+        key: value
+        for key, value in forged_manifest.items()
+        if key not in {"fixture_manifest_sha256", "fixture_digest"}
+    }
+    forged_manifest["fixture_manifest_sha256"] = sha256_json(manifest_payload)
+    identity = {
+        key: forged_manifest[key]
+        for key in (
+            "fixture_schema_version",
+            "fixture_id",
+            "base_sha",
+            "head_sha",
+            "effective_diff_sha256",
+            "task_contract_sha256",
+            "deterministic_evidence_sha256",
+            "repository_artifact_sha256",
+            "fixture_manifest_sha256",
+        )
+    }
+    forged_manifest["fixture_digest"] = sha256_json(identity)
+    manifest_path.write_text(
+        json.dumps(forged_manifest, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(LckStopError, match="independently trusted digest"):
+        load_frozen_review_fixture(
+            fixture.root,
+            expected_fixture_digest=fixture_digest,
+        )
+    with pytest.raises(LckStopError, match="independently trusted"):
+        load_frozen_review_fixture(fixture.root)
+
+    evaluator_started = False
+
+    def evaluate_forged_fixture(_run: Any) -> dict[str, Any]:
+        nonlocal evaluator_started
+        evaluator_started = True
+        return {"unexpected": "started"}
+
+    runner = ReviewEvalRunner(source, workspace_root=tmp_path / "runs")
+    with pytest.raises(LckStopError, match="independently trusted digest"):
+        runner.run(
+            fixture.root,
+            None,
+            evaluate_forged_fixture,
+            expected_fixture_digest=fixture_digest,
+        )
+    assert not evaluator_started
+
+    manifest_path.write_text(
+        json.dumps(fixture.to_manifest(), ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     shutil.rmtree(source)
     runner = ReviewEvalRunner(harness, workspace_root=tmp_path / "runs")
     materializer = GitFrozenSubjectMaterializer(fixture=fixture)
@@ -357,5 +422,10 @@ def test_fixture_digest_and_fresh_run_isolation_are_fail_closed(tmp_path: Path) 
     fixture.repository_bundle_path.write_bytes(
         fixture.repository_bundle_path.read_bytes() + b"tampered"
     )
+    with pytest.raises(LckStopError, match="digest mismatch"):
+        load_frozen_review_fixture(
+            fixture.root,
+            expected_fixture_digest=fixture_digest,
+        )
     with pytest.raises(LckStopError, match="digest mismatch"):
         runner.start(fixture, materializer)
