@@ -165,6 +165,26 @@ def test_review_eval_command_runs_from_harness_checkout_without_subject_import_p
         execution.close()
 
 
+def test_review_eval_detection_rejects_explicit_writable_subject(
+    tmp_path: Path,
+) -> None:
+    harness = tmp_path / "harness"
+    harness.mkdir()
+    authority = FrozenReviewAuthority("fixture", SHA, SHA)
+    runner = ReviewEvalRunner(
+        harness,
+        workspace=ReviewEvalWorkspaceManager(tmp_path / "runs"),
+    )
+
+    with pytest.raises(LckStopError, match="Detection Run Subject must be read-only"):
+        runner.start(
+            authority,
+            lambda _authority, destination: destination.mkdir(exist_ok=True),
+            writable=True,
+        )
+    assert not list((tmp_path / "runs").iterdir())
+
+
 def test_review_eval_closes_run_when_harness_entrypoint_fails(tmp_path: Path) -> None:
     harness = tmp_path / "harness"
     fixture_source = tmp_path / "fixture-source"
@@ -290,6 +310,14 @@ def test_fixture_digest_and_fresh_run_isolation_are_fail_closed(tmp_path: Path) 
         assert receipt["fixture_digest"] == fixture_digest
         assert receipt["run_identity"]["run_id"] == first.run.run_id
         assert receipt["harness_sha"] == harness_sha
+        with pytest.raises(LckStopError, match="reserved"):
+            first.run.write_result("run-receipt.json", {"tampered": True})
+        with pytest.raises(LckStopError, match="reserved"):
+            first.run.write_result("nested/../run-receipt.json", {"tampered": True})
+        assert json.loads(first.run.receipt_path.read_text(encoding="utf-8")) == receipt
+        first.run.receipt_path.write_text('{"tampered": true}\n', encoding="utf-8")
+        with pytest.raises(LckStopError, match="receipt identity does not match"):
+            first.run.write_receipt()
         assert json.loads(
             first.run.result_path("eval-result.json").read_text(encoding="utf-8")
         ) == {"result": "ok"}
@@ -319,6 +347,12 @@ def test_fixture_digest_and_fresh_run_isolation_are_fail_closed(tmp_path: Path) 
         ) == "frozen head\n"
     finally:
         second.close()
+
+    mismatched_authority = FrozenReviewAuthority(
+        "different-fixture", base_sha, head_sha
+    )
+    with pytest.raises(LckStopError, match="fixture authorities do not match"):
+        materializer.materialize(mismatched_authority, tmp_path / "mismatched-subject")
 
     fixture.repository_bundle_path.write_bytes(
         fixture.repository_bundle_path.read_bytes() + b"tampered"

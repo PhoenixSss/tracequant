@@ -39,6 +39,8 @@ from .review_fixture import (
 )
 
 T = TypeVar("T")
+_RECEIPT_NAME: Final = "run-receipt.json"
+_RECEIPT_STATUSES: Final = frozenset({"READY_FOR_EVAL", "COMPLETED"})
 
 
 class SubjectMaterializer(Protocol):
@@ -171,14 +173,25 @@ class ReviewEvalRunContext:
         candidate = (self.result_root / name).resolve(strict=False)
         if not _within(candidate, self.result_root) or candidate == self.result_root:
             raise LckStopError("Review Eval result path must remain inside the Run")
+        if candidate == self.receipt_path.resolve(strict=False):
+            raise LckStopError(
+                "Review Eval result path is reserved for the Run receipt"
+            )
         return candidate
 
     @property
     def receipt_path(self) -> Path:
-        return self.result_root / "run-receipt.json"
+        return self.result_root / _RECEIPT_NAME
 
     def write_receipt(self, *, status: str = "COMPLETED") -> Path:
         """Persist bounded identity evidence in the Run result area."""
+        self._workspace._assert_owned(self)
+        if status not in _RECEIPT_STATUSES:
+            raise LckStopError("Review Eval Run receipt status is invalid")
+        if self.receipt_path.is_symlink() or (
+            self.receipt_path.exists() and not self.receipt_path.is_file()
+        ):
+            raise LckStopError("Review Eval Run receipt path is unavailable")
         fixture_digest = self.authority.fixture_digest
         if fixture_digest is None:
             fixture_digest = self.authority.computed_fixture_digest
@@ -201,11 +214,36 @@ class ReviewEvalRunContext:
             "subject_root": str(self.subject_root),
             "result_root": str(self.result_root),
         }
+        if self.receipt_path.exists():
+            try:
+                existing = read_json_file(self.receipt_path)
+            except WorkflowToolError as exc:
+                raise LckStopError("Review Eval Run receipt cannot be read") from exc
+            if not isinstance(existing, Mapping):
+                raise LckStopError("Review Eval Run receipt identity does not match")
+            immutable_payload = {
+                key: item for key, item in payload.items() if key != "status"
+            }
+            existing_immutable = {
+                key: item for key, item in existing.items() if key != "status"
+            }
+            if existing_immutable != immutable_payload:
+                raise LckStopError("Review Eval Run receipt identity does not match")
+            existing_status = existing.get("status")
+            if (
+                existing_status not in _RECEIPT_STATUSES
+                or existing_status == "COMPLETED"
+                and status != "COMPLETED"
+            ):
+                raise LckStopError(
+                    "Review Eval Run receipt status transition is invalid"
+                )
         atomic_write_json(self.receipt_path, payload)
         return self.receipt_path
 
     def write_result(self, name: str, value: Mapping[str, Any]) -> Path:
         """Write an Eval result without granting access to fixture or Subject."""
+        self._workspace._assert_owned(self)
         path = self.result_path(name)
         atomic_write_json(path, value)
         return path
@@ -461,6 +499,12 @@ class GitFrozenSubjectMaterializer:
             raise LckStopError("Review Eval fixture authorities do not match")
         fixture = fixture or fixture_input
         if fixture is not None:
+            expected_authority = fixture.authority
+            if (
+                authority.identity_payload != expected_authority.identity_payload
+                or authority.fixture_digest != expected_authority.fixture_digest
+            ):
+                raise LckStopError("Review Eval fixture authorities do not match")
             fixture.verify(self.runner)
         source = self.source_repository
         destination = destination.resolve()
@@ -587,6 +631,8 @@ class ReviewEvalRunner:
         authority, fixture = _authority_input(authority)
         if run_kind not in {"detection", "remediation"}:
             raise ValueError("Review Eval run_kind must be detection or remediation")
+        if run_kind == "detection" and writable is True:
+            raise LckStopError("Detection Run Subject must be read-only")
         if writable is None:
             writable = run_kind == "remediation"
         if fixture is not None and materializer is None:
