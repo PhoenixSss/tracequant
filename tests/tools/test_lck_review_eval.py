@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -22,13 +23,19 @@ from lck_core.review_authority import (  # type: ignore[import-not-found]
     require_frozen_review_authority,
     require_live_review_authority,
 )
+from lck_core.models import LckStopError  # type: ignore[import-not-found]
 from lck_core.review_eval import (  # type: ignore[import-not-found]
     GitFrozenSubjectMaterializer,
     ReviewEvalRunner,
     ReviewEvalWorkspaceManager,
 )
+from lck_core.review_fixture import (  # type: ignore[import-not-found]
+    ReviewFixtureBuilder,
+    load_frozen_review_fixture,
+)
 from lck_core.review_workspace import _review_target_refs  # type: ignore[import-not-found]
 from lck_test_support import _review_state
+from workflow_common import sha256_json  # type: ignore[import-not-found]
 
 
 SHA = "a" * 40
@@ -160,6 +167,26 @@ def test_review_eval_command_runs_from_harness_checkout_without_subject_import_p
         execution.close()
 
 
+def test_review_eval_detection_rejects_explicit_writable_subject(
+    tmp_path: Path,
+) -> None:
+    harness = tmp_path / "harness"
+    harness.mkdir()
+    authority = FrozenReviewAuthority("fixture", SHA, SHA)
+    runner = ReviewEvalRunner(
+        harness,
+        workspace=ReviewEvalWorkspaceManager(tmp_path / "runs"),
+    )
+
+    with pytest.raises(LckStopError, match="Detection Run Subject must be read-only"):
+        runner.start(
+            authority,
+            lambda _authority, destination: destination.mkdir(exist_ok=True),
+            writable=True,
+        )
+    assert not list((tmp_path / "runs").iterdir())
+
+
 def test_review_eval_closes_run_when_harness_entrypoint_fails(tmp_path: Path) -> None:
     harness = tmp_path / "harness"
     fixture_source = tmp_path / "fixture-source"
@@ -230,3 +257,175 @@ def test_git_subject_materializer_uses_explicit_frozen_head(tmp_path: Path) -> N
         assert execution.value == ("historical head\n", "")
     finally:
         execution.close()
+
+
+def test_fixture_digest_and_fresh_run_isolation_are_fail_closed(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    harness = tmp_path / "harness"
+    source.mkdir()
+    harness.mkdir()
+
+    def git(root: Path, *args: str) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    for root in (source, harness):
+        git(root, "init", "--quiet")
+        git(root, "config", "user.name", "Review Eval Test")
+        git(root, "config", "user.email", "review-eval@example.invalid")
+    (source / "subject.txt").write_text("base\n", encoding="utf-8")
+    git(source, "add", "subject.txt")
+    git(source, "commit", "--quiet", "-m", "base")
+    base_sha = git(source, "rev-parse", "HEAD")
+    (source / "subject.txt").write_text("frozen head\n", encoding="utf-8")
+    git(source, "commit", "--quiet", "-am", "head")
+    head_sha = git(source, "rev-parse", "HEAD")
+    (harness / "harness.py").write_text("candidate\n", encoding="utf-8")
+    git(harness, "add", "harness.py")
+    git(harness, "commit", "--quiet", "-m", "harness")
+    harness_sha = git(harness, "rev-parse", "HEAD")
+
+    fixture = ReviewFixtureBuilder(source).create(
+        tmp_path / "fixture",
+        fixture_id="fixture-252",
+        base_sha=base_sha,
+        head_sha=head_sha,
+        task_contract={"task": 252},
+        deterministic_evidence={"checks": ["deterministic"]},
+    )
+    fixture_digest = fixture.fixture_digest
+    loaded = load_frozen_review_fixture(
+        fixture.root,
+        expected_fixture_digest=fixture_digest,
+    )
+    assert loaded.fixture_digest == fixture_digest
+
+    manifest_path = fixture.root / "fixture-manifest.json"
+    forged_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    forged_manifest["fixture_id"] = "forged-fixture"
+    manifest_payload = {
+        key: value
+        for key, value in forged_manifest.items()
+        if key not in {"fixture_manifest_sha256", "fixture_digest"}
+    }
+    forged_manifest["fixture_manifest_sha256"] = sha256_json(manifest_payload)
+    identity = {
+        key: forged_manifest[key]
+        for key in (
+            "fixture_schema_version",
+            "fixture_id",
+            "base_sha",
+            "head_sha",
+            "effective_diff_sha256",
+            "task_contract_sha256",
+            "deterministic_evidence_sha256",
+            "repository_artifact_sha256",
+            "fixture_manifest_sha256",
+        )
+    }
+    forged_manifest["fixture_digest"] = sha256_json(identity)
+    manifest_path.write_text(
+        json.dumps(forged_manifest, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(LckStopError, match="independently trusted digest"):
+        load_frozen_review_fixture(
+            fixture.root,
+            expected_fixture_digest=fixture_digest,
+        )
+    with pytest.raises(LckStopError, match="independently trusted"):
+        load_frozen_review_fixture(fixture.root)
+
+    evaluator_started = False
+
+    def evaluate_forged_fixture(_run: Any) -> dict[str, Any]:
+        nonlocal evaluator_started
+        evaluator_started = True
+        return {"unexpected": "started"}
+
+    runner = ReviewEvalRunner(source, workspace_root=tmp_path / "runs")
+    with pytest.raises(LckStopError, match="independently trusted digest"):
+        runner.run(
+            fixture.root,
+            None,
+            evaluate_forged_fixture,
+            expected_fixture_digest=fixture_digest,
+        )
+    assert not evaluator_started
+
+    manifest_path.write_text(
+        json.dumps(fixture.to_manifest(), ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    shutil.rmtree(source)
+    runner = ReviewEvalRunner(harness, workspace_root=tmp_path / "runs")
+    materializer = GitFrozenSubjectMaterializer(fixture=fixture)
+    first = runner.run(fixture, materializer, lambda _run: {"result": "ok"})
+    try:
+        assert first.run.run_id
+        assert first.run.harness_sha == harness_sha
+        receipt = json.loads(first.run.receipt_path.read_text(encoding="utf-8"))
+        assert receipt["fixture_id"] == "fixture-252"
+        assert receipt["fixture_digest"] == fixture_digest
+        assert receipt["run_identity"]["run_id"] == first.run.run_id
+        assert receipt["harness_sha"] == harness_sha
+        with pytest.raises(LckStopError, match="reserved"):
+            first.run.write_result("run-receipt.json", {"tampered": True})
+        with pytest.raises(LckStopError, match="reserved"):
+            first.run.write_result("nested/../run-receipt.json", {"tampered": True})
+        assert json.loads(first.run.receipt_path.read_text(encoding="utf-8")) == receipt
+        first.run.receipt_path.write_text('{"tampered": true}\n', encoding="utf-8")
+        with pytest.raises(LckStopError, match="receipt identity does not match"):
+            first.run.write_receipt()
+        assert json.loads(
+            first.run.result_path("eval-result.json").read_text(encoding="utf-8")
+        ) == {"result": "ok"}
+        assert (first.run.subject_root / "subject.txt").read_text(
+            encoding="utf-8"
+        ) == "frozen head\n"
+        with pytest.raises(PermissionError):
+            (first.run.subject_root / "subject.txt").write_text(
+                "must not mutate\n", encoding="utf-8"
+            )
+
+        remediation = first.run.materialize_remediation(materializer)
+        (remediation / "subject.txt").write_text("remediation copy\n", encoding="utf-8")
+        assert (first.run.subject_root / "subject.txt").read_text(
+            encoding="utf-8"
+        ) == "frozen head\n"
+        assert fixture.verify().fixture_digest == fixture_digest
+    finally:
+        first.close()
+
+    second = runner.run(fixture, materializer, lambda run: run)
+    try:
+        assert second.run.run_id != first.run.run_id
+        assert second.run.run_root != first.run.run_root
+        assert (second.run.subject_root / "subject.txt").read_text(
+            encoding="utf-8"
+        ) == "frozen head\n"
+    finally:
+        second.close()
+
+    mismatched_authority = FrozenReviewAuthority(
+        "different-fixture", base_sha, head_sha
+    )
+    with pytest.raises(LckStopError, match="fixture authorities do not match"):
+        materializer.materialize(mismatched_authority, tmp_path / "mismatched-subject")
+
+    fixture.repository_bundle_path.write_bytes(
+        fixture.repository_bundle_path.read_bytes() + b"tampered"
+    )
+    with pytest.raises(LckStopError, match="digest mismatch"):
+        load_frozen_review_fixture(
+            fixture.root,
+            expected_fixture_digest=fixture_digest,
+        )
+    with pytest.raises(LckStopError, match="digest mismatch"):
+        runner.start(fixture, materializer)
