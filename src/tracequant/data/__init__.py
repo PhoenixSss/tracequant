@@ -1,5 +1,15 @@
 """Public-history source contracts and immutable local Raw persistence."""
 
+from tracequant.data.binance_contract_kline import (
+    ArchiveHttpResponse,
+    BinanceArchiveCoverageGapPlan,
+    BinanceArchiveObjectPlan,
+    BinanceContractKlineBackfill,
+    BinanceContractKlineObjectResult,
+    BinanceContractKlineRunResult,
+    BinanceContractKlineStatus,
+    plan_binance_contract_kline_archives,
+)
 from tracequant.data.public_history import (
     BinanceArchiveObjectBoundary,
     BinanceArchiveObjectGranularity,
@@ -12,20 +22,31 @@ from tracequant.data.public_history import (
     PublicHistoryContractError,
 )
 from tracequant.data.raw_store import (
+    RawAcquisitionManifest,
+    RawAcquisitionResponse,
     RawArtifact,
     RawArtifactConflictError,
+    RawArtifactIncompleteError,
     RawArtifactNotFoundError,
     RawArtifactValidationError,
     RawManifest,
     RawObjectIdentity,
     RawSourceObject,
+    RawSourceProvenance,
     RawStore,
     RawStoreError,
 )
 
 __all__ = [
+    "ArchiveHttpResponse",
+    "BinanceArchiveCoverageGapPlan",
+    "BinanceArchiveObjectPlan",
     "BinanceArchiveObjectBoundary",
     "BinanceArchiveObjectGranularity",
+    "BinanceContractKlineBackfill",
+    "BinanceContractKlineObjectResult",
+    "BinanceContractKlineRunResult",
+    "BinanceContractKlineStatus",
     "BinanceKlineInterval",
     "BinanceMarket",
     "BinancePublicHistoryDataType",
@@ -35,11 +56,16 @@ __all__ = [
     "PublicHistoryContractError",
     "RawArtifact",
     "RawArtifactConflictError",
+    "RawArtifactIncompleteError",
     "RawArtifactNotFoundError",
     "RawArtifactValidationError",
+    "RawAcquisitionManifest",
+    "RawAcquisitionResponse",
     "RawManifest",
     "RawObjectIdentity",
+    "RawSourceProvenance",
     "RawSourceObject",
     "RawStore",
     "RawStoreError",
+    "plan_binance_contract_kline_archives",
 ]

@@ -151,13 +151,18 @@ The currently implemented public package is `tracequant` under `src/`:
   and formatting;
 - `tracequant.domain`: the initial immutable `InstrumentId`, `TimeRange`, and
   `OHLCVBar` models with validation and JSON-compatible serialization.
-- `tracequant.data`: typed Binance USDⓈ-M public-history request and source
-  identity contracts; it performs no network, file, or data-parsing work.
+- `tracequant.data`: typed Binance USDⓈ-M public-history contracts, an
+  immutable local Raw Parquet/manifest store, and an explicit archive-backfill
+  adapter for BTCUSDT and ETHUSDT 1m contract Klines. Backfill calls perform
+  bounded public HTTP downloads, checksum and ZIP/CSV validation, and Raw
+  persistence; importing the module performs no I/O.
 
 The `apps/`, `packages/`, and `deploy/` directories currently establish future
 boundaries through small README files. They are not implemented product
-packages. There is currently no exchange client, market-data ingestion,
-database, data pipeline, feature or label pipeline, backtester, strategy,
+packages. The implemented ingestion path is limited to Binance's public
+USDⓈ-M 1m contract-Kline archives; there is no private or trading exchange
+client, REST recent synchronization, general data pipeline, canonical quality
+or repair layer, database, feature or label pipeline, backtester, strategy,
 machine-learning model, order or account service, risk engine, live runtime,
 or multi-exchange implementation.
 
@@ -239,6 +244,8 @@ src/tracequant/                 implemented bootstrap package
   core/time.py                  UTC utilities
   domain/models.py              initial domain models
   data/public_history.py        Binance public-history contracts
+  data/raw_store.py             immutable Raw Parquet/manifest persistence
+  data/binance_contract_kline.py  explicit Binance archive backfill adapter
 tests/                          package and workflow tests
   fixtures/domain.py            deterministic domain factories, test-only
 apps/                           future research/runtime/console boundaries
@@ -282,8 +289,8 @@ UTC utilities, initial domain models, and test fixtures are covered in the
 - The shared fixtures cover only the initial domain models. They do not model
   exchange responses, missing or duplicated market data, fills, accounts, or
   production state.
-- The current repository does not provide database storage, raw/canonical data
-  layers, factors, labels, backtesting, model training, execution, risk
+- The current repository does not provide database storage, a canonical data
+  layer, factors, labels, backtesting, model training, execution, risk
   decisions, monitoring, or multi-exchange adapters. Those are future Issues,
   not available capabilities.
 - Documentation and Agent workflow controls have separate responsibilities.

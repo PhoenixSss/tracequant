@@ -12,6 +12,7 @@ from tracequant.data import (
     BinancePublicHistoryRequest,
     BinancePublicHistorySourceKind,
     RawArtifactConflictError,
+    RawArtifactIncompleteError,
     RawArtifactNotFoundError,
     RawArtifactValidationError,
     RawObjectIdentity,
@@ -123,7 +124,7 @@ def test_manifest_contains_complete_source_and_provenance_evidence(
     artifact = _store(tmp_path).write(_source_object())
     payload = json.loads(artifact.manifest_path.read_text(encoding="utf-8"))
 
-    assert payload["manifest_schema_version"] == 1
+    assert payload["manifest_schema_version"] == 3
     assert payload["completed"] is True
     assert payload["object_identity"]["source"] == _request().source_identity.to_dict()
     assert payload["caller_request_range"] == _request().request_range.to_dict()
@@ -136,6 +137,25 @@ def test_manifest_contains_complete_source_and_provenance_evidence(
     assert payload["raw_schema_identifier"] == "binance.um.contract-kline.csv.v1"
     assert payload["producer_version"] == "tracequant/0.1.0"
     assert payload["created_at"] == "2024-03-02T12:30:00Z"
+    assert payload["provenance"] is None
+
+
+def test_reader_accepts_schema_one_manifest_without_provenance(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    artifact = store.write(_source_object())
+    legacy_payload = json.loads(artifact.manifest_path.read_text(encoding="utf-8"))
+    legacy_payload["manifest_schema_version"] = 1
+    del legacy_payload["provenance"]
+    artifact.manifest_path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+    restored = store.read(_source_object().identity)
+
+    assert restored.frame.equals(artifact.frame)
+    assert restored.manifest.manifest_schema_version == 1
+    assert restored.manifest.provenance is None
+    assert restored.manifest.to_dict() == legacy_payload
 
 
 def test_raw_parquet_preserves_parsed_source_columns_values_and_dtypes(
@@ -231,7 +251,7 @@ def test_reader_rejects_corrupt_or_unsupported_artifact(
         if mutation == "checksum":
             payload["project_sha256"] = "0" * 64
         elif mutation == "version":
-            payload["manifest_schema_version"] = 2
+            payload["manifest_schema_version"] = 4
         else:
             payload["completed"] = False
         artifact.manifest_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -248,7 +268,7 @@ def test_reader_rejects_missing_final_component(
     artifact = store.write(_source_object())
     (artifact.path / missing_name).unlink()
 
-    with pytest.raises(RawArtifactNotFoundError, match="requires both"):
+    with pytest.raises(RawArtifactIncompleteError, match="requires both"):
         store.read(_source_object().identity)
 
 

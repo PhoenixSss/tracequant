@@ -1,7 +1,7 @@
 # TraceQuant technical baseline
 
-- **Version:** 1.1
-- **Date:** 2026-08-29
+- **Version:** 1.2
+- **Date:** 2026-09-03
 - **Repository:** `PhoenixSss/tracequant`
 - **Status:** current implementation facts plus explicitly deferred boundaries
 
@@ -23,6 +23,11 @@ Python standard library
 └── tracequant.logging ──> config + core.time
 
 tracequant.domain.models ──> tracequant.core.time
+
+tracequant.data.public_history ──> tracequant.domain
+tracequant.data.raw_store ──────> public_history + core.time + Polars
+tracequant.data.binance_contract_kline ──> public_history + raw_store
+                                      └──> domain + Polars + stdlib transport/archive
 ```
 
 The public foundation consists of:
@@ -33,12 +38,21 @@ The public foundation consists of:
 3. timezone-aware UTC conversion, parsing, and formatting;
 4. immutable initial domain models for instrument identifiers, UTC ranges, and
    OHLCV bars, including explicit JSON-compatible serialization;
-5. deterministic test-only factories for those domain models.
+5. typed Binance public-history request, source-identity, and archive-boundary
+   contracts;
+6. an immutable filesystem Raw store that publishes and revalidates Parquet
+   plus a provenance/checksum manifest, and durably records non-completed
+   acquisition outcomes in separate manifests with optional quarantined
+   response bodies;
+7. an explicit Binance USDⓈ-M public-archive backfill adapter for BTCUSDT and
+   ETHUSDT 1m contract Klines, including bounded HTTP, upstream checksum
+   verification, ZIP/CSV validation, and complete 12-field Raw parsing;
+8. deterministic test-only factories for the domain models.
 
-There are no runtime third-party dependencies in `pyproject.toml`. Development
-dependencies are pytest, Ruff, mypy, and PyYAML. The current package does not
-use an exchange SDK, database, Parquet engine, dataframe engine, backtest
-engine, model library, or execution framework.
+Polars is the sole runtime third-party dependency in `pyproject.toml` and is
+used for Raw frames and Parquet I/O. Development dependencies are pytest,
+Ruff, mypy, and PyYAML. The current package does not use an exchange SDK,
+database, backtest engine, model library, or execution framework.
 
 ## 2. Engineering boundaries
 
@@ -52,6 +66,9 @@ The full current tree and import rules are in
 - UTC conversion is centralized in `tracequant.core.time`;
 - domain models depend on UTC utilities but not on network, exchange, UI,
   deployment, logging setup, or test fixtures;
+- data contracts remain separate from transport and persistence concerns;
+  `BinanceContractKlineBackfill` and `RawStore` perform network and filesystem
+  work only when explicitly called, and module imports remain side-effect free;
 - tests may use `tests/fixtures`, but fixtures are not production runtime
   dependencies;
 - future exchange, storage, transport, and vendor behavior must terminate at
@@ -152,10 +169,18 @@ public exchange data
   -> vectorized research and event-driven verification
 ```
 
-This flow does not currently exist. In particular, there is no Binance client,
-raw data lake, Parquet storage, manifest, schema registry, missing/duplicate/
-out-of-order detector, feature pipeline, label pipeline, or future-data-leakage
-check. No exchange-specific field may be treated as a current canonical schema.
+Only the first, narrow part of this flow currently exists: callers can retrieve
+approved Binance USDⓈ-M BTCUSDT/ETHUSDT 1m contract-Kline archives and publish
+immutable Raw Parquet objects with manifests. There is no general Binance or
+private API client, REST recent/gap synchronization, canonical schema,
+missing/duplicate/out-of-order policy, feature pipeline, label pipeline, or
+future-data-leakage check. The preserved Binance 12-field wire schema is Raw
+source data and must not be treated as a canonical schema.
+
+Archive planning is bounded by the per-instrument daily and monthly coverage
+frozen in the approved Research contract. Dates outside those observed bounds
+produce explicit coverage-gap results and are not requested as speculative
+archive URLs.
 
 ### Backtesting, models, and experiments
 
@@ -178,20 +203,21 @@ future work, not evidence of current trading capability.
 
 ### Storage, deployment, and observability
 
-PostgreSQL, Redis/Valkey, Parquet, Polars, DuckDB, Prometheus, Grafana,
-Alertmanager, NautilusTrader, MLflow, Kubernetes, and multi-exchange support
-are not current dependencies or services. Introducing one requires a scoped
-Issue that documents purpose, alternatives, license/maintenance considerations,
-version constraints, safety impact, and reproducible validation. Future
-`apps/`, `packages/`, and `deploy/` directories remain boundaries until such an
-Issue is implemented and reviewed.
+Polars and local Parquet/manifest storage are current, limited dependencies and
+capabilities of the Raw path. PostgreSQL, Redis/Valkey, DuckDB, Prometheus,
+Grafana, Alertmanager, NautilusTrader, MLflow, Kubernetes, and multi-exchange
+support are not current dependencies or services. Introducing one requires a
+scoped Issue that documents purpose, alternatives, license/maintenance
+considerations, version constraints, safety impact, and reproducible
+validation. Future `apps/`, `packages/`, and `deploy/` directories remain
+boundaries until such an Issue is implemented and reviewed.
 
 ## 8. Research and trading scope limits
 
-The eventual product direction may study Binance USDⓈ-M perpetual market data,
-BTC/ETH instruments, cost-aware research, and auditable risk-controlled
-execution. None of the following is currently available: Binance public or
-private data access, BTC/ETH data files, multi-timeframe aggregation, factors,
+The current public-data capability is limited to explicitly requested Binance
+USDⓈ-M BTCUSDT/ETHUSDT 1m contract-Kline archives and local immutable Raw
+artifacts. None of the following is currently available: private Binance API
+access, REST recent/gap synchronization, multi-timeframe aggregation, factors,
 models, backtests, Demo orders, Live orders, private API credentials, database
 state, or multi-exchange production execution.
 
