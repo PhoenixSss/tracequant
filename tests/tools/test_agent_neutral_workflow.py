@@ -158,6 +158,17 @@ def test_pr_review_doc_has_binary_pass_fail_stop_contract() -> None:
     assert "有条件通过，不得合并" not in text
 
 
+def test_pr_review_doc_review_complete_examples_include_structured_receipt() -> None:
+    text = PR_REVIEW.read_text(encoding="utf-8")
+    pass_example, fail_example = text.split("PASS：", 1)[1].split("FAIL：", 1)
+    fail_example = fail_example.split("`review_id`", 1)[0]
+
+    for example in (pass_example, fail_example):
+        assert "--structured-review-file <STRUCTURED_REVIEW_FILE>" in example
+
+    assert text.count("--structured-review-file <STRUCTURED_REVIEW_FILE>") == 2
+
+
 def test_pr_review_doc_removes_cross_phase_mechanical_handoff_authority() -> None:
     text = PR_REVIEW.read_text(encoding="utf-8")
     assert "Delivery 输出、旧 snapshot、expected SHA" in text

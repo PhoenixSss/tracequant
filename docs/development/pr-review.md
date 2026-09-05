@@ -150,6 +150,7 @@ PASS：
 ```bash
 uv run --frozen python tools/agent_workflow/lck.py review complete <TASK> \
   --review-id <REVIEW_ID> \
+  --structured-review-file <STRUCTURED_REVIEW_FILE> \
   --verdict PASS
 ```
 
@@ -160,6 +161,7 @@ FAIL：先把 blocking findings 写入 review workspace 之外的临时/ignored 
 uv run --frozen python tools/agent_workflow/lck.py review complete <TASK> \
   --review-id <REVIEW_ID> \
   --verdict FAIL \
+  --structured-review-file <STRUCTURED_REVIEW_FILE> \
   --findings-file <FINDINGS_FILE>
 ```
 
