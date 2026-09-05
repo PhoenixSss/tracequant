@@ -313,8 +313,8 @@ def union_candidate_findings(
         evidence_refs: list[str] = []
         provenance: dict[str, RunProvenance] = {}
         locations: list[str] = []
-        for candidate in group:
-            duplicate_count += int(candidate is not first)
+        for index, candidate in enumerate(group):
+            duplicate_count += index
             for reference in candidate.evidence_refs:
                 if reference not in evidence_refs:
                     evidence_refs.append(reference)

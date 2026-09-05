@@ -35,6 +35,7 @@ from lck_core.review_shadow import (  # type: ignore[import-not-found]
     ShadowReviewPipeline,
     StructuredDiscoveryPlan,
     VerificationMethod,
+    union_candidate_findings,
 )
 from lck_core.review_benchmark import (  # type: ignore[import-not-found]
     ReviewBenchmarkRunner,
@@ -169,6 +170,17 @@ def test_shadow_review_vnext_cannot_change_production_verdict() -> None:
     assert all(
         "originating_runs" not in item.to_dict()["candidate"] for item in requests
     )
+
+
+def test_union_counts_reused_candidate_instance_as_duplicate() -> None:
+    candidate = _candidate("discovery-1", "candidate-1", "Repeated claim")
+
+    result = union_candidate_findings((candidate, candidate))
+
+    assert result.source_count == 2
+    assert result.duplicate_count == 1
+    assert len(result.candidate_findings) == 1
+    assert result.candidate_findings[0].originating_runs == candidate.originating_runs
 
 
 def test_shadow_unresolved_finding_is_not_a_blocker_or_false_positive() -> None:
