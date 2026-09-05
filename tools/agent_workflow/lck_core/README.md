@@ -15,6 +15,7 @@ maintainer or reviewer can start with the responsibility that owns the behavior.
 | Delivery prepare/complete | `delivery.py` | `eligibility.py`, `validation.py`, `effects.py` |
 | isolated Review workspace and review records | `review_workspace.py` | `review.py` |
 | Independent Review and Merge Preflight | `review.py` | `review_workspace.py`, `validation.py` |
+| production Structured Review v2 protocol | `structured_review.py` | `review.py`, `receipts.py` |
 | Review Eval fixture identity, artifact recovery, Harness / Subject / Run isolation, shadow discovery, and benchmark scoring | `review_authority.py`, `review_fixture.py`, `review_eval.py`, `review_shadow.py`, `review_benchmark.py` | none |
 | remediation and owned-candidate recovery | `remediation.py` | `eligibility.py`, `delivery.py`, `effects.py` |
 | post-merge Closeout | `closeout.py` | `eligibility.py`, `profile_policies.py` |

@@ -69,6 +69,10 @@ uv run --frozen python tools/agent_workflow/lck.py review prepare <TASK>
 
 Proceed only on `READY_FOR_SEMANTIC_REVIEW`. Use the returned `review_id`, current
 Task Contract, current review target, validation/check state, and `review_root`.
+The returned `structured_review_protocol` is the canonical production protocol;
+do not replace it with an ad-hoc prompt or a Task-specific checklist. It names
+the required obligations, their applicability rules, the coverage matrix, and
+the receipt contract.
 Before sealing, Review Prepare has already run and persisted the authoritative
 formal Review validation for the exact reviewed head. Consume that returned
 validation/check evidence; do not independently reproduce it. The `review_root`
@@ -92,6 +96,42 @@ Reason
 Judge
 Report
 ```
+
+Complete every obligation named by `structured_review_protocol` before forming a
+verdict:
+
+- `contract-critical-outcome` maps Objective, Requirements, Acceptance Criteria,
+  Critical Outcome, constraints, and non-goals to implementation and evidence.
+- `functional-invariants` checks core invariants and caller/callee assumptions,
+  and actively attempts an applicable counterexample.
+- `boundary-error-enumeration` explicitly enumerates applicable parsing,
+  conversion, external-input, and transport outcomes, including missing, empty,
+  malformed, extreme/oversized, negative, conversion failure, runtime exception,
+  exception/result mapping, success, redirect, timeout, rate limit,
+  retryable/permanent failure, and malformed/partial response.
+- `state-persistence-compatibility` enumerates applicable ABSENT, PARTIAL,
+  COMPLETE_VALID, COMPLETE_INVALID, LEGACY, CONFLICTING, and implemented
+  recovery/quarantine states across the major operations, then checks Base → Head
+  compatibility. Use `NOT_APPLICABLE` with an explicit reason when no applicable
+  stateful or persisted behavior exists.
+- `tests-vs-claims` distinguishes what tests actually prove from happy-path-only
+  evidence and failure, boundary, state, compatibility, and invariant gaps.
+- `adversarial-residual-sweep` assumes current findings are fixed and searches
+  for independent root causes. It must be completed before the final verdict.
+
+Build a Requirement → Implementation → Evidence → Status matrix with one entry
+per obligation. `NOT_APPLICABLE` is an explicit completed status; skipped,
+missing, pending, or unresolved work is not complete. A first blocker never
+ends this sequence. Continue all remaining obligations and the residual sweep.
+
+Use the existing canonical `ReviewRunReceipt` contract for the bounded semantic
+receipt. Its `protocol_config` must identify the returned protocol and include
+the coverage matrix plus falsification attempts for confirmed blocking findings.
+The receipt authority must exactly match the returned live Review target. Save
+the JSON receipt outside the sealed `review_root`; it is supplied to Review
+Complete with `--structured-review-file <RECEIPT>`. Both PASS and FAIL require a
+complete receipt. LCK derives the accepted production verdict from the completed
+receipt and rejects a mismatched or incomplete verdict.
 
 Read the complete effective diff and necessary related code. Build an independent AC
 coverage/evidence matrix. The current Task Contract, effective diff, and necessary related
@@ -127,7 +167,8 @@ PASS:
 ```bash
 uv run --frozen python tools/agent_workflow/lck.py review complete <TASK> \
   --review-id <REVIEW_ID> \
-  --verdict PASS
+  --verdict PASS \
+  --structured-review-file <RECEIPT>
 ```
 
 FAIL: write the complete blocking findings to an ignored or temporary file outside the
@@ -137,7 +178,8 @@ read-only standalone Review clone, then:
 uv run --frozen python tools/agent_workflow/lck.py review complete <TASK> \
   --review-id <REVIEW_ID> \
   --verdict FAIL \
-  --findings-file <FINDINGS_FILE>
+  --findings-file <FINDINGS_FILE> \
+  --structured-review-file <RECEIPT>
 ```
 
 Review Complete acquires current authority exactly once and compares it with the sealed

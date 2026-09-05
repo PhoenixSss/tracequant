@@ -9,12 +9,22 @@ from typing import Any, cast
 
 import pytest
 
+from tracequant.contracts import (
+    ALWAYS_ON_SURFACES,
+    AssuranceResult,
+    AssuranceStatus,
+    ReviewRunReceipt,
+    ReviewSurfacePlan,
+    TokenUsage,
+)
+
 AGENT_WORKFLOW = str(Path(__file__).parents[2] / "tools" / "agent_workflow")
 if AGENT_WORKFLOW not in sys.path:
     sys.path.insert(0, AGENT_WORKFLOW)
 
 from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     models as lck_models,
+    structured_review as lck_structured_review,
     review_workspace as lck_review_workspace,
     state as lck_state,
 )
@@ -353,6 +363,67 @@ def _review_identity_value(
         merge_base_sha=base,
         effective_diff_sha256="e" * 64,
         changed_files=("tools/agent_workflow/lck.py",),
+    )
+
+
+def structured_review_receipt(
+    identity: lck_review_workspace.ReviewIdentity,
+    *,
+    repository: str = "owner/repo",
+) -> ReviewRunReceipt:
+    """Build a complete no-finding v2 receipt for lifecycle controller tests."""
+    authority = lck_structured_review.expected_live_authority(
+        repository=repository,
+        task_number=identity.task_number,
+        pr_number=identity.pr_number,
+        base_sha=identity.base_sha,
+        head_sha=identity.head_sha,
+        diff_sha256=identity.effective_diff_sha256,
+    )
+    obligations = lck_structured_review.STRUCTURED_REVIEW_OBLIGATIONS
+    results = tuple(
+        AssuranceResult(
+            obligation_id=item.obligation_id,
+            status=(
+                AssuranceStatus.NOT_APPLICABLE
+                if item.obligation_id == "state-persistence-compatibility"
+                else AssuranceStatus.PASS
+            ),
+            evidence_refs=(f"evidence://{item.obligation_id}",),
+            summary="explicitly reviewed",
+        )
+        for item in obligations
+    )
+    matrix = {
+        item.obligation_id: {
+            "requirement": item.description,
+            "implementation": "reviewed current effective diff",
+            "evidence": [f"evidence://{item.obligation_id}"],
+            "status": results[index].status.value,
+        }
+        for index, item in enumerate(obligations)
+    }
+    return ReviewRunReceipt(
+        run_id="review-run-test",
+        authority=authority,
+        harness_config={"sealed_subject": True},
+        protocol_config={
+            "protocol_id": lck_structured_review.STRUCTURED_REVIEW_PROTOCOL_ID,
+            "protocol_version": lck_structured_review.STRUCTURED_REVIEW_PROTOCOL_VERSION,
+            "coverage_matrix": matrix,
+            "falsification_attempts": (),
+        },
+        model_config={"temperature": 0},
+        coverage=ReviewSurfacePlan(
+            required=ALWAYS_ON_SURFACES,
+            covered=ALWAYS_ON_SURFACES,
+        ),
+        candidate_findings=(),
+        verified_findings=(),
+        token_usage=TokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+        wall_clock_ms=1,
+        assurance_obligations=obligations,
+        assurance_results=results,
     )
 
 

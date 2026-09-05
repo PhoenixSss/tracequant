@@ -16,6 +16,15 @@ from typing import (
 
 import pytest
 
+from tracequant.contracts import (
+    ALWAYS_ON_SURFACES,
+    AssuranceResult,
+    AssuranceStatus,
+    ReviewRunReceipt,
+    ReviewSurfacePlan,
+    TokenUsage,
+)
+
 AGENT_WORKFLOW = str(Path(__file__).parents[2] / "tools" / "agent_workflow")
 if AGENT_WORKFLOW not in sys.path:
     sys.path.insert(0, AGENT_WORKFLOW)
@@ -24,6 +33,7 @@ from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     eligibility as lck_eligibility,
     models as lck_models,
     review as lck_review,
+    structured_review as lck_structured_review,
     review_workspace as lck_review_workspace,
     state as lck_state,
     validation as lck_validation,
@@ -135,6 +145,14 @@ def test_review_prepare_builds_context_only_from_live_resolution(
     assert value["task_contract"]["body"] == "Task Contract"
     assert value["workspace_mode"] == "implementation-read-only"
     assert value["mechanical_authority"].startswith("live Git/GitHub")
+    protocol = value["structured_review_protocol"]
+    assert protocol["protocol_version"] == "v2"
+    assert [item["obligation_id"] for item in protocol["obligations"]] == [
+        item.obligation_id
+        for item in lck_structured_review.STRUCTURED_REVIEW_OBLIGATIONS
+    ]
+    assert protocol["completion_contract"]["first_finding_does_not_end_review"] is True
+    assert protocol["completion_contract"]["residual_sweep_before_verdict"] is True
     assert workspace.sealed == [tmp_path / "review-root"]
     assert store.guard_path(context.review_id).is_file()
     inflight = json.loads(
@@ -249,6 +267,116 @@ def test_review_prepare_freezes_authority_before_validation(
 
     assert context.identity == identity
     assert workspace.sealed == [tmp_path / "review-root"]
+
+
+def test_production_review_requires_structured_obligations_before_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A normal Review Complete cannot pass before v2 obligations are complete."""
+    identity = _review_identity_value()
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    monkeypatch.setattr(
+        lck_review, "_review_identity", lambda *_args, **_kwargs: identity
+    )
+    store = lck_review_workspace.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    guard = _review_guard(identity, review_root=review_root)
+    guard["structured_review_protocol"] = lck_structured_review.protocol_context(
+        authority=lck_structured_review.expected_live_authority(
+            repository="owner/repo",
+            task_number=identity.task_number,
+            pr_number=identity.pr_number,
+            base_sha=identity.base_sha,
+            head_sha=identity.head_sha,
+            diff_sha256=identity.effective_diff_sha256,
+        )
+    )
+    store.write_guard(review_id, guard)
+    workspace = FakeReviewWorkspace(review_root)
+    completer = lck_review.ReviewCompleter(
+        resolver,
+        checks_gate=cast(Any, FakeReviewChecks()),
+        store=store,
+        workspace=cast(Any, workspace),
+    )
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="Structured Review v2 receipt is required",
+    ):
+        completer.complete(159, review_id, verdict="PASS")
+
+    authority = lck_structured_review.expected_live_authority(
+        repository="owner/repo",
+        task_number=identity.task_number,
+        pr_number=identity.pr_number,
+        base_sha=identity.base_sha,
+        head_sha=identity.head_sha,
+        diff_sha256=identity.effective_diff_sha256,
+    )
+    obligations = lck_structured_review.STRUCTURED_REVIEW_OBLIGATIONS
+    results = tuple(
+        AssuranceResult(
+            obligation_id=item.obligation_id,
+            status=(
+                AssuranceStatus.NOT_APPLICABLE
+                if item.obligation_id == "state-persistence-compatibility"
+                else AssuranceStatus.PASS
+            ),
+            evidence_refs=(f"evidence://{item.obligation_id}",),
+            summary="explicitly reviewed",
+        )
+        for item in obligations
+    )
+    matrix = {
+        item.obligation_id: {
+            "requirement": item.description,
+            "implementation": "reviewed current effective diff",
+            "evidence": [f"evidence://{item.obligation_id}"],
+            "status": results[index].status.value,
+        }
+        for index, item in enumerate(obligations)
+    }
+    receipt = ReviewRunReceipt(
+        run_id="review-run-1",
+        authority=authority,
+        harness_config={"sealed_subject": True},
+        protocol_config={
+            "protocol_id": lck_structured_review.STRUCTURED_REVIEW_PROTOCOL_ID,
+            "protocol_version": lck_structured_review.STRUCTURED_REVIEW_PROTOCOL_VERSION,
+            "coverage_matrix": matrix,
+            "falsification_attempts": (),
+        },
+        model_config={"temperature": 0},
+        coverage=ReviewSurfacePlan(
+            required=ALWAYS_ON_SURFACES,
+            covered=ALWAYS_ON_SURFACES,
+        ),
+        candidate_findings=(),
+        verified_findings=(),
+        token_usage=TokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+        wall_clock_ms=1,
+        assurance_obligations=obligations,
+        assurance_results=results,
+    )
+    receipt_file = tmp_path / "structured-review.json"
+    receipt_file.write_text(receipt.to_json(), encoding="utf-8")
+
+    result = completer.complete(
+        159,
+        review_id,
+        verdict="PASS",
+        structured_review_file=receipt_file,
+    )
+
+    assert result.status == "READY_FOR_MERGE_PREFLIGHT"
+    assert result.structured_review is not None
+    assert result.structured_review["status"] == "complete"
+    assert result.structured_review["canonical_verdict"] == "PASS"
+    assert workspace.removed == [review_root]
 
 
 def test_review_complete_acquires_one_fresh_snapshot_and_accepts_unchanged_target(

@@ -43,6 +43,11 @@ def test_lck_decomposition_preserves_cli_and_responsibility_boundaries() -> None
         "delivery.py": {"DeliveryPreparer", "DeliveryCompleter"},
         "review_workspace.py": {"ReviewWorkspaceManager", "ReviewInvocationStore"},
         "review.py": {"ReviewPreparer", "ReviewCompleter", "MergePreflight"},
+        "structured_review.py": {
+            "assess_receipt",
+            "protocol_context",
+            "read_and_assess_receipt",
+        },
         "remediation.py": {"RemediationPreparer", "RemediationCompleter"},
         "closeout.py": {"CloseoutCompleter"},
         "receipts.py": {"AuditReceiptStore"},

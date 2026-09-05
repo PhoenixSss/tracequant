@@ -74,6 +74,7 @@ from lck_test_support import (  # noqa: E402
     StaticResolver,
     _review_identity_value,
     _review_state,
+    structured_review_receipt,
 )
 
 
@@ -903,6 +904,7 @@ def test_generic_kernel_models_have_no_synthetic_fixed_slots() -> None:
             "review_root",
             "issue_profile",
             "profile_evidence",
+            "structured_review_protocol",
         },
         lck_delivery.DeliveryCompletionResult: {
             "task_number",
@@ -926,6 +928,7 @@ def test_generic_kernel_models_have_no_synthetic_fixed_slots() -> None:
             "record_path",
             "issue_profile",
             "profile_evidence",
+            "structured_review",
         },
         lck_closeout.CloseoutResult: {
             "task_number",
@@ -1535,6 +1538,10 @@ def test_synthetic_profile_review_and_closeout_use_kernel_and_persist_receipts(
     assert review_context.profile_evidence is not None
     assert review_context.profile_evidence.review is not None
     assert review_context.profile_evidence.review.kind == policy.review_kind
+    structured_review_file = tmp_path / "structured-review.json"
+    structured_review_file.write_text(
+        structured_review_receipt(identity).to_json(), encoding="utf-8"
+    )
 
     review_result = lck_review.ReviewCompleter(
         resolver,
@@ -1543,7 +1550,12 @@ def test_synthetic_profile_review_and_closeout_use_kernel_and_persist_receipts(
         workspace=cast(Any, workspace),
         policy_registry=registry,
         profile_resolver=resolve_synthetic,
-    ).complete(159, review_context.review_id, verdict="PASS")
+    ).complete(
+        159,
+        review_context.review_id,
+        verdict="PASS",
+        structured_review_file=structured_review_file,
+    )
     assert review_result.status == "READY_FOR_MERGE_PREFLIGHT"
     assert review_result.profile_evidence is not None
     assert review_result.profile_evidence.review is not None

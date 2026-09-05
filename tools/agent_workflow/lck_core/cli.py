@@ -55,6 +55,13 @@ def _build_parser() -> argparse.ArgumentParser:
     review_complete.add_argument("--review-id", required=True)
     review_complete.add_argument("--verdict", required=True, choices=("PASS", "FAIL"))
     review_complete.add_argument("--findings-file", type=Path)
+    review_complete.add_argument(
+        "--structured-review-file",
+        "--review-receipt-file",
+        dest="structured_review_file",
+        type=Path,
+        help="canonical Structured Review v2 receipt produced by the Reviewer",
+    )
     review_complete.add_argument("--research-outcome")
 
     remediation = commands.add_parser("remediation")
@@ -161,6 +168,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.review_id,
                     verdict=args.verdict,
                     findings_file=args.findings_file,
+                    structured_review_file=args.structured_review_file,
                     research_outcome=args.research_outcome,
                 )
             )

@@ -109,6 +109,37 @@ Review Prepare 不等待 CI checks 进入终态；semantic Review 可以与 CI �
 success 只在 Review Complete 与后续 Merge Preflight 的 fresh gate 中决定是否可进入
 人工合并边界。
 
+## 4.1 Structured Review v2 protocol
+
+Production Independent Review 的 structured protocol 唯一由
+`tools/agent_workflow/lck_core/structured_review.py` 声明和校验。Review Prepare
+把该 protocol 连同当前 live authority 放入 `structured_review_protocol`；标准
+`task-pr-review-runner` 不需要 maintainer 追加实验性提示词。
+
+Protocol 的六个通用 obligations 是：
+
+```text
+contract-critical-outcome
+functional-invariants
+boundary-error-enumeration
+state-persistence-compatibility
+tests-vs-claims
+adversarial-residual-sweep
+```
+
+Reviewer 必须为每个 obligation 产生 Requirement → Implementation → Evidence →
+Status coverage matrix。适用 surface 要完成；没有适用 stateful/persisted behavior
+的 obligation 使用带理由的 `NOT_APPLICABLE`，不能静默跳过。首个 finding 不终止
+剩余 obligations，Adversarial Residual Sweep 必须在最终 verdict 前完成。
+
+语义结果使用现有 `ReviewRunReceipt` contract 保存为 JSON，并在 Review Complete
+通过 `--structured-review-file` 提供。LCK 校验 receipt 的 live authority、protocol
+identity、obligation 定义、coverage、finding verification 与 blocker falsification
+evidence，然后从完整 receipt 推导 PASS 或 FAIL；不完整 receipt 只能得到
+`REVIEW_INCOMPLETE` / `STOP_REQUIRED`，不能产生 PASS。该 receipt 是 semantic
+evidence，不改变 live Git/GitHub authority、sealed clone、freshness、Merge
+Preflight 或 maintainer manual merge boundary。
+
 ## 5. Review Complete：fresh applicability snapshot
 
 语义审查结束后，调用 `review complete`。它是一个**新的 LCK operation**，不是

@@ -50,6 +50,12 @@ from .state import (
     _leaf_contract_from_state,
     _policy_issue_from_state,
 )
+from .structured_review import (
+    StructuredReviewProtocolError,
+    expected_live_authority,
+    protocol_context,
+    read_and_assess_receipt,
+)
 from .validation import (
     DeliveryChecksGate,
     ReviewValidationGate,
@@ -66,6 +72,7 @@ class ReviewContext:
     review_root: Path
     issue_profile: Mapping[str, Any] | None = None
     profile_evidence: ProfileEvidenceEnvelope | None = None
+    structured_review_protocol: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +87,11 @@ class ReviewContext:
             "validation": _jsonable(self.validation),
             "profile_evidence": (
                 self.profile_evidence.to_dict() if self.profile_evidence else None
+            ),
+            "structured_review_protocol": (
+                _jsonable(self.structured_review_protocol)
+                if self.structured_review_protocol is not None
+                else _jsonable(protocol_context())
             ),
             "review_root": str(self.review_root),
             "workspace_mode": "implementation-read-only",
@@ -160,6 +172,7 @@ class ReviewPreparer:
         self.last_validation: dict[str, Any] | None = None
         self.last_documentation_validation: dict[str, Any] | None = None
         self.last_profile_evidence: ProfileEvidenceEnvelope | None = None
+        self.last_structured_review: dict[str, Any] | None = None
 
     def prepare(self, task_number: int) -> ReviewContext:
         self.last_validation = None
@@ -256,6 +269,20 @@ class ReviewPreparer:
                 policy_registry=self.policy_registry,
                 profile_resolver=self.profile_resolver,
             )
+            repository = state.repository or getattr(self.resolver, "repository", None)
+            if not isinstance(repository, str) or not repository:
+                raise LckStopError(
+                    "Review Prepare cannot establish live Review authority repository"
+                )
+            authority = expected_live_authority(
+                repository=repository,
+                task_number=identity.task_number,
+                pr_number=identity.pr_number,
+                base_sha=identity.base_sha,
+                head_sha=identity.head_sha,
+                diff_sha256=identity.effective_diff_sha256,
+            )
+            structured_protocol = protocol_context(authority=authority)
             profile, _policy = resolve_issue_policy(
                 _policy_issue_from_state(state),
                 registry=self.policy_registry,
@@ -317,6 +344,7 @@ class ReviewPreparer:
                     if review_stage.profile_evidence
                     else None
                 ),
+                "structured_review_protocol": structured_protocol,
                 "snapshot": snapshot.to_dict(),
                 "authority": (
                     "sealed Review Prepare target; historical identity for Review Complete "
@@ -340,6 +368,7 @@ class ReviewPreparer:
                 review_root=review_root,
                 issue_profile=state.issue_profile,
                 profile_evidence=review_stage.profile_evidence,
+                structured_review_protocol=structured_protocol,
             )
             invocation.release_lock()
         except BaseException as exc:
@@ -370,6 +399,7 @@ class ReviewCompletionResult:
     record_path: Path
     issue_profile: Mapping[str, Any] | None = None
     profile_evidence: ProfileEvidenceEnvelope | None = None
+    structured_review: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         human_boundary = (
@@ -390,6 +420,11 @@ class ReviewCompletionResult:
             "record_path": str(self.record_path),
             "profile_evidence": (
                 self.profile_evidence.to_dict() if self.profile_evidence else None
+            ),
+            "structured_review": (
+                dict(self.structured_review)
+                if self.structured_review is not None
+                else None
             ),
             "human_boundary": human_boundary,
             "automatic_remediation": False,
@@ -437,6 +472,7 @@ class ReviewCompleter:
         self.last_checks: dict[str, Any] | None = None
         self.last_documentation_validation: dict[str, Any] | None = None
         self.last_profile_evidence: ProfileEvidenceEnvelope | None = None
+        self.last_structured_review: dict[str, Any] | None = None
 
     def _capture_checks_from_gate(self) -> None:
         """Retain a check gate's result when strict evaluation raises."""
@@ -467,14 +503,22 @@ class ReviewCompleter:
         *,
         verdict: str,
         findings_file: Path | None = None,
+        structured_review_file: Path | None = None,
+        review_receipt_file: Path | None = None,
         research_outcome: str | None = None,
     ) -> ReviewCompletionResult:
         self.last_checks = None
         self.last_documentation_validation = None
+        self.last_structured_review = None
         verdict = verdict.upper()
         if verdict not in {"PASS", "FAIL"}:
             raise LckStopError("Review verdict must be PASS or FAIL")
         findings = self._read_findings(findings_file, verdict)
+        if structured_review_file is not None and review_receipt_file is not None:
+            raise LckStopError(
+                "provide only one of --structured-review-file and --review-receipt-file"
+            )
+        receipt_file = structured_review_file or review_receipt_file
         guard = self.store.read_guard(review_id)
         if guard.get("task_number") != task_number:
             raise LckStopError("Review invocation does not belong to this Task")
@@ -541,6 +585,50 @@ class ReviewCompleter:
                 profile_resolver=self.profile_resolver,
             )
             _assert_review_applicable(reviewed_identity, current_identity)
+            structured_summary: dict[str, Any] | None = None
+            if isinstance(guard.get("structured_review_protocol"), Mapping):
+                if receipt_file is None:
+                    raise LckStopError(
+                        "Review Complete STOP: Structured Review v2 receipt is required"
+                    )
+                repository = state.repository or getattr(
+                    self.resolver, "repository", None
+                )
+                if not isinstance(repository, str) or not repository:
+                    raise LckStopError(
+                        "Review Complete cannot establish live Review authority repository"
+                    )
+                expected_authority = expected_live_authority(
+                    repository=repository,
+                    task_number=current_identity.task_number,
+                    pr_number=current_identity.pr_number,
+                    base_sha=current_identity.base_sha,
+                    head_sha=current_identity.head_sha,
+                    diff_sha256=current_identity.effective_diff_sha256,
+                )
+                try:
+                    _receipt, assessment = read_and_assess_receipt(
+                        receipt_file,
+                        expected_authority=expected_authority,
+                    )
+                except StructuredReviewProtocolError as exc:
+                    raise LckStopError(f"Review Complete STOP: {exc}") from exc
+                structured_summary = assessment.to_dict()
+                self.last_structured_review = structured_summary
+                if assessment.status != "complete":
+                    details = "; ".join(assessment.issues)
+                    raise LckStopError(
+                        "Review Complete STOP: REVIEW_INCOMPLETE: "
+                        + (
+                            details
+                            or "required Structured Review evidence is unresolved"
+                        )
+                    )
+                if assessment.canonical_verdict != verdict:
+                    raise LckStopError(
+                        "Review Complete STOP: canonical Structured Review verdict "
+                        f"is {assessment.canonical_verdict}, not {verdict}"
+                    )
             try:
                 profile, _policy = resolve_issue_policy(
                     _policy_issue_from_state(state),
@@ -627,6 +715,7 @@ class ReviewCompleter:
                     if review_stage.profile_evidence
                     else None
                 ),
+                "structured_review": structured_summary,
                 "review_snapshot": dict(prepared_snapshot),
                 "completion_snapshot": completion_snapshot.to_dict(),
                 "authority_note": (
@@ -648,6 +737,7 @@ class ReviewCompleter:
                 record_path=record_path,
                 issue_profile=completion_snapshot.state.issue_profile,
                 profile_evidence=review_stage.profile_evidence,
+                structured_review=structured_summary,
             )
         except ReviewStaleError:
             # Stale is a formal terminal outcome for this prepared target.  It
