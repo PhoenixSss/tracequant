@@ -957,6 +957,7 @@ class FindingVerificationStatus(StrEnum):
 
     CONFIRMED = "confirmed"
     REJECTED = "rejected"
+    NEEDS_MORE_EVIDENCE = "needs_more_evidence"
     INCONCLUSIVE = "inconclusive"
 
 
