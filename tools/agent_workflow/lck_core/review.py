@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from workflow_common import ProgressReporter, is_sha, safe_text
 
+from . import structured_review_instructions as structured_review_instruction_owner
 from .eligibility import PhaseEligibilityResolver
 from .issue_profiles import resolve_leaf_issue_profile
 from .models import (
@@ -66,6 +67,7 @@ class ReviewContext:
     review_root: Path
     issue_profile: Mapping[str, Any] | None = None
     profile_evidence: ProfileEvidenceEnvelope | None = None
+    structured_review_instructions: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +82,13 @@ class ReviewContext:
             "validation": _jsonable(self.validation),
             "profile_evidence": (
                 self.profile_evidence.to_dict() if self.profile_evidence else None
+            ),
+            "structured_review_instructions": (
+                _jsonable(self.structured_review_instructions)
+                if self.structured_review_instructions is not None
+                else _jsonable(
+                    structured_review_instruction_owner.canonical_structured_review_instructions()
+                )
             ),
             "review_root": str(self.review_root),
             "workspace_mode": "implementation-read-only",
@@ -256,6 +265,7 @@ class ReviewPreparer:
                 policy_registry=self.policy_registry,
                 profile_resolver=self.profile_resolver,
             )
+            structured_instructions = structured_review_instruction_owner.canonical_structured_review_instructions()
             profile, _policy = resolve_issue_policy(
                 _policy_issue_from_state(state),
                 registry=self.policy_registry,
@@ -317,6 +327,7 @@ class ReviewPreparer:
                     if review_stage.profile_evidence
                     else None
                 ),
+                "structured_review_instructions": structured_instructions,
                 "snapshot": snapshot.to_dict(),
                 "authority": (
                     "sealed Review Prepare target; historical identity for Review Complete "
@@ -340,6 +351,7 @@ class ReviewPreparer:
                 review_root=review_root,
                 issue_profile=state.issue_profile,
                 profile_evidence=review_stage.profile_evidence,
+                structured_review_instructions=structured_instructions,
             )
             invocation.release_lock()
         except BaseException as exc:

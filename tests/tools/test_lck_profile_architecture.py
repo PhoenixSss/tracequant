@@ -903,6 +903,7 @@ def test_generic_kernel_models_have_no_synthetic_fixed_slots() -> None:
             "review_root",
             "issue_profile",
             "profile_evidence",
+            "structured_review_instructions",
         },
         lck_delivery.DeliveryCompletionResult: {
             "task_number",

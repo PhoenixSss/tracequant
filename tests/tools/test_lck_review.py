@@ -23,9 +23,11 @@ if AGENT_WORKFLOW not in sys.path:
 from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     eligibility as lck_eligibility,
     models as lck_models,
+    receipts as lck_receipts,
     review as lck_review,
     review_workspace as lck_review_workspace,
     state as lck_state,
+    structured_review_instructions as lck_structured_review_instructions,
     validation as lck_validation,
 )
 from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
@@ -143,6 +145,59 @@ def test_review_prepare_builds_context_only_from_live_resolution(
     assert inflight["state"] == "handed-off"
     assert inflight["review_id"] == context.review_id
     assert checks.calls == 1
+
+
+def test_standard_review_path_provides_canonical_structured_review_instructions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The normal Review Prepare handoff carries owner-provided guidance only."""
+    state = _review_state()
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    identity = _review_identity_value()
+    monkeypatch.setattr(
+        lck_review, "_review_identity", lambda *_args, **_kwargs: identity
+    )
+    calls = 0
+    owner = lck_structured_review_instructions
+    original_provider = owner.canonical_structured_review_instructions
+    expected = original_provider()
+
+    def provide_instructions() -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        return cast(dict[str, Any], original_provider())
+
+    monkeypatch.setattr(
+        owner, "canonical_structured_review_instructions", provide_instructions
+    )
+    context = lck_review.ReviewPreparer(
+        resolver,
+        validation=cast(Any, FakeReviewValidation()),
+        checks_gate=cast(Any, FakeReviewChecks()),
+        workspace=cast(Any, FakeReviewWorkspace(tmp_path / "review-root")),
+        store=lck_review_workspace.ReviewInvocationStore(tmp_path),
+    ).prepare(159)
+
+    value = context.to_dict()
+    handoff = value["structured_review_instructions"]
+    assert calls == 1
+    assert handoff == expected
+    assert [item["obligation_id"] for item in handoff["obligations"]] == [
+        "contract-critical-outcome",
+        "functional-invariants",
+        "boundary-conversion-error",
+        "state-persistence-compatibility",
+        "tests-vs-claims",
+        "adversarial-residual-sweep",
+    ]
+    assert any("blocker" in item for item in handoff["review_sequence"])
+    assert any("residual sweep" in item for item in handoff["review_sequence"])
+
+    agent_view = lck_receipts._agent_view_for_result(context)
+    assert agent_view["structured_review_instructions"] == expected
+    assert agent_view["workspace_mode"] == "implementation-read-only"
+    assert agent_view["mechanical_authority"].startswith("live Git/GitHub")
 
 
 def test_review_prepare_allows_pending_checks_for_parallel_semantic_review(

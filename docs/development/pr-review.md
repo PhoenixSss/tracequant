@@ -109,6 +109,19 @@ Review Prepare 不等待 CI checks 进入终态；semantic Review 可以与 CI �
 success 只在 Review Complete 与后续 Merge Preflight 的 fresh gate 中决定是否可进入
 人工合并边界。
 
+## 4.1 Structured Review v2 semantic instructions
+
+Structured Review v2 的唯一 reviewer-facing owner 是
+`tools/agent_workflow/lck_core/structured_review_instructions.py`。Review Prepare
+通过 `structured_review_instructions` 将该 owner 返回的 instruction data 放入
+standard semantic handoff；因此正常 `task-pr-review-runner` invocation 不需要
+maintainer 追加实验性提示词。该 handoff 要求 Reviewer 完成其列出的全部适用
+semantic surfaces，在 blocker 后继续审查，并在现有 verdict 前执行 residual sweep。
+
+这是 semantic guidance，不是新的 completion state、receipt gate 或 verdict
+authority。Review Complete、现有 finding/report semantics、Merge Preflight、freshness
+与 maintainer manual merge boundary 保持不变。
+
 ## 5. Review Complete：fresh applicability snapshot
 
 语义审查结束后，调用 `review complete`。它是一个**新的 LCK operation**，不是
