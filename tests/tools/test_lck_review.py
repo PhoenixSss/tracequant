@@ -1420,7 +1420,16 @@ def test_review_prepare_handoff_keeps_explicit_ownership_until_cleanup(
     review_id = store.new_id()
     review_root = tmp_path / "tracequant-lck-review-159-handoff"
     review_root.mkdir()
-    store.write_guard(review_id, {"review_id": review_id})
+    store.write_guard(
+        review_id,
+        {
+            "review_id": review_id,
+            "structured_review_protocol": {
+                "protocol_id": lck_structured_review.STRUCTURED_REVIEW_PROTOCOL_ID,
+                "protocol_version": lck_structured_review.STRUCTURED_REVIEW_PROTOCOL_VERSION,
+            },
+        },
+    )
     store.review_prepare_inflight_path(159).parent.mkdir(parents=True, exist_ok=True)
     store.review_prepare_inflight_path(159).write_text(
         json.dumps(
@@ -1445,3 +1454,66 @@ def test_review_prepare_handoff_keeps_explicit_ownership_until_cleanup(
         store.begin_review_prepare(159)
 
     assert store.review_prepare_inflight_path(159).is_file()
+
+
+def test_review_prepare_reclaims_legacy_handoff_without_structured_protocol(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pre-v2 handoff is safely reclaimed by the next Review Prepare."""
+    state = _review_state()
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    identity = _review_identity_value()
+    monkeypatch.setattr(
+        lck_review, "_review_identity", lambda *_args, **_kwargs: identity
+    )
+    monkeypatch.setattr(
+        lck_review_workspace.ReviewInvocationStore,
+        "_pid_is_alive",
+        staticmethod(lambda _pid: False),
+    )
+
+    store = lck_review_workspace.ReviewInvocationStore(tmp_path)
+    legacy_review_id = store.new_id()
+    legacy_root = tmp_path / "tracequant-lck-review-159-legacy"
+    legacy_root.mkdir()
+    legacy_guard = _review_guard(
+        identity,
+        review_root=legacy_root,
+        structured_review_protocol=False,
+    )
+    legacy_guard.update(
+        {
+            "kind": "review-invocation-guard",
+            "review_id": legacy_review_id,
+        }
+    )
+    store.write_guard(legacy_review_id, legacy_guard)
+    store.review_prepare_inflight_path(159).parent.mkdir(parents=True, exist_ok=True)
+    store.review_prepare_inflight_path(159).write_text(
+        json.dumps(
+            {
+                "task_number": 159,
+                "pid": 1,
+                "operation_id": store.new_id(),
+                "state": "handed-off",
+                "review_id": legacy_review_id,
+                "review_root": str(legacy_root),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    workspace = FakeReviewWorkspace(tmp_path / "review-root")
+    context = lck_review.ReviewPreparer(
+        resolver,
+        validation=cast(Any, FakeReviewValidation()),
+        checks_gate=cast(Any, FakeReviewChecks()),
+        workspace=cast(Any, workspace),
+        store=store,
+    ).prepare(159)
+
+    assert workspace.removed == [legacy_root]
+    assert not store.guard_path(legacy_review_id).exists()
+    assert store.guard_path(context.review_id).is_file()
+    assert context.review_id != legacy_review_id

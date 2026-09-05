@@ -629,10 +629,37 @@ class ReviewInvocationStore:
                         isinstance(review_root, str) and Path(review_root).exists()
                     )
                     if guard_exists and root_exists:
-                        raise LckStopError(
-                            "Review Prepare handoff is still owned by the prior "
-                            f"operation (review {review_id})"
+                        try:
+                            guard = read_json_file(self.guard_path(review_id))
+                        except WorkflowToolError as exc:
+                            raise LckStopError(
+                                "Review Prepare handoff guard cannot be recovered"
+                            ) from exc
+                        if not isinstance(guard, Mapping):
+                            raise LckStopError(
+                                "Review Prepare handoff guard is invalid"
+                            )
+                        legacy_guard = (
+                            guard.get("kind") == "review-invocation-guard"
+                            and guard.get("review_id") == review_id
+                            and guard.get("task_number") == task_number
+                            and guard.get("review_root") == review_root
+                            and isinstance(guard.get("identity"), Mapping)
+                            and isinstance(guard.get("validation"), Mapping)
+                            and isinstance(guard.get("checks"), Mapping)
+                            and isinstance(guard.get("snapshot"), Mapping)
+                            and "structured_review_protocol" not in guard
                         )
+                        if not legacy_guard:
+                            raise LckStopError(
+                                "Review Prepare handoff is still owned by the prior "
+                                f"operation (review {review_id})"
+                            )
+                        # A pre-v2 handoff cannot be completed by the current
+                        # Review Complete protocol.  Permit ReviewPreparer to
+                        # reclaim its operation-owned clone and guard before
+                        # starting a fresh v2 handoff.  Current and malformed
+                        # guards remain fail-closed above.
                 existing = dict(parsed)
 
             operation_id = self.new_id()
