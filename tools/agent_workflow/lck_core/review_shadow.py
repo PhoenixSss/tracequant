@@ -755,13 +755,22 @@ class ShadowReviewPipeline:
                 )
             seen_passes.add(result.pass_id)
             discovery_pass = self.plan.pass_for(result.pass_id)
-            if not set(result.planned_surfaces).issubset(discovery_pass.surfaces):
+            expected_surfaces = set(discovery_pass.surfaces)
+            if not expected_surfaces.issuperset(result.planned_surfaces):
                 raise ReviewContractError(
                     "discovery result declares an unknown surface"
                 )
-            if not set(result.covered_surfaces).issubset(discovery_pass.surfaces):
+            if set(result.planned_surfaces) != expected_surfaces:
+                raise ReviewContractError(
+                    "discovery result must declare every surface in its planned pass"
+                )
+            if not expected_surfaces.issuperset(result.covered_surfaces):
                 raise ReviewContractError(
                     "discovery result covers an undeclared surface"
+                )
+            if set(result.covered_surfaces) != expected_surfaces:
+                raise ReviewContractError(
+                    "discovery result must cover every surface in its planned pass"
                 )
             for surface in result.covered_surfaces:
                 if surface not in coverage:
@@ -773,6 +782,27 @@ class ShadowReviewPipeline:
                     coverage_evidence.append(evidence)
             all_candidates.extend(result.candidate_findings)
             token_parts.append(result.token_usage)
+
+        missing_passes = tuple(
+            discovery_pass.pass_id
+            for discovery_pass in self.plan.passes
+            if discovery_pass.pass_id not in seen_passes
+        )
+        if missing_passes:
+            raise ReviewContractError(
+                "discovery results are missing planned passes: "
+                + ", ".join(missing_passes)
+            )
+        missing_surfaces = tuple(
+            surface
+            for surface in self.plan.required_surfaces
+            if surface not in coverage
+        )
+        if missing_surfaces:
+            raise ReviewContractError(
+                "discovery results are missing required surfaces: "
+                + ", ".join(surface.value for surface in missing_surfaces)
+            )
 
         union = union_candidate_findings(tuple(all_candidates))
         verification_results: list[VerifiedFinding] = []
@@ -853,6 +883,7 @@ class ShadowReviewPipeline:
             ),
         )
         elapsed_ms = max(1, int((time.perf_counter_ns() - started) / 1_000_000))
+        discovery_wall_clock_ms = sum(item.wall_clock_ms for item in results)
         receipt = ShadowReviewReceipt(
             run_id=run_id,
             protocol_id=self.protocol_id,
@@ -872,7 +903,7 @@ class ShadowReviewPipeline:
             unresolved_finding_ids=tuple(item.finding_id for item in unresolved),
             token_usage=_sum_tokens((*token_parts, *verification_tokens)),
             wall_clock_ms=max(
-                elapsed_ms,
+                elapsed_ms + discovery_wall_clock_ms,
                 int((time.perf_counter_ns() - verification_started) / 1_000_000),
             ),
             incremental_known_findings=known,

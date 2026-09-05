@@ -82,6 +82,9 @@ PROTOCOL_VERSION: Final = "v1"
 PROTOCOL_STEPS: Final = ("Inspect", "Reason", "Judge", "Report")
 _SEVERITIES: Final = frozenset({"Blocking", "High", "Medium", "Low", "Nit"})
 _FIXTURE_KINDS: Final = frozenset({"defect-rich", "stable"})
+BENCHMARK_WALL_CLOCK_SCOPE: Final[str] = (
+    "ReviewEvalRunner.run: Subject materialization through evaluator completion"
+)
 _HARNESS_EXCLUDED_ROOTS: Final = frozenset(
     {
         ".agents",
@@ -537,6 +540,7 @@ class BaselineShadowComparison:
     def to_dict(self) -> dict[str, Any]:
         return {
             "fixture_id": self.fixture_id,
+            "wall_clock_scope": BENCHMARK_WALL_CLOCK_SCOPE,
             "baseline": {
                 "verdict": self.baseline.observation.verdict,
                 "known_findings_covered": self.baseline_score.matched_count,
@@ -544,6 +548,7 @@ class BaselineShadowComparison:
                 "verified_count": self.baseline_score.verified_count,
                 "token_total": self.baseline_tokens,
                 "wall_clock_ms": self.baseline_wall_clock_ms,
+                "wall_clock_scope": BENCHMARK_WALL_CLOCK_SCOPE,
             },
             "shadow": {
                 "production_verdict": self.shadow.shadow.production_verdict,
@@ -555,6 +560,7 @@ class BaselineShadowComparison:
                 "verified_blocker_count": self.shadow.shadow.receipt.verified_blocker_count,
                 "token_total": self.shadow_tokens,
                 "wall_clock_ms": self.shadow_wall_clock_ms,
+                "wall_clock_scope": BENCHMARK_WALL_CLOCK_SCOPE,
                 "incremental_known_findings": list(
                     self.shadow.shadow.receipt.incremental_known_findings
                 ),
@@ -1014,13 +1020,24 @@ class ReviewBenchmarkRunner:
                     run_id=run.run_id,
                 )
 
+            shadow_started = time.perf_counter_ns()
             execution = runner.run(
                 fixture.fixture,
                 GitFrozenSubjectMaterializer(fixture=fixture.fixture),
                 evaluate,
             )
+            shadow_elapsed_ms = max(
+                1, int((time.perf_counter_ns() - shadow_started) / 1_000_000)
+            )
             try:
                 shadow = execution.value
+                shadow = replace(
+                    shadow,
+                    receipt=replace(
+                        shadow.receipt,
+                        wall_clock_ms=shadow_elapsed_ms,
+                    ),
+                )
                 verified_by_id = {
                     item.finding_id: item for item in shadow.verified_findings
                 }

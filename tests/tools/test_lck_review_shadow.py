@@ -7,6 +7,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 AGENT_WORKFLOW = str(Path(__file__).parents[2] / "tools" / "agent_workflow")
 if AGENT_WORKFLOW not in sys.path:
     sys.path.insert(0, AGENT_WORKFLOW)
@@ -18,6 +20,7 @@ from tracequant.contracts import (
     FindingVerificationStatus,
     ReviewAuthorityIdentity,
     ReviewAuthorityKind,
+    ReviewContractError,
     ReviewSurface,
     RunProvenance,
     TokenUsage,
@@ -160,6 +163,7 @@ def test_shadow_review_vnext_cannot_change_production_verdict() -> None:
     assert len(result.verified_findings) == 1
     assert len(result.rejected_findings) == 1
     assert result.receipt.verified_blocker_count == 1
+    assert result.receipt.wall_clock_ms >= 5
     assert len(requests) == 2
     assert len({item.context_id for item in requests}) == 2
     assert all(
@@ -195,6 +199,38 @@ def test_shadow_unresolved_finding_is_not_a_blocker_or_false_positive() -> None:
     assert result.production_verdict == "PASS"
 
 
+def test_shadow_requires_every_planned_pass_and_surface() -> None:
+    production = ProductionReviewState("PASS", True, "review-approved")
+
+    with pytest.raises(ReviewContractError, match="missing planned passes"):
+        ShadowReviewPipeline(lambda _request: pytest.fail("must not verify")).run(
+            production,
+            (
+                _result("contract-functional-invariants"),
+                _result("state-failure-compatibility"),
+            ),
+        )
+
+    partial = DiscoveryPassResult(
+        pass_id="contract-functional-invariants",
+        planned_surfaces=(
+            ReviewSurface.CONTRACT_CONFORMANCE,
+            ReviewSurface.FUNCTIONAL_CORRECTNESS,
+        ),
+        covered_surfaces=(ReviewSurface.CONTRACT_CONFORMANCE,),
+        coverage_evidence=("coverage://partial",),
+    )
+    with pytest.raises(ReviewContractError, match="cover every surface"):
+        ShadowReviewPipeline(lambda _request: pytest.fail("must not verify")).run(
+            production,
+            (
+                partial,
+                _result("state-failure-compatibility"),
+                _result("tests-claims-architecture"),
+            ),
+        )
+
+
 def test_task_194_benchmark_compares_shadow_metrics_without_using_the_oracle_in_review(
     tmp_path: Path,
 ) -> None:
@@ -224,3 +260,7 @@ def test_task_194_benchmark_compares_shadow_metrics_without_using_the_oracle_in_
     assert stable.shadow.shadow.receipt.incremental_known_findings == ()
     assert stable.shadow.shadow.receipt.production_state_unchanged is True
     assert stable.to_dict()["production_state_unchanged"] is True
+    comparison = stable.to_dict()
+    assert comparison["wall_clock_scope"].startswith("ReviewEvalRunner.run:")
+    assert comparison["baseline"]["wall_clock_scope"] == comparison["wall_clock_scope"]
+    assert comparison["shadow"]["wall_clock_scope"] == comparison["wall_clock_scope"]
