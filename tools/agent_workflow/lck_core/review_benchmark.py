@@ -23,9 +23,9 @@ import re
 import shutil
 import tempfile
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Final, Protocol
 
@@ -37,6 +37,21 @@ from workflow_common import (
     sha256_json,
 )
 
+from tracequant.contracts import (
+    CandidateFinding as CanonicalCandidateFinding,
+)
+from tracequant.contracts import (
+    FindingBlockingStatus,
+    FindingSeverity,
+    FindingVerificationStatus,
+    ReviewAuthorityIdentity,
+    ReviewAuthorityKind,
+    ReviewSurface,
+    RunProvenance,
+    TokenUsage,
+    VerifiedFinding,
+)
+
 from .models import LckStopError
 from .review_eval import (
     GitFrozenSubjectMaterializer,
@@ -46,6 +61,18 @@ from .review_eval import (
     _verified_harness_snapshot,
 )
 from .review_fixture import FrozenReviewFixture, load_frozen_review_fixture
+from .review_shadow import (
+    DEFAULT_DISCOVERY_PASSES,
+    DiscoveryPass,
+    DiscoveryPassResult,
+    IndependentVerification,
+    IndependentVerificationRequest,
+    ProductionReviewState,
+    ShadowReviewPipeline,
+    ShadowReviewResult,
+    StructuredDiscoveryPlan,
+    VerificationMethod,
+)
 
 BENCHMARK_SCHEMA_VERSION: Final = 1
 CORPUS_MANIFEST_NAME: Final = "corpus-manifest.json"
@@ -475,6 +502,107 @@ class ReplayResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ShadowReplayResult:
+    """One structured shadow replay and its scorer-only benchmark result."""
+
+    shadow: ShadowReviewResult
+    score: FindingScore
+
+
+@dataclass(frozen=True, slots=True)
+class BaselineShadowComparison:
+    """Comparable baseline/shadow metrics for one frozen fixture."""
+
+    fixture_id: str
+    baseline: ReplayResult
+    baseline_score: FindingScore
+    shadow: ShadowReplayResult
+
+    @property
+    def baseline_tokens(self) -> int:
+        return int(self.baseline.receipt.token_usage.get("total", 0))
+
+    @property
+    def shadow_tokens(self) -> int:
+        return self.shadow.shadow.receipt.token_usage.total_tokens
+
+    @property
+    def baseline_wall_clock_ms(self) -> float:
+        return self.baseline.receipt.wall_clock_ms
+
+    @property
+    def shadow_wall_clock_ms(self) -> int:
+        return self.shadow.shadow.receipt.wall_clock_ms
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "fixture_id": self.fixture_id,
+            "baseline": {
+                "verdict": self.baseline.observation.verdict,
+                "known_findings_covered": self.baseline_score.matched_count,
+                "candidate_count": self.baseline_score.candidate_count,
+                "verified_count": self.baseline_score.verified_count,
+                "token_total": self.baseline_tokens,
+                "wall_clock_ms": self.baseline_wall_clock_ms,
+            },
+            "shadow": {
+                "production_verdict": self.shadow.shadow.production_verdict,
+                "known_findings_covered": self.shadow.score.matched_count,
+                "candidate_count": self.shadow.shadow.receipt.candidate_count,
+                "verified_count": self.shadow.shadow.receipt.verified_count,
+                "rejected_count": self.shadow.shadow.receipt.rejected_count,
+                "unresolved_count": self.shadow.shadow.receipt.unresolved_count,
+                "verified_blocker_count": self.shadow.shadow.receipt.verified_blocker_count,
+                "token_total": self.shadow_tokens,
+                "wall_clock_ms": self.shadow_wall_clock_ms,
+                "incremental_known_findings": list(
+                    self.shadow.shadow.receipt.incremental_known_findings
+                ),
+                "control_status": self.shadow.score.control_status,
+            },
+            "production_state_unchanged": self.shadow.shadow.receipt.production_state_unchanged,
+        }
+
+
+def _task194_review_authority(authority: Any) -> ReviewAuthorityIdentity:
+    """Convert frozen Eval identity to the canonical contract identity."""
+    fixture_id = str(authority.fixture_id)
+    task_number = int(fixture_id.split(":", 1)[0].removeprefix("task-"))
+    diff_sha = authority.effective_diff_sha256 or "0" * 64
+    return ReviewAuthorityIdentity(
+        authority_kind=ReviewAuthorityKind.FIXTURE,
+        repository="fixture/" + fixture_id,
+        task_number=task_number,
+        pull_request_number=None,
+        base_sha=authority.base_sha,
+        head_sha=authority.head_sha,
+        diff_sha256=diff_sha,
+    )
+
+
+def _shadow_to_benchmark_candidate(
+    candidate: CanonicalCandidateFinding,
+    verified: VerifiedFinding | None = None,
+) -> CandidateFinding:
+    """Project canonical findings into the benchmark's scorer-only fingerprint."""
+    location = candidate.affected_locations[0]
+    if "::" in location:
+        path, symbol = location.split("::", 1)
+    else:
+        path, symbol = location.split(":", 1)[0], "shadow-finding"
+    category = candidate.failure_scenario.removeprefix("category=")
+    severity = "Low" if verified is None else verified.severity.value.title()
+    return CandidateFinding(
+        severity=severity,
+        path=path,
+        symbol=symbol,
+        category=category,
+        summary=candidate.claim,
+        evidence=candidate.evidence_refs,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewBenchmarkCorpus:
     """Verified Task #194 corpus with a deferred scorer-only oracle."""
 
@@ -841,6 +969,376 @@ class ReviewBenchmarkRunner:
                 raise LckStopError("Review benchmark Run workspace was not cleaned")
         return results
 
+    def replay_shadow(
+        self,
+        fixture_id: str,
+        discovery_protocol: Callable[[Path], Sequence[DiscoveryPassResult]]
+        | None = None,
+        verifier: Callable[[IndependentVerificationRequest], IndependentVerification]
+        | None = None,
+        *,
+        production_state: ProductionReviewState | None = None,
+        plan: StructuredDiscoveryPlan | None = None,
+    ) -> ShadowReplayResult:
+        """Replay shadow discovery, then score it through the deferred oracle."""
+        fixture = self.corpus.fixture(fixture_id)
+        with self._isolated_harness() as harness_snapshot:
+            runner = ReviewEvalRunner(
+                harness_snapshot,
+                workspace_root=self.workspace_root,
+            )
+
+            def evaluate(run: ReviewEvalRunContext) -> ShadowReviewResult:
+                baseline = Task194ProductionEquivalentReviewer()(run)
+                state = production_state or ProductionReviewState(
+                    verdict=baseline.verdict,
+                    merge_eligible=baseline.verdict == "PASS",
+                    authoritative_review_state=(
+                        "production-pass"
+                        if baseline.verdict == "PASS"
+                        else "production-fail"
+                    ),
+                )
+                authority = _task194_review_authority(run.authority)
+                discovery = discovery_protocol or Task194StructuredDiscovery(authority)
+                selected_verifier = verifier or Task194IndependentVerifier()
+                selected_plan = plan or TASK194_SHADOW_PLAN
+                return ShadowReviewPipeline(
+                    selected_verifier,
+                    plan=selected_plan,
+                ).run(
+                    state,
+                    discovery(run.subject_root),
+                    authority=authority,
+                    subject_root=run.subject_root,
+                    run_id=run.run_id,
+                )
+
+            execution = runner.run(
+                fixture.fixture,
+                GitFrozenSubjectMaterializer(fixture=fixture.fixture),
+                evaluate,
+            )
+            try:
+                shadow = execution.value
+                verified_by_id = {
+                    item.finding_id: item for item in shadow.verified_findings
+                }
+                candidates = tuple(
+                    _shadow_to_benchmark_candidate(
+                        item, verified_by_id.get(item.finding_id)
+                    )
+                    for item in shadow.finding_union.candidate_findings
+                )
+                verified = tuple(
+                    _shadow_to_benchmark_candidate(item, item)
+                    for item in shadow.verified_findings
+                )
+                score = self.corpus.score(fixture_id, candidates, verified)
+                known_ids = tuple(
+                    item.known_finding_id
+                    for item in score.matches
+                    if item.known_finding_id is not None
+                )
+                return ShadowReplayResult(
+                    shadow=shadow.with_incremental_known_findings(known_ids),
+                    score=score,
+                )
+            finally:
+                execution.close()
+
+    def compare_baseline_and_shadow(
+        self,
+        fixture_id: str,
+        *,
+        discovery_protocol: Callable[[Path], Sequence[DiscoveryPassResult]]
+        | None = None,
+        verifier: Callable[[IndependentVerificationRequest], IndependentVerification]
+        | None = None,
+        production_state: ProductionReviewState | None = None,
+    ) -> BaselineShadowComparison:
+        """Compare current baseline metrics with scorer-only shadow metrics."""
+        baseline = self.replay(fixture_id, Task194ProductionEquivalentReviewer())
+        baseline_score = self.corpus.score(
+            fixture_id,
+            baseline.observation.findings,
+            baseline.observation.findings,
+        )
+        shadow = self.replay_shadow(
+            fixture_id,
+            discovery_protocol,
+            verifier,
+            production_state=production_state,
+        )
+        return BaselineShadowComparison(
+            fixture_id=fixture_id,
+            baseline=baseline,
+            baseline_score=baseline_score,
+            shadow=shadow,
+        )
+
+    def compare_task_194_baseline_and_shadow(
+        self,
+    ) -> tuple[BaselineShadowComparison, ...]:
+        """Compare both defect-rich and stable Task #194 controls."""
+        return tuple(
+            self.compare_baseline_and_shadow(item.fixture_id)
+            for item in self.corpus.fixtures
+        )
+
+
+TASK194_SHADOW_PLAN: Final[StructuredDiscoveryPlan] = StructuredDiscoveryPlan(
+    passes=(
+        *DEFAULT_DISCOVERY_PASSES,
+        DiscoveryPass(
+            pass_id="risk-follow-up",
+            surfaces=(ReviewSurface.FUNCTIONAL_CORRECTNESS,),
+        ),
+    )
+)
+
+
+class Task194StructuredDiscovery:
+    """Deterministic structured discovery adapter for the frozen corpus."""
+
+    def __init__(self, authority: ReviewAuthorityIdentity) -> None:
+        self.authority = authority
+
+    def _provenance(self, pass_id: str) -> RunProvenance:
+        return RunProvenance(
+            run_id=f"task194-shadow-{pass_id}",
+            authority=self.authority,
+            harness_id="task194-shadow-harness.v1",
+            protocol_id="task194-shadow-discovery.v1",
+        )
+
+    def _candidate(
+        self,
+        pass_id: str,
+        *,
+        surface: ReviewSurface,
+        path: str,
+        symbol: str,
+        category: str,
+        claim: str,
+        invariant: str,
+    ) -> CanonicalCandidateFinding:
+        return CanonicalCandidateFinding(
+            finding_id=f"task194-{pass_id}-{category}",
+            surface=surface,
+            claim=claim,
+            affected_locations=(f"{path}::{symbol}",),
+            contract_invariant=invariant,
+            failure_scenario=f"category={category}",
+            evidence_refs=(f"task194:{pass_id}:{category}",),
+            originating_runs=(self._provenance(pass_id),),
+        )
+
+    @staticmethod
+    def _result(
+        pass_id: str,
+        surfaces: tuple[ReviewSurface, ...],
+        candidates: tuple[CanonicalCandidateFinding, ...],
+        source_size: int,
+    ) -> DiscoveryPassResult:
+        return DiscoveryPassResult(
+            pass_id=pass_id,
+            covered_surfaces=surfaces,
+            candidate_findings=candidates,
+            coverage_evidence=(f"task194://coverage/{pass_id}",),
+            token_usage=TokenUsage(
+                input_tokens=max(1, source_size // 32),
+                output_tokens=16 + len(candidates) * 12,
+                total_tokens=max(1, source_size // 32) + 16 + len(candidates) * 12,
+            ),
+            wall_clock_ms=1,
+        )
+
+    def __call__(self, subject_root: Path) -> tuple[DiscoveryPassResult, ...]:
+        data_path = subject_root / "src/tracequant/data/binance_contract_kline.py"
+        store_path = subject_root / "src/tracequant/data/raw_store.py"
+        try:
+            data_source = data_path.read_text(encoding="utf-8")
+            store_source = store_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise LckStopError(
+                "Task #194 shadow Subject source is unavailable"
+            ) from exc
+        source_size = len(data_source) + len(store_source)
+
+        integer = (
+            "parsed = int(value)" in data_source
+            and "_MAX_SIGNED_INT64_TEXT" not in data_source
+        )
+        manifest = (
+            "_LEGACY_MANIFEST_VERSION" not in store_source
+            and "version != _MANIFEST_VERSION" in store_source
+        )
+        incomplete = (
+            "RawArtifactIncompleteError" not in store_source
+            and "except RawArtifactNotFoundError" in data_source
+        )
+        integer_candidate = self._candidate(
+            "contract-functional-invariants",
+            surface=ReviewSurface.FUNCTIONAL_CORRECTNESS,
+            path="src/tracequant/data/binance_contract_kline.py",
+            symbol="_parse_nonnegative_int",
+            category="integer-range-exception",
+            claim="Oversized numeric input can escape the invalid-content boundary.",
+            invariant="Invalid numeric content must remain inside the parser error boundary.",
+        )
+        pass_one = self._result(
+            "contract-functional-invariants",
+            (
+                ReviewSurface.CONTRACT_CONFORMANCE,
+                ReviewSurface.FUNCTIONAL_CORRECTNESS,
+            ),
+            (integer_candidate,) if integer else (),
+            source_size,
+        )
+        compatibility_candidate = self._candidate(
+            "state-failure-compatibility",
+            surface=ReviewSurface.COMPATIBILITY_MIGRATION,
+            path="src/tracequant/data/raw_store.py",
+            symbol="RawManifest.from_dict",
+            category="manifest-backward-compatibility",
+            claim="The manifest reader rejects the earlier completed manifest shape.",
+            invariant="Completed legacy manifests must remain readable.",
+        )
+        incomplete_candidate = self._candidate(
+            "state-failure-compatibility",
+            surface=ReviewSurface.ERROR_FAILURE_PATHS,
+            path="src/tracequant/data/binance_contract_kline.py",
+            symbol="BinanceContractKlineBackfill.run",
+            category="incomplete-local-artifact-semantics",
+            claim="An incomplete local artifact is treated as absent.",
+            invariant="Incomplete local artifacts must not be treated as absent.",
+        )
+        pass_two = self._result(
+            "state-failure-compatibility",
+            (
+                ReviewSurface.STATE_TRANSITIONS,
+                ReviewSurface.ERROR_FAILURE_PATHS,
+                ReviewSurface.COMPATIBILITY_MIGRATION,
+            ),
+            tuple(
+                item
+                for item, active in (
+                    (compatibility_candidate, manifest),
+                    (incomplete_candidate, incomplete),
+                )
+                if active
+            ),
+            source_size,
+        )
+        stable_candidate = self._candidate(
+            "tests-claims-architecture",
+            surface=ReviewSurface.TESTS_VS_CLAIMS,
+            path="tests/",
+            symbol="historical-pass-control",
+            category="stable-unadjudicated",
+            claim="A historical PASS does not establish that every new candidate is false.",
+            invariant="New findings require independent evidence before classification.",
+        )
+        pass_three = self._result(
+            "tests-claims-architecture",
+            (ReviewSurface.TESTS_VS_CLAIMS, ReviewSurface.ARCHITECTURE),
+            (stable_candidate,)
+            if not integer and not manifest and not incomplete
+            else (),
+            source_size,
+        )
+        duplicate = replace(
+            integer_candidate,
+            finding_id="task194-risk-duplicate-integer",
+            originating_runs=(self._provenance("risk-follow-up"),),
+            evidence_refs=("task194:risk-follow-up:integer-range-exception",),
+        )
+        pass_four = self._result(
+            "risk-follow-up",
+            (ReviewSurface.FUNCTIONAL_CORRECTNESS,),
+            (duplicate,) if integer else (),
+            source_size,
+        )
+        return (pass_one, pass_two, pass_three, pass_four)
+
+
+class Task194IndependentVerifier:
+    """Independent verifier that reads only the candidate and frozen Subject."""
+
+    def __call__(
+        self, request: IndependentVerificationRequest
+    ) -> IndependentVerification:
+        subject_root = request.subject_root
+        if subject_root is None:
+            raise LckStopError("Task #194 verifier requires a frozen Subject")
+        category = request.candidate.failure_scenario.removeprefix("category=")
+        try:
+            data_source = (
+                subject_root / "src/tracequant/data/binance_contract_kline.py"
+            ).read_text(encoding="utf-8")
+            store_source = (
+                subject_root / "src/tracequant/data/raw_store.py"
+            ).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise LckStopError(
+                "Task #194 verifier Subject source is unavailable"
+            ) from exc
+        source_size = len(data_source) + len(store_source)
+        evidence = (f"task194://verification/{request.candidate.finding_id}",)
+        usage = TokenUsage(
+            input_tokens=max(1, source_size // 48),
+            output_tokens=24,
+            total_tokens=max(1, source_size // 48) + 24,
+        )
+        if category == "stable-unadjudicated":
+            return IndependentVerification(
+                status=FindingVerificationStatus.NEEDS_MORE_EVIDENCE,
+                verification_evidence_refs=("task194://adjudication/fresh-evidence",),
+                method=VerificationMethod.INDEPENDENT_ADJUDICATION,
+                falsification_attempted=True,
+                token_usage=usage,
+                wall_clock_ms=1,
+            )
+        confirmed = {
+            "integer-range-exception": (
+                "parsed = int(value)" in data_source
+                and "_MAX_SIGNED_INT64_TEXT" not in data_source
+            ),
+            "manifest-backward-compatibility": (
+                "_LEGACY_MANIFEST_VERSION" not in store_source
+                and "version != _MANIFEST_VERSION" in store_source
+            ),
+            "incomplete-local-artifact-semantics": (
+                "RawArtifactIncompleteError" not in store_source
+                and "except RawArtifactNotFoundError" in data_source
+            ),
+        }.get(category, False)
+        if not confirmed:
+            return IndependentVerification(
+                status=FindingVerificationStatus.REJECTED,
+                verification_evidence_refs=evidence,
+                method=VerificationMethod.TARGETED_DETERMINISTIC_REPRODUCTION,
+                falsification_attempted=True,
+                token_usage=usage,
+                wall_clock_ms=1,
+            )
+        severity = (
+            FindingSeverity.MEDIUM
+            if category == "manifest-backward-compatibility"
+            else FindingSeverity.HIGH
+        )
+        return IndependentVerification(
+            status=FindingVerificationStatus.CONFIRMED,
+            verification_evidence_refs=evidence,
+            method=VerificationMethod.TARGETED_DETERMINISTIC_REPRODUCTION,
+            falsification_attempted=True,
+            severity=severity,
+            blocking_status=FindingBlockingStatus.BLOCKING,
+            token_usage=usage,
+            wall_clock_ms=1,
+        )
+
 
 class Task194ProductionEquivalentReviewer:
     """Deterministic Inspect/Reason/Judge/Report adapter for the first corpus.
@@ -950,6 +1448,7 @@ def load_task_194_benchmark(repo_root: Path | None = None) -> ReviewBenchmarkCor
 
 __all__ = [
     "BENCHMARK_SCHEMA_VERSION",
+    "BaselineShadowComparison",
     "BaselineRunReceipt",
     "BenchmarkFixture",
     "CandidateFinding",
@@ -964,6 +1463,10 @@ __all__ = [
     "ReviewBenchmarkRunner",
     "ReviewObservation",
     "ReviewProtocol",
+    "ShadowReplayResult",
+    "TASK194_SHADOW_PLAN",
+    "Task194IndependentVerifier",
     "Task194ProductionEquivalentReviewer",
+    "Task194StructuredDiscovery",
     "load_task_194_benchmark",
 ]

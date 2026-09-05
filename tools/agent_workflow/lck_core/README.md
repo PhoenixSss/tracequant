@@ -15,7 +15,7 @@ maintainer or reviewer can start with the responsibility that owns the behavior.
 | Delivery prepare/complete | `delivery.py` | `eligibility.py`, `validation.py`, `effects.py` |
 | isolated Review workspace and review records | `review_workspace.py` | `review.py` |
 | Independent Review and Merge Preflight | `review.py` | `review_workspace.py`, `validation.py` |
-| Review Eval fixture identity, artifact recovery, Harness / Subject / Run isolation, and benchmark scoring | `review_authority.py`, `review_fixture.py`, `review_eval.py`, `review_benchmark.py` | none |
+| Review Eval fixture identity, artifact recovery, Harness / Subject / Run isolation, shadow discovery, and benchmark scoring | `review_authority.py`, `review_fixture.py`, `review_eval.py`, `review_shadow.py`, `review_benchmark.py` | none |
 | remediation and owned-candidate recovery | `remediation.py` | `eligibility.py`, `delivery.py`, `effects.py` |
 | post-merge Closeout | `closeout.py` | `eligibility.py`, `profile_policies.py` |
 | Agent View, Audit Receipt, failure evidence/replay | `receipts.py` | affected phase module |
@@ -67,6 +67,7 @@ The former mixed `tests/tools/test_lck.py` suite is responsibility-owned too:
 - `test_lck_bug.py` — Bug defect contract and shared lifecycle boundaries.
 - `test_lck_prepare.py` — prepare/admission and eligibility behavior.
 - `test_lck_review.py` — Review workspace, Review Complete, Merge Preflight.
+- `test_lck_review_shadow.py` — structured shadow discovery, finding union, independent verification, and Task #194 comparison.
 - `test_lck_remediation.py` — remediation sessions and partial-effect recovery.
 - `test_lck_receipts.py` — Agent View / Audit Receipt and failure evidence.
 - `test_lck_closeout.py` plus `test_lck_closeout_additional.py` — Closeout.
