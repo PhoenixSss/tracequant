@@ -350,7 +350,13 @@ def union_candidate_findings(
 
 @dataclass(frozen=True, slots=True)
 class VerificationSubject:
-    """The candidate claim exposed to a verifier, without social-proof data."""
+    """The candidate claim exposed to a verifier, without discovery evidence.
+
+    Discovery evidence belongs to the candidate and the resulting audit record,
+    but it is not part of the independent verifier's input.  In particular,
+    unioning references from duplicate candidates would otherwise expose the
+    number and source pattern of supporting discovery runs.
+    """
 
     finding_id: str
     surface: ReviewSurface
@@ -369,7 +375,10 @@ class VerificationSubject:
             affected_locations=candidate.affected_locations,
             contract_invariant=candidate.contract_invariant,
             failure_scenario=candidate.failure_scenario,
-            evidence_refs=candidate.evidence_refs,
+            # Candidate evidence may contain one reference per discovery run.
+            # Keep it on the canonical finding for auditability, but never
+            # project it into the fresh verifier context.
+            evidence_refs=(),
         )
 
     def __post_init__(self) -> None:
@@ -389,6 +398,10 @@ class VerificationSubject:
             "evidence_refs",
             _unique_texts(self.evidence_refs, field="evidence_refs"),
         )
+        if self.evidence_refs:
+            raise ReviewContractError(
+                "verification subject must not expose discovery evidence"
+            )
 
 
 @dataclass(frozen=True, slots=True)

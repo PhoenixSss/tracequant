@@ -170,6 +170,8 @@ def test_shadow_review_vnext_cannot_change_production_verdict() -> None:
     assert all(
         "originating_runs" not in item.to_dict()["candidate"] for item in requests
     )
+    assert all(item.candidate.evidence_refs == () for item in requests)
+    assert all(item.to_dict()["candidate"]["evidence_refs"] == [] for item in requests)
 
 
 def test_union_counts_reused_candidate_instance_as_duplicate() -> None:
