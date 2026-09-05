@@ -27,8 +27,12 @@ from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     models as lck_models,
     review as lck_review,
     review_workspace as lck_review_workspace,
+    structured_review as lck_structured_review,
 )
-from lck_test_support import FakeReviewWorkspace  # noqa: E402
+from lck_test_support import (  # noqa: E402
+    FakeReviewWorkspace,
+    structured_review_receipt,
+)
 from research_policy import (  # type: ignore[import-not-found]  # noqa: E402
     RESEARCH_POLICY_ID,
     ResearchOutcome,
@@ -435,7 +439,21 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
             "validation": {"status": "pass"},
             "checks": {"status": "observed"},
             "snapshot": {"operation": "review-prepare"},
+            "structured_review_protocol": lck_structured_review.protocol_context(
+                authority=lck_structured_review.expected_live_authority(
+                    repository="owner/repo",
+                    task_number=identity.task_number,
+                    pr_number=identity.pr_number,
+                    base_sha=identity.base_sha,
+                    head_sha=identity.head_sha,
+                    diff_sha256=identity.effective_diff_sha256,
+                )
+            ),
         },
+    )
+    structured_review_file = tmp_path / "structured-review.json"
+    structured_review_file.write_text(
+        structured_review_receipt(identity).to_json(), encoding="utf-8"
     )
     review_result = lck_review.ReviewCompleter(
         resolver,
@@ -443,7 +461,12 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
         checks_gate=cast(Any, Checks()),
         store=review_store,
         workspace=cast(Any, FakeReviewWorkspace(review_root)),
-    ).complete(199, review_id, verdict="PASS")
+    ).complete(
+        199,
+        review_id,
+        verdict="PASS",
+        structured_review_file=structured_review_file,
+    )
     assert review_result.status == "READY_FOR_MERGE_PREFLIGHT"
     review_record = review_store.read_record(199, review_id)
     assert review_record["research_outcome"] == "IMPLEMENT"

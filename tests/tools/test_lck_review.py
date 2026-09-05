@@ -60,8 +60,23 @@ from lck_test_support import (  # noqa: E402
     _review_identity_value,
     _review_state,
     _task_contract,
+    structured_review_receipt,
     _write_required_checks_workflow,
 )
+
+
+def _write_structured_review_receipt(
+    tmp_path: Path,
+    identity: lck_review_workspace.ReviewIdentity,
+    *,
+    blocking: bool = False,
+) -> Path:
+    path = tmp_path / "structured-review.json"
+    path.write_text(
+        structured_review_receipt(identity, blocking=blocking).to_json(),
+        encoding="utf-8",
+    )
+    return path
 
 
 def test_review_prepare_rejects_draft_open_pr(
@@ -349,6 +364,11 @@ def test_production_review_requires_structured_obligations_before_pass(
             "protocol_version": lck_structured_review.STRUCTURED_REVIEW_PROTOCOL_VERSION,
             "coverage_matrix": matrix,
             "falsification_attempts": (),
+            "not_applicable_reasons": {
+                "state-persistence-compatibility": (
+                    "The reviewed change has no persisted or stateful behavior."
+                )
+            },
         },
         model_config={"temperature": 0},
         coverage=ReviewSurfacePlan(
@@ -379,6 +399,134 @@ def test_production_review_requires_structured_obligations_before_pass(
     assert workspace.removed == [review_root]
 
 
+def test_review_complete_rejects_legacy_guard_without_structured_protocol(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = _review_identity_value()
+    resolver = cast(Any, StaticResolver(tmp_path, _review_state()))
+    monkeypatch.setattr(
+        lck_review, "_review_identity", lambda *_args, **_kwargs: identity
+    )
+    store = lck_review_workspace.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    review_root = tmp_path / "review-root"
+    review_root.mkdir()
+    store.write_guard(
+        review_id,
+        _review_guard(
+            identity,
+            review_root=review_root,
+            structured_review_protocol=False,
+        ),
+    )
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="persisted Review guard has no Structured Review v2 protocol",
+    ):
+        lck_review.ReviewCompleter(
+            resolver,
+            checks_gate=cast(Any, FakeReviewChecks()),
+            store=store,
+            workspace=cast(Any, FakeReviewWorkspace(review_root)),
+        ).complete(159, review_id, verdict="PASS")
+
+    assert store.read_latest_review(159) is None
+    assert not store.record_path(159, review_id).exists()
+
+
+def test_merge_preflight_rejects_legacy_structured_review_pass_record(
+    tmp_path: Path,
+) -> None:
+    identity = _review_identity_value()
+    state = _review_state()
+    resolver = cast(Any, StaticResolver(tmp_path, state))
+    store = lck_review_workspace.ReviewInvocationStore(tmp_path)
+    review_id = store.new_id()
+    store.write_record(
+        159,
+        review_id,
+        {
+            "task_number": 159,
+            "review_id": review_id,
+            "verdict": "PASS",
+            "status": "READY_FOR_MERGE_PREFLIGHT",
+            "identity": identity.to_dict(),
+        },
+    )
+    store.write_latest_review(159, review_id, "PASS")
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="no accepted Structured Review v2 result",
+    ):
+        lck_review.ReviewPassGate(resolver, store=store).run(159, state)
+
+
+def test_structured_review_rejects_arbitrary_not_applicable_obligations() -> None:
+    identity = _review_identity_value()
+    original = structured_review_receipt(identity)
+    payload = original.to_dict()
+    assurance_results = cast(list[dict[str, object]], payload["assurance_results"])
+    payload["assurance_results"] = [
+        {**item, "status": AssuranceStatus.NOT_APPLICABLE.value}
+        for item in assurance_results
+    ]
+    protocol_config = dict(cast(dict[str, Any], payload["protocol_config"]))
+    protocol_config["not_applicable_reasons"] = {
+        "boundary-error-enumeration": "No external transport or conversion surface.",
+        "state-persistence-compatibility": "No persisted or stateful behavior.",
+    }
+    payload["protocol_config"] = protocol_config
+    payload["review_status"] = "incomplete"
+    receipt = ReviewRunReceipt.from_dict(payload)
+    authority = lck_structured_review.expected_live_authority(
+        repository="owner/repo",
+        task_number=identity.task_number,
+        pr_number=identity.pr_number,
+        base_sha=identity.base_sha,
+        head_sha=identity.head_sha,
+        diff_sha256=identity.effective_diff_sha256,
+    )
+
+    assessment = lck_structured_review.assess_receipt(
+        receipt,
+        expected_authority=authority,
+    )
+
+    assert assessment.status == "incomplete"
+    assert assessment.canonical_verdict is None
+    assert any("NOT_APPLICABLE is not allowed" in issue for issue in assessment.issues)
+
+
+def test_structured_review_rejects_boolean_falsification_shortcut() -> None:
+    identity = _review_identity_value()
+    original = structured_review_receipt(identity, blocking=True)
+    payload = original.to_dict()
+    protocol_config = dict(cast(dict[str, Any], payload["protocol_config"]))
+    protocol_config["falsification_attempts"] = True
+    payload["protocol_config"] = protocol_config
+    receipt = ReviewRunReceipt.from_dict(payload)
+    authority = lck_structured_review.expected_live_authority(
+        repository="owner/repo",
+        task_number=identity.task_number,
+        pr_number=identity.pr_number,
+        base_sha=identity.base_sha,
+        head_sha=identity.head_sha,
+        diff_sha256=identity.effective_diff_sha256,
+    )
+
+    assessment = lck_structured_review.assess_receipt(
+        receipt,
+        expected_authority=authority,
+    )
+
+    assert assessment.status == "incomplete"
+    assert assessment.canonical_verdict is None
+    assert any("falsification attempt" in issue for issue in assessment.issues)
+
+
 def test_review_complete_acquires_one_fresh_snapshot_and_accepts_unchanged_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -397,13 +545,19 @@ def test_review_complete_acquires_one_fresh_snapshot_and_accepts_unchanged_targe
         _review_guard(identity, review_root=review_root),
     )
     workspace = FakeReviewWorkspace(review_root)
+    receipt_file = _write_structured_review_receipt(tmp_path, identity)
 
     result = lck_review.ReviewCompleter(
         resolver,
         checks_gate=cast(Any, FakeReviewChecks()),
         store=store,
         workspace=cast(Any, workspace),
-    ).complete(159, review_id, verdict="PASS")
+    ).complete(
+        159,
+        review_id,
+        verdict="PASS",
+        structured_review_file=receipt_file,
+    )
 
     assert result.status == "READY_FOR_MERGE_PREFLIGHT"
     assert result.identity == identity
@@ -430,6 +584,7 @@ def test_review_complete_rejects_research_outcome_for_task_profile(
     review_root = tmp_path / "review-root"
     review_root.mkdir()
     store.write_guard(review_id, _review_guard(identity, review_root=review_root))
+    receipt_file = _write_structured_review_receipt(tmp_path, identity)
 
     with pytest.raises(
         lck_models.LckStopError,
@@ -445,6 +600,7 @@ def test_review_complete_rejects_research_outcome_for_task_profile(
             review_id,
             verdict="PASS",
             research_outcome="IMPLEMENT",
+            structured_review_file=receipt_file,
         )
 
     assert not store.record_path(159, review_id).exists()
@@ -553,6 +709,7 @@ def test_review_complete_can_retry_after_transient_live_resolution_failure(
     review_root = tmp_path / "review-root"
     review_root.mkdir()
     store.write_guard(review_id, _review_guard(identity, review_root=review_root))
+    receipt_file = _write_structured_review_receipt(tmp_path, identity)
     store.review_prepare_inflight_path(159).parent.mkdir(parents=True, exist_ok=True)
     store.review_prepare_inflight_path(159).write_text(
         json.dumps(
@@ -578,14 +735,24 @@ def test_review_complete_can_retry_after_transient_live_resolution_failure(
     with pytest.raises(
         lck_models.LckStopError, match="transient live-state resolution"
     ):
-        completer.complete(159, review_id, verdict="PASS")
+        completer.complete(
+            159,
+            review_id,
+            verdict="PASS",
+            structured_review_file=receipt_file,
+        )
 
     assert resolver.calls == 1
     assert workspace.removed == []
     assert store.guard_path(review_id).is_file()
     assert store.review_prepare_inflight_path(159).is_file()
 
-    result = completer.complete(159, review_id, verdict="PASS")
+    result = completer.complete(
+        159,
+        review_id,
+        verdict="PASS",
+        structured_review_file=receipt_file,
+    )
 
     assert result.status == "READY_FOR_MERGE_PREFLIGHT"
     assert resolver.calls == 2
@@ -608,13 +775,19 @@ def test_review_pass_stops_at_merge_preflight_boundary(
     review_root = tmp_path / "review-root"
     review_root.mkdir()
     store.write_guard(review_id, _review_guard(identity, review_root=review_root))
+    receipt_file = _write_structured_review_receipt(tmp_path, identity)
 
     result = lck_review.ReviewCompleter(
         resolver,
         checks_gate=cast(Any, FakeReviewChecks()),
         store=store,
         workspace=cast(Any, FakeReviewWorkspace(review_root)),
-    ).complete(159, review_id, verdict="PASS")
+    ).complete(
+        159,
+        review_id,
+        verdict="PASS",
+        structured_review_file=receipt_file,
+    )
 
     assert result.status == "READY_FOR_MERGE_PREFLIGHT"
     assert "Merge Preflight" in result.to_dict()["human_boundary"]
@@ -735,6 +908,7 @@ def test_review_complete_revalidates_current_checks(
     review_root = tmp_path / "review-root"
     review_root.mkdir()
     store.write_guard(review_id, _review_guard(identity, review_root=review_root))
+    receipt_file = _write_structured_review_receipt(tmp_path, identity)
 
     class CurrentChecksFail:
         def evaluate(self, _snapshot: lck_models.OperationSnapshot) -> dict[str, Any]:
@@ -746,7 +920,12 @@ def test_review_complete_revalidates_current_checks(
             checks_gate=cast(Any, CurrentChecksFail()),
             store=store,
             workspace=cast(Any, FakeReviewWorkspace(review_root)),
-        ).complete(159, review_id, verdict="PASS")
+        ).complete(
+            159,
+            review_id,
+            verdict="PASS",
+            structured_review_file=receipt_file,
+        )
 
     assert resolver.calls == 1
     assert store.read_latest_review(159) is None
@@ -770,6 +949,7 @@ def test_review_fail_is_not_delayed_by_pending_checks(
     findings.write_text(
         "[F1][Medium] CI-independent semantic finding.\n", encoding="utf-8"
     )
+    receipt_file = _write_structured_review_receipt(tmp_path, identity, blocking=True)
 
     class PendingChecks(FakeReviewChecks):
         def evaluate(self, _snapshot: lck_models.OperationSnapshot) -> dict[str, Any]:
@@ -780,7 +960,13 @@ def test_review_fail_is_not_delayed_by_pending_checks(
         checks_gate=cast(Any, PendingChecks()),
         store=store,
         workspace=cast(Any, FakeReviewWorkspace(review_root)),
-    ).complete(159, review_id, verdict="FAIL", findings_file=findings)
+    ).complete(
+        159,
+        review_id,
+        verdict="FAIL",
+        findings_file=findings,
+        structured_review_file=receipt_file,
+    )
 
     assert result.status == "STOP_REQUIRED"
 

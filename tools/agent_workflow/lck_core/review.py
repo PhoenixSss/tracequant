@@ -51,6 +51,8 @@ from .state import (
     _policy_issue_from_state,
 )
 from .structured_review import (
+    STRUCTURED_REVIEW_PROTOCOL_ID,
+    STRUCTURED_REVIEW_PROTOCOL_VERSION,
     StructuredReviewProtocolError,
     expected_live_authority,
     protocol_context,
@@ -586,49 +588,58 @@ class ReviewCompleter:
             )
             _assert_review_applicable(reviewed_identity, current_identity)
             structured_summary: dict[str, Any] | None = None
-            if isinstance(guard.get("structured_review_protocol"), Mapping):
-                if receipt_file is None:
-                    raise LckStopError(
-                        "Review Complete STOP: Structured Review v2 receipt is required"
-                    )
-                repository = state.repository or getattr(
-                    self.resolver, "repository", None
+            structured_protocol = guard.get("structured_review_protocol")
+            if not isinstance(structured_protocol, Mapping):
+                raise LckStopError(
+                    "Review Complete STOP: persisted Review guard has no "
+                    "Structured Review v2 protocol"
                 )
-                if not isinstance(repository, str) or not repository:
-                    raise LckStopError(
-                        "Review Complete cannot establish live Review authority repository"
-                    )
-                expected_authority = expected_live_authority(
-                    repository=repository,
-                    task_number=current_identity.task_number,
-                    pr_number=current_identity.pr_number,
-                    base_sha=current_identity.base_sha,
-                    head_sha=current_identity.head_sha,
-                    diff_sha256=current_identity.effective_diff_sha256,
+            if (
+                structured_protocol.get("protocol_id") != STRUCTURED_REVIEW_PROTOCOL_ID
+                or structured_protocol.get("protocol_version")
+                != STRUCTURED_REVIEW_PROTOCOL_VERSION
+            ):
+                raise LckStopError(
+                    "Review Complete STOP: persisted Review guard has an "
+                    "unsupported Structured Review protocol"
                 )
-                try:
-                    _receipt, assessment = read_and_assess_receipt(
-                        receipt_file,
-                        expected_authority=expected_authority,
-                    )
-                except StructuredReviewProtocolError as exc:
-                    raise LckStopError(f"Review Complete STOP: {exc}") from exc
-                structured_summary = assessment.to_dict()
-                self.last_structured_review = structured_summary
-                if assessment.status != "complete":
-                    details = "; ".join(assessment.issues)
-                    raise LckStopError(
-                        "Review Complete STOP: REVIEW_INCOMPLETE: "
-                        + (
-                            details
-                            or "required Structured Review evidence is unresolved"
-                        )
-                    )
-                if assessment.canonical_verdict != verdict:
-                    raise LckStopError(
-                        "Review Complete STOP: canonical Structured Review verdict "
-                        f"is {assessment.canonical_verdict}, not {verdict}"
-                    )
+            if receipt_file is None:
+                raise LckStopError(
+                    "Review Complete STOP: Structured Review v2 receipt is required"
+                )
+            repository = state.repository or getattr(self.resolver, "repository", None)
+            if not isinstance(repository, str) or not repository:
+                raise LckStopError(
+                    "Review Complete cannot establish live Review authority repository"
+                )
+            expected_authority = expected_live_authority(
+                repository=repository,
+                task_number=current_identity.task_number,
+                pr_number=current_identity.pr_number,
+                base_sha=current_identity.base_sha,
+                head_sha=current_identity.head_sha,
+                diff_sha256=current_identity.effective_diff_sha256,
+            )
+            try:
+                _receipt, assessment = read_and_assess_receipt(
+                    receipt_file,
+                    expected_authority=expected_authority,
+                )
+            except StructuredReviewProtocolError as exc:
+                raise LckStopError(f"Review Complete STOP: {exc}") from exc
+            structured_summary = assessment.to_dict()
+            self.last_structured_review = structured_summary
+            if assessment.status != "complete":
+                details = "; ".join(assessment.issues)
+                raise LckStopError(
+                    "Review Complete STOP: REVIEW_INCOMPLETE: "
+                    + (details or "required Structured Review evidence is unresolved")
+                )
+            if assessment.canonical_verdict != verdict:
+                raise LckStopError(
+                    "Review Complete STOP: canonical Structured Review verdict "
+                    f"is {assessment.canonical_verdict}, not {verdict}"
+                )
             try:
                 profile, _policy = resolve_issue_policy(
                     _policy_issue_from_state(state),
@@ -792,6 +803,21 @@ class ReviewPassGate:
             or record.get("status") != "READY_FOR_MERGE_PREFLIGHT"
         ):
             raise LckStopError("latest Independent Review PASS record is invalid")
+        structured_review = record.get("structured_review")
+        if not isinstance(structured_review, Mapping):
+            raise LckStopError(
+                "Independent Review PASS has no accepted Structured Review v2 result"
+            )
+        if (
+            structured_review.get("protocol_id") != STRUCTURED_REVIEW_PROTOCOL_ID
+            or structured_review.get("protocol_version")
+            != STRUCTURED_REVIEW_PROTOCOL_VERSION
+            or structured_review.get("status") != "complete"
+            or structured_review.get("canonical_verdict") != "PASS"
+        ):
+            raise LckStopError(
+                "Independent Review PASS has an invalid Structured Review v2 result"
+            )
         raw_identity = record.get("identity")
         if not isinstance(raw_identity, Mapping):
             raise LckStopError("Independent Review PASS has no identity")

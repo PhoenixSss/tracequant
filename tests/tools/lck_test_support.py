@@ -13,9 +13,16 @@ from tracequant.contracts import (
     ALWAYS_ON_SURFACES,
     AssuranceResult,
     AssuranceStatus,
+    CandidateFinding,
+    FindingBlockingStatus,
+    FindingSeverity,
+    FindingVerificationStatus,
     ReviewRunReceipt,
+    ReviewSurface,
     ReviewSurfacePlan,
+    RunProvenance,
     TokenUsage,
+    VerifiedFinding,
 )
 
 AGENT_WORKFLOW = str(Path(__file__).parents[2] / "tools" / "agent_workflow")
@@ -370,6 +377,7 @@ def structured_review_receipt(
     identity: lck_review_workspace.ReviewIdentity,
     *,
     repository: str = "owner/repo",
+    blocking: bool = False,
 ) -> ReviewRunReceipt:
     """Build a complete no-finding v2 receipt for lifecycle controller tests."""
     authority = lck_structured_review.expected_live_authority(
@@ -403,6 +411,37 @@ def structured_review_receipt(
         }
         for index, item in enumerate(obligations)
     }
+    candidate_findings: tuple[CandidateFinding, ...] = ()
+    verified_findings: tuple[VerifiedFinding, ...] = ()
+    falsification_attempts: tuple[str, ...] = ()
+    if blocking:
+        provenance = RunProvenance(
+            run_id="review-run-test",
+            authority=authority,
+            harness_id="test-harness",
+            protocol_id=lck_structured_review.STRUCTURED_REVIEW_PROTOCOL_ID,
+        )
+        candidate = CandidateFinding(
+            finding_id="finding-1",
+            surface=ReviewSurface.FUNCTIONAL_CORRECTNESS,
+            claim="The reviewed behavior violates a required invariant.",
+            affected_locations=("tools/agent_workflow/lck_core/review.py:1",),
+            contract_invariant="The canonical review gate must not accept unsupported evidence.",
+            failure_scenario="A malformed review result reaches the merge gate.",
+            evidence_refs=("evidence://finding-1",),
+            originating_runs=(provenance,),
+        )
+        candidate_findings = (candidate,)
+        verified_findings = (
+            VerifiedFinding.from_candidate(
+                candidate,
+                verification_status=FindingVerificationStatus.CONFIRMED,
+                verification_evidence_refs=("evidence://finding-1",),
+                severity=FindingSeverity.HIGH,
+                blocking_status=FindingBlockingStatus.BLOCKING,
+            ),
+        )
+        falsification_attempts = ("finding-1",)
     return ReviewRunReceipt(
         run_id="review-run-test",
         authority=authority,
@@ -411,15 +450,20 @@ def structured_review_receipt(
             "protocol_id": lck_structured_review.STRUCTURED_REVIEW_PROTOCOL_ID,
             "protocol_version": lck_structured_review.STRUCTURED_REVIEW_PROTOCOL_VERSION,
             "coverage_matrix": matrix,
-            "falsification_attempts": (),
+            "falsification_attempts": falsification_attempts,
+            "not_applicable_reasons": {
+                "state-persistence-compatibility": (
+                    "The reviewed change has no persisted or stateful behavior."
+                )
+            },
         },
         model_config={"temperature": 0},
         coverage=ReviewSurfacePlan(
             required=ALWAYS_ON_SURFACES,
             covered=ALWAYS_ON_SURFACES,
         ),
-        candidate_findings=(),
-        verified_findings=(),
+        candidate_findings=candidate_findings,
+        verified_findings=verified_findings,
         token_usage=TokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
         wall_clock_ms=1,
         assurance_obligations=obligations,
@@ -584,8 +628,9 @@ def _review_guard(
     identity: lck_review_workspace.ReviewIdentity,
     *,
     review_root: Path | str = "review-root",
+    structured_review_protocol: bool = True,
 ) -> dict[str, Any]:
-    return {
+    guard = {
         "task_number": 159,
         "identity": identity.to_dict(),
         "review_root": str(review_root),
@@ -604,6 +649,18 @@ def _review_guard(
             "state": {"task_number": identity.task_number},
         },
     }
+    if structured_review_protocol:
+        guard["structured_review_protocol"] = lck_structured_review.protocol_context(
+            authority=lck_structured_review.expected_live_authority(
+                repository="owner/repo",
+                task_number=identity.task_number,
+                pr_number=identity.pr_number,
+                base_sha=identity.base_sha,
+                head_sha=identity.head_sha,
+                diff_sha256=identity.effective_diff_sha256,
+            )
+        )
+    return guard
 
 
 def _write_owned_candidate_session(

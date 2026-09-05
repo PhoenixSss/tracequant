@@ -92,6 +92,12 @@ STRUCTURED_REVIEW_OBLIGATIONS: Final[tuple[AssuranceObligation, ...]] = (
 _OBLIGATION_IDS: Final[tuple[str, ...]] = tuple(
     item.obligation_id for item in STRUCTURED_REVIEW_OBLIGATIONS
 )
+_NOT_APPLICABLE_OBLIGATION_IDS: Final[frozenset[str]] = frozenset(
+    {
+        "boundary-error-enumeration",
+        "state-persistence-compatibility",
+    }
+)
 
 
 class StructuredReviewProtocolError(ReviewContractError):
@@ -135,6 +141,10 @@ def protocol_context(
         "completion_contract": {
             "required_statuses": [AssuranceStatus.PASS.value],
             "allowed_not_applicable_status": AssuranceStatus.NOT_APPLICABLE.value,
+            "allowed_not_applicable_obligation_ids": sorted(
+                _NOT_APPLICABLE_OBLIGATION_IDS
+            ),
+            "not_applicable_reason_field": "not_applicable_reasons",
             "incomplete_status": "REVIEW_INCOMPLETE",
             "residual_sweep_before_verdict": True,
             "first_finding_does_not_end_review": True,
@@ -213,11 +223,7 @@ def _falsification_issues(
     if not blocking_ids:
         return []
     attempts = protocol_config.get("falsification_attempts")
-    if attempts is True:
-        return []
-    if isinstance(attempts, str):
-        attempted_ids = {attempts}
-    elif isinstance(attempts, Sequence):
+    if isinstance(attempts, Sequence) and not isinstance(attempts, (str, bytes)):
         attempted_ids = {item for item in attempts if isinstance(item, str)}
     else:
         attempted_ids = set()
@@ -230,6 +236,39 @@ def _falsification_issues(
         if missing
         else []
     )
+
+
+def _not_applicable_issues(
+    protocol_config: Mapping[str, Any],
+    results_by_id: Mapping[str, Any],
+) -> list[str]:
+    not_applicable_ids = {
+        obligation_id
+        for obligation_id, result in results_by_id.items()
+        if result.status is AssuranceStatus.NOT_APPLICABLE
+    }
+    if not not_applicable_ids:
+        return []
+
+    issues: list[str] = []
+    disallowed = sorted(not_applicable_ids - _NOT_APPLICABLE_OBLIGATION_IDS)
+    if disallowed:
+        issues.append(
+            "NOT_APPLICABLE is not allowed for obligation(s): " + ", ".join(disallowed)
+        )
+
+    reasons = protocol_config.get("not_applicable_reasons")
+    if not isinstance(reasons, Mapping):
+        return issues + [
+            "NOT_APPLICABLE results require non-empty not_applicable_reasons"
+        ]
+    for obligation_id in sorted(not_applicable_ids):
+        reason = reasons.get(obligation_id)
+        if not isinstance(reason, str) or not reason.strip():
+            issues.append(
+                f"NOT_APPLICABLE obligation {obligation_id} has no applicability reason"
+            )
+    return issues
 
 
 def assess_receipt(
@@ -269,6 +308,7 @@ def assess_receipt(
 
     results_by_id = {item.obligation_id: item for item in receipt.assurance_results}
     issues.extend(_validate_coverage_matrix(protocol_config, results_by_id))
+    issues.extend(_not_applicable_issues(protocol_config, results_by_id))
     if not receipt.coverage_complete:
         issues.append("required Review surface coverage is incomplete")
     if not receipt.review_complete:

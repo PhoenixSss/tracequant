@@ -43,6 +43,7 @@ from lck_test_support import (  # noqa: E402
     _review_identity_value,
     _review_state,
     _write_owned_candidate_session,
+    structured_review_receipt,
 )
 
 
@@ -141,13 +142,24 @@ def test_review_fail_returns_stop_required_without_starting_remediation(
     store.write_guard(review_id, _review_guard(identity, review_root=review_root))
     findings = tmp_path / "findings.md"
     findings.write_text("[F1][Medium] Repair this behavior.\n", encoding="utf-8")
+    structured_review_file = tmp_path / "structured-review.json"
+    structured_review_file.write_text(
+        structured_review_receipt(identity, blocking=True).to_json(),
+        encoding="utf-8",
+    )
 
     result = lck_review.ReviewCompleter(
         resolver,
         checks_gate=cast(Any, FakeReviewChecks()),
         store=store,
         workspace=cast(Any, FakeReviewWorkspace(review_root)),
-    ).complete(159, review_id, verdict="FAIL", findings_file=findings)
+    ).complete(
+        159,
+        review_id,
+        verdict="FAIL",
+        findings_file=findings,
+        structured_review_file=structured_review_file,
+    )
 
     assert result.status == "STOP_REQUIRED"
     assert result.to_dict()["automatic_remediation"] is False
@@ -641,6 +653,11 @@ def test_accepted_fresh_review_releases_post_remediation_boundary(
     )
     findings = tmp_path / "findings-new.md"
     findings.write_text("[F2][Medium] New review finding.\n", encoding="utf-8")
+    structured_review_file = tmp_path / "structured-review.json"
+    structured_review_file.write_text(
+        structured_review_receipt(identity, blocking=True).to_json(),
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(
         lck_review, "_review_identity", lambda *_args, **_kwargs: identity
@@ -650,7 +667,13 @@ def test_accepted_fresh_review_releases_post_remediation_boundary(
         checks_gate=cast(Any, FakeReviewChecks()),
         store=store,
         workspace=cast(Any, FakeReviewWorkspace(tmp_path / "review-root")),
-    ).complete(159, review_id, verdict="FAIL", findings_file=findings)
+    ).complete(
+        159,
+        review_id,
+        verdict="FAIL",
+        findings_file=findings,
+        structured_review_file=structured_review_file,
+    )
 
     assert result.status == "STOP_REQUIRED"
     assert store.read_review_required(159) is None

@@ -1680,9 +1680,17 @@ class ReviewRunReceipt:
                 or not set(obligation.required_surfaces).issubset(coverage_covered)
             ):
                 return False
-        return all(
+        if not all(
             results_by_id[item.obligation_id].status
             in (AssuranceStatus.PASS, AssuranceStatus.NOT_APPLICABLE)
+            for item in self.assurance_obligations
+        ):
+            return False
+        # A completed review must execute at least one applicable obligation.
+        # Without this floor, an all-NOT_APPLICABLE receipt can masquerade as a
+        # completed review even though it contains no substantive assurance.
+        return any(
+            results_by_id[item.obligation_id].status is AssuranceStatus.PASS
             for item in self.assurance_obligations
         )
 

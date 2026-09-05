@@ -36,6 +36,7 @@ from lck_test_support import (  # noqa: E402
     _review_guard,
     _review_identity_value,
     _review_state,
+    structured_review_receipt,
 )
 
 
@@ -534,6 +535,10 @@ def test_review_complete_failure_receipt_preserves_bound_snapshot_and_checks(
     review_root = tmp_path / "review-root"
     review_root.mkdir()
     store.write_guard(review_id, _review_guard(identity, review_root=review_root))
+    structured_review_file = tmp_path / "structured-review.json"
+    structured_review_file.write_text(
+        structured_review_receipt(identity).to_json(), encoding="utf-8"
+    )
 
     class FailingChecks:
         last_result: dict[str, Any] | None = None
@@ -557,7 +562,12 @@ def test_review_complete_failure_receipt_preserves_bound_snapshot_and_checks(
     )
 
     with pytest.raises(lck_models.LckStopError, match="PR checks are pending"):
-        handler.complete(159, review_id, verdict="PASS")
+        handler.complete(
+            159,
+            review_id,
+            verdict="PASS",
+            structured_review_file=structured_review_file,
+        )
 
     assert handler.last_snapshot is not None
     assert handler.last_snapshot.required_checks is not None
