@@ -69,6 +69,9 @@ uv run --frozen python tools/agent_workflow/lck.py review prepare <TASK>
 
 Proceed only on `READY_FOR_SEMANTIC_REVIEW`. Use the returned `review_id`, current
 Task Contract, current review target, validation/check state, and `review_root`.
+The returned `structured_review_instructions` is the canonical Structured Review
+v2 semantic handoff. Use it to organize the review; do not replace it with an
+ad-hoc prompt or a Task-specific checklist.
 Before sealing, Review Prepare has already run and persisted the authoritative
 formal Review validation for the exact reviewed head. Consume that returned
 validation/check evidence; do not independently reproduce it. The `review_root`
@@ -92,6 +95,14 @@ Reason
 Judge
 Report
 ```
+
+Complete all applicable obligations named by `structured_review_instructions`
+before the existing final verdict. A High or Medium blocker does not end the
+semantic review; continue the remaining applicable surfaces and perform the
+adversarial residual sweep before reporting. Use the existing canonical finding
+and report semantics, including concrete evidence and falsification reasoning
+when applicable. This handoff is semantic guidance only; it adds no receipt,
+completion gate, or new verdict.
 
 Read the complete effective diff and necessary related code. Build an independent AC
 coverage/evidence matrix. The current Task Contract, effective diff, and necessary related
