@@ -1,7 +1,0 @@
-task,phase,git_containing_command_calls,github_gh_containing_command_calls,guardian_turns_task_total,guardian_tokens_task_total,task_total_tokens,status
-63,delivery,47,27,54,2290161,8692744,observed-external-aggregate
-63,review,18,18,,,,observed-external-aggregate
-63,closeout,45,9,,,,observed-external-aggregate
-64,delivery,40,29,72,3259735,11969449,observed-external-aggregate
-64,review,13,24,,,,observed-external-aggregate
-64,closeout,45,12,,,,observed-external-aggregate

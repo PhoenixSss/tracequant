@@ -1,9 +1,0 @@
-metric,value,unit,status,scope,evidence
-live_targeted_guardian_turns,0,turns,observed,targeted profile only,live-activation-evidence.json
-live_targeted_approval_prompts,0,prompts,observed,targeted profile only,live-activation-evidence.json
-live_targeted_elevated_executions,0,executions,observed,targeted profile only,live-activation-evidence.json
-live_targeted_duration,10284,ms,observed,runner 1.0.0 live probe,live-activation-evidence.json
-live_targeted_stdout,346,bytes,observed,compact digest,live-activation-evidence.json
-current_ci_equivalent_duration,11174,ms,observed-summary,raw result hash unavailable,current-ci-equivalent-evidence.json
-current_ci_equivalent_guardian_turns,,turns,not-measured,not covered by targeted live probe,publication-materials.json
-token_reduction,,tokens,not-measured,requires Task #86 candidate,publication-materials.json

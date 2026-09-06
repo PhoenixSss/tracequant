@@ -33,9 +33,9 @@ from .models import (
     OperationSnapshot,
     Phase,
     ResolutionStatus,
-    _authoritative_remote_main_sha,
     _branch_matches_task,
     _pr_base_sha,
+    _remote_main_sha,
     _remote_refs,
     branch_matches_profile,
     canonical_task_branch,
@@ -336,7 +336,7 @@ class LiveStateResolver:
                 reasons.append("current local HEAD is unavailable")
             if not is_sha(git.get("local_main_sha")):
                 reasons.append("local main ref unavailable")
-            if not is_sha(_authoritative_remote_main_sha(git)):
+            if not is_sha(_remote_main_sha(git)):
                 reasons.append("remote main query failed")
             if git.get("clean") not in {True, False}:
                 reasons.append("current worktree cleanliness is unavailable")
@@ -703,7 +703,7 @@ def _required_checks_policy_source_sha(
     """
 
     if operation == Phase.DELIVERY_COMPLETE.value:
-        source_sha = _authoritative_remote_main_sha(state.git)
+        source_sha = _remote_main_sha(state.git)
     else:
         pr = state.open_pr
         source_sha = _pr_base_sha(pr) if isinstance(pr, Mapping) else None

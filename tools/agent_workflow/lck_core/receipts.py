@@ -22,13 +22,13 @@ from .models import (
     LckStopError,
     LiveState,
     OperationSnapshot,
-    _authoritative_remote_main_sha,
     _checks_agent_view,
     _critical_outcome_agent_view,
     _jsonable,
     _pr_agent_view,
     _pr_base_sha,
     _pr_head_sha,
+    _remote_main_sha,
     _validation_agent_view,
 )
 from .profile_policies import ProfileEvidenceEnvelope
@@ -293,7 +293,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             ),
         }
     if isinstance(value, DeliveryCompletionResult):
-        base_sha = _authoritative_remote_main_sha(value.operation_snapshot.state.git)
+        base_sha = _remote_main_sha(value.operation_snapshot.state.git)
         return {
             "schema_version": LCK_SCHEMA_VERSION,
             "kind": "lck-agent-view",

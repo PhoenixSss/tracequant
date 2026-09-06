@@ -69,21 +69,6 @@ PR #N 已人工合并，请完成 closeout
 `.agents/validation.local/` 如被 formal Review validation 使用，只存在于 disposable
 standalone clone 内。
 
-## Task #88 architecture audit
-
-The current Workflow execution map, Agent / Skill / Runner ownership matrix,
-fixed-mechanics coverage audit, evidence limitations, and follow-up candidate
-dispositions are recorded in
-[`task-workflow-architecture-audit.md`](task-workflow-architecture-audit.md).
-That document is an audit/design artifact only; it does not activate Runner,
-Context Compiler, batching, Review-session, Closeout, sandbox, approval, or
-quality-gate changes.
-
-## Task #123 cleanup evidence
-
-- [Historical Task #122 Migration Acceptance Report](migration-acceptance/task-122-migration-acceptance-report.md)
-- [Task #123 Legacy Agent Workflow Cleanup Evidence](legacy-agent-workflow-cleanup.md)
-
 ## Skill identity 验证
 
 当前 Codex / Claude Skill 路径、共享语义引用、单一机械入口与每个文件的
@@ -95,7 +80,7 @@ tools/agent_workflow/skill_path_audit.py
 
 审计输出只覆盖 `active_skills` 与 `claude_skills`。已退役 Legacy Skill 不再位于
 active discovery namespace，也不再作为 current routing、失败回退或 competing
-semantic owner；其历史内容由 Git 历史及 frozen migration / benchmark evidence 保留。
+semantic owner；其历史内容仅通过 Git 历史恢复。
 
 ## Final source-of-truth matrix
 
@@ -110,9 +95,8 @@ semantic owner；其历史内容由 Git 历史及 frozen migration / benchmark e
 | `tools/agent_workflow/lck_core/shared_facts.py` | ACTIVE | authoritative profile-neutral Git/GitHub fact acquisition and normalization |
 | `tools/agent_workflow/wsl2_validation_runner.py`、`workflow_validation.py`、validation profiles 与 current tests | ACTIVE | deterministic validation plans、exit codes 与 bounded diagnostics |
 | `tools/agent_workflow/workflow_evidence.py` | AUDIT-ONLY | Feature audit evidence and adapter over shared facts；不具备 Task lifecycle authority |
-| pre-LCK Task Evidence Runner、Task profiles、Codex Rules、dedicated Runner/Rules tests 与 `self_review.py` binder/test | REMOVED | 仅保留历史 publication / migration provenance；不属于当前 workflow entry point |
+| pre-LCK Task Evidence Runner、Task profiles、Codex Rules、dedicated Runner/Rules tests 与 `self_review.py` binder/test | REMOVED | 不属于当前 workflow entry point；需要时仅从 Git 历史恢复 |
 | retired `.agents/skills/task-delivery/`、`.agents/skills/task-pr-review/` | DEAD / ABSENT | Legacy executable Skills 已退役；历史内容由 Git 历史及 frozen evidence 保留 |
-| `docs/workflows/task-skill-runner-migration/` 与 `docs/workflows/benchmarks/` | HISTORICAL EVIDENCE ONLY | frozen migration/benchmark/audit provenance |
 | Claude current Skills 中的 Codex/Claude permission-boundary 说明 | COMPATIBILITY ONLY | cross-agent adapter guidance; retained intentionally while both agents are supported |
 | retired Skill-variant provenance JSON/doc/tool/test bundle | DEAD / ABSENT | replaced by `skill_path_audit.py`; all stale current references removed |
 | removed trusted-runner、runtime usage-measurement 与 runtime manifest machinery | DEAD / ABSENT | no current responsibility; absence is regression-tested |

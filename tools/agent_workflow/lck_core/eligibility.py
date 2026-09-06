@@ -11,9 +11,9 @@ from .models import (
     LiveState,
     Phase,
     ResolutionStatus,
-    _authoritative_remote_main_sha,
     _is_clean_current_main,
     _items,
+    _remote_main_sha,
 )
 from .profile_policies import (
     DEFAULT_PROFILE_POLICY_REGISTRY,
@@ -390,7 +390,7 @@ class PhaseEligibilityResolver:
             if not is_sha(pr_head):
                 reasons.append("current OPEN PR head OID is unavailable")
             pr_base = state.open_pr.get("baseRefOid") if state.open_pr else None
-            remote_main = _authoritative_remote_main_sha(state.git)
+            remote_main = _remote_main_sha(state.git)
             if not is_sha(pr_base) or not is_sha(remote_main) or pr_base != remote_main:
                 reasons.append("current OPEN PR base must match current origin/main")
             if state.remote_issue_oid != pr_head:

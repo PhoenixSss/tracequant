@@ -15,10 +15,9 @@
 2. **ADR 与已合并 PR** 对已经实施的架构决策和行为事实具有权威性；它们并非简单从属于尚未实施的规划描述。
 3. [技术基线](../architecture/technical-baseline.md) 记录当前技术选型和架构边界。
 4. 本文记录阶段与 Issue 导航，不复制技术基线或 Issue 正文。
-5. [历史 planning baseline](quant-system-planning-baseline-v1.0.md) 保留特定时点的规划语义。
-6. [研究报告](../research/) 是技术路线的历史研究依据，不是已经批准的实施规范。
+5. [研究源契约](../research/binance-usdm-public-history-source-contract.md) 记录当前公共数据输入边界，不替代 Issue、ADR 或已合并 PR。
 
-概括为 `GitHub Issue → ADR / 已合并 PR → technical-baseline.md → project-roadmap.md → 历史 planning baseline → research reports`，但应按上述各自权威范围理解，而不是把它当作对所有事实的一条机械覆盖链。
+概括为 `GitHub Issue → ADR / 已合并 PR → technical-baseline.md → project-roadmap.md`，但应按上述各自权威范围理解，而不是把它当作对所有事实的一条机械覆盖链。
 
 ## 2. 固定规划方法
 

@@ -302,7 +302,7 @@ def test_optional_git_snapshot_warning_does_not_stop_resolution(
     assert state.status is lck_models.ResolutionStatus.RESOLVED
 
 
-def test_remote_main_query_failure_stops_before_workspace_write(
+def test_legacy_origin_main_only_stops_before_workspace_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = FakeRunner(branch="main")
@@ -314,11 +314,14 @@ def test_remote_main_query_failure_stops_before_workspace_write(
         **_kwargs: Any,
     ) -> dict[str, Any]:
         value = _git_snapshot(fake)
-        value["remote_main_sha"] = None
+        value["origin_main_sha"] = "b" * 40
         value["remote_main_query"] = "unknown"
-        value.pop("origin_main_sha", None)
+        value.pop("remote_main_sha", None)
         return value
 
+    legacy_only = unavailable_remote_main(fake, [])
+    assert legacy_only["origin_main_sha"] == "b" * 40
+    assert "remote_main_sha" not in legacy_only
     monkeypatch.setattr(lck_state, "_git_snapshot", unavailable_remote_main)
 
     with pytest.raises(lck_models.LckStopError, match="remote main query failed"):

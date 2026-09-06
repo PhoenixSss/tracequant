@@ -241,7 +241,7 @@ RISK_TRIGGERED_SURFACES: Final[tuple[ReviewSurface, ...]] = (
 
 
 class ReviewAuthorityKind(StrEnum):
-    """Whether a Review run is tied to a frozen fixture or live repository state."""
+    """Whether a Review run is tied to an explicit fixture or live repository state."""
 
     FIXTURE = "fixture"
     LIVE = "live"
