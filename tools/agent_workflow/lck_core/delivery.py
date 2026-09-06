@@ -23,9 +23,9 @@ from .models import (
     LiveState,
     OperationSnapshot,
     Phase,
-    _authoritative_remote_main_sha,
     _is_clean_current_main,
     _jsonable,
+    _remote_main_sha,
 )
 from .profile_policies import (
     DEFAULT_PROFILE_POLICY_REGISTRY,
@@ -446,7 +446,7 @@ class DeliveryCompleter:
                 f"{phase.value} STOP for Task #{task_number}: "
                 + "; ".join(decision.reasons)
             )
-        base_sha_value = _authoritative_remote_main_sha(state.git)
+        base_sha_value = _remote_main_sha(state.git)
         if not is_sha(base_sha_value):
             raise LckStopError("current remote main identity is unavailable")
         base_sha = str(base_sha_value)

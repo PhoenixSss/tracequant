@@ -21,8 +21,8 @@ from .models import (
     EffectReceipt,
     LckStopError,
     LiveState,
-    _authoritative_remote_main_sha,
     _issue_number_from_state,
+    _remote_main_sha,
     _remote_refs,
 )
 from .profile_policies import ProfileEffectDescriptor
@@ -710,7 +710,7 @@ class EnsureOpenPrEffect:
         expected_body_sha256: str,
     ) -> EffectReceipt:
         repository = state.repository
-        base = _authoritative_remote_main_sha(state.git)
+        base = _remote_main_sha(state.git)
         issue = state.issue
         if (
             not isinstance(repository, str)
@@ -818,7 +818,7 @@ class ReuseExistingOpenPrEffect:
             or not isinstance(repository, str)
         ):
             raise LckStopError("Remediation requires the existing non-Draft OPEN PR")
-        if _authoritative_remote_main_sha(state.git) != expected_base_sha:
+        if _remote_main_sha(state.git) != expected_base_sha:
             raise LckStopError(
                 "Remediation PR precondition failed: snapshot base mismatch"
             )

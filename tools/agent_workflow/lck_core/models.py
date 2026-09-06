@@ -401,6 +401,12 @@ def _is_clean_current_main(git: Mapping[str, Any]) -> bool:
     )
 
 
+def _remote_main_sha(git: Mapping[str, Any]) -> str | None:
+    """Return the current remote-main identity, without legacy fallbacks."""
+    value = git.get("remote_main_sha")
+    return value if isinstance(value, str) else None
+
+
 def _remote_refs(stdout: str) -> dict[str, str]:
     refs: dict[str, str] = {}
     for line in stdout.splitlines():
