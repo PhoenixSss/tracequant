@@ -14,8 +14,9 @@ import os
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Self
@@ -33,6 +34,7 @@ from tracequant.domain import TimeRange
 __all__ = [
     "RawArtifact",
     "RawArtifactConflictError",
+    "RawArtifactAmbiguousError",
     "RawArtifactIncompleteError",
     "RawArtifactNotFoundError",
     "RawArtifactValidationError",
@@ -40,6 +42,8 @@ __all__ = [
     "RawAcquisitionResponse",
     "RawManifest",
     "RawObjectIdentity",
+    "RawRevisionEvidenceKind",
+    "RawRevisionIdentity",
     "RawSourceProvenance",
     "RawSourceObject",
     "RawStore",
@@ -48,7 +52,8 @@ __all__ = [
 
 _LAYOUT_VERSION: Final = "v1"
 _LEGACY_MANIFEST_VERSION: Final = 1
-_MANIFEST_VERSION: Final = 3
+_LEGACY_CURRENT_MANIFEST_VERSION: Final = 3
+_MANIFEST_VERSION: Final = 4
 _DATA_FILENAME: Final = "data.parquet"
 _MANIFEST_FILENAME: Final = "manifest.json"
 _ARCHIVE_FILENAME: Final = "source.zip"
@@ -63,6 +68,10 @@ class RawStoreError(Exception):
 
 class RawArtifactConflictError(RawStoreError):
     """Raised when an immutable identity already has different content."""
+
+
+class RawArtifactAmbiguousError(RawStoreError):
+    """Raised when a logical object has more than one readable revision."""
 
 
 class RawArtifactNotFoundError(RawStoreError):
@@ -442,6 +451,11 @@ class RawObjectIdentity:
             _canonical_json(self.to_dict()).encode("ascii")
         ).hexdigest()
 
+    @property
+    def logical_id(self) -> str:
+        """Return the stable logical-object identifier."""
+        return self.object_id
+
 
 @dataclass(frozen=True, slots=True)
 class RawAcquisitionManifest:
@@ -682,6 +696,120 @@ class RawSourceObject:
     def identity(self) -> RawObjectIdentity:
         return RawObjectIdentity.from_request(self.request)
 
+    @property
+    def revision_identity(self) -> RawRevisionIdentity | None:
+        """Return the immutable revision identity when checksum evidence exists."""
+        return RawRevisionIdentity.from_source_object(self)
+
+
+class RawRevisionEvidenceKind(StrEnum):
+    """Kinds of upstream evidence that can identify an immutable revision."""
+
+    UPSTREAM_CHECKSUM = "upstream_checksum"
+
+
+def _verified_upstream_checksum(value: str | None) -> str | None:
+    """Return a normalized checksum only when it is a valid SHA-256 claim."""
+    if not isinstance(value, str) or not value.startswith("sha256:"):
+        return None
+    digest = value.removeprefix("sha256:")
+    if len(digest) != 64 or any(
+        character not in "0123456789abcdef" for character in digest
+    ):
+        return None
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class RawRevisionIdentity:
+    """Stable identity for one immutable revision of a logical Raw object.
+
+    The official archive checksum is the identity-bearing evidence.  The
+    upstream revision label is retained as lineage in the manifest but is not
+    part of the identity, so a mirror or URL change for identical bytes does
+    not create a duplicate revision.
+    """
+
+    logical_identity: RawObjectIdentity
+    evidence_kind: RawRevisionEvidenceKind
+    verified_upstream_checksum: str
+    verified_upstream_revision: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.logical_identity, RawObjectIdentity):
+            raise TypeError("logical_identity must be a RawObjectIdentity")
+        if not isinstance(self.evidence_kind, RawRevisionEvidenceKind):
+            try:
+                evidence_kind = RawRevisionEvidenceKind(self.evidence_kind)
+            except (TypeError, ValueError) as error:
+                raise ValueError("unsupported revision evidence kind") from error
+            object.__setattr__(self, "evidence_kind", evidence_kind)
+        if self.evidence_kind is not RawRevisionEvidenceKind.UPSTREAM_CHECKSUM:
+            raise ValueError("unsupported revision evidence kind")
+        if _verified_upstream_checksum(self.verified_upstream_checksum) is None:
+            raise ValueError("verified_upstream_checksum must be a SHA-256 checksum")
+        if self.verified_upstream_revision is not None and (
+            not isinstance(self.verified_upstream_revision, str)
+            or not self.verified_upstream_revision
+        ):
+            raise ValueError(
+                "verified_upstream_revision must be None or a non-empty string"
+            )
+
+    @classmethod
+    def from_source_object(cls, source_object: RawSourceObject) -> Self | None:
+        """Derive a revision identity from caller-supplied verified evidence."""
+        if not isinstance(source_object, RawSourceObject):
+            raise TypeError("source_object must be a RawSourceObject")
+        checksum = _verified_upstream_checksum(source_object.upstream_checksum)
+        if source_object.provenance is not None:
+            provenance_checksum = f"sha256:{source_object.provenance.archive_sha256}"
+            if checksum is None:
+                checksum = provenance_checksum
+            elif checksum != provenance_checksum:
+                raise RawArtifactValidationError(
+                    "upstream checksum does not match provenance archive checksum"
+                )
+        if checksum is None:
+            return None
+        return cls(
+            logical_identity=source_object.identity,
+            evidence_kind=RawRevisionEvidenceKind.UPSTREAM_CHECKSUM,
+            verified_upstream_checksum=checksum,
+            verified_upstream_revision=source_object.upstream_revision,
+        )
+
+    @property
+    def object_identity(self) -> RawObjectIdentity:
+        """Compatibility alias for the logical identity."""
+        return self.logical_identity
+
+    @property
+    def logical_object_id(self) -> str:
+        return self.logical_identity.object_id
+
+    @property
+    def revision_id(self) -> str:
+        """Return the deterministic identifier for this logical revision pair."""
+        return hashlib.sha256(
+            _canonical_json(
+                {
+                    "logical_object_id": self.logical_object_id,
+                    "revision_evidence_kind": self.evidence_kind.value,
+                    "verified_upstream_checksum": self.verified_upstream_checksum,
+                }
+            ).encode("ascii")
+        ).hexdigest()
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "logical_object_id": self.logical_object_id,
+            "revision_evidence_kind": self.evidence_kind.value,
+            "verified_upstream_checksum": self.verified_upstream_checksum,
+            "verified_upstream_revision": self.verified_upstream_revision,
+            "revision_id": self.revision_id,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class RawManifest:
@@ -701,6 +829,11 @@ class RawManifest:
     producer_version: str
     created_at: datetime
     provenance: RawSourceProvenance | None = None
+    logical_object_id: str | None = None
+    revision_id: str | None = None
+    revision_evidence_kind: RawRevisionEvidenceKind | None = None
+    verified_upstream_checksum: str | None = None
+    verified_upstream_revision: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -718,11 +851,53 @@ class RawManifest:
             "producer_version": self.producer_version,
             "created_at": format_utc(self.created_at),
         }
-        if self.manifest_schema_version == _MANIFEST_VERSION:
+        if self.manifest_schema_version in {
+            _LEGACY_CURRENT_MANIFEST_VERSION,
+            _MANIFEST_VERSION,
+        }:
             payload["provenance"] = (
                 self.provenance.to_dict() if self.provenance is not None else None
             )
+            if self.manifest_schema_version == _MANIFEST_VERSION:
+                payload.update(
+                    {
+                        "logical_object_id": self.logical_object_id,
+                        "revision_id": self.revision_id,
+                        "revision_evidence_kind": (
+                            self.revision_evidence_kind.value
+                            if self.revision_evidence_kind is not None
+                            else None
+                        ),
+                        "verified_upstream_checksum": self.verified_upstream_checksum,
+                        "verified_upstream_revision": self.verified_upstream_revision,
+                    }
+                )
         return payload
+
+    @property
+    def revision_identity(self) -> RawRevisionIdentity | None:
+        """Return the explicit revision identity, if this is a revision artifact."""
+        if self.revision_id is None or self.revision_evidence_kind is None:
+            return None
+        if self.logical_object_id != self.object_identity.object_id:
+            raise RawArtifactValidationError(
+                "manifest logical object id does not match object identity"
+            )
+        if self.verified_upstream_checksum is None:
+            raise RawArtifactValidationError(
+                "revision manifest is missing verified upstream checksum"
+            )
+        revision = RawRevisionIdentity(
+            logical_identity=self.object_identity,
+            evidence_kind=self.revision_evidence_kind,
+            verified_upstream_checksum=self.verified_upstream_checksum,
+            verified_upstream_revision=self.verified_upstream_revision,
+        )
+        if revision.revision_id != self.revision_id:
+            raise RawArtifactValidationError(
+                "manifest revision id does not match revision evidence"
+            )
+        return revision
 
     @classmethod
     def from_dict(cls, value: object) -> Self:
@@ -748,15 +923,28 @@ class RawManifest:
         version = value.get("manifest_schema_version")
         if type(version) is not int or version not in {
             _LEGACY_MANIFEST_VERSION,
+            _LEGACY_CURRENT_MANIFEST_VERSION,
             _MANIFEST_VERSION,
         }:
             raise RawArtifactValidationError(
                 f"unsupported manifest schema version {version!r}"
             )
         names = (
-            common_names
-            if version == _LEGACY_MANIFEST_VERSION
-            else common_names | {"provenance"}
+            common_names | {"provenance"}
+            if version == _LEGACY_CURRENT_MANIFEST_VERSION
+            else (
+                common_names
+                | {
+                    "provenance",
+                    "logical_object_id",
+                    "revision_id",
+                    "revision_evidence_kind",
+                    "verified_upstream_checksum",
+                    "verified_upstream_revision",
+                }
+            )
+            if version == _MANIFEST_VERSION
+            else common_names
         )
         fields = _exact_mapping(value, fields=names, model="RawManifest")
         if fields["completed"] is not True:
@@ -808,7 +996,7 @@ class RawManifest:
             raise RawArtifactValidationError(
                 "manifest contains invalid typed identity or UTC range fields"
             ) from error
-        return cls(
+        manifest = cls(
             manifest_schema_version=version,
             completed=True,
             object_identity=object_identity,
@@ -828,6 +1016,87 @@ class RawManifest:
             created_at=created_at,
             provenance=provenance,
         )
+        if version == _MANIFEST_VERSION:
+            logical_object_id = _require_string(
+                fields["logical_object_id"], field="logical_object_id"
+            )
+            if logical_object_id != object_identity.object_id:
+                raise RawArtifactValidationError(
+                    "manifest logical object id does not match object identity"
+                )
+            revision_id = _require_sha256(fields["revision_id"], field="revision_id")
+            try:
+                evidence_kind = RawRevisionEvidenceKind(
+                    _require_string(
+                        fields["revision_evidence_kind"],
+                        field="revision_evidence_kind",
+                    )
+                )
+                verified_checksum = _require_string(
+                    fields["verified_upstream_checksum"],
+                    field="verified_upstream_checksum",
+                )
+                verified_revision = _optional_string(
+                    fields["verified_upstream_revision"],
+                    field="verified_upstream_revision",
+                )
+                revision_identity = RawRevisionIdentity(
+                    logical_identity=object_identity,
+                    evidence_kind=evidence_kind,
+                    verified_upstream_checksum=verified_checksum,
+                    verified_upstream_revision=verified_revision,
+                )
+            except (TypeError, ValueError) as error:
+                raise RawArtifactValidationError(
+                    "manifest contains invalid revision identity evidence"
+                ) from error
+            if revision_id != revision_identity.revision_id:
+                raise RawArtifactValidationError(
+                    "manifest revision id does not match revision evidence"
+                )
+            if manifest.upstream_checksum != verified_checksum:
+                raise RawArtifactValidationError(
+                    "manifest upstream checksum does not match revision evidence"
+                )
+            if manifest.upstream_revision != verified_revision:
+                raise RawArtifactValidationError(
+                    "manifest upstream revision does not match revision evidence"
+                )
+            if manifest.provenance is not None and (
+                f"sha256:{manifest.provenance.archive_sha256}" != verified_checksum
+            ):
+                raise RawArtifactValidationError(
+                    "manifest provenance checksum does not match revision evidence"
+                )
+            return replace(
+                manifest,
+                logical_object_id=logical_object_id,
+                revision_id=revision_id,
+                revision_evidence_kind=evidence_kind,
+                verified_upstream_checksum=verified_checksum,
+                verified_upstream_revision=verified_revision,
+            )
+        return manifest
+
+
+def _manifest_revision_identity(
+    manifest: RawManifest,
+) -> RawRevisionIdentity | None:
+    """Resolve explicit or legacy checksum-backed revision identity."""
+    explicit_revision = manifest.revision_identity
+    if explicit_revision is not None:
+        return explicit_revision
+    if manifest.upstream_checksum is None:
+        return None
+    checksum = _verified_upstream_checksum(manifest.upstream_checksum)
+    if checksum is None:
+        return None
+    return RawRevisionIdentity(
+        logical_identity=manifest.object_identity,
+        evidence_kind=RawRevisionEvidenceKind.UPSTREAM_CHECKSUM,
+        verified_upstream_checksum=checksum,
+        verified_upstream_revision=manifest.upstream_revision,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -855,6 +1124,21 @@ class RawArtifact:
     def checksum_response_path(self) -> Path:
         """Return the persisted upstream checksum response body."""
         return self.path / _CHECKSUM_FILENAME
+
+    @property
+    def logical_object_id(self) -> str:
+        """Return the logical identity id shared by all revisions."""
+        return self.manifest.object_identity.object_id
+
+    @property
+    def revision_identity(self) -> RawRevisionIdentity | None:
+        """Return this artifact's explicit revision identity, if any."""
+        return self.manifest.revision_identity
+
+    @property
+    def revision_id(self) -> str | None:
+        """Return the immutable revision id, or ``None`` for legacy artifacts."""
+        return self.manifest.revision_id
 
 
 class RawStore:
@@ -897,7 +1181,54 @@ class RawStore:
         )
 
     def path_for(self, identity: RawObjectIdentity) -> Path:
+        """Return the legacy v1/v3 path for backward-compatible artifacts."""
         return self._root / self.relative_path(identity)
+
+    def logical_relative_path(self, identity: RawObjectIdentity) -> Path:
+        """Return the v2 path representing one logical object."""
+        legacy = self.relative_path(identity)
+        return Path(
+            "raw",
+            "v2",
+            *legacy.parts[2:-1],
+            identity.object_id,
+        )
+
+    def logical_path_for(self, identity: RawObjectIdentity) -> Path:
+        return self._root / self.logical_relative_path(identity)
+
+    @staticmethod
+    def _revision_id_value(revision: RawRevisionIdentity | str) -> str:
+        if isinstance(revision, RawRevisionIdentity):
+            return revision.revision_id
+        if not isinstance(revision, str):
+            raise TypeError("revision must be a RawRevisionIdentity or revision id")
+        try:
+            return _require_sha256(revision, field="revision_id")
+        except RawArtifactValidationError as error:
+            raise ValueError(str(error)) from error
+
+    def revision_relative_path(
+        self,
+        identity: RawObjectIdentity,
+        revision: RawRevisionIdentity | str,
+    ) -> Path:
+        """Return the controlled path for one exact immutable revision."""
+        if not isinstance(identity, RawObjectIdentity):
+            raise TypeError("identity must be a RawObjectIdentity")
+        if isinstance(revision, RawRevisionIdentity) and (
+            revision.logical_identity != identity
+        ):
+            raise ValueError("revision identity does not match logical identity")
+        revision_id = self._revision_id_value(revision)
+        return self.logical_relative_path(identity) / "revisions" / revision_id
+
+    def revision_path_for(
+        self,
+        identity: RawObjectIdentity,
+        revision: RawRevisionIdentity | str,
+    ) -> Path:
+        return self._root / self.revision_relative_path(identity, revision)
 
     def acquisition_path_for(self, identity: RawObjectIdentity) -> Path:
         """Return the root for durable non-completed acquisition attempts."""
@@ -999,7 +1330,12 @@ class RawStore:
         if not isinstance(source_object, RawSourceObject):
             raise TypeError("source_object must be a RawSourceObject")
         identity = source_object.identity
-        final_path = self.path_for(identity)
+        revision_identity = source_object.revision_identity
+        final_path = (
+            self.revision_path_for(identity, revision_identity)
+            if revision_identity is not None
+            else self.path_for(identity)
+        )
         final_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = Path(
             tempfile.mkdtemp(
@@ -1019,7 +1355,11 @@ class RawStore:
                 checksum_response_path.write_bytes(source_object.checksum_response_body)
             created_at = to_utc(self._clock())
             manifest = RawManifest(
-                manifest_schema_version=_MANIFEST_VERSION,
+                manifest_schema_version=(
+                    _MANIFEST_VERSION
+                    if revision_identity is not None
+                    else _LEGACY_CURRENT_MANIFEST_VERSION
+                ),
                 completed=True,
                 object_identity=identity,
                 caller_request_range=source_object.request.request_range,
@@ -1027,12 +1367,45 @@ class RawStore:
                 record_count=source_object.rows.height,
                 parquet_file_size=data_path.stat().st_size,
                 project_sha256=checksum,
-                upstream_checksum=source_object.upstream_checksum,
-                upstream_revision=source_object.upstream_revision,
+                upstream_checksum=(
+                    revision_identity.verified_upstream_checksum
+                    if revision_identity is not None
+                    else source_object.upstream_checksum
+                ),
+                upstream_revision=(
+                    revision_identity.verified_upstream_revision
+                    if revision_identity is not None
+                    else source_object.upstream_revision
+                ),
                 raw_schema_identifier=source_object.raw_schema_identifier,
                 producer_version=source_object.producer_version,
                 created_at=created_at,
                 provenance=source_object.provenance,
+                logical_object_id=(
+                    revision_identity.logical_object_id
+                    if revision_identity is not None
+                    else None
+                ),
+                revision_id=(
+                    revision_identity.revision_id
+                    if revision_identity is not None
+                    else None
+                ),
+                revision_evidence_kind=(
+                    revision_identity.evidence_kind
+                    if revision_identity is not None
+                    else None
+                ),
+                verified_upstream_checksum=(
+                    revision_identity.verified_upstream_checksum
+                    if revision_identity is not None
+                    else None
+                ),
+                verified_upstream_revision=(
+                    revision_identity.verified_upstream_revision
+                    if revision_identity is not None
+                    else None
+                ),
             )
             manifest_path = temporary_path / _MANIFEST_FILENAME
             manifest_path.write_text(
@@ -1043,11 +1416,32 @@ class RawStore:
                 self._sync_file(archive_path)
                 self._sync_file(checksum_response_path)
             self._sync_file(manifest_path)
-            self._validate_path(temporary_path, expected_identity=identity)
+            self._validate_path(
+                temporary_path,
+                expected_identity=identity,
+                expected_revision_id=(
+                    revision_identity.revision_id
+                    if revision_identity is not None
+                    else None
+                ),
+            )
             self._sync_directory(temporary_path)
 
             if final_path.exists():
                 return self._resolve_existing(final_path, manifest)
+            if revision_identity is not None:
+                legacy_path = self.path_for(identity)
+                if legacy_path.exists():
+                    legacy = self._validate_path(
+                        legacy_path,
+                        expected_identity=identity,
+                    )
+                    legacy_revision = self._manifest_revision_identity(legacy.manifest)
+                    if (
+                        legacy_revision is not None
+                        and legacy_revision.revision_id == revision_identity.revision_id
+                    ):
+                        return self._resolve_existing(legacy_path, manifest)
             try:
                 self._publish_directory(temporary_path, final_path)
             except OSError:
@@ -1055,26 +1449,168 @@ class RawStore:
                     raise
                 return self._resolve_existing(final_path, manifest)
             self._sync_directory(final_path.parent)
-            return self.read(identity)
+            return (
+                self.read_revision(identity, revision_identity)
+                if revision_identity is not None
+                else self.read(identity)
+            )
         finally:
             if temporary_path.exists():
                 shutil.rmtree(temporary_path)
 
-    def read(self, identity: RawObjectIdentity) -> RawArtifact:
-        """Open a completed artifact and revalidate all persisted components."""
+    def read_revision(
+        self,
+        identity: RawObjectIdentity,
+        revision: RawRevisionIdentity | str,
+    ) -> RawArtifact:
+        """Open and fully validate one exact immutable revision."""
         if not isinstance(identity, RawObjectIdentity):
             raise TypeError("identity must be a RawObjectIdentity")
-        path = self.path_for(identity)
+        path = self.revision_path_for(identity, revision)
         if not path.is_dir():
             if path.exists():
                 raise RawArtifactIncompleteError(
-                    f"Raw artifact is not a directory: {path}"
+                    f"Raw revision is not a directory: {path}"
                 )
-            raise RawArtifactNotFoundError(f"Raw artifact does not exist: {path}")
-        return self._validate_path(path, expected_identity=identity)
+            legacy_path = self.path_for(identity)
+            if legacy_path.exists():
+                legacy = self._validate_path(
+                    legacy_path,
+                    expected_identity=identity,
+                )
+                legacy_revision = self._manifest_revision_identity(legacy.manifest)
+                if (
+                    legacy_revision is not None
+                    and legacy_revision.revision_id == self._revision_id_value(revision)
+                ):
+                    return legacy
+            raise RawArtifactNotFoundError(f"Raw revision does not exist: {path}")
+        return self._validate_path(
+            path,
+            expected_identity=identity,
+            expected_revision_id=self._revision_id_value(revision),
+        )
 
-    def read_request(self, request: BinancePublicHistoryRequest) -> RawArtifact:
-        return self.read(RawObjectIdentity.from_request(request))
+    def list_verified_revisions(
+        self, identity: RawObjectIdentity
+    ) -> tuple[RawArtifact, ...]:
+        """Return all verified revisions in deterministic revision-id order."""
+        if not isinstance(identity, RawObjectIdentity):
+            raise TypeError("identity must be a RawObjectIdentity")
+        revisions_path = self.logical_path_for(identity) / "revisions"
+        if revisions_path.exists() and not revisions_path.is_dir():
+            raise RawArtifactIncompleteError(
+                "Raw revision collection is not a directory"
+            )
+        artifacts_by_revision: dict[str, RawArtifact] = {}
+        if revisions_path.exists():
+            for path in sorted(revisions_path.iterdir(), key=lambda item: item.name):
+                if not path.is_dir():
+                    raise RawArtifactValidationError(
+                        "Raw revision collection contains an unexpected file"
+                    )
+                try:
+                    revision_id = _require_sha256(path.name, field="revision_id")
+                except RawArtifactValidationError as error:
+                    raise RawArtifactValidationError(
+                        "Raw revision collection contains an invalid revision id"
+                    ) from error
+                artifacts_by_revision[revision_id] = self._validate_path(
+                    path,
+                    expected_identity=identity,
+                    expected_revision_id=revision_id,
+                )
+
+        legacy_path = self.path_for(identity)
+        if legacy_path.exists():
+            legacy = self._validate_path(
+                legacy_path,
+                expected_identity=identity,
+            )
+            legacy_revision = self._manifest_revision_identity(legacy.manifest)
+            if legacy_revision is not None:
+                existing = artifacts_by_revision.get(legacy_revision.revision_id)
+                if existing is None:
+                    artifacts_by_revision[legacy_revision.revision_id] = legacy
+                else:
+                    self._resolve_existing(legacy_path, existing.manifest)
+
+        return tuple(
+            artifacts_by_revision[revision_id]
+            for revision_id in sorted(artifacts_by_revision)
+        )
+
+    def list_revisions(self, identity: RawObjectIdentity) -> tuple[RawArtifact, ...]:
+        """Alias for :meth:`list_verified_revisions`."""
+        return self.list_verified_revisions(identity)
+
+    def read(self, identity: RawObjectIdentity) -> RawArtifact:
+        """Read one logical object, failing explicitly when it is ambiguous."""
+        if not isinstance(identity, RawObjectIdentity):
+            raise TypeError("identity must be a RawObjectIdentity")
+        legacy_path = self.path_for(identity)
+        logical_path = self.logical_path_for(identity)
+        legacy = (
+            self._validate_path(legacy_path, expected_identity=identity)
+            if legacy_path.exists()
+            else None
+        )
+        revisions = self.list_verified_revisions(identity)
+        if len(revisions) > 1:
+            raise RawArtifactAmbiguousError(
+                f"Raw logical object {identity.object_id} has multiple revisions; "
+                "read an exact revision"
+            )
+        if len(revisions) == 1:
+            if legacy is not None:
+                legacy_revision = self._manifest_revision_identity(legacy.manifest)
+                listed_revision = self._manifest_revision_identity(
+                    revisions[0].manifest
+                )
+                if (
+                    legacy_revision is None
+                    or listed_revision is None
+                    or legacy_revision.revision_id != listed_revision.revision_id
+                ):
+                    raise RawArtifactAmbiguousError(
+                        f"Raw logical object {identity.object_id} has multiple revisions; "
+                        "read an exact revision"
+                    )
+                self._resolve_existing(legacy_path, revisions[0].manifest)
+            return revisions[0]
+        if logical_path.exists() and not logical_path.is_dir():
+            raise RawArtifactIncompleteError(
+                f"Raw logical object is not a directory: {logical_path}"
+            )
+        if legacy is None:
+            if legacy_path.exists():
+                raise RawArtifactIncompleteError(
+                    f"Raw artifact is not a directory: {legacy_path}"
+                )
+            raise RawArtifactNotFoundError(
+                f"Raw artifact does not exist: {legacy_path}"
+            )
+        return legacy
+
+    def read_request(
+        self,
+        request: BinancePublicHistoryRequest,
+        revision: RawRevisionIdentity | str | None = None,
+    ) -> RawArtifact:
+        identity = RawObjectIdentity.from_request(request)
+        return (
+            self.read(identity)
+            if revision is None
+            else self.read_revision(identity, revision)
+        )
+
+    def read_exact_revision(
+        self,
+        identity: RawObjectIdentity,
+        revision: RawRevisionIdentity | str,
+    ) -> RawArtifact:
+        """Explicit alias for callers that want to emphasize exactness."""
+        return self.read_revision(identity, revision)
 
     @staticmethod
     def _validate_acquisition_response(
@@ -1146,8 +1682,25 @@ class RawStore:
         self, final_path: Path, candidate_manifest: RawManifest
     ) -> RawArtifact:
         existing = self._validate_path(
-            final_path, expected_identity=candidate_manifest.object_identity
+            final_path,
+            expected_identity=candidate_manifest.object_identity,
+            expected_revision_id=(
+                None
+                if final_path == self.path_for(candidate_manifest.object_identity)
+                else candidate_manifest.revision_id
+            ),
         )
+        existing_revision = self._manifest_revision_identity(existing.manifest)
+        candidate_revision = self._manifest_revision_identity(candidate_manifest)
+        if (existing_revision is None) != (candidate_revision is None) or (
+            existing_revision is not None
+            and candidate_revision is not None
+            and existing_revision.revision_id != candidate_revision.revision_id
+        ):
+            raise RawArtifactConflictError(
+                f"Raw identity {candidate_manifest.object_identity.object_id} "
+                "already exists with different content or provenance"
+            )
         comparable = (
             "actual_record_range",
             "record_count",
@@ -1181,8 +1734,18 @@ class RawStore:
             )
         return existing
 
+    @staticmethod
+    def _manifest_revision_identity(
+        manifest: RawManifest,
+    ) -> RawRevisionIdentity | None:
+        return _manifest_revision_identity(manifest)
+
     def _validate_path(
-        self, path: Path, *, expected_identity: RawObjectIdentity
+        self,
+        path: Path,
+        *,
+        expected_identity: RawObjectIdentity,
+        expected_revision_id: str | None = None,
     ) -> RawArtifact:
         data_path = path / _DATA_FILENAME
         manifest_path = path / _MANIFEST_FILENAME
@@ -1200,6 +1763,15 @@ class RawStore:
         if manifest.object_identity != expected_identity:
             raise RawArtifactValidationError(
                 "manifest object identity does not match path"
+            )
+        if expected_revision_id is not None:
+            if manifest.revision_id != expected_revision_id:
+                raise RawArtifactValidationError(
+                    "manifest revision id does not match path"
+                )
+        elif manifest.revision_id is not None:
+            raise RawArtifactValidationError(
+                "revision artifact requires an exact revision path"
             )
         if manifest.provenance is not None:
             archive_path = path / _ARCHIVE_FILENAME

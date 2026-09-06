@@ -39,6 +39,7 @@ from tracequant.data.raw_store import (
     RawAcquisitionManifest,
     RawAcquisitionResponse,
     RawArtifact,
+    RawArtifactAmbiguousError,
     RawArtifactConflictError,
     RawArtifactIncompleteError,
     RawArtifactNotFoundError,
@@ -691,32 +692,57 @@ class BinanceContractKlineBackfill:
                 plan, BinanceContractKlineStatus.COVERAGE_GAP, plan.detail
             )
 
+        identity = RawObjectIdentity.from_request(plan.request)
         existing: RawArtifact | None = None
         try:
-            existing = self._store.read_request(plan.request)
+            revisions = self._store.list_verified_revisions(identity)
+            if len(revisions) == 1:
+                existing = revisions[0]
+            elif not revisions:
+                existing = self._store.read_request(plan.request)
+            else:
+                for revision in revisions:
+                    try:
+                        _validate_complete_object_coverage(
+                            plan, revision.manifest.actual_record_range
+                        )
+                    except _CoverageGapError as error:
+                        return self._failure_result(
+                            plan,
+                            BinanceContractKlineStatus.COVERAGE_GAP,
+                            str(error),
+                            artifact_path=revision.path,
+                        )
         except RawArtifactIncompleteError as error:
             return self._failure_result(
                 plan, BinanceContractKlineStatus.LOCAL_FAILURE, str(error)
             )
         except RawArtifactNotFoundError:
             pass
-        except (RawArtifactValidationError, OSError) as error:
+        except (
+            RawArtifactAmbiguousError,
+            RawArtifactValidationError,
+            OSError,
+        ) as error:
             return self._failure_result(
                 plan, BinanceContractKlineStatus.LOCAL_FAILURE, str(error)
             )
         else:
-            try:
-                _validate_complete_object_coverage(
-                    plan, existing.manifest.actual_record_range
-                )
-                _validate_required_coverage(plan, existing.manifest.actual_record_range)
-            except _CoverageGapError as error:
-                return self._failure_result(
-                    plan,
-                    BinanceContractKlineStatus.COVERAGE_GAP,
-                    str(error),
-                    artifact_path=existing.path,
-                )
+            if existing is not None:
+                try:
+                    _validate_complete_object_coverage(
+                        plan, existing.manifest.actual_record_range
+                    )
+                    _validate_required_coverage(
+                        plan, existing.manifest.actual_record_range
+                    )
+                except _CoverageGapError as error:
+                    return self._failure_result(
+                        plan,
+                        BinanceContractKlineStatus.COVERAGE_GAP,
+                        str(error),
+                        artifact_path=existing.path,
+                    )
 
         checksum_payload: _DownloadedResponse | None = None
         archive_payload: _DownloadedResponse | None = None
@@ -779,6 +805,17 @@ class BinanceContractKlineBackfill:
                 archive_payload=archive_payload.body,
                 checksum_response_body=checksum_payload.body,
             )
+            candidate_revision = source.revision_identity
+            matching_existing: RawArtifact | None = None
+            if candidate_revision is not None:
+                try:
+                    matching_existing = self._store.read_revision(
+                        identity, candidate_revision
+                    )
+                except RawArtifactNotFoundError:
+                    pass
+            else:
+                matching_existing = existing
             artifact = self._store.write(source)
         except _DownloadNotFoundError as error:
             status = (
@@ -867,7 +904,7 @@ class BinanceContractKlineBackfill:
             )
         status = (
             BinanceContractKlineStatus.EXISTING
-            if existing is not None
+            if matching_existing is not None
             else BinanceContractKlineStatus.PUBLISHED
         )
         return BinanceContractKlineObjectResult(

@@ -1,10 +1,13 @@
 import hashlib
 import http.client
 import io
+import json
+import shutil
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+import polars as pl
 import pytest
 from pytest import MonkeyPatch
 
@@ -14,9 +17,11 @@ from tracequant.data import (
     BinanceArchiveObjectPlan,
     BinanceContractKlineBackfill,
     BinanceContractKlineStatus,
+    RawArtifact,
     RawArtifactNotFoundError,
     RawArtifactValidationError,
     RawObjectIdentity,
+    RawSourceObject,
     RawStore,
     plan_binance_contract_kline_archives,
 )
@@ -94,6 +99,27 @@ def _responses(url: str, archive: bytes) -> dict[str, ArchiveHttpResponse]:
             {"Content-Type": "text/plain"},
         ),
     }
+
+
+def _seed_legacy_v3_artifact(store: RawStore, artifact: RawArtifact) -> Path:
+    """Place a verified current artifact in the pre-revision v3 layout."""
+    legacy_path = store.path_for(artifact.manifest.object_identity)
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(artifact.path, legacy_path)
+    manifest_path = legacy_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["manifest_schema_version"] = 3
+    for field in (
+        "logical_object_id",
+        "revision_id",
+        "revision_evidence_kind",
+        "verified_upstream_checksum",
+        "verified_upstream_revision",
+    ):
+        del manifest[field]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    shutil.rmtree(artifact.path)
+    return legacy_path
 
 
 def test_planner_uses_monthly_objects_for_complete_months_and_daily_edges() -> None:
@@ -657,7 +683,7 @@ def test_raw_store_requires_persisted_source_bodies_for_provenance(
         store.read_request(plan.request)
 
 
-def test_upstream_revision_conflicts_without_replacing_existing_artifact(
+def test_upstream_revision_publishes_new_immutable_artifact(
     tmp_path: Path,
 ) -> None:
     request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
@@ -676,12 +702,106 @@ def test_upstream_revision_conflicts_without_replacing_existing_artifact(
     ).run(InstrumentId("BTCUSDT"), request_range)
 
     assert first.completed
-    assert second.completed is False
-    assert second.objects[0].status is BinanceContractKlineStatus.CONFLICT
-    assert second.objects[0].artifact_path is None
-    preserved = store.read_request(plan.request)
-    assert preserved.manifest.project_sha256 == original_checksum
-    assert preserved.frame["close"].head(2).to_list() == ["61010.0", "61010.0"]
+    assert second.completed
+    assert second.objects[0].status is BinanceContractKlineStatus.PUBLISHED
+    assert second.objects[0].artifact_path is not None
+    revisions = store.list_verified_revisions(
+        RawObjectIdentity.from_request(plan.request)
+    )
+    assert len(revisions) == 2
+    assert original_checksum in {item.manifest.project_sha256 for item in revisions}
+    assert {tuple(item.frame["close"].head(2).to_list()) for item in revisions} == {
+        ("61010.0", "61010.0"),
+        ("62000.0", "61010.0"),
+    }
+
+
+def test_partial_multi_revision_is_reported_as_coverage_gap(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
+    archive = _full_daily_archive(plan, 1709164800000)
+    store = RawStore(tmp_path)
+
+    first = BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, archive))
+    ).run(InstrumentId("BTCUSDT"), request_range)
+    assert first.completed
+
+    partial_source = RawSourceObject(
+        request=plan.request,
+        rows=pl.DataFrame({"open_time": [1709164800000]}),
+        actual_record_range=_range("2024-02-29T00:00:00", "2024-02-29T00:01:00"),
+        raw_schema_identifier="binance.um.contract-kline.csv.v1",
+        producer_version="tracequant/test",
+        upstream_checksum=f"sha256:{'2' * 64}",
+        upstream_revision="archive:partial",
+    )
+    partial = store.write(partial_source)
+    transport = FixtureHttp({})
+
+    result = BinanceContractKlineBackfill(store, http_get=transport).run(
+        InstrumentId("BTCUSDT"), request_range
+    )
+
+    assert result.completed is False
+    assert result.objects[0].status is BinanceContractKlineStatus.COVERAGE_GAP
+    assert result.objects[0].artifact_path == partial.path
+    assert transport.calls == []
+    record = store.list_acquisition_manifests(
+        RawObjectIdentity.from_request(plan.request)
+    )[-1]
+    assert record.status == BinanceContractKlineStatus.COVERAGE_GAP.value
+
+
+def test_legacy_verified_revision_is_idempotent_and_exactly_readable(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
+    original = _full_daily_archive(plan, 1709164800000)
+    revised = _full_daily_archive(plan, 1709164800000, first_close="62000.0")
+    store = RawStore(tmp_path)
+    original_run = BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, original))
+    ).run(InstrumentId("BTCUSDT"), request_range)
+    assert original_run.completed
+    original_artifact = store.read_request(plan.request)
+    identity = original_artifact.manifest.object_identity
+    original_revision = original_artifact.revision_identity
+    assert original_revision is not None
+    legacy_path = _seed_legacy_v3_artifact(store, original_artifact)
+
+    repeated = BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, original))
+    ).run(InstrumentId("BTCUSDT"), request_range)
+
+    assert repeated.completed
+    assert repeated.objects[0].status is BinanceContractKlineStatus.EXISTING
+    assert not store.revision_path_for(identity, original_revision).exists()
+    assert store.read_revision(identity, original_revision).path == legacy_path
+
+    revised_run = BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, revised))
+    ).run(InstrumentId("BTCUSDT"), request_range)
+
+    assert revised_run.completed
+    assert revised_run.objects[0].status is BinanceContractKlineStatus.PUBLISHED
+    revisions = store.list_verified_revisions(identity)
+    assert len(revisions) == 2
+    new_revision = next(
+        item.revision_identity
+        for item in revisions
+        if item.manifest.project_sha256 != original_artifact.manifest.project_sha256
+    )
+    assert new_revision is not None
+    assert store.read_revision(identity, original_revision).frame.equals(
+        original_artifact.frame
+    )
+    assert store.read_revision(identity, new_revision).frame["close"].head(
+        2
+    ).to_list() == ["62000.0", "61010.0"]
 
 
 def test_incomplete_existing_artifact_is_reported_as_local_failure(

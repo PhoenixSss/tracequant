@@ -11,6 +11,7 @@ from tracequant.data import (
     BinancePublicHistoryDataType,
     BinancePublicHistoryRequest,
     BinancePublicHistorySourceKind,
+    RawArtifactAmbiguousError,
     RawArtifactConflictError,
     RawArtifactIncompleteError,
     RawArtifactNotFoundError,
@@ -53,6 +54,7 @@ def _source_object(
     *,
     request: BinancePublicHistoryRequest | None = None,
     close: str = "61234.50",
+    upstream_checksum: str = "sha256:upstream-example",
     upstream_revision: str | None = "archive:2024-03-01",
 ) -> RawSourceObject:
     return RawSourceObject(
@@ -73,7 +75,7 @@ def _source_object(
         ),
         raw_schema_identifier="binance.um.contract-kline.csv.v1",
         producer_version="tracequant/0.1.0",
-        upstream_checksum="sha256:upstream-example",
+        upstream_checksum=upstream_checksum,
         upstream_revision=upstream_revision,
     )
 
@@ -230,6 +232,65 @@ def test_same_content_is_idempotent_but_different_content_conflicts(
     assert store.read(_source_object().identity).frame.equals(first.frame)
 
 
+def test_upstream_revision_publishes_new_immutable_revision_with_lineage(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    first_source = _source_object(
+        upstream_checksum=f"sha256:{'1' * 64}",
+        upstream_revision="archive:2024-03-01",
+    )
+    second_source = _source_object(
+        close="99999.00",
+        upstream_checksum=f"sha256:{'2' * 64}",
+        upstream_revision="archive:2024-03-01",
+    )
+
+    first = store.write(first_source)
+    repeated = store.write(first_source)
+    second = store.write(second_source)
+
+    assert repeated.path == first.path
+    assert first.path != second.path
+    assert first.logical_object_id == second.logical_object_id
+    first_revision = first.revision_identity
+    second_revision = second.revision_identity
+    assert first_revision is not None
+    assert second_revision is not None
+    assert first_revision.revision_id != second_revision.revision_id
+    assert first.manifest.manifest_schema_version == 4
+    manifest = json.loads(first.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["logical_object_id"] == first.logical_object_id
+    assert manifest["revision_id"] == first.revision_id
+    assert manifest["revision_evidence_kind"] == "upstream_checksum"
+    assert manifest["verified_upstream_checksum"] == f"sha256:{'1' * 64}"
+    assert manifest["verified_upstream_revision"] == "archive:2024-03-01"
+
+    revisions = store.list_verified_revisions(first_source.identity)
+    assert [item.revision_id for item in revisions] == sorted(
+        [first_revision.revision_id, second_revision.revision_id]
+    )
+    assert store.read_revision(first_source.identity, first_revision).frame.equals(
+        first_source.rows
+    )
+    assert store.read_revision(first_source.identity, second_revision).frame.equals(
+        second_source.rows
+    )
+    with pytest.raises(RawArtifactAmbiguousError, match="multiple revisions"):
+        store.read(first_source.identity)
+
+
+def test_same_verified_revision_still_rejects_local_content_conflict(
+    tmp_path: Path,
+) -> None:
+    checksum = f"sha256:{'3' * 64}"
+    store = _store(tmp_path)
+    store.write(_source_object(upstream_checksum=checksum))
+
+    with pytest.raises(RawArtifactConflictError, match="different content"):
+        store.write(_source_object(close="99999.00", upstream_checksum=checksum))
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
@@ -251,7 +312,7 @@ def test_reader_rejects_corrupt_or_unsupported_artifact(
         if mutation == "checksum":
             payload["project_sha256"] = "0" * 64
         elif mutation == "version":
-            payload["manifest_schema_version"] = 4
+            payload["manifest_schema_version"] = 5
         else:
             payload["completed"] = False
         artifact.manifest_path.write_text(json.dumps(payload), encoding="utf-8")
