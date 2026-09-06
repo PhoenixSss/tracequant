@@ -205,7 +205,7 @@ def test_delivery_prepare_stops_on_divergent_main_without_branch_creation(
     fake = FakeRunner(
         branch="main",
         local_main_sha=SHA,
-        origin_main_sha="b" * 40,
+        remote_main_sha="b" * 40,
     )
     _install_facts(monkeypatch, fake)
 

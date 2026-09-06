@@ -75,7 +75,7 @@ class FakeRunner:
         clean: bool = True,
         head_sha: str = SHA,
         local_main_sha: str = SHA,
-        origin_main_sha: str = SHA,
+        remote_main_sha: str = SHA,
         open_pr: dict[str, Any] | None = None,
     ) -> None:
         self.branch = branch
@@ -84,7 +84,7 @@ class FakeRunner:
         self.clean = clean
         self.head_sha = head_sha
         self.local_main_sha = local_main_sha
-        self.origin_main_sha = origin_main_sha
+        self.remote_main_sha = remote_main_sha
         self.open_pr = open_pr
         self.commands: list[tuple[str, ...]] = []
 
@@ -221,9 +221,8 @@ def _git_snapshot(fake: FakeRunner) -> dict[str, Any]:
         "branch": fake.branch,
         "head_sha": fake.head_sha,
         "local_main_sha": fake.local_main_sha,
-        "tracking_main_sha": fake.origin_main_sha,
-        "remote_main_sha": fake.origin_main_sha,
-        "origin_main_sha": fake.origin_main_sha,
+        "tracking_main_sha": fake.remote_main_sha,
+        "remote_main_sha": fake.remote_main_sha,
         "remote_main_query": "pass",
         "clean": fake.clean,
         "status_entries": 0 if fake.clean else 1,
@@ -310,7 +309,7 @@ def _review_state(
             "branch": branch,
             "head_sha": head,
             "local_main_sha": base,
-            "origin_main_sha": base,
+            "remote_main_sha": base,
             "origin_fetch": "pass",
             "clean": clean,
         },
@@ -377,11 +376,7 @@ class StaticResolver:
                 clean=state.git.get("clean") is True,
                 head_sha=head_sha,
                 local_main_sha=str(state.git.get("local_main_sha") or SHA),
-                origin_main_sha=str(
-                    state.git.get("remote_main_sha")
-                    or state.git.get("origin_main_sha")
-                    or SHA
-                ),
+                remote_main_sha=str(state.git.get("remote_main_sha") or SHA),
                 open_pr=dict(state.open_pr)
                 if isinstance(state.open_pr, dict)
                 else None,

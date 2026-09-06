@@ -553,7 +553,6 @@ def _live_state(
             "branch": branch,
             "head_sha": head,
             "local_main_sha": SHA,
-            "origin_main_sha": SHA,
             "remote_main_sha": SHA,
             "remote_main_query": "pass",
             "clean": clean,
@@ -1453,7 +1452,6 @@ def test_review_required_checks_policy_is_governed_by_pr_base_not_candidate_head
         git={
             **original.git,
             "local_main_sha": base_sha,
-            "origin_main_sha": base_sha,
             "remote_main_sha": base_sha,
         },
     )

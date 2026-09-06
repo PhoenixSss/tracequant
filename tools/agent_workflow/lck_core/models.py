@@ -390,7 +390,7 @@ def _is_clean_current_main(git: Mapping[str, Any]) -> bool:
     """Return whether a new Task branch can safely be based on current main."""
     head_sha = git.get("head_sha")
     local_main_sha = git.get("local_main_sha")
-    remote_main_sha = _authoritative_remote_main_sha(git)
+    remote_main_sha = git.get("remote_main_sha")
     return (
         git.get("branch") == BASE_BRANCH
         and git.get("clean") is True
@@ -399,15 +399,6 @@ def _is_clean_current_main(git: Mapping[str, Any]) -> bool:
         and is_sha(remote_main_sha)
         and head_sha == local_main_sha == remote_main_sha
     )
-
-
-def _authoritative_remote_main_sha(git: Mapping[str, Any]) -> str | None:
-    """Return remote main authority, with a test/legacy input compatibility fallback."""
-    remote_main_sha = git.get("remote_main_sha")
-    if isinstance(remote_main_sha, str):
-        return remote_main_sha
-    legacy_sha = git.get("origin_main_sha")
-    return legacy_sha if isinstance(legacy_sha, str) else None
 
 
 def _remote_refs(stdout: str) -> dict[str, str]:

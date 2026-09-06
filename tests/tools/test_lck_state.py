@@ -316,7 +316,7 @@ def test_remote_main_query_failure_stops_before_workspace_write(
         value = _git_snapshot(fake)
         value["remote_main_sha"] = None
         value["remote_main_query"] = "unknown"
-        value.pop("origin_main_sha", None)
+        value.pop("remote_main_sha", None)
         return value
 
     monkeypatch.setattr(lck_state, "_git_snapshot", unavailable_remote_main)

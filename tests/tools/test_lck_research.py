@@ -299,7 +299,6 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
             "branch": branch,
             "head_sha": head_sha,
             "local_main_sha": base_sha,
-            "origin_main_sha": base_sha,
             "remote_main_sha": base_sha,
             "clean": True,
         },
