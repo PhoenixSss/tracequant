@@ -1171,7 +1171,7 @@ class RawStore:
             _LAYOUT_VERSION,
             "binance",
             source.market.value,
-            str(source.instrument),
+            str(source.subject),
             source.data_type.value,
             interval,
             source.source_kind.value,
