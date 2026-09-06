@@ -5,8 +5,8 @@ CLAUDE.md, and the eight workflow Skills: leaf-Issue-first default context,
 default exclusions, trigger-based expansion, bounded progressive retrieval,
 comments default-off, Parent/Epic on demand, deterministic-metadata vs
 full-text separation, preserved safety hard rules, the
-feature-completion-audit hierarchy-aware exception, and the before/after
-evidence document. They intentionally avoid a new harness: they reuse the
+feature-completion-audit hierarchy-aware exception. They intentionally avoid
+a new harness: they reuse the
 existing tests/tools/ convention of reading the policy sources directly.
 """
 
@@ -18,8 +18,6 @@ ROOT = Path(__file__).parents[2]
 
 AGENTS = ROOT / "AGENTS.md"
 CLAUDE = ROOT / "CLAUDE.md"
-EVIDENCE = ROOT / "docs/workflows/context-retrieval-v2/before-after-retrieval.md"
-
 SKILLS: dict[str, dict[str, Path]] = {
     "delivery": {
         "agents": ROOT / ".agents/skills/task-delivery-runner/SKILL.md",
@@ -308,17 +306,3 @@ def test_codex_claude_retrieval_semantics_parity() -> None:
         claude_text = _flat(SKILLS[group]["claude"])
         assert marker in agents_text
         assert marker in claude_text
-
-
-# --- Before / after evidence document ---
-
-
-def test_retrieval_evidence_document_has_before_after_sections() -> None:
-    text = _read(EVIDENCE)
-    assert "## BEFORE" in text
-    assert "## AFTER" in text
-    for scenario in ("Scenario A", "Scenario B", "Scenario C", "Scenario D"):
-        assert scenario in text
-    assert "Before → after comparison" in text
-    assert "not reliably obtainable" in text
-    assert "no fabricated Token data" in text or "not fabricated" in text

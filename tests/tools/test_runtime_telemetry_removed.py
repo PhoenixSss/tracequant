@@ -33,36 +33,6 @@ APPROVED_TELEMETRY_REFERENCE_FILES = {
     "AGENTS.md": "normative statement that runtime telemetry is disabled",
     "tests/tools/test_runtime_telemetry_removed.py": "removal regression assertions",
     "tests/tools/test_workflow_skills.py": "Skill regression assertion",
-    "docs/workflows/benchmarks/task-65-round-2/README.md": (
-        "Task #65 round-two benchmark evidence index"
-    ),
-    "docs/workflows/benchmarks/task-65-round-2/benchmark-manifest.json": (
-        "machine-readable freeze record for retired Task #65 requirements"
-    ),
-    "docs/workflows/benchmarks/task-65-round-2/protocol.md": (
-        "round-two protocol describing the retired runtime requirement boundary"
-    ),
-    "docs/workflows/benchmarks/task-65-round-2/task-65-frozen.md": (
-        "frozen Task #65 body after removing retired runtime requirements"
-    ),
-    "docs/workflows/benchmarks/task-65-round-2/task-65-original.md": (
-        "verbatim historical Task #65 body retained for audit"
-    ),
-    "docs/workflows/benchmarks/task-65-round-2/task-65-telemetry-only.diff": (
-        "auditable historical-to-frozen Task #65 diff"
-    ),
-    "docs/workflows/publication-materials/task-material-register.md": (
-        "publication material register retaining historical workflow sample labels"
-    ),
-    "docs/workflows/context-retrieval-v2/before-after-retrieval.md": (
-        "#87 retrieval before/after evidence noting Token telemetry remains disabled"
-    ),
-    "docs/workflows/legacy-agent-workflow-cleanup.md": (
-        "Task #123 cleanup inventory and historical telemetry-era disposition"
-    ),
-    "docs/workflows/migration-acceptance/task-122-migration-acceptance-report.md": (
-        "Task #122 migration acceptance evidence recording telemetry boundary"
-    ),
 }
 
 LOCAL_ONLY_EXCLUSIONS = {

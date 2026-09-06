@@ -152,11 +152,6 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     assert "source repository" in command_policy
     assert ".workflow.local/lck/review-validation/" in command_policy
 
-    architecture_delta = (
-        ROOT / "docs/workflows/lck-v1-closeout-architecture-delta.md"
-    ).read_text(encoding="utf-8")
-    assert "git ls-remote origin refs/heads/main" in architecture_delta
-    assert "refs/remotes/origin/main" in architecture_delta
     assert "git fetch --prune origin" not in core_source
     assert "lck-review-worktree-" not in core_source
     assert '["git", "worktree", "add"' not in core_source
@@ -189,16 +184,28 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     assert "required-check policy" in policy
     assert "exact trusted base commit" in policy
     assert "mutable checkout" in policy
-    assert "canonical formatted candidate" in architecture_delta
-    assert "intentionally not frozen in prose" in architecture_delta
     assert "remote_main_sha" in core_sources["models.py"]
-    assert "local_main_sha" in architecture_delta
-    assert "tracking_main_sha" in architecture_delta
-    assert "pre-merge" in architecture_delta
-    assert "post-merge" in architecture_delta
-    assert (
-        "not prerequisites for this PR's Independent Review PASS" in architecture_delta
+
+    typed_architecture = (ROOT / "docs/architecture/typed-leaf-workflows.md").read_text(
+        encoding="utf-8"
     )
+    assert "ProfilePolicyRegistry" in typed_architecture
+    assert "shared Delivery, Review, Remediation, and Closeout kernel" in (
+        typed_architecture
+    )
+    assert "generic registry injection seam" in typed_architecture
+    assert "synthetic fifth profile" not in typed_architecture
+
+    charter = (ROOT / "docs/workflows/LCK-v1-Design-Charter.md").read_text(
+        encoding="utf-8"
+    )
+    for marker in (
+        "immutable Operation Snapshot",
+        "Independent Review",
+        "Safe Effect",
+        "manual Squash Merge",
+    ):
+        assert marker in charter
 
     # The pre-LCK compatibility/control front door must be physically absent,
     # not merely unreferenced by the active Skills. Historical publication
@@ -223,11 +230,10 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     assert "test_wsl2_github_evidence_runner.py" not in validation_profile
     assert "test_wsl2_github_evidence_rules.py" not in validation_profile
 
-    archive = (ROOT / "docs/workflows/wsl2-github-evidence-runner/README.md").read_text(
-        encoding="utf-8"
-    )
-    assert "frozen historical publication evidence" in archive
-    assert "not a current workflow entry point" in archive
+    validation_docs = (
+        ROOT / "docs/workflows/wsl2-validation-runner/README.md"
+    ).read_text(encoding="utf-8")
+    assert "current WSL2 Validation Runner" in validation_docs
 
 
 def test_typed_leaf_workflows_share_one_lck_control_kernel() -> None:

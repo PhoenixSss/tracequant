@@ -1250,22 +1250,6 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
     ]
 
 
-def test_lck_migration_matrix_records_activation_rollback_procedure() -> None:
-    matrix = (
-        Path(__file__).parents[2] / "docs" / "workflows" / "lck-v1-migration-matrix.md"
-    ).read_text(encoding="utf-8")
-
-    assert "## Mainline activation and rollback procedure" in matrix
-    assert "independent Review" in matrix
-    assert "required Squash Merge" in matrix
-    assert "revert the candidate" in matrix
-    assert "last reviewed/merged LCK v1 state" in matrix
-    assert "No Legacy Task control path is" in matrix
-    assert "pre-cutover Current Workflow remains the authority" not in matrix
-    assert "fresh maintainer merge" in matrix
-    assert "decision; no Agent or Skill" in matrix
-
-
 def test_lck_rollback_procedure_reverts_candidate_and_requires_fresh_review(
     tmp_path: Path,
 ) -> None:
