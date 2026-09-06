@@ -308,7 +308,7 @@ class RegistryExtensionPolicy:
         return ProfileEvidenceRecord("extension.candidate.v1", 1, {})
 
     def validate_evidence(self, record: ProfileEvidenceRecord) -> bool:
-        return record.schema_version == 1
+        return bool(record.schema_version == 1)
 
 
 def test_registry_contains_only_formal_profiles_and_preserves_extension_seam() -> None:
@@ -334,7 +334,7 @@ def test_registry_contains_only_formal_profiles_and_preserves_extension_seam() -
     with pytest.raises(ProfilePolicyError, match="not registered"):
         DEFAULT_PROFILE_POLICY_REGISTRY.resolve("type:retired")
     with pytest.raises(TypeError):
-        registry.policies["other"] = extension  # type: ignore[index]
+        registry.policies["other"] = extension
 
 
 def test_generic_kernel_models_have_no_profile_specific_fixed_slots() -> None:
