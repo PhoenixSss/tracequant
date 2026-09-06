@@ -7,6 +7,7 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+import polars as pl
 import pytest
 from pytest import MonkeyPatch
 
@@ -20,6 +21,7 @@ from tracequant.data import (
     RawArtifactNotFoundError,
     RawArtifactValidationError,
     RawObjectIdentity,
+    RawSourceObject,
     RawStore,
     plan_binance_contract_kline_archives,
 )
@@ -712,6 +714,45 @@ def test_upstream_revision_publishes_new_immutable_artifact(
         ("61010.0", "61010.0"),
         ("62000.0", "61010.0"),
     }
+
+
+def test_partial_multi_revision_is_reported_as_coverage_gap(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
+    archive = _full_daily_archive(plan, 1709164800000)
+    store = RawStore(tmp_path)
+
+    first = BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, archive))
+    ).run(InstrumentId("BTCUSDT"), request_range)
+    assert first.completed
+
+    partial_source = RawSourceObject(
+        request=plan.request,
+        rows=pl.DataFrame({"open_time": [1709164800000]}),
+        actual_record_range=_range("2024-02-29T00:00:00", "2024-02-29T00:01:00"),
+        raw_schema_identifier="binance.um.contract-kline.csv.v1",
+        producer_version="tracequant/test",
+        upstream_checksum=f"sha256:{'2' * 64}",
+        upstream_revision="archive:partial",
+    )
+    partial = store.write(partial_source)
+    transport = FixtureHttp({})
+
+    result = BinanceContractKlineBackfill(store, http_get=transport).run(
+        InstrumentId("BTCUSDT"), request_range
+    )
+
+    assert result.completed is False
+    assert result.objects[0].status is BinanceContractKlineStatus.COVERAGE_GAP
+    assert result.objects[0].artifact_path == partial.path
+    assert transport.calls == []
+    record = store.list_acquisition_manifests(
+        RawObjectIdentity.from_request(plan.request)
+    )[-1]
+    assert record.status == BinanceContractKlineStatus.COVERAGE_GAP.value
 
 
 def test_legacy_verified_revision_is_idempotent_and_exactly_readable(

@@ -702,9 +702,17 @@ class BinanceContractKlineBackfill:
                 existing = self._store.read_request(plan.request)
             else:
                 for revision in revisions:
-                    _validate_complete_object_coverage(
-                        plan, revision.manifest.actual_record_range
-                    )
+                    try:
+                        _validate_complete_object_coverage(
+                            plan, revision.manifest.actual_record_range
+                        )
+                    except _CoverageGapError as error:
+                        return self._failure_result(
+                            plan,
+                            BinanceContractKlineStatus.COVERAGE_GAP,
+                            str(error),
+                            artifact_path=revision.path,
+                        )
         except RawArtifactIncompleteError as error:
             return self._failure_result(
                 plan, BinanceContractKlineStatus.LOCAL_FAILURE, str(error)
