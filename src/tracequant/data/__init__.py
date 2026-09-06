@@ -10,6 +10,13 @@ from tracequant.data.binance_contract_kline import (
     BinanceContractKlineStatus,
     plan_binance_contract_kline_archives,
 )
+from tracequant.data.binance_public_archive import (
+    BinanceArchiveAcquisitionOutcome,
+    BinanceArchiveAcquisitionStatus,
+    BinanceArchiveDatasetAdapter,
+    BinanceArchiveParseResult,
+    BinancePublicArchiveAcquisition,
+)
 from tracequant.data.public_history import (
     BinanceArchiveObjectBoundary,
     BinanceArchiveObjectGranularity,
@@ -44,8 +51,12 @@ from tracequant.data.raw_store import (
 
 __all__ = [
     "ArchiveHttpResponse",
+    "BinanceArchiveAcquisitionOutcome",
+    "BinanceArchiveAcquisitionStatus",
     "BinanceArchiveCoverageGapPlan",
+    "BinanceArchiveDatasetAdapter",
     "BinanceArchiveObjectPlan",
+    "BinanceArchiveParseResult",
     "BinanceArchiveObjectBoundary",
     "BinanceArchiveObjectGranularity",
     "BinanceContractKlineBackfill",
@@ -60,6 +71,7 @@ __all__ = [
     "BinancePublicHistorySourceIdentity",
     "BinancePublicHistorySourceKind",
     "BinancePublicHistorySubjectKind",
+    "BinancePublicArchiveAcquisition",
     "PublicHistoryContractError",
     "RawArtifact",
     "RawArtifactAmbiguousError",
