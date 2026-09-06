@@ -233,7 +233,9 @@ def test_lck_v1_full_lifecycle_has_single_deterministic_control_authority() -> N
     validation_docs = (
         ROOT / "docs/workflows/wsl2-validation-runner/README.md"
     ).read_text(encoding="utf-8")
-    assert "current WSL2 Validation Runner" in validation_docs
+    assert "`wsl2_validation_runner.py` is the single mechanical entry" in (
+        validation_docs
+    )
 
 
 def test_typed_leaf_workflows_share_one_lck_control_kernel() -> None:
