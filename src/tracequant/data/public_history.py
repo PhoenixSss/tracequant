@@ -20,10 +20,12 @@ __all__ = [
     "BinanceArchiveObjectGranularity",
     "BinanceKlineInterval",
     "BinanceMarket",
+    "BinancePriceIndexId",
     "BinancePublicHistoryDataType",
     "BinancePublicHistoryRequest",
     "BinancePublicHistorySourceIdentity",
     "BinancePublicHistorySourceKind",
+    "BinancePublicHistorySubjectKind",
     "PublicHistoryContractError",
 ]
 
@@ -52,6 +54,13 @@ class BinancePublicHistoryDataType(StrEnum):
     SETTLED_FUNDING_RATE = "settled_funding_rate"
 
 
+class BinancePublicHistorySubjectKind(StrEnum):
+    """The semantic subject represented by a public-history request."""
+
+    INSTRUMENT = "instrument"
+    PRICE_INDEX_PAIR = "price_index_pair"
+
+
 class BinancePublicHistorySourceKind(StrEnum):
     """The source boundary used to obtain a public-history object."""
 
@@ -71,6 +80,56 @@ class BinanceArchiveObjectGranularity(StrEnum):
 
     DAY = "day"
     MONTH = "month"
+
+
+@dataclass(frozen=True, slots=True)
+class BinancePriceIndexId:
+    """A Binance price-index ``pair`` subject, not a tradable instrument.
+
+    The value uses the same exchange symbol syntax as :class:`InstrumentId`,
+    but the distinct type prevents callers from treating a price-index pair as
+    an exchange-info instrument or an orderable contract.
+    """
+
+    value: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.value, str):
+            raise TypeError("price-index pair value must be a string")
+        stripped = self.value.strip()
+        if not stripped:
+            raise DomainValidationError("price-index pair value must not be empty")
+        if not stripped.isascii() or not stripped.isalnum():
+            raise DomainValidationError(
+                "price-index pair value must contain only ASCII letters and digits"
+            )
+        if len(stripped) > 32:
+            raise DomainValidationError(
+                "price-index pair value must be at most 32 characters"
+            )
+        object.__setattr__(self, "value", stripped.upper())
+
+    def __str__(self) -> str:
+        return self.value
+
+    @property
+    def pair(self) -> str:
+        """Return the normalized upstream ``pair`` value."""
+        return self.value
+
+    def to_dict(self) -> str:
+        """Return the stable JSON-compatible pair representation."""
+        return self.value
+
+    @classmethod
+    def from_dict(cls, value: object) -> Self:
+        """Create a price-index pair from its JSON-compatible value."""
+        if not isinstance(value, str):
+            raise TypeError("pair must be a string")
+        return cls(value)
+
+
+type BinancePublicHistorySubject = InstrumentId | BinancePriceIndexId
 
 
 def _require_exact_fields(
@@ -211,29 +270,43 @@ class BinanceArchiveObjectBoundary:
 def _normalize_components(
     *,
     market: BinanceMarket | str,
-    instrument: InstrumentId,
+    subject: BinancePublicHistorySubject,
     data_type: BinancePublicHistoryDataType | str,
     interval: BinanceKlineInterval | str | None,
     source_kind: BinancePublicHistorySourceKind | str,
     archive_object_boundary: BinanceArchiveObjectBoundary | None,
 ) -> tuple[
     BinanceMarket,
+    BinancePublicHistorySubject,
     BinancePublicHistoryDataType,
     BinanceKlineInterval | None,
     BinancePublicHistorySourceKind,
     BinanceArchiveObjectBoundary | None,
 ]:
     normalized_market = _coerce_enum(market, BinanceMarket, field="market")
-    if not isinstance(instrument, InstrumentId):
-        raise TypeError("instrument must be an InstrumentId")
-    if str(instrument) not in _SUPPORTED_INSTRUMENT_VALUES:
-        raise PublicHistoryContractError(
-            f"instrument {instrument!s} is outside the supported Binance USDⓈ-M set"
-        )
-
     normalized_data_type = _coerce_enum(
         data_type, BinancePublicHistoryDataType, field="data type"
     )
+    is_index_price = (
+        normalized_data_type is BinancePublicHistoryDataType.INDEX_PRICE_KLINE
+    )
+    if is_index_price:
+        if not isinstance(subject, BinancePriceIndexId):
+            raise PublicHistoryContractError(
+                "index-price Kline requires a BinancePriceIndexId price-index pair"
+            )
+    elif not isinstance(subject, InstrumentId):
+        raise PublicHistoryContractError(
+            f"{normalized_data_type.value} requires a tradable InstrumentId subject"
+        )
+    if (
+        isinstance(subject, InstrumentId)
+        and str(subject) not in _SUPPORTED_INSTRUMENT_VALUES
+    ):
+        raise PublicHistoryContractError(
+            f"instrument {subject!s} is outside the supported Binance USDⓈ-M set"
+        )
+
     normalized_interval: BinanceKlineInterval | None
     if interval is None:
         normalized_interval = None
@@ -303,6 +376,7 @@ def _normalize_components(
 
     return (
         normalized_market,
+        subject,
         normalized_data_type,
         normalized_interval,
         normalized_source_kind,
@@ -310,44 +384,151 @@ def _normalize_components(
     )
 
 
-@dataclass(frozen=True, slots=True)
+def _resolve_subject(
+    *,
+    instrument: BinancePublicHistorySubject | None,
+    subject: BinancePublicHistorySubject | None,
+    price_index_pair: BinancePriceIndexId | None,
+) -> BinancePublicHistorySubject:
+    if instrument is not None:
+        if price_index_pair is not None:
+            raise TypeError(
+                "provide exactly one of instrument, subject, or price_index_pair"
+            )
+        resolved = instrument
+    elif subject is not None:
+        if price_index_pair is not None:
+            raise TypeError(
+                "provide exactly one of instrument, subject, or price_index_pair"
+            )
+        resolved = subject
+    elif price_index_pair is not None:
+        resolved = price_index_pair
+    else:
+        raise TypeError(
+            "provide exactly one of instrument, subject, or price_index_pair"
+        )
+    if not isinstance(resolved, (InstrumentId, BinancePriceIndexId)):
+        raise TypeError("subject must be an InstrumentId or BinancePriceIndexId")
+    return resolved
+
+
+def _parse_subject_fields(
+    value: object, *, common_fields: frozenset[str], model: str
+) -> tuple[Mapping[str, object], BinancePublicHistorySubject]:
+    if not isinstance(value, dict):
+        raise TypeError(f"{model} serialized value must be a JSON object")
+    if any(not isinstance(key, str) for key in value):
+        raise TypeError(f"{model} serialized field names must be strings")
+    subject_fields = {field for field in ("instrument", "pair") if field in value}
+    if len(subject_fields) != 1:
+        raise PublicHistoryContractError(
+            f"{model} must contain exactly one of 'instrument' or 'pair'"
+        )
+    subject_field = next(iter(subject_fields))
+    fields = _require_exact_fields(
+        value,
+        expected=common_fields | {subject_field},
+        model=model,
+    )
+    subject: BinancePublicHistorySubject
+    if subject_field == "instrument":
+        subject = InstrumentId.from_dict(fields[subject_field])
+    else:
+        subject = BinancePriceIndexId.from_dict(fields[subject_field])
+    return fields, subject
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class BinancePublicHistorySourceIdentity:
     """Stable source identity independent of the caller's request range."""
 
-    instrument: InstrumentId
+    subject: BinancePublicHistorySubject
     data_type: BinancePublicHistoryDataType
     source_kind: BinancePublicHistorySourceKind
     interval: BinanceKlineInterval | None
     archive_object_boundary: BinanceArchiveObjectBoundary | None
     market: BinanceMarket = BinanceMarket.USD_M
 
-    def __post_init__(self) -> None:
+    def __init__(
+        self,
+        instrument: BinancePublicHistorySubject | None = None,
+        data_type: BinancePublicHistoryDataType | str | None = None,
+        source_kind: BinancePublicHistorySourceKind | str | None = None,
+        interval: BinanceKlineInterval | str | None = None,
+        archive_object_boundary: BinanceArchiveObjectBoundary | None = None,
+        market: BinanceMarket | str = BinanceMarket.USD_M,
+        *,
+        subject: BinancePublicHistorySubject | None = None,
+        price_index_pair: BinancePriceIndexId | None = None,
+    ) -> None:
+        if data_type is None:
+            raise TypeError("data_type is required")
+        if source_kind is None:
+            raise TypeError("source_kind is required")
+        resolved_subject = _resolve_subject(
+            instrument=instrument,
+            subject=subject,
+            price_index_pair=price_index_pair,
+        )
         (
             market,
+            resolved_subject,
             data_type,
             interval,
             source_kind,
             archive_object_boundary,
         ) = _normalize_components(
-            market=self.market,
-            instrument=self.instrument,
-            data_type=self.data_type,
-            interval=self.interval,
-            source_kind=self.source_kind,
-            archive_object_boundary=self.archive_object_boundary,
+            market=market,
+            subject=resolved_subject,
+            data_type=data_type,
+            interval=interval,
+            source_kind=source_kind,
+            archive_object_boundary=archive_object_boundary,
         )
+        object.__setattr__(self, "subject", resolved_subject)
         object.__setattr__(self, "market", market)
         object.__setattr__(self, "data_type", data_type)
         object.__setattr__(self, "interval", interval)
         object.__setattr__(self, "source_kind", source_kind)
         object.__setattr__(self, "archive_object_boundary", archive_object_boundary)
 
+    @property
+    def subject_kind(self) -> BinancePublicHistorySubjectKind:
+        """Return the discriminant for the typed source subject."""
+        if isinstance(self.subject, InstrumentId):
+            return BinancePublicHistorySubjectKind.INSTRUMENT
+        return BinancePublicHistorySubjectKind.PRICE_INDEX_PAIR
+
+    @property
+    def instrument(self) -> InstrumentId:
+        """Return the legacy instrument view for instrument-backed identities."""
+        if not isinstance(self.subject, InstrumentId):
+            raise PublicHistoryContractError(
+                "index-price source identity has a price-index pair, not an instrument"
+            )
+        return self.subject
+
+    @property
+    def price_index_pair(self) -> BinancePriceIndexId:
+        """Return the pair view for index-price identities."""
+        if not isinstance(self.subject, BinancePriceIndexId):
+            raise PublicHistoryContractError(
+                "instrument-backed source identity has an instrument, not a price-index pair"
+            )
+        return self.subject
+
     def to_dict(self) -> dict[str, object]:
         """Return stable JSON-compatible source identity fields."""
+        subject_field = (
+            {"instrument": self.instrument.to_dict()}
+            if isinstance(self.subject, InstrumentId)
+            else {"pair": self.price_index_pair.to_dict()}
+        )
         return {
             "venue": _BINANCE_VENUE,
             "market": self.market.value,
-            "instrument": self.instrument.to_dict(),
+            **subject_field,
             "data_type": self.data_type.value,
             "interval": self.interval.value if self.interval is not None else None,
             "source_kind": self.source_kind.value,
@@ -371,13 +552,12 @@ class BinancePublicHistorySourceIdentity:
     @classmethod
     def from_dict(cls, value: object) -> Self:
         """Create a source identity from exact serialized fields."""
-        fields = _require_exact_fields(
+        fields, subject = _parse_subject_fields(
             value,
-            expected=frozenset(
+            common_fields=frozenset(
                 {
                     "venue",
                     "market",
-                    "instrument",
                     "data_type",
                     "interval",
                     "source_kind",
@@ -402,7 +582,7 @@ class BinancePublicHistorySourceIdentity:
             else _coerce_enum(interval_value, BinanceKlineInterval, field="interval")
         )
         return cls(
-            instrument=InstrumentId.from_dict(fields["instrument"]),
+            subject=subject,
             data_type=_coerce_enum(
                 fields["data_type"],
                 BinancePublicHistoryDataType,
@@ -419,7 +599,7 @@ class BinancePublicHistorySourceIdentity:
         )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class BinancePublicHistoryRequest:
     """A typed Binance USDⓈ-M public-history acquisition request.
 
@@ -429,7 +609,7 @@ class BinancePublicHistoryRequest:
     mistaken for the requested or observed data range.
     """
 
-    instrument: InstrumentId
+    subject: BinancePublicHistorySubject
     data_type: BinancePublicHistoryDataType
     request_range: TimeRange
     source_kind: BinancePublicHistorySourceKind
@@ -437,28 +617,69 @@ class BinancePublicHistoryRequest:
     archive_object_boundary: BinanceArchiveObjectBoundary | None = None
     market: BinanceMarket = BinanceMarket.USD_M
 
-    def __post_init__(self) -> None:
-        if not isinstance(self.request_range, TimeRange):
+    def __init__(
+        self,
+        instrument: BinancePublicHistorySubject | None = None,
+        data_type: BinancePublicHistoryDataType | str | None = None,
+        request_range: TimeRange | None = None,
+        source_kind: BinancePublicHistorySourceKind | str | None = None,
+        interval: BinanceKlineInterval | str | None = None,
+        archive_object_boundary: BinanceArchiveObjectBoundary | None = None,
+        market: BinanceMarket | str = BinanceMarket.USD_M,
+        *,
+        subject: BinancePublicHistorySubject | None = None,
+        price_index_pair: BinancePriceIndexId | None = None,
+    ) -> None:
+        if data_type is None:
+            raise TypeError("data_type is required")
+        if request_range is None:
+            raise TypeError("request_range is required")
+        if source_kind is None:
+            raise TypeError("source_kind is required")
+        if not isinstance(request_range, TimeRange):
             raise TypeError("request_range must be a TimeRange")
+        resolved_subject = _resolve_subject(
+            instrument=instrument,
+            subject=subject,
+            price_index_pair=price_index_pair,
+        )
         (
             market,
+            resolved_subject,
             data_type,
             interval,
             source_kind,
             archive_object_boundary,
         ) = _normalize_components(
-            market=self.market,
-            instrument=self.instrument,
-            data_type=self.data_type,
-            interval=self.interval,
-            source_kind=self.source_kind,
-            archive_object_boundary=self.archive_object_boundary,
+            market=market,
+            subject=resolved_subject,
+            data_type=data_type,
+            interval=interval,
+            source_kind=source_kind,
+            archive_object_boundary=archive_object_boundary,
         )
+        object.__setattr__(self, "subject", resolved_subject)
         object.__setattr__(self, "market", market)
         object.__setattr__(self, "data_type", data_type)
+        object.__setattr__(self, "request_range", request_range)
         object.__setattr__(self, "interval", interval)
         object.__setattr__(self, "source_kind", source_kind)
         object.__setattr__(self, "archive_object_boundary", archive_object_boundary)
+
+    @property
+    def subject_kind(self) -> BinancePublicHistorySubjectKind:
+        """Return the discriminant for the typed request subject."""
+        return self.source_identity.subject_kind
+
+    @property
+    def instrument(self) -> InstrumentId:
+        """Return the legacy instrument view for instrument-backed requests."""
+        return self.source_identity.instrument
+
+    @property
+    def price_index_pair(self) -> BinancePriceIndexId:
+        """Return the pair view for index-price requests."""
+        return self.source_identity.price_index_pair
 
     @property
     def time_range(self) -> TimeRange:
@@ -474,7 +695,7 @@ class BinancePublicHistoryRequest:
     def source_identity(self) -> BinancePublicHistorySourceIdentity:
         """Return the stable source identity for this request."""
         return BinancePublicHistorySourceIdentity(
-            instrument=self.instrument,
+            subject=self.subject,
             data_type=self.data_type,
             source_kind=self.source_kind,
             interval=self.interval,
@@ -502,13 +723,12 @@ class BinancePublicHistoryRequest:
     @classmethod
     def from_dict(cls, value: object) -> Self:
         """Create a request from exact serialized fields."""
-        fields = _require_exact_fields(
+        fields, subject = _parse_subject_fields(
             value,
-            expected=frozenset(
+            common_fields=frozenset(
                 {
                     "venue",
                     "market",
-                    "instrument",
                     "data_type",
                     "interval",
                     "source_kind",
@@ -534,7 +754,7 @@ class BinancePublicHistoryRequest:
             else _coerce_enum(interval_value, BinanceKlineInterval, field="interval")
         )
         return cls(
-            instrument=InstrumentId.from_dict(fields["instrument"]),
+            subject=subject,
             data_type=_coerce_enum(
                 fields["data_type"],
                 BinancePublicHistoryDataType,

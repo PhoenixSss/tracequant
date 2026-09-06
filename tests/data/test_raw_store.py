@@ -8,6 +8,7 @@ import pytest
 from tracequant.data import (
     BinanceArchiveObjectBoundary,
     BinanceKlineInterval,
+    BinancePriceIndexId,
     BinancePublicHistoryDataType,
     BinancePublicHistoryRequest,
     BinancePublicHistorySourceKind,
@@ -140,6 +141,27 @@ def test_manifest_contains_complete_source_and_provenance_evidence(
     assert payload["producer_version"] == "tracequant/0.1.0"
     assert payload["created_at"] == "2024-03-02T12:30:00Z"
     assert payload["provenance"] is None
+
+
+def test_index_price_raw_identity_keeps_pair_subject_distinct(
+    tmp_path: Path,
+) -> None:
+    request = BinancePublicHistoryRequest(
+        subject=BinancePriceIndexId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.INDEX_PRICE_KLINE,
+        request_range=TimeRange(
+            start=datetime(2024, 2, 29, tzinfo=UTC),
+            end=datetime(2024, 3, 1, tzinfo=UTC),
+        ),
+        source_kind=BinancePublicHistorySourceKind.REST,
+        interval=BinanceKlineInterval.ONE_MINUTE,
+    )
+    identity = RawObjectIdentity.from_request(request)
+
+    assert identity.source.to_dict()["pair"] == "BTCUSDT"
+    assert "instrument" not in identity.source.to_dict()
+    assert RawObjectIdentity.from_dict(identity.to_dict()) == identity
+    assert "index_price_kline" in _store(tmp_path).relative_path(identity).parts
 
 
 def test_reader_accepts_schema_one_manifest_without_provenance(

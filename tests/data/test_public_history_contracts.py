@@ -9,6 +9,7 @@ from tracequant.data import (
     BinanceArchiveObjectGranularity,
     BinanceKlineInterval,
     BinanceMarket,
+    BinancePriceIndexId,
     BinancePublicHistoryDataType,
     BinancePublicHistoryRequest,
     BinancePublicHistorySourceIdentity,
@@ -34,8 +35,13 @@ def _request(
         and source_kind is not BinancePublicHistorySourceKind.REST
     ):
         archive_object_boundary = BinanceArchiveObjectBoundary.day(date(2024, 2, 29))
+    subject = (
+        BinancePriceIndexId("BTCUSDT")
+        if data_type is BinancePublicHistoryDataType.INDEX_PRICE_KLINE
+        else InstrumentId("BTCUSDT")
+    )
     return BinancePublicHistoryRequest(
-        instrument=InstrumentId("BTCUSDT"),
+        subject=subject,
         data_type=data_type,
         request_range=TimeRange(
             start=datetime(2024, 2, 29, 23, 45, tzinfo=UTC),
@@ -85,6 +91,75 @@ def test_public_history_request_has_stable_utc_source_identity() -> None:
         BinancePublicHistorySourceIdentity.from_dict(first.source_identity.to_dict())
         == first.source_identity
     )
+
+
+def test_index_price_requires_price_index_subject_not_tradable_instrument() -> None:
+    valid = _request(data_type=BinancePublicHistoryDataType.INDEX_PRICE_KLINE)
+    with pytest.raises(PublicHistoryContractError, match="price-index pair"):
+        BinancePublicHistoryRequest(
+            instrument=InstrumentId("BTCUSDT"),
+            data_type=valid.data_type,
+            request_range=valid.request_range,
+            source_kind=valid.source_kind,
+            interval=valid.interval,
+            archive_object_boundary=valid.archive_object_boundary,
+        )
+
+    request = valid
+
+    assert request.subject == BinancePriceIndexId("BTCUSDT")
+    assert request.subject_kind.value == "price_index_pair"
+    assert request.to_dict()["pair"] == "BTCUSDT"
+    assert "instrument" not in request.to_dict()
+    assert BinancePublicHistoryRequest.from_dict(request.to_dict()) == request
+    assert (
+        BinancePublicHistorySourceIdentity.from_dict(request.source_identity.to_dict())
+        == request.source_identity
+    )
+
+
+@pytest.mark.parametrize(
+    ("data_type", "subject", "message"),
+    [
+        (
+            BinancePublicHistoryDataType.INDEX_PRICE_KLINE,
+            InstrumentId("BTCUSDT"),
+            "price-index pair",
+        ),
+        (
+            BinancePublicHistoryDataType.CONTRACT_KLINE,
+            BinancePriceIndexId("BTCUSDT"),
+            "tradable InstrumentId",
+        ),
+        (
+            BinancePublicHistoryDataType.MARK_PRICE_KLINE,
+            BinancePriceIndexId("BTCUSDT"),
+            "tradable InstrumentId",
+        ),
+        (
+            BinancePublicHistoryDataType.SETTLED_FUNDING_RATE,
+            BinancePriceIndexId("BTCUSDT"),
+            "tradable InstrumentId",
+        ),
+    ],
+)
+def test_data_type_and_subject_kind_must_match(
+    data_type: BinancePublicHistoryDataType,
+    subject: InstrumentId | BinancePriceIndexId,
+    message: str,
+) -> None:
+    with pytest.raises(PublicHistoryContractError, match=message):
+        BinancePublicHistoryRequest(
+            subject=subject,
+            data_type=data_type,
+            request_range=TimeRange(
+                start=datetime(2024, 2, 29, 23, 45, tzinfo=UTC),
+                end=datetime(2024, 3, 1, 0, 15, tzinfo=UTC),
+            ),
+            source_kind=BinancePublicHistorySourceKind.ARCHIVE_DAILY,
+            interval=BinanceKlineInterval.ONE_MINUTE,
+            archive_object_boundary=BinanceArchiveObjectBoundary.day(date(2024, 2, 29)),
+        )
 
 
 @pytest.mark.parametrize("instrument", ["BTCUSDT", "ETHUSDT", "BTCUSDC", "ETHUSDC"])
