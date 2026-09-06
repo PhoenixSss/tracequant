@@ -418,9 +418,6 @@ class _ContractKlineArchiveAdapter:
         _validate_required_coverage(plan, actual_range)
 
 
-_CONTRACT_KLINE_ADAPTER = _ContractKlineArchiveAdapter()
-
-
 class BinanceContractKlineBackfill:
     """Execute the official contract-Kline archive path."""
 
@@ -458,7 +455,7 @@ class BinanceContractKlineBackfill:
                 plan.detail,
             )
         else:
-            outcome = self._acquisition.acquire(plan, _CONTRACT_KLINE_ADAPTER)
+            outcome = self._acquisition.acquire(plan, _ContractKlineArchiveAdapter())
         return BinanceContractKlineObjectResult(
             plan,
             outcome.status,

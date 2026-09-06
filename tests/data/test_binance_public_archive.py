@@ -10,6 +10,7 @@ import pytest
 from tracequant.data import (
     ArchiveHttpResponse,
     BinanceArchiveAcquisitionOutcome,
+    BinanceArchiveAcquisitionStatus,
     BinanceArchiveDatasetAdapter,
     BinanceArchiveObjectPlan,
     BinanceContractKlineBackfill,
@@ -96,3 +97,50 @@ def test_contract_kline_uses_shared_archive_acquisition_pipeline(
     assert artifact.frame.height == 24 * 60
     assert artifact.manifest.provenance is not None
     assert artifact.manifest.provenance.csv_member == plan.member_name
+
+
+def test_contract_kline_creates_an_isolated_adapter_per_archive_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request_range = TimeRange(
+        start=datetime(2024, 2, 29, tzinfo=UTC),
+        end=datetime(2024, 3, 2, tzinfo=UTC),
+    )
+    assert (
+        len(
+            plan_binance_contract_kline_archives(InstrumentId("BTCUSDT"), request_range)
+        )
+        == 2
+    )
+    adapters: list[BinanceArchiveDatasetAdapter] = []
+    adapter_ids: list[int] = []
+    schema_identifiers: list[str] = []
+
+    def acquire(
+        self: BinancePublicArchiveAcquisition,
+        shared_plan: BinanceArchiveObjectPlan,
+        adapter: BinanceArchiveDatasetAdapter,
+    ) -> BinanceArchiveAcquisitionOutcome:
+        del self, shared_plan
+        adapters.append(adapter)
+        adapter_ids.append(id(adapter))
+        schema_identifiers.append(adapter.raw_schema_identifier)
+        if len(adapter_ids) == 1:
+            adapter.raw_schema_identifier = "mutated-by-fixture"
+        return BinanceArchiveAcquisitionOutcome(
+            status=BinanceArchiveAcquisitionStatus.PUBLISHED
+        )
+
+    monkeypatch.setattr(BinancePublicArchiveAcquisition, "acquire", acquire)
+
+    result = BinanceContractKlineBackfill(RawStore(tmp_path)).run(
+        InstrumentId("BTCUSDT"), request_range
+    )
+
+    assert result.completed
+    assert len(adapter_ids) == 2
+    assert adapters[0] is not adapters[1]
+    assert schema_identifiers == [
+        "binance.um.contract-kline.csv.v1",
+        "binance.um.contract-kline.csv.v1",
+    ]
