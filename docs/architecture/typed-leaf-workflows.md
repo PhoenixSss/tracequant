@@ -32,7 +32,8 @@ lifecycle controller.
 | `type:documentation` | Documentation Issue form | `documentation_policy.py` | `documentation/` | not required |
 | `type:research` | Research Issue form | `research_policy.py` | `research/` | not required |
 
-The profile registry stores the policy selectors and candidate capabilities.
+The `ProfilePolicyRegistry` stores the policy selectors and candidate
+capabilities.
 `profile_policies.py` is the only adapter that dispatches those selectors to
 the typed policy modules. Phase controllers do not maintain a type allowlist;
 they call the shared adapter and retain one mechanical owner for live-state
@@ -55,12 +56,12 @@ contain a special case for a profile or blocker. A profile cannot use an
 arbitrary callable or hidden side effect to bypass the registry, policy
 validation, bounded effect executor, postcondition, or receipt authority.
 
-The generic registry injection seam is test-only for architecture acceptance:
-a synthetic fifth profile is registered in an independent registry and is
-resolved by an injected profile resolver. The production canonical registry
-and its four supported profiles remain unchanged. This fixture must traverse
-the same contract, blocker, candidate, review, completion, effect, and
-receipt capabilities as a real profile.
+The generic registry injection seam is independently testable: an isolated
+registry may register an additional policy and resolve it through the same
+profile metadata contract. The production canonical registry and its four
+supported profiles remain unchanged. Extension tests must exercise only the
+existing generic registration and dispatch boundary; they must not add a
+second lifecycle controller or a profile-specific branch to production code.
 
 Extending a generic protocol or adding a previously absent generic blocker,
 evidence, effect, parser, or Kernel capability is an architecture exception.

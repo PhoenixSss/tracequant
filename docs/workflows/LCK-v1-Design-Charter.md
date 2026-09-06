@@ -1561,7 +1561,7 @@ Examples of intended direction:
 | manual Squash Merge | KEEP |
 | monolithic closeout success state | REPLACE with Business Delivery + Cleanup |
 
-Migration tests SHOULD verify snapshot acquisition boundaries and absence of hidden live queries without requiring a large synthetic workflow simulator.
+Migration tests SHOULD verify snapshot acquisition boundaries and absence of hidden live queries without requiring a large workflow simulator.
 
 ---
 

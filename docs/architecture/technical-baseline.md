@@ -238,10 +238,9 @@ workflow artifacts), with matches classified by context:
   `validation stub` input strings, and no-op `pass` branches used to exercise
   workflow failure/cleanup behavior. They are test scaffolding, not runtime
   capability claims.
-- `tools/agent_workflow/` and `tools/wsl2_codex_diagnostic.py` contain
-  `pass` in exception cleanup/no-op branches and use `pass` as a serialized
-  status value. These are workflow-tool implementation details, not business
-  module stubs.
+- `tools/agent_workflow/` contains `pass` in exception cleanup/no-op branches
+  and uses `pass` as a serialized status value. These are workflow-tool
+  implementation details, not business module stubs.
 - The active workflow Skills in `.agents/skills/` and `.claude/skills/` use
   `pass`/`PASS` for lifecycle outcomes and review protocol language; the
   feature-audit Skill also uses `placeholder` when describing a finding to
@@ -253,14 +252,8 @@ workflow artifacts), with matches classified by context:
   work.
 - `.github/ISSUE_TEMPLATE/*.yml` uses `placeholder` as GitHub form-field UI
   metadata. It is not application code.
-- `docs/workflows/task-workflow-architecture-audit.md` uses `placeholder` for
-  unavailable historical Task #86 evidence and `pass`/`PASS` for audit status
-  and protocol outcomes. It is a workflow audit record, not product code.
-- Other `docs/workflows/` reports, evidence records, publication registers,
-  and templates use `pass`/`PASS` as validation or protocol status values and
-  `placeholder`/`FILL_ME` as explicitly historical or template values. They
-  are not current implementation evidence and must not be read as product
-  functionality.
+- Current workflow documentation uses `pass`/`PASS` as validation or protocol
+  status values. These are not current product capability claims.
 
 No current production data, research, execution, or risk capability is being
 hidden behind one of these matches. A future real code gap must receive its own

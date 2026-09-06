@@ -295,9 +295,9 @@ UTC utilities, initial domain models, and test fixtures are covered in the
   not available capabilities.
 - Documentation and Agent workflow controls have separate responsibilities.
   LCK and the Validation Runner describe repository lifecycle mechanics; they
-  do not add business or trading functionality. See the [WSL2 Codex environment
-  guide](docs/workflows/wsl2-codex-environment/README.md) only when working in
-  that specific environment.
+  do not add business or trading functionality. The current [WSL2 Validation
+  Runner guide](docs/workflows/wsl2-validation-runner/README.md) documents the
+  deterministic validation profiles and their bounded diagnostics.
 
 ## Typed leaf Issue navigation
 
@@ -361,8 +361,8 @@ backfilled or replayed typed lifecycle receipts.
 - [LCK v1 Design Charter](docs/workflows/LCK-v1-Design-Charter.md): design
   baseline and responsibility model; it is not evidence of completed product
   capability.
-- [WSL2 Codex environment](docs/workflows/wsl2-codex-environment/README.md):
-  environment-specific setup and diagnostics.
+- [WSL2 Validation Runner](docs/workflows/wsl2-validation-runner/README.md):
+  current deterministic validation profiles and bounded diagnostics.
 
 ## License
 
