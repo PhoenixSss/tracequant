@@ -657,7 +657,7 @@ def test_raw_store_requires_persisted_source_bodies_for_provenance(
         store.read_request(plan.request)
 
 
-def test_upstream_revision_conflicts_without_replacing_existing_artifact(
+def test_upstream_revision_publishes_new_immutable_artifact(
     tmp_path: Path,
 ) -> None:
     request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
@@ -676,12 +676,18 @@ def test_upstream_revision_conflicts_without_replacing_existing_artifact(
     ).run(InstrumentId("BTCUSDT"), request_range)
 
     assert first.completed
-    assert second.completed is False
-    assert second.objects[0].status is BinanceContractKlineStatus.CONFLICT
-    assert second.objects[0].artifact_path is None
-    preserved = store.read_request(plan.request)
-    assert preserved.manifest.project_sha256 == original_checksum
-    assert preserved.frame["close"].head(2).to_list() == ["61010.0", "61010.0"]
+    assert second.completed
+    assert second.objects[0].status is BinanceContractKlineStatus.PUBLISHED
+    assert second.objects[0].artifact_path is not None
+    revisions = store.list_verified_revisions(
+        RawObjectIdentity.from_request(plan.request)
+    )
+    assert len(revisions) == 2
+    assert original_checksum in {item.manifest.project_sha256 for item in revisions}
+    assert {tuple(item.frame["close"].head(2).to_list()) for item in revisions} == {
+        ("61010.0", "61010.0"),
+        ("62000.0", "61010.0"),
+    }
 
 
 def test_incomplete_existing_artifact_is_reported_as_local_failure(
