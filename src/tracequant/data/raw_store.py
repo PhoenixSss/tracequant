@@ -1079,6 +1079,26 @@ class RawManifest:
         return manifest
 
 
+def _manifest_revision_identity(
+    manifest: RawManifest,
+) -> RawRevisionIdentity | None:
+    """Resolve explicit or legacy checksum-backed revision identity."""
+    explicit_revision = manifest.revision_identity
+    if explicit_revision is not None:
+        return explicit_revision
+    if manifest.upstream_checksum is None:
+        return None
+    checksum = _verified_upstream_checksum(manifest.upstream_checksum)
+    if checksum is None:
+        return None
+    return RawRevisionIdentity(
+        logical_identity=manifest.object_identity,
+        evidence_kind=RawRevisionEvidenceKind.UPSTREAM_CHECKSUM,
+        verified_upstream_checksum=checksum,
+        verified_upstream_revision=manifest.upstream_revision,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class RawArtifact:
     """A verified completed Raw artifact."""
@@ -1409,6 +1429,19 @@ class RawStore:
 
             if final_path.exists():
                 return self._resolve_existing(final_path, manifest)
+            if revision_identity is not None:
+                legacy_path = self.path_for(identity)
+                if legacy_path.exists():
+                    legacy = self._validate_path(
+                        legacy_path,
+                        expected_identity=identity,
+                    )
+                    legacy_revision = self._manifest_revision_identity(legacy.manifest)
+                    if (
+                        legacy_revision is not None
+                        and legacy_revision.revision_id == revision_identity.revision_id
+                    ):
+                        return self._resolve_existing(legacy_path, manifest)
             try:
                 self._publish_directory(temporary_path, final_path)
             except OSError:
@@ -1439,6 +1472,18 @@ class RawStore:
                 raise RawArtifactIncompleteError(
                     f"Raw revision is not a directory: {path}"
                 )
+            legacy_path = self.path_for(identity)
+            if legacy_path.exists():
+                legacy = self._validate_path(
+                    legacy_path,
+                    expected_identity=identity,
+                )
+                legacy_revision = self._manifest_revision_identity(legacy.manifest)
+                if (
+                    legacy_revision is not None
+                    and legacy_revision.revision_id == self._revision_id_value(revision)
+                ):
+                    return legacy
             raise RawArtifactNotFoundError(f"Raw revision does not exist: {path}")
         return self._validate_path(
             path,
@@ -1453,32 +1498,47 @@ class RawStore:
         if not isinstance(identity, RawObjectIdentity):
             raise TypeError("identity must be a RawObjectIdentity")
         revisions_path = self.logical_path_for(identity) / "revisions"
-        if not revisions_path.exists():
-            return ()
-        if not revisions_path.is_dir():
+        if revisions_path.exists() and not revisions_path.is_dir():
             raise RawArtifactIncompleteError(
                 "Raw revision collection is not a directory"
             )
-        artifacts: list[RawArtifact] = []
-        for path in sorted(revisions_path.iterdir(), key=lambda item: item.name):
-            if not path.is_dir():
-                raise RawArtifactValidationError(
-                    "Raw revision collection contains an unexpected file"
-                )
-            try:
-                revision_id = _require_sha256(path.name, field="revision_id")
-            except RawArtifactValidationError as error:
-                raise RawArtifactValidationError(
-                    "Raw revision collection contains an invalid revision id"
-                ) from error
-            artifacts.append(
-                self._validate_path(
+        artifacts_by_revision: dict[str, RawArtifact] = {}
+        if revisions_path.exists():
+            for path in sorted(revisions_path.iterdir(), key=lambda item: item.name):
+                if not path.is_dir():
+                    raise RawArtifactValidationError(
+                        "Raw revision collection contains an unexpected file"
+                    )
+                try:
+                    revision_id = _require_sha256(path.name, field="revision_id")
+                except RawArtifactValidationError as error:
+                    raise RawArtifactValidationError(
+                        "Raw revision collection contains an invalid revision id"
+                    ) from error
+                artifacts_by_revision[revision_id] = self._validate_path(
                     path,
                     expected_identity=identity,
                     expected_revision_id=revision_id,
                 )
+
+        legacy_path = self.path_for(identity)
+        if legacy_path.exists():
+            legacy = self._validate_path(
+                legacy_path,
+                expected_identity=identity,
             )
-        return tuple(artifacts)
+            legacy_revision = self._manifest_revision_identity(legacy.manifest)
+            if legacy_revision is not None:
+                existing = artifacts_by_revision.get(legacy_revision.revision_id)
+                if existing is None:
+                    artifacts_by_revision[legacy_revision.revision_id] = legacy
+                else:
+                    self._resolve_existing(legacy_path, existing.manifest)
+
+        return tuple(
+            artifacts_by_revision[revision_id]
+            for revision_id in sorted(artifacts_by_revision)
+        )
 
     def list_revisions(self, identity: RawObjectIdentity) -> tuple[RawArtifact, ...]:
         """Alias for :meth:`list_verified_revisions`."""
@@ -1490,19 +1550,39 @@ class RawStore:
             raise TypeError("identity must be a RawObjectIdentity")
         legacy_path = self.path_for(identity)
         logical_path = self.logical_path_for(identity)
+        legacy = (
+            self._validate_path(legacy_path, expected_identity=identity)
+            if legacy_path.exists()
+            else None
+        )
         revisions = self.list_verified_revisions(identity)
-        if len(revisions) > 1 or (revisions and legacy_path.exists()):
+        if len(revisions) > 1:
             raise RawArtifactAmbiguousError(
                 f"Raw logical object {identity.object_id} has multiple revisions; "
                 "read an exact revision"
             )
         if len(revisions) == 1:
+            if legacy is not None:
+                legacy_revision = self._manifest_revision_identity(legacy.manifest)
+                listed_revision = self._manifest_revision_identity(
+                    revisions[0].manifest
+                )
+                if (
+                    legacy_revision is None
+                    or listed_revision is None
+                    or legacy_revision.revision_id != listed_revision.revision_id
+                ):
+                    raise RawArtifactAmbiguousError(
+                        f"Raw logical object {identity.object_id} has multiple revisions; "
+                        "read an exact revision"
+                    )
+                self._resolve_existing(legacy_path, revisions[0].manifest)
             return revisions[0]
         if logical_path.exists() and not logical_path.is_dir():
             raise RawArtifactIncompleteError(
                 f"Raw logical object is not a directory: {logical_path}"
             )
-        if not legacy_path.is_dir():
+        if legacy is None:
             if legacy_path.exists():
                 raise RawArtifactIncompleteError(
                     f"Raw artifact is not a directory: {legacy_path}"
@@ -1510,7 +1590,7 @@ class RawStore:
             raise RawArtifactNotFoundError(
                 f"Raw artifact does not exist: {legacy_path}"
             )
-        return self._validate_path(legacy_path, expected_identity=identity)
+        return legacy
 
     def read_request(
         self,
@@ -1604,8 +1684,23 @@ class RawStore:
         existing = self._validate_path(
             final_path,
             expected_identity=candidate_manifest.object_identity,
-            expected_revision_id=candidate_manifest.revision_id,
+            expected_revision_id=(
+                None
+                if final_path == self.path_for(candidate_manifest.object_identity)
+                else candidate_manifest.revision_id
+            ),
         )
+        existing_revision = self._manifest_revision_identity(existing.manifest)
+        candidate_revision = self._manifest_revision_identity(candidate_manifest)
+        if (existing_revision is None) != (candidate_revision is None) or (
+            existing_revision is not None
+            and candidate_revision is not None
+            and existing_revision.revision_id != candidate_revision.revision_id
+        ):
+            raise RawArtifactConflictError(
+                f"Raw identity {candidate_manifest.object_identity.object_id} "
+                "already exists with different content or provenance"
+            )
         comparable = (
             "actual_record_range",
             "record_count",
@@ -1615,11 +1710,6 @@ class RawStore:
             "upstream_revision",
             "raw_schema_identifier",
             "producer_version",
-            "logical_object_id",
-            "revision_id",
-            "revision_evidence_kind",
-            "verified_upstream_checksum",
-            "verified_upstream_revision",
         )
         if any(
             getattr(existing.manifest, field) != getattr(candidate_manifest, field)
@@ -1643,6 +1733,12 @@ class RawStore:
                 "already exists with different content or provenance"
             )
         return existing
+
+    @staticmethod
+    def _manifest_revision_identity(
+        manifest: RawManifest,
+    ) -> RawRevisionIdentity | None:
+        return _manifest_revision_identity(manifest)
 
     def _validate_path(
         self,

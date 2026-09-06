@@ -1,6 +1,8 @@
 import hashlib
 import http.client
 import io
+import json
+import shutil
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,6 +16,7 @@ from tracequant.data import (
     BinanceArchiveObjectPlan,
     BinanceContractKlineBackfill,
     BinanceContractKlineStatus,
+    RawArtifact,
     RawArtifactNotFoundError,
     RawArtifactValidationError,
     RawObjectIdentity,
@@ -94,6 +97,27 @@ def _responses(url: str, archive: bytes) -> dict[str, ArchiveHttpResponse]:
             {"Content-Type": "text/plain"},
         ),
     }
+
+
+def _seed_legacy_v3_artifact(store: RawStore, artifact: RawArtifact) -> Path:
+    """Place a verified current artifact in the pre-revision v3 layout."""
+    legacy_path = store.path_for(artifact.manifest.object_identity)
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(artifact.path, legacy_path)
+    manifest_path = legacy_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["manifest_schema_version"] = 3
+    for field in (
+        "logical_object_id",
+        "revision_id",
+        "revision_evidence_kind",
+        "verified_upstream_checksum",
+        "verified_upstream_revision",
+    ):
+        del manifest[field]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    shutil.rmtree(artifact.path)
+    return legacy_path
 
 
 def test_planner_uses_monthly_objects_for_complete_months_and_daily_edges() -> None:
@@ -688,6 +712,55 @@ def test_upstream_revision_publishes_new_immutable_artifact(
         ("61010.0", "61010.0"),
         ("62000.0", "61010.0"),
     }
+
+
+def test_legacy_verified_revision_is_idempotent_and_exactly_readable(
+    tmp_path: Path,
+) -> None:
+    request_range = _range("2024-02-29T00:00:00", "2024-02-29T00:01:00")
+    plan = _archive_plans(InstrumentId("BTCUSDT"), request_range)[0]
+    original = _full_daily_archive(plan, 1709164800000)
+    revised = _full_daily_archive(plan, 1709164800000, first_close="62000.0")
+    store = RawStore(tmp_path)
+    original_run = BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, original))
+    ).run(InstrumentId("BTCUSDT"), request_range)
+    assert original_run.completed
+    original_artifact = store.read_request(plan.request)
+    identity = original_artifact.manifest.object_identity
+    original_revision = original_artifact.revision_identity
+    assert original_revision is not None
+    legacy_path = _seed_legacy_v3_artifact(store, original_artifact)
+
+    repeated = BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, original))
+    ).run(InstrumentId("BTCUSDT"), request_range)
+
+    assert repeated.completed
+    assert repeated.objects[0].status is BinanceContractKlineStatus.EXISTING
+    assert not store.revision_path_for(identity, original_revision).exists()
+    assert store.read_revision(identity, original_revision).path == legacy_path
+
+    revised_run = BinanceContractKlineBackfill(
+        store, http_get=FixtureHttp(_responses(plan.url, revised))
+    ).run(InstrumentId("BTCUSDT"), request_range)
+
+    assert revised_run.completed
+    assert revised_run.objects[0].status is BinanceContractKlineStatus.PUBLISHED
+    revisions = store.list_verified_revisions(identity)
+    assert len(revisions) == 2
+    new_revision = next(
+        item.revision_identity
+        for item in revisions
+        if item.manifest.project_sha256 != original_artifact.manifest.project_sha256
+    )
+    assert new_revision is not None
+    assert store.read_revision(identity, original_revision).frame.equals(
+        original_artifact.frame
+    )
+    assert store.read_revision(identity, new_revision).frame["close"].head(
+        2
+    ).to_list() == ["62000.0", "61010.0"]
 
 
 def test_incomplete_existing_artifact_is_reported_as_local_failure(
