@@ -44,9 +44,10 @@ The public foundation consists of:
    plus a provenance/checksum manifest, and durably records non-completed
    acquisition outcomes in separate manifests with optional quarantined
    response bodies;
-7. an explicit Binance USDⓈ-M public-archive backfill adapter for BTCUSDT and
-   ETHUSDT 1m contract Klines, including bounded HTTP, upstream checksum
-   verification, ZIP/CSV validation, and complete 12-field Raw parsing;
+7. explicit Binance USDⓈ-M public-archive backfill adapters for BTCUSDT and
+   ETHUSDT 1m contract and mark-price Klines, including bounded HTTP, upstream
+   checksum verification, ZIP/CSV validation, complete 12-field Raw parsing,
+   and mark-price-specific placeholder field names;
 8. deterministic test-only factories for the domain models.
 
 Polars is the sole runtime third-party dependency in `pyproject.toml` and is
@@ -170,12 +171,15 @@ public exchange data
 ```
 
 Only the first, narrow part of this flow currently exists: callers can retrieve
-approved Binance USDⓈ-M BTCUSDT/ETHUSDT 1m contract-Kline archives and publish
-immutable Raw Parquet objects with manifests. There is no general Binance or
-private API client, REST recent/gap synchronization, canonical schema,
-missing/duplicate/out-of-order policy, feature pipeline, label pipeline, or
-future-data-leakage check. The preserved Binance 12-field wire schema is Raw
-source data and must not be treated as a canonical schema.
+approved Binance USDⓈ-M BTCUSDT/ETHUSDT 1m contract-Kline or mark-price-Kline
+archives and publish immutable Raw Parquet objects with manifests. There is no
+general Binance or private API client, REST recent/gap synchronization,
+canonical schema, data repair, feature pipeline, label pipeline, or
+future-data-leakage check. Each adapter validates missing, duplicate, and
+out-of-order minutes before publication. The preserved 12-field wire values are
+Raw source data and must not be treated as a canonical schema; mark-price
+volume, quote, count, taker, and ignore fields have explicit `placeholder_*`
+names and no contract-trade meaning.
 
 Archive planning is bounded by the per-instrument daily and monthly coverage
 frozen in the approved Research contract. Dates outside those observed bounds
@@ -215,11 +219,12 @@ boundaries until such an Issue is implemented and reviewed.
 ## 8. Research and trading scope limits
 
 The current public-data capability is limited to explicitly requested Binance
-USDⓈ-M BTCUSDT/ETHUSDT 1m contract-Kline archives and local immutable Raw
-artifacts. None of the following is currently available: private Binance API
-access, REST recent/gap synchronization, multi-timeframe aggregation, factors,
-models, backtests, Demo orders, Live orders, private API credentials, database
-state, or multi-exchange production execution.
+USDⓈ-M BTCUSDT/ETHUSDT 1m contract-Kline and mark-price-Kline archives and local
+immutable Raw artifacts. None of the following is currently available: private
+Binance API access, REST recent/gap synchronization, index-price or funding
+ingestion, multi-timeframe aggregation, factors, models, backtests, Demo orders,
+Live orders, private API credentials, database state, or multi-exchange
+production execution.
 
 Historical research, planning documents, and workflow documentation must retain
 their stated roles. Workflow controls such as LCK and the Validation Runner
