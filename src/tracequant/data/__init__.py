@@ -38,6 +38,15 @@ from tracequant.data.public_history import (
     BinancePublicHistorySubjectKind,
     PublicHistoryContractError,
 )
+from tracequant.data.public_history_rest import (
+    BinanceRestEndpoint,
+    BinanceRestPageIdentity,
+    BinanceRestPageProvenance,
+    BinanceRestPageRequest,
+    BinanceRestRequestBounds,
+    next_binance_funding_cursor,
+    next_binance_kline_cursor,
+)
 from tracequant.data.raw_store import (
     RawAcquisitionManifest,
     RawAcquisitionResponse,
@@ -79,6 +88,11 @@ __all__ = [
     "BinanceMarkPriceKlineStatus",
     "BinanceMarket",
     "BinancePriceIndexId",
+    "BinanceRestEndpoint",
+    "BinanceRestPageIdentity",
+    "BinanceRestPageProvenance",
+    "BinanceRestPageRequest",
+    "BinanceRestRequestBounds",
     "BinancePublicHistoryDataType",
     "BinancePublicHistoryRequest",
     "BinancePublicHistorySourceIdentity",
@@ -104,4 +118,6 @@ __all__ = [
     "RawStoreError",
     "plan_binance_contract_kline_archives",
     "plan_binance_mark_price_kline_archives",
+    "next_binance_funding_cursor",
+    "next_binance_kline_cursor",
 ]

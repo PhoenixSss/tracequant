@@ -29,6 +29,11 @@ from tracequant.data.public_history import (
     BinancePublicHistorySourceIdentity,
     BinancePublicHistorySourceKind,
 )
+from tracequant.data.public_history_rest import (
+    BinanceRestPageIdentity,
+    BinanceRestPageProvenance,
+    BinanceRestPageRequest,
+)
 from tracequant.domain import TimeRange
 
 __all__ = [
@@ -385,25 +390,43 @@ class RawSourceProvenance:
 class RawObjectIdentity:
     """Stable local identity for one upstream public-history object.
 
-    Archive requests already carry a day/month source boundary.  REST has no
-    archive boundary, so its caller UTC range is the object boundary instead.
+    Archive requests already carry a day/month source boundary.  Legacy REST
+    objects retain their caller UTC range boundary; typed REST pages use the
+    exact normalized page request identity instead.
     """
 
     source: BinancePublicHistorySourceIdentity
     rest_request_range: TimeRange | None = None
+    rest_page_identity: BinanceRestPageIdentity | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, BinancePublicHistorySourceIdentity):
             raise TypeError("source must be a BinancePublicHistorySourceIdentity")
         is_rest = self.source.source_kind is BinancePublicHistorySourceKind.REST
-        if is_rest != (self.rest_request_range is not None):
+        rest_boundaries = sum(
+            boundary is not None
+            for boundary in (self.rest_request_range, self.rest_page_identity)
+        )
+        if is_rest != (rest_boundaries == 1):
             raise ValueError(
-                "REST Raw identity requires a request range and archive identity forbids it"
+                "REST Raw identity requires exactly one page/range boundary and "
+                "archive identity forbids both"
             )
         if self.rest_request_range is not None and not isinstance(
             self.rest_request_range, TimeRange
         ):
             raise TypeError("rest_request_range must be a TimeRange")
+        if self.rest_page_identity is not None:
+            if not isinstance(self.rest_page_identity, BinanceRestPageIdentity):
+                raise TypeError("rest_page_identity must be a BinanceRestPageIdentity")
+            if self.source != BinancePublicHistorySourceIdentity(
+                subject=self.rest_page_identity.subject,
+                data_type=self.rest_page_identity.data_type,
+                source_kind=BinancePublicHistorySourceKind.REST,
+                interval=self.rest_page_identity.interval,
+                market=self.rest_page_identity.market,
+            ):
+                raise ValueError("REST page identity does not match source identity")
 
     @classmethod
     def from_request(cls, request: BinancePublicHistoryRequest) -> Self:
@@ -419,7 +442,22 @@ class RawObjectIdentity:
             ),
         )
 
+    @classmethod
+    def from_rest_page_request(cls, request: BinanceRestPageRequest) -> Self:
+        """Derive a page-level Raw logical identity without losing provenance."""
+        if not isinstance(request, BinanceRestPageRequest):
+            raise TypeError("request must be a BinanceRestPageRequest")
+        return cls(
+            source=request.source_identity,
+            rest_page_identity=request.identity,
+        )
+
     def to_dict(self) -> dict[str, object]:
+        if self.rest_page_identity is not None:
+            return {
+                "source": self.source.to_dict(),
+                "rest_page_identity": self.rest_page_identity.to_dict(),
+            }
         return {
             "source": self.source.to_dict(),
             "rest_request_range": (
@@ -431,6 +469,21 @@ class RawObjectIdentity:
 
     @classmethod
     def from_dict(cls, value: object) -> Self:
+        if not isinstance(value, dict):
+            raise RawArtifactValidationError("RawObjectIdentity must be a JSON object")
+        serialized_fields = set(value)
+        if serialized_fields == {"source", "rest_page_identity"}:
+            fields = _exact_mapping(
+                value,
+                fields=frozenset({"source", "rest_page_identity"}),
+                model="RawObjectIdentity",
+            )
+            return cls(
+                source=BinancePublicHistorySourceIdentity.from_dict(fields["source"]),
+                rest_page_identity=BinanceRestPageIdentity.from_dict(
+                    fields["rest_page_identity"]
+                ),
+            )
         fields = _exact_mapping(
             value,
             fields=frozenset({"source", "rest_request_range"}),
@@ -706,6 +759,7 @@ class RawRevisionEvidenceKind(StrEnum):
     """Kinds of upstream evidence that can identify an immutable revision."""
 
     UPSTREAM_CHECKSUM = "upstream_checksum"
+    RESPONSE_SHA256 = "response_sha256"
 
 
 def _verified_upstream_checksum(value: str | None) -> str | None:
@@ -744,7 +798,10 @@ class RawRevisionIdentity:
             except (TypeError, ValueError) as error:
                 raise ValueError("unsupported revision evidence kind") from error
             object.__setattr__(self, "evidence_kind", evidence_kind)
-        if self.evidence_kind is not RawRevisionEvidenceKind.UPSTREAM_CHECKSUM:
+        if self.evidence_kind not in {
+            RawRevisionEvidenceKind.UPSTREAM_CHECKSUM,
+            RawRevisionEvidenceKind.RESPONSE_SHA256,
+        }:
             raise ValueError("unsupported revision evidence kind")
         if _verified_upstream_checksum(self.verified_upstream_checksum) is None:
             raise ValueError("verified_upstream_checksum must be a SHA-256 checksum")
@@ -778,6 +835,30 @@ class RawRevisionIdentity:
             verified_upstream_checksum=checksum,
             verified_upstream_revision=source_object.upstream_revision,
         )
+
+    @classmethod
+    def from_rest_page_provenance(cls, provenance: BinanceRestPageProvenance) -> Self:
+        """Bind a verified REST response digest to its page logical identity."""
+        if not isinstance(provenance, BinanceRestPageProvenance):
+            raise TypeError("provenance must be a BinanceRestPageProvenance")
+        if not provenance.is_successful_response:
+            raise ValueError(
+                "only a successful REST response can identify a Raw revision"
+            )
+        return cls(
+            logical_identity=RawObjectIdentity.from_rest_page_request(
+                provenance.request
+            ),
+            evidence_kind=RawRevisionEvidenceKind.RESPONSE_SHA256,
+            verified_upstream_checksum=provenance.revision_checksum,
+        )
+
+    @property
+    def verified_response_sha256(self) -> str | None:
+        """Return a REST response digest for response-backed revisions."""
+        if self.evidence_kind is not RawRevisionEvidenceKind.RESPONSE_SHA256:
+            return None
+        return self.verified_upstream_checksum.removeprefix("sha256:")
 
     @property
     def object_identity(self) -> RawObjectIdentity:
