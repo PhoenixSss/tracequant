@@ -10,6 +10,14 @@ from tracequant.data.binance_contract_kline import (
     BinanceContractKlineStatus,
     plan_binance_contract_kline_archives,
 )
+from tracequant.data.binance_mark_price_kline import (
+    BinanceMarkPriceKlineBackfill,
+    BinanceMarkPriceKlineCoverageGapPlan,
+    BinanceMarkPriceKlineObjectResult,
+    BinanceMarkPriceKlineRunResult,
+    BinanceMarkPriceKlineStatus,
+    plan_binance_mark_price_kline_archives,
+)
 from tracequant.data.binance_public_archive import (
     BinanceArchiveAcquisitionOutcome,
     BinanceArchiveAcquisitionStatus,
@@ -64,6 +72,11 @@ __all__ = [
     "BinanceContractKlineRunResult",
     "BinanceContractKlineStatus",
     "BinanceKlineInterval",
+    "BinanceMarkPriceKlineBackfill",
+    "BinanceMarkPriceKlineCoverageGapPlan",
+    "BinanceMarkPriceKlineObjectResult",
+    "BinanceMarkPriceKlineRunResult",
+    "BinanceMarkPriceKlineStatus",
     "BinanceMarket",
     "BinancePriceIndexId",
     "BinancePublicHistoryDataType",
@@ -90,4 +103,5 @@ __all__ = [
     "RawStore",
     "RawStoreError",
     "plan_binance_contract_kline_archives",
+    "plan_binance_mark_price_kline_archives",
 ]
