@@ -11,6 +11,7 @@ body:
         Task 是主要 coding-agent execution contract，遵循 Minimum sufficient specification。
         默认目标是 1 Task ≈ 1 PR ≈ 1 main squash commit。
         Parent、blocked-by、Status、Priority、Size 使用 GitHub native metadata；不要在正文复制 repository-wide rules、标准 CI 或 Git/PR 流程。
+        Task 承接已批准的有限成果；纯拆细不新增义务，新增范围先按 issue-authoring.md 处理。只读取本项需要的合同，不全文加载上游设计。
 
   - type: textarea
     id: objective
@@ -26,9 +27,11 @@ body:
     id: requirements
     attributes:
       label: Requirements
-      description: 只写本 Task 特有、会改变实现决策或行为的要求，包括必要边界和非显而易见 edge cases；不要复制 Parent、架构全文或通用 workflow。
+      description: 说明本项承接的批准成果/要求、可复用输入和必要合同、行为边界与 edge cases；已有 REQ / DP 时引用。不要复制 Parent、架构全文或通用 workflow，也不在实施中重新定义产品范围。
       placeholder: |
-        - ...
+        - 承接成果及来源：...
+        - 必要输入/合同与已有实现：...
+        - 本次行为要求：...
     validations:
       required: true
 
@@ -49,7 +52,7 @@ body:
     id: acceptance_criteria
     attributes:
       label: Acceptance Criteria
-      description: 使用可观察、可测试或可明确判断的结果定义完成；不要写 implementation checklist、通用 pytest/Ruff/mypy、CI green 或 PR created。
+      description: 定义本项结果与必要失败边界，满足后停止扩展；Critical Outcome 覆盖真实 supported path，不能替代其余 AC。不要写 implementation checklist、通用 CI 或 PR created。
       placeholder: |
         - [ ] ...
     validations:
@@ -59,7 +62,7 @@ body:
     id: additional_context
     attributes:
       label: Additional execution context
-      description: 可选。仅补充当前 Task 独有且确有必要的信息，例如 Context、Scope Boundary / Non-goals、task-specific Constraints / Decisions、References 或标准 CI 之外的特殊 Verification。
+      description: 可选。仅补充本项必要 Context、约束、版本化 References 或特殊 Verification；存在相邻能力混淆或范围扩张风险时，必须说明 Scope Boundary / Non-goals，避免顺手承担其他成果。
       placeholder: |
         仅在需要时填写，例如：
 
