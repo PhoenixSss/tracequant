@@ -75,6 +75,9 @@ OPTIONAL：`Constraints / Decisions`、`Risks`、`References`
 
 - Outcome 描述最终状态，不是 Feature/Task 清单。
 - Success / Exit Criteria 描述 Epic-level result。
+- Scope 引用已批准的产品/阶段基线，区分本次核心交付与未纳入的条件式扩展；
+  阶段出口描述可观察结果，不因后续扩展尚未实施而追加当前完成义务。
+- 软件成果完成、研究候选准入和具体运行/资金授权分别判断，不能相互替代。
 - 不复制各 Feature 的完整 specification；不维护 child task checklist。
 - 不包含标准 pytest / Ruff / mypy / CI、Git workflow、Priority / Size / Status、
   Parent / Dependency 文本字段。
@@ -90,6 +93,14 @@ REQUIRED：`Capability`、`Scope`、`Non-goals`、`Acceptance Criteria`
 OPTIONAL：`Context`、`Key Scenarios / Edge Cases`、`Constraints / Decisions`、
 `References`
 
+- Scope 必须说明批准的需求来源、主责模块、完整有限成果及必要行为合同；跨模块时
+  明确协同职责，不把跨模块协作本身当作拆 Feature 的理由或改变领域所有权。
+- 已有 REQ / DP 编号时引用其批准版本/章节及本 Feature 承担的部分；尚未编号的
+  批准要求可引用明确来源，不为填模板发明编号、创建包或扩建规划系统。
+- AC 覆盖各项成果、必要失败边界及最终集成结果；满足当前 AC 后停止新增开发义务，
+  进入既有 completion audit。子项全部关闭不能代替行为证据或正式完成判断。
+- 实施前将所有计划成果分解为有限工作清单；具体叶项、输入和先后安排只在一份
+  明确引用的规划记录中维护。Feature 保留完整行为边界，不复制子项规格或状态。
 - 不写文件名、class、function、implementation sequence、逐文件修改方案；只有实现
   方式本身已是 approved architecture / compatibility contract 时才进入
   Constraints / Decisions。
@@ -104,6 +115,12 @@ OPTIONAL：`Context`、`Scope Boundary / Non-goals`、`Constraints / Decisions`�
 
 Task 必须满足：one primary objective、bounded scope、independently verifiable、
 normally one PR、minimal unrelated context、observable acceptance。
+
+Requirements 必须明确本项承接的批准成果/要求、必要输入合同及可复用实现。
+来源可简短引用到批准规格的版本/章节和适用 REQ / DP；正文仍须足以理解本项行为，
+不能只列编号让实现者递归读取上游。存在相邻能力混淆或 scope-creep 风险时，
+必须在 Requirements 或 `Scope Boundary / Non-goals` 说明排除项。
+每个 Task 只承担有限清单中的明确部分，不要求复制整个 Feature 的剩余工作。
 
 `Critical Outcome` 是 Task-level end-to-end acceptance contract，必须使用固定四行格式：
 
@@ -168,6 +185,60 @@ Research 有效结果可以是 `IMPLEMENT` / `DO NOT IMPLEMENT` / `NEEDS MORE EV
 `ARCHITECTURE DECISION`。“决定不做”属于有效完成结果。不强制所有调查填写
 Hypotheses / Data Requirements / Method。
 
+- Context 说明结论的具体消费者/待决事项；已有需求或验证项时简短引用来源。
+- Scope 固定适用系统/版本、数据/方案/时间边界，以及与问题有关的有限样本、请求、
+  试验或资源预算；不要求填全部维度，也不统一规定时长。
+- Evidence / Evaluation Criteria 事先定义证据充分性、预算耗尽/来源不可得时的停止
+  条件，并区分 fixture、实际来源与适用运行环境的证据。
+- Expected Outcome / Artifact 定义有限产物；`NEEDS MORE EVIDENCE` 应交付已知事实、
+  限制和有界 follow-up 建议。是否满足本次 Research AC 仍按原合同判断，不能仅用
+  “证据不足”自动宣告完成，也不能自动延长研究或创建实施 Task。
+
+### 批准基线、有限工作分解与变更
+
+以下是 authoring 语义，适用于 UI、API 和 Agent 编写的 Issue；不新增表单必填章节、
+机器解析字段、Project 状态或 LCK gate。填写提示本身不代替当前 Issue 规格。
+
+**基线引用。** 产品需求、总体设计和阶段计划须经批准并有可访问的明确版本/章节，
+才能作为工作分解依据。草稿、示例 REQ/DP、阶段编号或本地评审文件的存在不自动
+改变当前 Issue、架构权威或运行授权。引用只提供必要语义，不复制设计全文，
+也不将设计中的阶段编号写成第二份 Project metadata。Bug 的明确缺陷证据和
+Documentation 的事实来源仍是各自合同，不强迫它们绑定产品 DP。
+
+**一份有限分解。** 在 Feature 实施前，确定全部交付义务和一份规范的工作分解记录；
+可放在获准的规划文档或明确的规划正文位置，通过 Feature 引用。已有记录应复用，
+不得新建竞争清单。该记录逐项说明：
+
+| 内容 | 必须明确 |
+|---|---|
+| 来源与成果 | 对应的批准要求、Feature AC、适用 DP/部分及可观察交付物 |
+| 已有与剩余 | 当前实现证据、复用部分和全部剩余成果；已完成工作不重新分配 |
+| 输入 | 必要合同、消费者及影响实施的未知项；正式 blocker 仍以原生关系表达 |
+| 验收与边界 | 适用行为/失败/集成结果、证据类型、排除项和停止条件 |
+| 叶项分解 | 有限候选叶项及其承担部分；创建时间可后移，交付义务不因此开放增长 |
+
+有限成果说明 WHAT；代码结构、实现步骤和实际叶项合同仍在相应执行位置定义。
+叶项引用用于定位，不复制 Parent、blocked-by、Project Status 或关闭状态的真相。
+部分成果可提前提供合同/代码，整体集成验收可后置，但必须分别说明边界；不能把
+提前可消费的部分当作整个 Feature 已完成，也不能绕过当前原生 blocker。
+
+**变化处理。** 创建或扩展叶项前，将变化归入下表；未解决的范围冲突只阻止依赖它的
+工作，其他已获准且独立的工作可以继续。
+
+| 变化 | 处理 |
+|---|---|
+| 原义务纯拆细 | 保持输入/输出、AC、排除项与总义务不变，更新唯一分解记录；不将其包装为新能力 |
+| 既有要求未满足 | 记录具体合同、复现和修复验收，按既有 Bug/remediation 路径处理；不因没有 DP 编号拒绝必要修复 |
+| 必要合同/安全前置遗漏 | 说明来源、最小修订、消费者与剩余工作影响；经明确决定后更新基线，不静默塞入下一批 |
+| 新能力或新增完成标准 | 先提出范围变更及取舍/依赖影响，经维护者批准再纳入；“技术上有用”不足以成为范围依据 |
+| 迁移、后置或取消既有义务 | 明确旧义务、承接位置或处置、理由及影响；批准后同步规格与必要原生关系，不能伪造完成 |
+
+不以固定 Task 个数压住必要正确性/安全修复，也不以一个宽泛 REQ 容纳无限新义务。
+连续发现新前置时，停止受影响部分的滚动创建并复核完整分解。范围变更只记录一次
+清楚的决定及必要引用，不新增审批平台、完整历史台账或逐 Task 的通用流程副本。
+仍须遵守已有实施、独立 Review、显式 remediation、人工 merge、closeout 和
+Feature completion 边界；获准创建/修改规格不自动授予其中其他操作权限。
+
 ## 4. Acceptance Criteria authoring
 
 AC 必须描述**可以观察、测试或明确判断的完成事实**。允许简洁 checklist、
@@ -181,6 +252,10 @@ Given/When/Then 或等价 behavioral statements；不强制 Gherkin。
 
 优先描述：externally observable behavior、invariant、failure behavior、
 state transition、regression condition。
+
+Task 的 Critical Outcome 只验证指定 supported path，不替代其余 AC。
+Feature 的最终集成结果不能由独立子项各自 PASS 推断；适用证据达到当前完成标准后，
+停止追加无来源开发工作并使用既有完成审计，不引入第二套 Outcome Check 完成状态。
 
 ## 5. Non-goals 规则
 
@@ -264,6 +339,11 @@ Research body 表达 pre-research specification；不把完整过程日志堆入
 observable behavior、meaningful edge cases、acceptance、important scope boundary。
 
 ## 11. 迁移规则（历史 Issue 改写时适用）
+
+本节规定保持原义务不变的结构迁移。采用新的产品/设计基线并改变范围、AC 或依赖，
+属于前述显式范围变更，不能伪装成格式规范化；模板更新不授权批量改写既有 Issue。
+对已有实施历史的 Feature，必须明确批准受影响的剩余规格调整及历史证据保留方式，
+不能通过自动迁移重写已完成工作的原合同。
 
 - 只迁移**明确尚未开始实施**的 Issue（OPEN + Project/lifecycle state 尚未开始 +
   无 active/merged implementation PR + 无 implementation-in-progress evidence）。

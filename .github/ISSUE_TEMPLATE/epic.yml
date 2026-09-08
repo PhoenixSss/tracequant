@@ -37,7 +37,7 @@ body:
     id: scope
     attributes:
       label: Scope
-      description: 列出本 Epic 覆盖的主要能力边界；保持 outcome-level，不展开 child Feature 的完整规格。
+      description: 引用批准的产品/阶段基线，区分本次必须交付的核心范围与未纳入的条件式扩展；保持 outcome-level，不展开 child Feature 的完整规格或复制 Project 阶段字段。
       placeholder: |
         - ...
     validations:
@@ -57,7 +57,7 @@ body:
     id: success_exit_criteria
     attributes:
       label: Success / Exit Criteria
-      description: 使用可观察、可判断的 Epic-level 结果说明何时可以关闭本 Epic；不要复制通用 CI / PR Definition of Done。
+      description: 引用批准的阶段出口并明确整体可观察结果；未纳入的扩展不追加为完成前置。软件完成、候选准入和资金授权分别判断，不复制通用 CI / PR Definition of Done。
       placeholder: |
         - [ ] ...
     validations:

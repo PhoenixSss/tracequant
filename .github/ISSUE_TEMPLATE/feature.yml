@@ -11,6 +11,7 @@ body:
         Feature 负责描述 WHAT：系统应具备什么行为或能力，而不是逐文件 HOW。
         Parent 使用 GitHub Parent/Sub-issues，正式阻塞使用 blocked-by/blocking；不要在正文重复 Project metadata、标准验证或 Git/PR 流程。
         如果一个能力只有一个主要实现目标且一个 PR 即可完成，应优先直接创建 Task。
+        实施前列全已批准的有限成果及其工作分解；新增交付义务按 issue-authoring.md 处理，不能靠继续创建 Task 扩大范围。
 
   - type: textarea
     id: capability
@@ -26,8 +27,11 @@ body:
     id: scope
     attributes:
       label: Scope
-      description: 明确本 Feature 覆盖的能力、场景和边界；Inputs / Outputs 只有在属于行为 contract 时才写入这里或 Acceptance Criteria。
+      description: 引用批准的需求/交付包来源，明确主责模块、必要协同边界及完整有限成果；Inputs / Outputs 属于行为 contract 时写入。具体叶项分解只引用一份规划记录，不写逐文件步骤或复制子项状态。
       placeholder: |
+        需求来源：批准的规格版本/章节；已有 REQ / DP 编号时注明
+        主责模块：...（跨模块时补充协同职责）
+        有限成果：
         - ...
     validations:
       required: true
@@ -36,7 +40,7 @@ body:
     id: non_goals
     attributes:
       label: Non-goals
-      description: 明确不属于本 Feature 的相邻能力，避免 leaf work item 顺手实现。
+      description: 明确相邻能力、后置扩展和不属于本次交付的结果；已有承接位置时引用，不能将接口预留当成实现该扩展的要求。
       placeholder: |
         - ...
     validations:
@@ -46,7 +50,7 @@ body:
     id: acceptance_criteria
     attributes:
       label: Acceptance Criteria
-      description: 描述可观察、可测试或可明确判断的完成条件；不要把文件修改步骤、pytest/Ruff/mypy 或 PR 流程当作验收标准。
+      description: 覆盖有限成果的可观察行为、必要失败边界及最终集成结果，明确何时停止开发并进入既有完成审计；子项全部关闭不能代替行为证据。不要填写通用 CI / PR 流程。
       placeholder: |
         - [ ] ...
     validations:
@@ -56,7 +60,7 @@ body:
     id: additional_context
     attributes:
       label: Additional context
-      description: 可选。只补充理解行为所必需的信息，例如 Context、关键 Edge Cases、approved Constraints / Decisions 或 References；优先链接 canonical docs / ADR。
+      description: 可选。补充必要 Context、Edge Cases、批准的约束或 References；可引用唯一的有限工作分解记录。来源引用注明版本/章节，不复制设计全文或机械状态。
       placeholder: |
         仅在需要时填写，例如：
 

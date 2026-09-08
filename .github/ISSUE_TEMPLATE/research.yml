@@ -11,6 +11,7 @@ body:
         Research 是 evidence / decision leaf work item：当“是否应该实施”仍需要证据时使用；若实现目标已经决定，应创建 Task。
         研究结果可以是 IMPLEMENT、DO NOT IMPLEMENT、NEEDS MORE EVIDENCE 或 ARCHITECTURE DECISION。
         Parent、blocked-by 和 Project metadata 使用 GitHub native state。研究正文定义 pre-research specification，不要把完整过程日志永久堆入 Issue body。
+        事先固定证据范围、适用预算与停止条件；证据不足时交付已知限制及有界后续建议，不自动延长研究或创建实施任务。
 
   - type: textarea
     id: question_decision
@@ -27,7 +28,7 @@ body:
     id: context
     attributes:
       label: Context
-      description: 简洁说明为什么现在需要这项研究，以及结论将支持什么后续判断；不要复制大段 Parent 或文档。
+      description: 说明为什么现在需要研究、哪个具体消费者/决定使用结论；承接已有验证项或需求时注明来源，不复制大段 Parent 或文档。
       placeholder: |
         当前背景：
         ...
@@ -38,7 +39,7 @@ body:
     id: scope
     attributes:
       label: Scope
-      description: 明确本研究覆盖的系统、方案、数据、时间范围或调查边界。
+      description: 固定系统/版本、方案、数据或时间范围，并给出适用的有限样本、请求、试验或资源预算；不强制填写所有预算维度。
       placeholder: |
         - ...
     validations:
@@ -58,7 +59,7 @@ body:
     id: evidence_evaluation
     attributes:
       label: Evidence / Evaluation Criteria
-      description: 说明需要什么证据，以及如何判断证据足以支持继续、停止、比较方案或形成 decision。
+      description: 明确必要证据、充分性判断及预算耗尽/来源不可得时的停止条件；区分 fixture、实际来源、Demo 或其他适用证据，不能用一种证据冒充另一种。
       placeholder: |
         - ...
     validations:
@@ -68,7 +69,7 @@ body:
     id: expected_outcome_artifact
     attributes:
       label: Expected Outcome / Artifact
-      description: 定义研究完成时应产出的结论或载体，例如 concise recommendation、benchmark result、versioned research report、ADR input 或 follow-up Task。
+      description: 定义有限结论/工件，例如 recommendation、benchmark、versioned report 或 ADR input；证据不足也应记录已知事实、限制及有界 follow-up 建议。后续实施须另行明确范围和授权。
       placeholder: |
         预期结果：
         - ...
