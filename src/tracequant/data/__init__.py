@@ -10,6 +10,15 @@ from tracequant.data.binance_contract_kline import (
     BinanceContractKlineStatus,
     plan_binance_contract_kline_archives,
 )
+from tracequant.data.binance_funding_rate import (
+    BinanceFundingRateBackfill,
+    BinanceFundingRateCoverageGapPlan,
+    BinanceFundingRateCoverageStatus,
+    BinanceFundingRateObjectResult,
+    BinanceFundingRateRunResult,
+    BinanceFundingRateStatus,
+    plan_binance_funding_rate_archives,
+)
 from tracequant.data.binance_index_price_kline import (
     BinanceIndexPriceKlineBackfill,
     BinanceIndexPriceKlineCoverageGapPlan,
@@ -88,6 +97,12 @@ __all__ = [
     "BinanceContractKlineObjectResult",
     "BinanceContractKlineRunResult",
     "BinanceContractKlineStatus",
+    "BinanceFundingRateBackfill",
+    "BinanceFundingRateCoverageGapPlan",
+    "BinanceFundingRateCoverageStatus",
+    "BinanceFundingRateObjectResult",
+    "BinanceFundingRateRunResult",
+    "BinanceFundingRateStatus",
     "BinanceKlineInterval",
     "BinanceIndexPriceKlineBackfill",
     "BinanceIndexPriceKlineCoverageGapPlan",
@@ -130,6 +145,7 @@ __all__ = [
     "RawStore",
     "RawStoreError",
     "plan_binance_contract_kline_archives",
+    "plan_binance_funding_rate_archives",
     "plan_binance_index_price_kline_archives",
     "plan_binance_mark_price_kline_archives",
     "next_binance_funding_cursor",

@@ -45,10 +45,10 @@ The public foundation consists of:
    acquisition outcomes in separate manifests with optional quarantined
    response bodies;
 7. explicit Binance USDⓈ-M public-archive backfill adapters for BTCUSDT and
-   ETHUSDT 1m contract, mark-price, and index-price Klines, including bounded
-   HTTP, upstream checksum verification, ZIP/CSV validation, complete 12-field
-   Raw parsing, typed price-index-pair identity, and dataset-specific
-   placeholder field names;
+   ETHUSDT 1m contract, mark-price, and index-price Klines plus settled funding
+   monthly objects, including bounded HTTP, upstream checksum verification,
+   ZIP/CSV validation, typed price-index-pair identity, dataset-specific
+   placeholder field names, and event-specific funding coverage evidence;
 8. deterministic test-only factories for the domain models.
 
 Polars is the sole runtime third-party dependency in `pyproject.toml` and is
@@ -69,7 +69,7 @@ The full current tree and import rules are in
 - domain models depend on UTC utilities but not on network, exchange, UI,
   deployment, logging setup, or test fixtures;
 - data contracts remain separate from transport and persistence concerns;
-  `BinanceContractKlineBackfill` and `RawStore` perform network and filesystem
+  public-history backfill adapters and `RawStore` perform network and filesystem
   work only when explicitly called, and module imports remain side-effect free;
 - tests may use `tests/fixtures`, but fixtures are not production runtime
   dependencies;

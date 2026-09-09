@@ -149,6 +149,7 @@ class BinanceArchiveAcquisitionOutcome:
     status: BinanceArchiveAcquisitionStatus
     artifact_path: Path | None = None
     detail: str | None = None
+    actual_record_range: TimeRange | None = None
 
 
 class _InvalidContentError(ValueError):
@@ -160,7 +161,14 @@ class _InvalidContentError(ValueError):
 
 
 class _CoverageGapError(ValueError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        actual_record_range: TimeRange | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.actual_record_range = actual_record_range
 
 
 class _RetryableDownloadError(RuntimeError):
@@ -337,6 +345,7 @@ class BinancePublicArchiveAcquisition:
         artifact_path: Path | None = None,
         source_response: RawAcquisitionResponse | None = None,
         checksum_response: RawAcquisitionResponse | None = None,
+        actual_record_range: TimeRange | None = None,
     ) -> BinanceArchiveAcquisitionOutcome:
         manifest = RawAcquisitionManifest(
             manifest_schema_version=1,
@@ -376,6 +385,7 @@ class BinancePublicArchiveAcquisition:
             status=status,
             artifact_path=artifact_path,
             detail=detail,
+            actual_record_range=actual_record_range,
         )
 
     def _existing_artifact(
@@ -404,6 +414,7 @@ class BinancePublicArchiveAcquisition:
                             source_url=plan.url,
                             checksum_url=plan.checksum_url,
                             artifact_path=revision.path,
+                            actual_record_range=error.actual_record_range,
                         )
                 existing = None
         except RawArtifactIncompleteError as error:
@@ -445,6 +456,7 @@ class BinancePublicArchiveAcquisition:
                         source_url=plan.url,
                         checksum_url=plan.checksum_url,
                         artifact_path=existing.path,
+                        actual_record_range=error.actual_record_range,
                     )
         return existing, None
 
@@ -580,6 +592,7 @@ class BinancePublicArchiveAcquisition:
                 checksum_url=plan.checksum_url,
                 source_response=self._to_raw_response(archive_payload),
                 checksum_response=self._to_raw_response(checksum_payload),
+                actual_record_range=error.actual_record_range,
             )
         except (csv.Error, _InvalidContentError) as error:
             response = (
@@ -638,12 +651,20 @@ class BinancePublicArchiveAcquisition:
                 else BinanceArchiveAcquisitionStatus.PUBLISHED
             ),
             artifact_path=artifact.path,
+            actual_record_range=artifact.manifest.actual_record_range,
         )
 
 
-def _coverage_gap(message: str) -> _CoverageGapError:
+def _coverage_gap(
+    message: str,
+    *,
+    actual_record_range: TimeRange | None = None,
+) -> _CoverageGapError:
     """Create the shared coverage exception for dataset adapters."""
-    return _CoverageGapError(message)
+    return _CoverageGapError(
+        message,
+        actual_record_range=actual_record_range,
+    )
 
 
 def _invalid_content(message: str) -> _InvalidContentError:
