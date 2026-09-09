@@ -153,18 +153,64 @@ The currently implemented public package is `tracequant` under `src/`:
   `OHLCVBar` models with validation and JSON-compatible serialization.
 - `tracequant.data`: typed Binance USDⓈ-M public-history contracts, an
   immutable local Raw Parquet/manifest store, and explicit archive-backfill
-  adapters for BTCUSDT and ETHUSDT 1m contract and mark-price Klines. Backfill
-  calls perform bounded public HTTP downloads, checksum and ZIP/CSV validation,
-  and Raw persistence; importing the module performs no I/O.
+  adapters for BTCUSDT and ETHUSDT 1m contract, mark-price, and index-price
+  Klines. Backfill calls perform bounded public HTTP downloads, checksum and
+  ZIP/CSV validation, and Raw persistence; importing the module performs no I/O.
 
 The `apps/`, `packages/`, and `deploy/` directories currently establish future
 boundaries through small README files. They are not implemented product
 packages. The implemented ingestion path is limited to Binance's public USDⓈ-M
-1m contract-Kline and mark-price-Kline archives; there is no private or trading
-exchange client, REST recent synchronization, general data pipeline, canonical
-quality or repair layer, database, feature or label pipeline, backtester,
-strategy, machine-learning model, order or account service, risk engine, live
-runtime, or multi-exchange implementation.
+1m contract-Kline, mark-price-Kline, and index-price-Kline archives; there is no
+private or trading exchange client, REST recent synchronization, general data
+pipeline, canonical quality or repair layer, database, feature or label
+pipeline, backtester, strategy, machine-learning model, order or account
+service, risk engine, live runtime, or multi-exchange implementation.
+
+### Binance index-price archive backfill
+
+`BinanceIndexPriceKlineBackfill` accepts a semantic price-index pair, not an
+orderable `InstrumentId`, and a UTC half-open `TimeRange`:
+
+```python
+from datetime import UTC, datetime
+from pathlib import Path
+
+from tracequant.data import (
+    BinanceIndexPriceKlineBackfill,
+    BinancePriceIndexId,
+    RawObjectIdentity,
+    RawStore,
+)
+from tracequant.domain import TimeRange
+
+store = RawStore(Path("raw"))
+request_range = TimeRange(
+    start=datetime(2024, 2, 29, tzinfo=UTC),
+    end=datetime(2024, 3, 1, tzinfo=UTC),
+)
+result = BinanceIndexPriceKlineBackfill(store).run(
+    BinancePriceIndexId("BTCUSDT"), request_range
+)
+
+plan = result.objects[0].plan
+identity = RawObjectIdentity.from_request(plan.request)
+for artifact in store.list_verified_revisions(identity):
+    revision = artifact.revision_identity
+    assert revision is not None
+    exact_artifact = store.read_revision(identity, revision)
+```
+
+The frozen archive coverage is monthly `2020-01` through `2026-07` and daily
+`2019-12-23` through `2026-08-29` for BTCUSDT and ETHUSDT. Complete covered
+months use monthly objects; UTC edge dates use daily objects. The first daily
+object is partial from 11:58 UTC and is reported as a coverage gap, not
+published as complete. Dates outside the frozen coverage are explicit gaps and
+do not trigger speculative URLs. The adapter preserves ZIP, checksum response,
+manifest digests, original millisecond timestamps, decimal strings, and
+non-trading `placeholder_*` fields. It has no REST/USDC fallback, tradability
+decision, retry scheduler, canonical repair, or aggregation behavior. Inspect
+every object status and `result.completed`; partial success or any gap/failure
+keeps the batch incomplete.
 
 “Research MVP” therefore means a reliable foundation for later research work,
 not a claim that research, backtesting, Demo, or Live trading is available.
@@ -246,6 +292,7 @@ src/tracequant/                 implemented bootstrap package
   data/public_history.py        Binance public-history contracts
   data/raw_store.py             immutable Raw Parquet/manifest persistence
   data/binance_contract_kline.py  explicit Binance archive backfill adapter
+  data/binance_index_price_kline.py  explicit index-price pair archive adapter
   data/binance_mark_price_kline.py  explicit mark-price archive adapter
 tests/                          package and workflow tests
   fixtures/domain.py            deterministic domain factories, test-only
