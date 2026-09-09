@@ -1,0 +1,2287 @@
+{
+  "manifest_version": 1,
+  "issue": {
+    "number": 279,
+    "title": "[Research] 核定 Feature #11 剩余获取路径的有限验收窗口",
+    "url": "https://github.com/PhoenixSss/tracequant/issues/279"
+  },
+  "research_outcome": "NEEDS MORE EVIDENCE",
+  "probe_run": {
+    "started_at": "2026-09-09T10:58:43.717234Z",
+    "finished_at": "2026-09-09T10:59:19.501987Z",
+    "elapsed_seconds": 33.618988,
+    "policy": {
+      "request_limit": 64,
+      "total_response_bytes_limit": 134217728,
+      "response_bytes_limit": 16777216,
+      "elapsed_seconds_limit": 900,
+      "timeout_seconds": 10,
+      "attempts_per_semantic_request_limit": 2,
+      "redirect_policy": "do_not_follow"
+    },
+    "allocation_before_first_request": {
+      "primary_requests": 45,
+      "server_time": 1,
+      "archive_zip": 14,
+      "archive_checksum": 14,
+      "rest_recent": 8,
+      "rest_gap": 8,
+      "retry_reserve": 19
+    },
+    "consumed": {
+      "http_requests": 29,
+      "response_bytes": 7917924,
+      "retries": 0,
+      "redirects_followed": 0,
+      "stop_reason": null
+    },
+    "request_list": {
+      "server_time": [
+        "server_time"
+      ],
+      "archive": [
+        {
+          "probe_id": "contract_kline:BTCUSDT:monthly_2026_07",
+          "zip_url": "https://data.binance.vision/data/futures/um/monthly/klines/BTCUSDT/1m/BTCUSDT-1m-2026-07.zip",
+          "checksum_url": "https://data.binance.vision/data/futures/um/monthly/klines/BTCUSDT/1m/BTCUSDT-1m-2026-07.zip.CHECKSUM"
+        },
+        {
+          "probe_id": "contract_kline:BTCUSDT:daily_2026_08_29",
+          "zip_url": "https://data.binance.vision/data/futures/um/daily/klines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip",
+          "checksum_url": "https://data.binance.vision/data/futures/um/daily/klines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip.CHECKSUM"
+        },
+        {
+          "probe_id": "contract_kline:ETHUSDT:monthly_2026_07",
+          "zip_url": "https://data.binance.vision/data/futures/um/monthly/klines/ETHUSDT/1m/ETHUSDT-1m-2026-07.zip",
+          "checksum_url": "https://data.binance.vision/data/futures/um/monthly/klines/ETHUSDT/1m/ETHUSDT-1m-2026-07.zip.CHECKSUM"
+        },
+        {
+          "probe_id": "contract_kline:ETHUSDT:daily_2026_08_29",
+          "zip_url": "https://data.binance.vision/data/futures/um/daily/klines/ETHUSDT/1m/ETHUSDT-1m-2026-08-29.zip",
+          "checksum_url": "https://data.binance.vision/data/futures/um/daily/klines/ETHUSDT/1m/ETHUSDT-1m-2026-08-29.zip.CHECKSUM"
+        },
+        {
+          "probe_id": "index_price_kline:BTCUSDT:monthly_2026_07",
+          "zip_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-07.zip",
+          "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-07.zip.CHECKSUM"
+        },
+        {
+          "probe_id": "index_price_kline:BTCUSDT:daily_2026_08_29",
+          "zip_url": "https://data.binance.vision/data/futures/um/daily/indexPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip",
+          "checksum_url": "https://data.binance.vision/data/futures/um/daily/indexPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip.CHECKSUM"
+        },
+        {
+          "probe_id": "index_price_kline:ETHUSDT:monthly_2026_07",
+          "zip_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-07.zip",
+          "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-07.zip.CHECKSUM"
+        },
+        {
+          "probe_id": "index_price_kline:ETHUSDT:daily_2026_08_29",
+          "zip_url": "https://data.binance.vision/data/futures/um/daily/indexPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-08-29.zip",
+          "checksum_url": "https://data.binance.vision/data/futures/um/daily/indexPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-08-29.zip.CHECKSUM"
+        },
+        {
+          "probe_id": "mark_price_kline:BTCUSDT:monthly_2026_07",
+          "zip_url": "https://data.binance.vision/data/futures/um/monthly/markPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-07.zip",
+          "checksum_url": "https://data.binance.vision/data/futures/um/monthly/markPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-07.zip.CHECKSUM"
+        },
+        {
+          "probe_id": "mark_price_kline:BTCUSDT:daily_2026_08_29",
+          "zip_url": "https://data.binance.vision/data/futures/um/daily/markPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip",
+          "checksum_url": "https://data.binance.vision/data/futures/um/daily/markPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip.CHECKSUM"
+        },
+        {
+          "probe_id": "mark_price_kline:ETHUSDT:monthly_2026_07",
+          "zip_url": "https://data.binance.vision/data/futures/um/monthly/markPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-07.zip",
+          "checksum_url": "https://data.binance.vision/data/futures/um/monthly/markPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-07.zip.CHECKSUM"
+        },
+        {
+          "probe_id": "mark_price_kline:ETHUSDT:daily_2026_08_29",
+          "zip_url": "https://data.binance.vision/data/futures/um/daily/markPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-08-29.zip",
+          "checksum_url": "https://data.binance.vision/data/futures/um/daily/markPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-08-29.zip.CHECKSUM"
+        },
+        {
+          "probe_id": "settled_funding_rate:BTCUSDT:monthly_2026_07",
+          "zip_url": "https://data.binance.vision/data/futures/um/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2026-07.zip",
+          "checksum_url": "https://data.binance.vision/data/futures/um/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2026-07.zip.CHECKSUM"
+        },
+        {
+          "probe_id": "settled_funding_rate:ETHUSDT:monthly_2026_07",
+          "zip_url": "https://data.binance.vision/data/futures/um/monthly/fundingRate/ETHUSDT/ETHUSDT-fundingRate-2026-07.zip",
+          "checksum_url": "https://data.binance.vision/data/futures/um/monthly/fundingRate/ETHUSDT/ETHUSDT-fundingRate-2026-07.zip.CHECKSUM"
+        }
+      ],
+      "rest_recent_and_gap": [
+        "rest:contract_kline:BTCUSDT:recent",
+        "rest:contract_kline:BTCUSDT:gap",
+        "rest:contract_kline:ETHUSDT:recent",
+        "rest:contract_kline:ETHUSDT:gap",
+        "rest:mark_price_kline:BTCUSDT:recent",
+        "rest:mark_price_kline:BTCUSDT:gap",
+        "rest:mark_price_kline:ETHUSDT:recent",
+        "rest:mark_price_kline:ETHUSDT:gap",
+        "rest:index_price_kline:BTCUSDT:recent",
+        "rest:index_price_kline:BTCUSDT:gap",
+        "rest:index_price_kline:ETHUSDT:recent",
+        "rest:index_price_kline:ETHUSDT:gap",
+        "rest:settled_funding_rate:BTCUSDT:recent",
+        "rest:settled_funding_rate:BTCUSDT:gap",
+        "rest:settled_funding_rate:ETHUSDT:recent",
+        "rest:settled_funding_rate:ETHUSDT:gap"
+      ]
+    }
+  },
+  "t0": {
+    "status": "unknown",
+    "server_time_ms": null,
+    "server_time_utc": null,
+    "minute_floor_ms": null,
+    "minute_floor_utc": null,
+    "request": {
+      "semantic_id": "server_time",
+      "attempt": 1,
+      "method": "GET",
+      "url": "https://fapi.binance.com/fapi/v1/time",
+      "observed_at": "2026-09-09T10:58:43.717243Z",
+      "http_status": 451,
+      "response_bytes": 224,
+      "response_sha256": "79c1db471a4cdc1c8565b5dfc52e0ed2d29962738ee4d28597696fcd0920e348",
+      "headers": {
+        "date": "Wed, 09 Sep 2026 10:58:46 GMT",
+        "content-type": "application/json",
+        "content-length": "224"
+      }
+    },
+    "bounded_response": {
+      "code": 0,
+      "msg": "Service unavailable from a restricted location according to 'b. Eligibility' in https://www.binance.com/en/terms. Please contact customer service if you believe you received this message in error."
+    },
+    "classification": "http_error_restricted_location",
+    "consequence": "recent and gap absolute windows cannot be defined",
+    "prohibited_substitutions_used": []
+  },
+  "fixed_windows": {
+    "archive_monthly": "[2026-07-01T00:00:00Z,2026-08-01T00:00:00Z)",
+    "kline_daily_edge": "[2026-08-29T00:00:00Z,2026-08-30T00:00:00Z)",
+    "kline_recent": {
+      "formula": "[M-60min,M)",
+      "absolute": null,
+      "status": "unknown"
+    },
+    "funding_recent": {
+      "formula": "[T0-7days,T0)",
+      "absolute": null,
+      "status": "unknown"
+    },
+    "kline_gap": {
+      "formula": "first five complete recent minutes",
+      "absolute": null,
+      "status": "unknown"
+    },
+    "funding_gap": {
+      "formula": "first settled recent row to min(+1h,T0)",
+      "absolute": null,
+      "status": "unknown"
+    }
+  },
+  "status_vocabulary": {
+    "supported": "the exact fixed request/object succeeded and its bounded validation passed",
+    "unsupported": "official contract or observed response proves the path is not offered",
+    "unknown": "evidence was not obtained or the required window could not be defined",
+    "legal_empty": "HTTP 200 JSON [] for an executed REST request; none observed in this run",
+    "archive_missing": "archive object HTTP 404; none observed in this run",
+    "checksum_or_format_failure": "downloaded object failed checksum/ZIP/schema validation; none observed in this run",
+    "network_or_http_failure": "transport/HTTP failure, kept distinct from unsupported and legal empty"
+  },
+  "core_units": [
+    {
+      "family": "contract_kline",
+      "subject": "BTCUSDT",
+      "subject_kind": "instrument",
+      "archive": {
+        "status": "supported",
+        "probe_ids": [
+          "contract_kline:BTCUSDT:monthly_2026_07",
+          "contract_kline:BTCUSDT:daily_2026_08_29"
+        ],
+        "coverage_claim": "only the fixed object windows; not all-history completeness"
+      },
+      "recent": {
+        "status": "unknown",
+        "planned_request": "rest:contract_kline:BTCUSDT:recent",
+        "reason": "T0 unavailable"
+      },
+      "gap": {
+        "status": "unknown",
+        "planned_request": "rest:contract_kline:BTCUSDT:gap",
+        "reason": "T0 unavailable; no positive gap sample was fabricated"
+      },
+      "consumer": "archive planner/parser plus REST recent/gap fallback"
+    },
+    {
+      "family": "contract_kline",
+      "subject": "ETHUSDT",
+      "subject_kind": "instrument",
+      "archive": {
+        "status": "supported",
+        "probe_ids": [
+          "contract_kline:ETHUSDT:monthly_2026_07",
+          "contract_kline:ETHUSDT:daily_2026_08_29"
+        ],
+        "coverage_claim": "only the fixed object windows; not all-history completeness"
+      },
+      "recent": {
+        "status": "unknown",
+        "planned_request": "rest:contract_kline:ETHUSDT:recent",
+        "reason": "T0 unavailable"
+      },
+      "gap": {
+        "status": "unknown",
+        "planned_request": "rest:contract_kline:ETHUSDT:gap",
+        "reason": "T0 unavailable; no positive gap sample was fabricated"
+      },
+      "consumer": "archive planner/parser plus REST recent/gap fallback"
+    },
+    {
+      "family": "mark_price_kline",
+      "subject": "BTCUSDT",
+      "subject_kind": "instrument",
+      "archive": {
+        "status": "supported",
+        "probe_ids": [
+          "mark_price_kline:BTCUSDT:monthly_2026_07",
+          "mark_price_kline:BTCUSDT:daily_2026_08_29"
+        ],
+        "coverage_claim": "only the fixed object windows; not all-history completeness"
+      },
+      "recent": {
+        "status": "unknown",
+        "planned_request": "rest:mark_price_kline:BTCUSDT:recent",
+        "reason": "T0 unavailable"
+      },
+      "gap": {
+        "status": "unknown",
+        "planned_request": "rest:mark_price_kline:BTCUSDT:gap",
+        "reason": "T0 unavailable; no positive gap sample was fabricated"
+      },
+      "consumer": "archive planner/parser plus REST recent/gap fallback"
+    },
+    {
+      "family": "mark_price_kline",
+      "subject": "ETHUSDT",
+      "subject_kind": "instrument",
+      "archive": {
+        "status": "supported",
+        "probe_ids": [
+          "mark_price_kline:ETHUSDT:monthly_2026_07",
+          "mark_price_kline:ETHUSDT:daily_2026_08_29"
+        ],
+        "coverage_claim": "only the fixed object windows; not all-history completeness"
+      },
+      "recent": {
+        "status": "unknown",
+        "planned_request": "rest:mark_price_kline:ETHUSDT:recent",
+        "reason": "T0 unavailable"
+      },
+      "gap": {
+        "status": "unknown",
+        "planned_request": "rest:mark_price_kline:ETHUSDT:gap",
+        "reason": "T0 unavailable; no positive gap sample was fabricated"
+      },
+      "consumer": "archive planner/parser plus REST recent/gap fallback"
+    },
+    {
+      "family": "index_price_kline",
+      "subject": "BTCUSDT",
+      "subject_kind": "price_index_pair",
+      "archive": {
+        "status": "supported",
+        "probe_ids": [
+          "index_price_kline:BTCUSDT:monthly_2026_07",
+          "index_price_kline:BTCUSDT:daily_2026_08_29"
+        ],
+        "coverage_claim": "only the fixed object windows; not all-history completeness"
+      },
+      "recent": {
+        "status": "unknown",
+        "planned_request": "rest:index_price_kline:BTCUSDT:recent",
+        "reason": "T0 unavailable"
+      },
+      "gap": {
+        "status": "unknown",
+        "planned_request": "rest:index_price_kline:BTCUSDT:gap",
+        "reason": "T0 unavailable; no positive gap sample was fabricated"
+      },
+      "consumer": "archive planner/parser plus REST recent/gap fallback"
+    },
+    {
+      "family": "index_price_kline",
+      "subject": "ETHUSDT",
+      "subject_kind": "price_index_pair",
+      "archive": {
+        "status": "supported",
+        "probe_ids": [
+          "index_price_kline:ETHUSDT:monthly_2026_07",
+          "index_price_kline:ETHUSDT:daily_2026_08_29"
+        ],
+        "coverage_claim": "only the fixed object windows; not all-history completeness"
+      },
+      "recent": {
+        "status": "unknown",
+        "planned_request": "rest:index_price_kline:ETHUSDT:recent",
+        "reason": "T0 unavailable"
+      },
+      "gap": {
+        "status": "unknown",
+        "planned_request": "rest:index_price_kline:ETHUSDT:gap",
+        "reason": "T0 unavailable; no positive gap sample was fabricated"
+      },
+      "consumer": "archive planner/parser plus REST recent/gap fallback"
+    },
+    {
+      "family": "settled_funding_rate",
+      "subject": "BTCUSDT",
+      "subject_kind": "instrument",
+      "archive": {
+        "status": "supported",
+        "probe_ids": [
+          "settled_funding_rate:BTCUSDT:monthly_2026_07"
+        ],
+        "coverage_claim": "only the fixed object windows; not all-history completeness"
+      },
+      "recent": {
+        "status": "unknown",
+        "planned_request": "rest:settled_funding_rate:BTCUSDT:recent",
+        "reason": "T0 unavailable"
+      },
+      "gap": {
+        "status": "unknown",
+        "planned_request": "rest:settled_funding_rate:BTCUSDT:gap",
+        "reason": "T0 unavailable; no positive gap sample was fabricated"
+      },
+      "consumer": "archive planner/parser plus REST recent/gap fallback"
+    },
+    {
+      "family": "settled_funding_rate",
+      "subject": "ETHUSDT",
+      "subject_kind": "instrument",
+      "archive": {
+        "status": "supported",
+        "probe_ids": [
+          "settled_funding_rate:ETHUSDT:monthly_2026_07"
+        ],
+        "coverage_claim": "only the fixed object windows; not all-history completeness"
+      },
+      "recent": {
+        "status": "unknown",
+        "planned_request": "rest:settled_funding_rate:ETHUSDT:recent",
+        "reason": "T0 unavailable"
+      },
+      "gap": {
+        "status": "unknown",
+        "planned_request": "rest:settled_funding_rate:ETHUSDT:gap",
+        "reason": "T0 unavailable; no positive gap sample was fabricated"
+      },
+      "consumer": "archive planner/parser plus REST recent/gap fallback"
+    }
+  ],
+  "archive_probes": [
+    {
+      "id": "contract_kline:BTCUSDT:monthly_2026_07",
+      "family": "contract_kline",
+      "subject": "BTCUSDT",
+      "subject_kind": "instrument",
+      "requested_window": "[2026-07-01T00:00:00Z,2026-08-01T00:00:00Z)",
+      "status": "supported",
+      "classification": "archive_object_present_checksum_valid_format_valid",
+      "zip_request": {
+        "semantic_id": "archive:contract_kline:BTCUSDT:monthly_2026_07:archive_ZIP",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/klines/BTCUSDT/1m/BTCUSDT-1m-2026-07.zip",
+        "observed_at": "2026-09-09T10:58:44.433753Z",
+        "http_status": 200,
+        "response_bytes": 1844583,
+        "response_sha256": "f18440bb58f0c7e1ff63cbb906132002877c4914540c8aebab920da6937cff73",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:58:48 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "1844583",
+          "last-modified": "Sun, 02 Aug 2026 10:44:42 GMT",
+          "etag": "\"4e4893ea25ed564e0ee59aee8d6ef319\""
+        }
+      },
+      "checksum_request": {
+        "semantic_id": "archive:contract_kline:BTCUSDT:monthly_2026_07:official_checksum",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/klines/BTCUSDT/1m/BTCUSDT-1m-2026-07.zip.CHECKSUM",
+        "observed_at": "2026-09-09T10:58:50.198116Z",
+        "http_status": 200,
+        "response_bytes": 89,
+        "response_sha256": "1cd084ee3d85aa4e26070a31a691718f8d6428182a23113c54bd9f0662bcc824",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:58:51 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "89",
+          "last-modified": "Sun, 02 Aug 2026 10:44:42 GMT",
+          "etag": "\"775b767f40833641a5d449950b5327a6\""
+        },
+        "bounded_sample": "f18440bb58f0c7e1ff63cbb906132002877c4914540c8aebab920da6937cff73  BTCUSDT-1m-2026-07.zip",
+        "declared_sha256": "f18440bb58f0c7e1ff63cbb906132002877c4914540c8aebab920da6937cff73"
+      },
+      "object_key": "data/futures/um/monthly/klines/BTCUSDT/1m/BTCUSDT-1m-2026-07.zip",
+      "zip_sha256": "f18440bb58f0c7e1ff63cbb906132002877c4914540c8aebab920da6937cff73",
+      "checksum_matches_actual_bytes": true,
+      "member": "BTCUSDT-1m-2026-07.csv",
+      "header_present": true,
+      "header": [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "count",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "ignore"
+      ],
+      "row_widths": [
+        12
+      ],
+      "row_count": 44640,
+      "first_timestamp_ms": 1782864000000,
+      "first_timestamp_utc": "2026-07-01T00:00:00Z",
+      "last_timestamp_ms": 1785542340000,
+      "last_timestamp_utc": "2026-07-31T23:59:00Z",
+      "bounded_sample": {
+        "first": [
+          "1782864000000",
+          "58605.40",
+          "58688.50",
+          "58605.40",
+          "58675.80",
+          "113.536",
+          "1782864059999",
+          "6659523.70170",
+          "4323",
+          "75.808",
+          "4446408.85270",
+          "0"
+        ],
+        "last": [
+          "1785542340000",
+          "62849.00",
+          "62859.90",
+          "62848.90",
+          "62859.90",
+          "24.131",
+          "1785542399999",
+          "1516691.63880",
+          "815",
+          "19.864",
+          "1248499.57500",
+          "0"
+        ]
+      },
+      "sequence_checks": {
+        "duplicate_timestamps": 0,
+        "non_increasing_transitions": 0,
+        "missing_expected_grid_slots": 0,
+        "expected_step_ms": 60000
+      },
+      "comparison_to_2026_08_30_snapshot": {
+        "old_zip_sha256": "f18440bb58f0c7e1ff63cbb906132002877c4914540c8aebab920da6937cff73",
+        "digest_unchanged": true
+      },
+      "consumer": "archive acquisition and dataset-specific parser"
+    },
+    {
+      "id": "contract_kline:BTCUSDT:daily_2026_08_29",
+      "family": "contract_kline",
+      "subject": "BTCUSDT",
+      "subject_kind": "instrument",
+      "requested_window": "[2026-08-29T00:00:00Z,2026-08-30T00:00:00Z)",
+      "status": "supported",
+      "classification": "archive_object_present_checksum_valid_format_valid",
+      "zip_request": {
+        "semantic_id": "archive:contract_kline:BTCUSDT:daily_2026_08_29:archive_ZIP",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/daily/klines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip",
+        "observed_at": "2026-09-09T10:58:50.895074Z",
+        "http_status": 200,
+        "response_bytes": 57192,
+        "response_sha256": "41e554b2a312bfadb74e4865c5cbef8dd401586c7d973c623d0915869eb81ebc",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:58:52 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "57192",
+          "last-modified": "Sun, 30 Aug 2026 08:41:07 GMT",
+          "etag": "\"3a714c44d1bae437b4708897b145d68a\""
+        }
+      },
+      "checksum_request": {
+        "semantic_id": "archive:contract_kline:BTCUSDT:daily_2026_08_29:official_checksum",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/daily/klines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip.CHECKSUM",
+        "observed_at": "2026-09-09T10:58:52.024164Z",
+        "http_status": 200,
+        "response_bytes": 92,
+        "response_sha256": "14781ff0fb7b0aa2a8c0d30f76e51ecd8a05966cd6c2ad83685a597a0aa5f74f",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:58:54 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "92",
+          "last-modified": "Sun, 30 Aug 2026 08:41:07 GMT",
+          "etag": "\"06ea34240014efe8b62d27dac50fa65e\""
+        },
+        "bounded_sample": "41e554b2a312bfadb74e4865c5cbef8dd401586c7d973c623d0915869eb81ebc  BTCUSDT-1m-2026-08-29.zip",
+        "declared_sha256": "41e554b2a312bfadb74e4865c5cbef8dd401586c7d973c623d0915869eb81ebc"
+      },
+      "object_key": "data/futures/um/daily/klines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip",
+      "zip_sha256": "41e554b2a312bfadb74e4865c5cbef8dd401586c7d973c623d0915869eb81ebc",
+      "checksum_matches_actual_bytes": true,
+      "member": "BTCUSDT-1m-2026-08-29.csv",
+      "header_present": true,
+      "header": [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "count",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "ignore"
+      ],
+      "row_widths": [
+        12
+      ],
+      "row_count": 1440,
+      "first_timestamp_ms": 1787961600000,
+      "first_timestamp_utc": "2026-08-29T00:00:00Z",
+      "last_timestamp_ms": 1788047940000,
+      "last_timestamp_utc": "2026-08-29T23:59:00Z",
+      "bounded_sample": {
+        "first": [
+          "1787961600000",
+          "77805.90",
+          "77806.00",
+          "77760.90",
+          "77783.70",
+          "98.955",
+          "1787961659999",
+          "7696899.19340",
+          "2452",
+          "44.774",
+          "3482236.19340",
+          "0"
+        ],
+        "last": [
+          "1788047940000",
+          "78208.50",
+          "78208.60",
+          "78200.60",
+          "78200.70",
+          "15.332",
+          "1788047999999",
+          "1199041.96090",
+          "429",
+          "1.904",
+          "148902.52260",
+          "0"
+        ]
+      },
+      "sequence_checks": {
+        "duplicate_timestamps": 0,
+        "non_increasing_transitions": 0,
+        "missing_expected_grid_slots": 0,
+        "expected_step_ms": 60000
+      },
+      "comparison_to_2026_08_30_snapshot": {
+        "old_zip_sha256": "41e554b2a312bfadb74e4865c5cbef8dd401586c7d973c623d0915869eb81ebc",
+        "digest_unchanged": true
+      },
+      "consumer": "archive acquisition and dataset-specific parser"
+    },
+    {
+      "id": "contract_kline:ETHUSDT:monthly_2026_07",
+      "family": "contract_kline",
+      "subject": "ETHUSDT",
+      "subject_kind": "instrument",
+      "requested_window": "[2026-07-01T00:00:00Z,2026-08-01T00:00:00Z)",
+      "status": "supported",
+      "classification": "archive_object_present_checksum_valid_format_valid",
+      "zip_request": {
+        "semantic_id": "archive:contract_kline:ETHUSDT:monthly_2026_07:archive_ZIP",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/klines/ETHUSDT/1m/ETHUSDT-1m-2026-07.zip",
+        "observed_at": "2026-09-09T10:58:53.579519Z",
+        "http_status": 200,
+        "response_bytes": 1905641,
+        "response_sha256": "5c98ad0cfa152fbe08df59838ead7c8bbfa433af943bbfb4d082626ebee2d83e",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:58:55 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "1905641",
+          "last-modified": "Sun, 02 Aug 2026 10:45:02 GMT",
+          "etag": "\"69b65db8019c19e1e71321e778f728ac\""
+        }
+      },
+      "checksum_request": {
+        "semantic_id": "archive:contract_kline:ETHUSDT:monthly_2026_07:official_checksum",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/klines/ETHUSDT/1m/ETHUSDT-1m-2026-07.zip.CHECKSUM",
+        "observed_at": "2026-09-09T10:58:55.856082Z",
+        "http_status": 200,
+        "response_bytes": 89,
+        "response_sha256": "6c90402d993c1e477b4e1a75c4f65c74728d349a6e9a024d9f52e67f332acaf9",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:58:57 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "89",
+          "last-modified": "Sun, 02 Aug 2026 10:45:02 GMT",
+          "etag": "\"9a9cd010468e791f6671b55ab8afbec9\""
+        },
+        "bounded_sample": "5c98ad0cfa152fbe08df59838ead7c8bbfa433af943bbfb4d082626ebee2d83e  ETHUSDT-1m-2026-07.zip",
+        "declared_sha256": "5c98ad0cfa152fbe08df59838ead7c8bbfa433af943bbfb4d082626ebee2d83e"
+      },
+      "object_key": "data/futures/um/monthly/klines/ETHUSDT/1m/ETHUSDT-1m-2026-07.zip",
+      "zip_sha256": "5c98ad0cfa152fbe08df59838ead7c8bbfa433af943bbfb4d082626ebee2d83e",
+      "checksum_matches_actual_bytes": true,
+      "member": "ETHUSDT-1m-2026-07.csv",
+      "header_present": true,
+      "header": [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "count",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "ignore"
+      ],
+      "row_widths": [
+        12
+      ],
+      "row_count": 44640,
+      "first_timestamp_ms": 1782864000000,
+      "first_timestamp_utc": "2026-07-01T00:00:00Z",
+      "last_timestamp_ms": 1785542340000,
+      "last_timestamp_utc": "2026-07-31T23:59:00Z",
+      "bounded_sample": {
+        "first": [
+          "1782864000000",
+          "1571.48",
+          "1573.37",
+          "1571.48",
+          "1572.84",
+          "2313.436",
+          "1782864059999",
+          "3638427.01785",
+          "3308",
+          "1325.811",
+          "2085098.32804",
+          "0"
+        ],
+        "last": [
+          "1785542340000",
+          "1861.67",
+          "1862.01",
+          "1861.50",
+          "1861.68",
+          "460.822",
+          "1785542399999",
+          "857937.59524",
+          "823",
+          "180.965",
+          "336903.60665",
+          "0"
+        ]
+      },
+      "sequence_checks": {
+        "duplicate_timestamps": 0,
+        "non_increasing_transitions": 0,
+        "missing_expected_grid_slots": 0,
+        "expected_step_ms": 60000
+      },
+      "comparison_to_2026_08_30_snapshot": {
+        "old_zip_sha256": "5c98ad0cfa152fbe08df59838ead7c8bbfa433af943bbfb4d082626ebee2d83e",
+        "digest_unchanged": true
+      },
+      "consumer": "archive acquisition and dataset-specific parser"
+    },
+    {
+      "id": "contract_kline:ETHUSDT:daily_2026_08_29",
+      "family": "contract_kline",
+      "subject": "ETHUSDT",
+      "subject_kind": "instrument",
+      "requested_window": "[2026-08-29T00:00:00Z,2026-08-30T00:00:00Z)",
+      "status": "supported",
+      "classification": "archive_object_present_checksum_valid_format_valid",
+      "zip_request": {
+        "semantic_id": "archive:contract_kline:ETHUSDT:daily_2026_08_29:archive_ZIP",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/daily/klines/ETHUSDT/1m/ETHUSDT-1m-2026-08-29.zip",
+        "observed_at": "2026-09-09T10:58:56.525232Z",
+        "http_status": 200,
+        "response_bytes": 58898,
+        "response_sha256": "6d64864dff240b52550814cb981d14325fb716d0705d4ca6f02116b321f1f91b",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:58:58 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "58898",
+          "last-modified": "Sun, 30 Aug 2026 08:41:22 GMT",
+          "etag": "\"8e2d87381363bd97123b1a2885b024fb\""
+        }
+      },
+      "checksum_request": {
+        "semantic_id": "archive:contract_kline:ETHUSDT:daily_2026_08_29:official_checksum",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/daily/klines/ETHUSDT/1m/ETHUSDT-1m-2026-08-29.zip.CHECKSUM",
+        "observed_at": "2026-09-09T10:58:57.543070Z",
+        "http_status": 200,
+        "response_bytes": 92,
+        "response_sha256": "9a84c2d34b27383050efd1d2f1c165f63255fd778433348bb2cd49dbdcbd7509",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:00 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "92",
+          "last-modified": "Sun, 30 Aug 2026 08:41:22 GMT",
+          "etag": "\"e7d6230a5ce87572007da47b0eecbefd\""
+        },
+        "bounded_sample": "6d64864dff240b52550814cb981d14325fb716d0705d4ca6f02116b321f1f91b  ETHUSDT-1m-2026-08-29.zip",
+        "declared_sha256": "6d64864dff240b52550814cb981d14325fb716d0705d4ca6f02116b321f1f91b"
+      },
+      "object_key": "data/futures/um/daily/klines/ETHUSDT/1m/ETHUSDT-1m-2026-08-29.zip",
+      "zip_sha256": "6d64864dff240b52550814cb981d14325fb716d0705d4ca6f02116b321f1f91b",
+      "checksum_matches_actual_bytes": true,
+      "member": "ETHUSDT-1m-2026-08-29.csv",
+      "header_present": true,
+      "header": [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "count",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "ignore"
+      ],
+      "row_widths": [
+        12
+      ],
+      "row_count": 1440,
+      "first_timestamp_ms": 1787961600000,
+      "first_timestamp_utc": "2026-08-29T00:00:00Z",
+      "last_timestamp_ms": 1788047940000,
+      "last_timestamp_utc": "2026-08-29T23:59:00Z",
+      "bounded_sample": {
+        "first": [
+          "1787961600000",
+          "2441.91",
+          "2442.00",
+          "2441.38",
+          "2441.99",
+          "1177.316",
+          "1787961659999",
+          "2874727.74237",
+          "1675",
+          "512.924",
+          "1252425.90746",
+          "0"
+        ],
+        "last": [
+          "1788047940000",
+          "2456.17",
+          "2456.66",
+          "2456.08",
+          "2456.50",
+          "566.765",
+          "1788047999999",
+          "1392147.62859",
+          "939",
+          "306.117",
+          "751939.71007",
+          "0"
+        ]
+      },
+      "sequence_checks": {
+        "duplicate_timestamps": 0,
+        "non_increasing_transitions": 0,
+        "missing_expected_grid_slots": 0,
+        "expected_step_ms": 60000
+      },
+      "comparison_to_2026_08_30_snapshot": {
+        "old_zip_sha256": "6d64864dff240b52550814cb981d14325fb716d0705d4ca6f02116b321f1f91b",
+        "digest_unchanged": true
+      },
+      "consumer": "archive acquisition and dataset-specific parser"
+    },
+    {
+      "id": "index_price_kline:BTCUSDT:monthly_2026_07",
+      "family": "index_price_kline",
+      "subject": "BTCUSDT",
+      "subject_kind": "price_index_pair",
+      "requested_window": "[2026-07-01T00:00:00Z,2026-08-01T00:00:00Z)",
+      "status": "supported",
+      "classification": "archive_object_present_checksum_valid_format_valid",
+      "zip_request": {
+        "semantic_id": "archive:index_price_kline:BTCUSDT:monthly_2026_07:archive_ZIP",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-07.zip",
+        "observed_at": "2026-09-09T10:59:07.659838Z",
+        "http_status": 200,
+        "response_bytes": 1037742,
+        "response_sha256": "80f701b6e752ee9a04e9069472d6eb1165c4f379ee9cfd4c7bc11eb98a4a8175",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:10 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "1037742",
+          "last-modified": "Sun, 02 Aug 2026 10:13:00 GMT",
+          "etag": "\"fd3e68f9a0ca3c6ee73853c5a600ffbc\""
+        }
+      },
+      "checksum_request": {
+        "semantic_id": "archive:index_price_kline:BTCUSDT:monthly_2026_07:official_checksum",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-07.zip.CHECKSUM",
+        "observed_at": "2026-09-09T10:59:09.281244Z",
+        "http_status": 200,
+        "response_bytes": 89,
+        "response_sha256": "1a48e6b081574da10fc2b6807b9e09711a7085bf035e37017f247096c22ca516",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:12 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "89",
+          "last-modified": "Sun, 02 Aug 2026 10:13:00 GMT",
+          "etag": "\"d95bf088b2e8259f3a94529dd0e48cc8\""
+        },
+        "bounded_sample": "80f701b6e752ee9a04e9069472d6eb1165c4f379ee9cfd4c7bc11eb98a4a8175  BTCUSDT-1m-2026-07.zip",
+        "declared_sha256": "80f701b6e752ee9a04e9069472d6eb1165c4f379ee9cfd4c7bc11eb98a4a8175"
+      },
+      "object_key": "data/futures/um/monthly/indexPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-07.zip",
+      "zip_sha256": "80f701b6e752ee9a04e9069472d6eb1165c4f379ee9cfd4c7bc11eb98a4a8175",
+      "checksum_matches_actual_bytes": true,
+      "member": "BTCUSDT-1m-2026-07.csv",
+      "header_present": true,
+      "header": [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "count",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "ignore"
+      ],
+      "row_widths": [
+        12
+      ],
+      "row_count": 44640,
+      "first_timestamp_ms": 1782864000000,
+      "first_timestamp_utc": "2026-07-01T00:00:00Z",
+      "last_timestamp_ms": 1785542340000,
+      "last_timestamp_utc": "2026-07-31T23:59:00Z",
+      "bounded_sample": {
+        "first": [
+          "1782864000000",
+          "58626.88478261",
+          "58716.94434783",
+          "58626.88478261",
+          "58705.25282609",
+          "0",
+          "1782864059999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ],
+        "last": [
+          "1785542340000",
+          "62877.17652174",
+          "62887.07065217",
+          "62877.17652174",
+          "62886.98956522",
+          "0",
+          "1785542399999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      "sequence_checks": {
+        "duplicate_timestamps": 0,
+        "non_increasing_transitions": 0,
+        "missing_expected_grid_slots": 0,
+        "expected_step_ms": 60000
+      },
+      "comparison_to_2026_08_30_snapshot": {
+        "old_zip_sha256": "80f701b6e752ee9a04e9069472d6eb1165c4f379ee9cfd4c7bc11eb98a4a8175",
+        "digest_unchanged": true
+      },
+      "consumer": "archive acquisition and dataset-specific parser"
+    },
+    {
+      "id": "index_price_kline:BTCUSDT:daily_2026_08_29",
+      "family": "index_price_kline",
+      "subject": "BTCUSDT",
+      "subject_kind": "price_index_pair",
+      "requested_window": "[2026-08-29T00:00:00Z,2026-08-30T00:00:00Z)",
+      "status": "supported",
+      "classification": "archive_object_present_checksum_valid_format_valid",
+      "zip_request": {
+        "semantic_id": "archive:index_price_kline:BTCUSDT:daily_2026_08_29:archive_ZIP",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/daily/indexPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip",
+        "observed_at": "2026-09-09T10:59:10.153893Z",
+        "http_status": 200,
+        "response_bytes": 32595,
+        "response_sha256": "26241ffe071d9019db8302b9e1765fd05160b9db5dd8704df6fb2cecdb79a2d1",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:13 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "32595",
+          "last-modified": "Sun, 30 Aug 2026 08:29:55 GMT",
+          "etag": "\"e05195d0381e285cd40714f0e9f3995f\""
+        }
+      },
+      "checksum_request": {
+        "semantic_id": "archive:index_price_kline:BTCUSDT:daily_2026_08_29:official_checksum",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/daily/indexPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip.CHECKSUM",
+        "observed_at": "2026-09-09T10:59:11.443852Z",
+        "http_status": 200,
+        "response_bytes": 92,
+        "response_sha256": "9e7c1e680467843a4b73a39e8912fe7da37a74c44866849dbe986387890ae3a3",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:14 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "92",
+          "last-modified": "Sun, 30 Aug 2026 08:29:55 GMT",
+          "etag": "\"ff13884c2ab4c35010b0ef562d29301d\""
+        },
+        "bounded_sample": "26241ffe071d9019db8302b9e1765fd05160b9db5dd8704df6fb2cecdb79a2d1  BTCUSDT-1m-2026-08-29.zip",
+        "declared_sha256": "26241ffe071d9019db8302b9e1765fd05160b9db5dd8704df6fb2cecdb79a2d1"
+      },
+      "object_key": "data/futures/um/daily/indexPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip",
+      "zip_sha256": "26241ffe071d9019db8302b9e1765fd05160b9db5dd8704df6fb2cecdb79a2d1",
+      "checksum_matches_actual_bytes": true,
+      "member": "BTCUSDT-1m-2026-08-29.csv",
+      "header_present": true,
+      "header": [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "count",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "ignore"
+      ],
+      "row_widths": [
+        12
+      ],
+      "row_count": 1440,
+      "first_timestamp_ms": 1787961600000,
+      "first_timestamp_utc": "2026-08-29T00:00:00Z",
+      "last_timestamp_ms": 1788047940000,
+      "last_timestamp_utc": "2026-08-29T23:59:00Z",
+      "bounded_sample": {
+        "first": [
+          "1787961600000",
+          "77843.09782609",
+          "77843.09782609",
+          "77807.48934783",
+          "77819.90891304",
+          "0",
+          "1787961659999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ],
+        "last": [
+          "1788047940000",
+          "78243.19673913",
+          "78243.19673913",
+          "78232.13543478",
+          "78234.75956522",
+          "0",
+          "1788047999999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      "sequence_checks": {
+        "duplicate_timestamps": 0,
+        "non_increasing_transitions": 0,
+        "missing_expected_grid_slots": 0,
+        "expected_step_ms": 60000
+      },
+      "comparison_to_2026_08_30_snapshot": {
+        "old_zip_sha256": "26241ffe071d9019db8302b9e1765fd05160b9db5dd8704df6fb2cecdb79a2d1",
+        "digest_unchanged": true
+      },
+      "consumer": "archive acquisition and dataset-specific parser"
+    },
+    {
+      "id": "index_price_kline:ETHUSDT:monthly_2026_07",
+      "family": "index_price_kline",
+      "subject": "ETHUSDT",
+      "subject_kind": "price_index_pair",
+      "requested_window": "[2026-07-01T00:00:00Z,2026-08-01T00:00:00Z)",
+      "status": "supported",
+      "classification": "archive_object_present_checksum_valid_format_valid",
+      "zip_request": {
+        "semantic_id": "archive:index_price_kline:ETHUSDT:monthly_2026_07:archive_ZIP",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-07.zip",
+        "observed_at": "2026-09-09T10:59:12.258116Z",
+        "http_status": 200,
+        "response_bytes": 915717,
+        "response_sha256": "dd2524b6c7fbfcc8da296da3e8068818660f590f32f6467236cd0f1585b4bc73",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:15 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "915717",
+          "last-modified": "Sun, 02 Aug 2026 10:13:18 GMT",
+          "etag": "\"8fc10e8f9552cf172b049a9091e3ee69\""
+        }
+      },
+      "checksum_request": {
+        "semantic_id": "archive:index_price_kline:ETHUSDT:monthly_2026_07:official_checksum",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-07.zip.CHECKSUM",
+        "observed_at": "2026-09-09T10:59:14.164447Z",
+        "http_status": 200,
+        "response_bytes": 89,
+        "response_sha256": "38c487be3f40173fdf5e107eee44613f5059a17300535522262c7405ef2b0393",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:17 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "89",
+          "last-modified": "Sun, 02 Aug 2026 10:13:18 GMT",
+          "etag": "\"0ead44febb11b044ff66865a653e6d4d\""
+        },
+        "bounded_sample": "dd2524b6c7fbfcc8da296da3e8068818660f590f32f6467236cd0f1585b4bc73  ETHUSDT-1m-2026-07.zip",
+        "declared_sha256": "dd2524b6c7fbfcc8da296da3e8068818660f590f32f6467236cd0f1585b4bc73"
+      },
+      "object_key": "data/futures/um/monthly/indexPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-07.zip",
+      "zip_sha256": "dd2524b6c7fbfcc8da296da3e8068818660f590f32f6467236cd0f1585b4bc73",
+      "checksum_matches_actual_bytes": true,
+      "member": "ETHUSDT-1m-2026-07.csv",
+      "header_present": true,
+      "header": [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "count",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "ignore"
+      ],
+      "row_widths": [
+        12
+      ],
+      "row_count": 44640,
+      "first_timestamp_ms": 1782864000000,
+      "first_timestamp_utc": "2026-07-01T00:00:00Z",
+      "last_timestamp_ms": 1785542340000,
+      "last_timestamp_utc": "2026-07-31T23:59:00Z",
+      "bounded_sample": {
+        "first": [
+          "1782864000000",
+          "1572.01302326",
+          "1573.72697674",
+          "1572.01302326",
+          "1573.33581395",
+          "0",
+          "1782864059999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ],
+        "last": [
+          "1785542340000",
+          "1862.43558140",
+          "1862.81674419",
+          "1862.43116279",
+          "1862.48488372",
+          "0",
+          "1785542399999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      "sequence_checks": {
+        "duplicate_timestamps": 0,
+        "non_increasing_transitions": 0,
+        "missing_expected_grid_slots": 0,
+        "expected_step_ms": 60000
+      },
+      "comparison_to_2026_08_30_snapshot": {
+        "old_zip_sha256": "dd2524b6c7fbfcc8da296da3e8068818660f590f32f6467236cd0f1585b4bc73",
+        "digest_unchanged": true
+      },
+      "consumer": "archive acquisition and dataset-specific parser"
+    },
+    {
+      "id": "index_price_kline:ETHUSDT:daily_2026_08_29",
+      "family": "index_price_kline",
+      "subject": "ETHUSDT",
+      "subject_kind": "price_index_pair",
+      "requested_window": "[2026-08-29T00:00:00Z,2026-08-30T00:00:00Z)",
+      "status": "supported",
+      "classification": "archive_object_present_checksum_valid_format_valid",
+      "zip_request": {
+        "semantic_id": "archive:index_price_kline:ETHUSDT:daily_2026_08_29:archive_ZIP",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/daily/indexPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-08-29.zip",
+        "observed_at": "2026-09-09T10:59:14.809964Z",
+        "http_status": 200,
+        "response_bytes": 28571,
+        "response_sha256": "c15bec3556193e76d4a2144f57865e9610453a550177a81be966aa8eb5ab2eb7",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:18 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "28571",
+          "last-modified": "Sun, 30 Aug 2026 08:30:10 GMT",
+          "etag": "\"ad36b9c7785b87688407c90585aedfc5\""
+        }
+      },
+      "checksum_request": {
+        "semantic_id": "archive:index_price_kline:ETHUSDT:daily_2026_08_29:official_checksum",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/daily/indexPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-08-29.zip.CHECKSUM",
+        "observed_at": "2026-09-09T10:59:15.866332Z",
+        "http_status": 200,
+        "response_bytes": 92,
+        "response_sha256": "1330a80c176c27586b8d6c37186c4d476c994a9107804d5d10e1444c207c7499",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:19 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "92",
+          "last-modified": "Sun, 30 Aug 2026 08:30:10 GMT",
+          "etag": "\"704b3342c3eb3ff0fbe5c2b0ac7e8f8b\""
+        },
+        "bounded_sample": "c15bec3556193e76d4a2144f57865e9610453a550177a81be966aa8eb5ab2eb7  ETHUSDT-1m-2026-08-29.zip",
+        "declared_sha256": "c15bec3556193e76d4a2144f57865e9610453a550177a81be966aa8eb5ab2eb7"
+      },
+      "object_key": "data/futures/um/daily/indexPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-08-29.zip",
+      "zip_sha256": "c15bec3556193e76d4a2144f57865e9610453a550177a81be966aa8eb5ab2eb7",
+      "checksum_matches_actual_bytes": true,
+      "member": "ETHUSDT-1m-2026-08-29.csv",
+      "header_present": true,
+      "header": [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "count",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "ignore"
+      ],
+      "row_widths": [
+        12
+      ],
+      "row_count": 1440,
+      "first_timestamp_ms": 1787961600000,
+      "first_timestamp_utc": "2026-08-29T00:00:00Z",
+      "last_timestamp_ms": 1788047940000,
+      "last_timestamp_utc": "2026-08-29T23:59:00Z",
+      "bounded_sample": {
+        "first": [
+          "1787961600000",
+          "2442.90418605",
+          "2443.06488372",
+          "2442.76488372",
+          "2443.06488372",
+          "0",
+          "1787961659999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ],
+        "last": [
+          "1788047940000",
+          "2457.18255814",
+          "2457.29864865",
+          "2456.99860465",
+          "2457.29864865",
+          "0",
+          "1788047999999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      "sequence_checks": {
+        "duplicate_timestamps": 0,
+        "non_increasing_transitions": 0,
+        "missing_expected_grid_slots": 0,
+        "expected_step_ms": 60000
+      },
+      "comparison_to_2026_08_30_snapshot": {
+        "old_zip_sha256": "c15bec3556193e76d4a2144f57865e9610453a550177a81be966aa8eb5ab2eb7",
+        "digest_unchanged": true
+      },
+      "consumer": "archive acquisition and dataset-specific parser"
+    },
+    {
+      "id": "mark_price_kline:BTCUSDT:monthly_2026_07",
+      "family": "mark_price_kline",
+      "subject": "BTCUSDT",
+      "subject_kind": "instrument",
+      "requested_window": "[2026-07-01T00:00:00Z,2026-08-01T00:00:00Z)",
+      "status": "supported",
+      "classification": "archive_object_present_checksum_valid_format_valid",
+      "zip_request": {
+        "semantic_id": "archive:mark_price_kline:BTCUSDT:monthly_2026_07:archive_ZIP",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/markPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-07.zip",
+        "observed_at": "2026-09-09T10:58:59.001048Z",
+        "http_status": 200,
+        "response_bytes": 1022569,
+        "response_sha256": "5bb16a0707eef96d648480ab45943f25b27425154b2ccb881c200cfd51e594ed",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:01 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "1022569",
+          "last-modified": "Sun, 02 Aug 2026 10:42:56 GMT",
+          "etag": "\"a1e5fc5bf189922120bc84875466002e\""
+        }
+      },
+      "checksum_request": {
+        "semantic_id": "archive:mark_price_kline:BTCUSDT:monthly_2026_07:official_checksum",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/markPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-07.zip.CHECKSUM",
+        "observed_at": "2026-09-09T10:59:01.110555Z",
+        "http_status": 200,
+        "response_bytes": 89,
+        "response_sha256": "e2d0a763b92925aa819daa3bc1958292c9767a4323e303003f839223d1f71844",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:03 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "89",
+          "last-modified": "Sun, 02 Aug 2026 10:42:56 GMT",
+          "etag": "\"8afb7b0406d159eab4b175fd31a20896\""
+        },
+        "bounded_sample": "5bb16a0707eef96d648480ab45943f25b27425154b2ccb881c200cfd51e594ed  BTCUSDT-1m-2026-07.zip",
+        "declared_sha256": "5bb16a0707eef96d648480ab45943f25b27425154b2ccb881c200cfd51e594ed"
+      },
+      "object_key": "data/futures/um/monthly/markPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-07.zip",
+      "zip_sha256": "5bb16a0707eef96d648480ab45943f25b27425154b2ccb881c200cfd51e594ed",
+      "checksum_matches_actual_bytes": true,
+      "member": "BTCUSDT-1m-2026-07.csv",
+      "header_present": true,
+      "header": [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "count",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "ignore"
+      ],
+      "row_widths": [
+        12
+      ],
+      "row_count": 44640,
+      "first_timestamp_ms": 1782864000000,
+      "first_timestamp_utc": "2026-07-01T00:00:00Z",
+      "last_timestamp_ms": 1785542340000,
+      "last_timestamp_utc": "2026-07-31T23:59:00Z",
+      "bounded_sample": {
+        "first": [
+          "1782864000000",
+          "58605.50000000",
+          "58691.98816667",
+          "58605.40000000",
+          "58681.07221014",
+          "0",
+          "1782864059999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ],
+        "last": [
+          "1785542340000",
+          "62849.00000000",
+          "62859.90000000",
+          "62848.90000000",
+          "62859.80000000",
+          "0",
+          "1785542399999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      "sequence_checks": {
+        "duplicate_timestamps": 0,
+        "non_increasing_transitions": 0,
+        "missing_expected_grid_slots": 0,
+        "expected_step_ms": 60000
+      },
+      "comparison_to_2026_08_30_snapshot": {
+        "old_zip_sha256": "5bb16a0707eef96d648480ab45943f25b27425154b2ccb881c200cfd51e594ed",
+        "digest_unchanged": true
+      },
+      "consumer": "archive acquisition and dataset-specific parser"
+    },
+    {
+      "id": "mark_price_kline:BTCUSDT:daily_2026_08_29",
+      "family": "mark_price_kline",
+      "subject": "BTCUSDT",
+      "subject_kind": "instrument",
+      "requested_window": "[2026-08-29T00:00:00Z,2026-08-30T00:00:00Z)",
+      "status": "supported",
+      "classification": "archive_object_present_checksum_valid_format_valid",
+      "zip_request": {
+        "semantic_id": "archive:mark_price_kline:BTCUSDT:daily_2026_08_29:archive_ZIP",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/daily/markPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip",
+        "observed_at": "2026-09-09T10:59:01.857074Z",
+        "http_status": 200,
+        "response_bytes": 32177,
+        "response_sha256": "2146dff9db1e1ddc3af33f00696f735d0076174602e659377532db817860f4ac",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:04 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "32177",
+          "last-modified": "Sun, 30 Aug 2026 08:32:28 GMT",
+          "etag": "\"34274a699b785a0d8b1a24bd0e7540f0\""
+        }
+      },
+      "checksum_request": {
+        "semantic_id": "archive:mark_price_kline:BTCUSDT:daily_2026_08_29:official_checksum",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/daily/markPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip.CHECKSUM",
+        "observed_at": "2026-09-09T10:59:02.740557Z",
+        "http_status": 200,
+        "response_bytes": 92,
+        "response_sha256": "286c757489e6a11c8a1590caee37ba86febf5e2f60cc8288f9490cc50202fa26",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:05 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "92",
+          "last-modified": "Sun, 30 Aug 2026 08:32:28 GMT",
+          "etag": "\"ae312999e0262034b11af32e44081631\""
+        },
+        "bounded_sample": "2146dff9db1e1ddc3af33f00696f735d0076174602e659377532db817860f4ac  BTCUSDT-1m-2026-08-29.zip",
+        "declared_sha256": "2146dff9db1e1ddc3af33f00696f735d0076174602e659377532db817860f4ac"
+      },
+      "object_key": "data/futures/um/daily/markPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2026-08-29.zip",
+      "zip_sha256": "2146dff9db1e1ddc3af33f00696f735d0076174602e659377532db817860f4ac",
+      "checksum_matches_actual_bytes": true,
+      "member": "BTCUSDT-1m-2026-08-29.csv",
+      "header_present": true,
+      "header": [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "count",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "ignore"
+      ],
+      "row_widths": [
+        12
+      ],
+      "row_count": 1440,
+      "first_timestamp_ms": 1787961600000,
+      "first_timestamp_utc": "2026-08-29T00:00:00Z",
+      "last_timestamp_ms": 1788047940000,
+      "last_timestamp_utc": "2026-08-29T23:59:00Z",
+      "bounded_sample": {
+        "first": [
+          "1787961600000",
+          "77806.11673913",
+          "77806.12043478",
+          "77764.52556972",
+          "77783.70000000",
+          "0",
+          "1787961659999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ],
+        "last": [
+          "1788047940000",
+          "78208.60000000",
+          "78208.60000000",
+          "78200.60000000",
+          "78201.65386957",
+          "0",
+          "1788047999999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      "sequence_checks": {
+        "duplicate_timestamps": 0,
+        "non_increasing_transitions": 0,
+        "missing_expected_grid_slots": 0,
+        "expected_step_ms": 60000
+      },
+      "comparison_to_2026_08_30_snapshot": {
+        "old_zip_sha256": "2146dff9db1e1ddc3af33f00696f735d0076174602e659377532db817860f4ac",
+        "digest_unchanged": true
+      },
+      "consumer": "archive acquisition and dataset-specific parser"
+    },
+    {
+      "id": "mark_price_kline:ETHUSDT:monthly_2026_07",
+      "family": "mark_price_kline",
+      "subject": "ETHUSDT",
+      "subject_kind": "instrument",
+      "requested_window": "[2026-07-01T00:00:00Z,2026-08-01T00:00:00Z)",
+      "status": "supported",
+      "classification": "archive_object_present_checksum_valid_format_valid",
+      "zip_request": {
+        "semantic_id": "archive:mark_price_kline:ETHUSDT:monthly_2026_07:archive_ZIP",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/markPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-07.zip",
+        "observed_at": "2026-09-09T10:59:03.480234Z",
+        "http_status": 200,
+        "response_bytes": 949603,
+        "response_sha256": "641ce19380be3671714cf4e358d671737af834534e6e6f1f75852ffc07ce3e7d",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:06 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "949603",
+          "last-modified": "Sun, 02 Aug 2026 10:43:17 GMT",
+          "etag": "\"9be0369e75d1c0096a8d3d25cd9dff31\""
+        }
+      },
+      "checksum_request": {
+        "semantic_id": "archive:mark_price_kline:ETHUSDT:monthly_2026_07:official_checksum",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/markPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-07.zip.CHECKSUM",
+        "observed_at": "2026-09-09T10:59:05.439112Z",
+        "http_status": 200,
+        "response_bytes": 89,
+        "response_sha256": "185295dd379b284f878f20f4bd2d69090c52234196ad2713427c4a159ded6508",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:08 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "89",
+          "last-modified": "Sun, 02 Aug 2026 10:43:17 GMT",
+          "etag": "\"46d9a5eb61e4281456e42866174d0176\""
+        },
+        "bounded_sample": "641ce19380be3671714cf4e358d671737af834534e6e6f1f75852ffc07ce3e7d  ETHUSDT-1m-2026-07.zip",
+        "declared_sha256": "641ce19380be3671714cf4e358d671737af834534e6e6f1f75852ffc07ce3e7d"
+      },
+      "object_key": "data/futures/um/monthly/markPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-07.zip",
+      "zip_sha256": "641ce19380be3671714cf4e358d671737af834534e6e6f1f75852ffc07ce3e7d",
+      "checksum_matches_actual_bytes": true,
+      "member": "ETHUSDT-1m-2026-07.csv",
+      "header_present": true,
+      "header": [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "count",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "ignore"
+      ],
+      "row_widths": [
+        12
+      ],
+      "row_count": 44640,
+      "first_timestamp_ms": 1782864000000,
+      "first_timestamp_utc": "2026-07-01T00:00:00Z",
+      "last_timestamp_ms": 1785542340000,
+      "last_timestamp_utc": "2026-07-31T23:59:00Z",
+      "bounded_sample": {
+        "first": [
+          "1782864000000",
+          "1571.48000000",
+          "1573.17717322",
+          "1571.48000000",
+          "1572.81000000",
+          "0",
+          "1782864059999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ],
+        "last": [
+          "1785542340000",
+          "1861.67000000",
+          "1862.03480620",
+          "1861.66000000",
+          "1861.69074419",
+          "0",
+          "1785542399999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      "sequence_checks": {
+        "duplicate_timestamps": 0,
+        "non_increasing_transitions": 0,
+        "missing_expected_grid_slots": 0,
+        "expected_step_ms": 60000
+      },
+      "comparison_to_2026_08_30_snapshot": {
+        "old_zip_sha256": "641ce19380be3671714cf4e358d671737af834534e6e6f1f75852ffc07ce3e7d",
+        "digest_unchanged": true
+      },
+      "consumer": "archive acquisition and dataset-specific parser"
+    },
+    {
+      "id": "mark_price_kline:ETHUSDT:daily_2026_08_29",
+      "family": "mark_price_kline",
+      "subject": "ETHUSDT",
+      "subject_kind": "instrument",
+      "requested_window": "[2026-08-29T00:00:00Z,2026-08-30T00:00:00Z)",
+      "status": "supported",
+      "classification": "archive_object_present_checksum_valid_format_valid",
+      "zip_request": {
+        "semantic_id": "archive:mark_price_kline:ETHUSDT:daily_2026_08_29:archive_ZIP",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/daily/markPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-08-29.zip",
+        "observed_at": "2026-09-09T10:59:06.084103Z",
+        "http_status": 200,
+        "response_bytes": 29275,
+        "response_sha256": "ba0613355d8ae1a47367d99a4c39543b5f5cd8aacb70480e5670b38d076b359a",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:08 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "29275",
+          "last-modified": "Sun, 30 Aug 2026 08:32:44 GMT",
+          "etag": "\"b9703706270f528b3ed466e7a5f6fa6e\""
+        }
+      },
+      "checksum_request": {
+        "semantic_id": "archive:mark_price_kline:ETHUSDT:daily_2026_08_29:official_checksum",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/daily/markPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-08-29.zip.CHECKSUM",
+        "observed_at": "2026-09-09T10:59:06.883293Z",
+        "http_status": 200,
+        "response_bytes": 92,
+        "response_sha256": "86a3c2ce56f07470d2115b9cdbbb8c742273196982a030aad59df984fffa8016",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:09 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "92",
+          "last-modified": "Sun, 30 Aug 2026 08:32:44 GMT",
+          "etag": "\"5ada5d82f22f4f855a5c9f14ac8413f9\""
+        },
+        "bounded_sample": "ba0613355d8ae1a47367d99a4c39543b5f5cd8aacb70480e5670b38d076b359a  ETHUSDT-1m-2026-08-29.zip",
+        "declared_sha256": "ba0613355d8ae1a47367d99a4c39543b5f5cd8aacb70480e5670b38d076b359a"
+      },
+      "object_key": "data/futures/um/daily/markPriceKlines/ETHUSDT/1m/ETHUSDT-1m-2026-08-29.zip",
+      "zip_sha256": "ba0613355d8ae1a47367d99a4c39543b5f5cd8aacb70480e5670b38d076b359a",
+      "checksum_matches_actual_bytes": true,
+      "member": "ETHUSDT-1m-2026-08-29.csv",
+      "header_present": true,
+      "header": [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "count",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "ignore"
+      ],
+      "row_widths": [
+        12
+      ],
+      "row_count": 1440,
+      "first_timestamp_ms": 1787961600000,
+      "first_timestamp_utc": "2026-08-29T00:00:00Z",
+      "last_timestamp_ms": 1788047940000,
+      "last_timestamp_utc": "2026-08-29T23:59:00Z",
+      "bounded_sample": {
+        "first": [
+          "1787961600000",
+          "2441.96697674",
+          "2442.00725581",
+          "2441.60389334",
+          "2442.00725581",
+          "0",
+          "1787961659999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ],
+        "last": [
+          "1788047940000",
+          "2456.17000000",
+          "2456.20796627",
+          "2456.08000000",
+          "2456.19000000",
+          "0",
+          "1788047999999",
+          "0",
+          "60",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      "sequence_checks": {
+        "duplicate_timestamps": 0,
+        "non_increasing_transitions": 0,
+        "missing_expected_grid_slots": 0,
+        "expected_step_ms": 60000
+      },
+      "comparison_to_2026_08_30_snapshot": {
+        "old_zip_sha256": "ba0613355d8ae1a47367d99a4c39543b5f5cd8aacb70480e5670b38d076b359a",
+        "digest_unchanged": true
+      },
+      "consumer": "archive acquisition and dataset-specific parser"
+    },
+    {
+      "id": "settled_funding_rate:BTCUSDT:monthly_2026_07",
+      "family": "settled_funding_rate",
+      "subject": "BTCUSDT",
+      "subject_kind": "instrument",
+      "requested_window": "[2026-07-01T00:00:00Z,2026-08-01T00:00:00Z)",
+      "status": "supported",
+      "classification": "archive_object_present_checksum_valid_format_valid",
+      "zip_request": {
+        "semantic_id": "archive:settled_funding_rate:BTCUSDT:monthly_2026_07:archive_ZIP",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2026-07.zip",
+        "observed_at": "2026-09-09T10:59:16.668628Z",
+        "http_status": 200,
+        "response_bytes": 914,
+        "response_sha256": "e36fcc66f493d7d9ec348c852fc22e9f318c79cf7adae17398a3994ae0adc41e",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:20 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "914",
+          "last-modified": "Sat, 01 Aug 2026 08:09:06 GMT",
+          "etag": "\"49406c38fb0b470fed5627a37c217ac8\""
+        }
+      },
+      "checksum_request": {
+        "semantic_id": "archive:settled_funding_rate:BTCUSDT:monthly_2026_07:official_checksum",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2026-07.zip.CHECKSUM",
+        "observed_at": "2026-09-09T10:59:17.354936Z",
+        "http_status": 200,
+        "response_bytes": 98,
+        "response_sha256": "50e4e9f408bff433a4b2eb9bbc37ac816a1112dd6d851689ffd48f3014580ff6",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:21 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "98",
+          "last-modified": "Sat, 01 Aug 2026 08:09:06 GMT",
+          "etag": "\"161e31f9412b9ef03802a3b6bf6bd8b8\""
+        },
+        "bounded_sample": "e36fcc66f493d7d9ec348c852fc22e9f318c79cf7adae17398a3994ae0adc41e  BTCUSDT-fundingRate-2026-07.zip",
+        "declared_sha256": "e36fcc66f493d7d9ec348c852fc22e9f318c79cf7adae17398a3994ae0adc41e"
+      },
+      "object_key": "data/futures/um/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2026-07.zip",
+      "zip_sha256": "e36fcc66f493d7d9ec348c852fc22e9f318c79cf7adae17398a3994ae0adc41e",
+      "checksum_matches_actual_bytes": true,
+      "member": "BTCUSDT-fundingRate-2026-07.csv",
+      "header_present": true,
+      "header": [
+        "calc_time",
+        "funding_interval_hours",
+        "last_funding_rate"
+      ],
+      "row_widths": [
+        3
+      ],
+      "row_count": 93,
+      "first_timestamp_ms": 1782864000000,
+      "first_timestamp_utc": "2026-07-01T00:00:00Z",
+      "last_timestamp_ms": 1785513600000,
+      "last_timestamp_utc": "2026-07-31T16:00:00Z",
+      "bounded_sample": {
+        "first": [
+          "1782864000000",
+          "8",
+          "0.00005532"
+        ],
+        "last": [
+          "1785513600000",
+          "8",
+          "0.00005664"
+        ]
+      },
+      "sequence_checks": {
+        "duplicate_timestamps": 0,
+        "non_increasing_transitions": 0,
+        "missing_expected_grid_slots": 0,
+        "expected_step_ms": 28800000
+      },
+      "comparison_to_2026_08_30_snapshot": {
+        "old_zip_sha256": "e36fcc66f493d7d9ec348c852fc22e9f318c79cf7adae17398a3994ae0adc41e",
+        "digest_unchanged": true
+      },
+      "consumer": "archive acquisition and dataset-specific parser"
+    },
+    {
+      "id": "settled_funding_rate:ETHUSDT:monthly_2026_07",
+      "family": "settled_funding_rate",
+      "subject": "ETHUSDT",
+      "subject_kind": "instrument",
+      "requested_window": "[2026-07-01T00:00:00Z,2026-08-01T00:00:00Z)",
+      "status": "supported",
+      "classification": "archive_object_present_checksum_valid_format_valid",
+      "zip_request": {
+        "semantic_id": "archive:settled_funding_rate:ETHUSDT:monthly_2026_07:archive_ZIP",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/fundingRate/ETHUSDT/ETHUSDT-fundingRate-2026-07.zip",
+        "observed_at": "2026-09-09T10:59:18.094691Z",
+        "http_status": 200,
+        "response_bytes": 941,
+        "response_sha256": "ece7f6c64d0e45fbd64929dec40bae525fe365381046e367de5ca0827bc623d3",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:21 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "941",
+          "last-modified": "Sat, 01 Aug 2026 08:09:07 GMT",
+          "etag": "\"0a8a9e3d0f514dbc2af655bbf820044d\""
+        }
+      },
+      "checksum_request": {
+        "semantic_id": "archive:settled_funding_rate:ETHUSDT:monthly_2026_07:official_checksum",
+        "attempt": 1,
+        "method": "GET",
+        "url": "https://data.binance.vision/data/futures/um/monthly/fundingRate/ETHUSDT/ETHUSDT-fundingRate-2026-07.zip.CHECKSUM",
+        "observed_at": "2026-09-09T10:59:18.815196Z",
+        "http_status": 200,
+        "response_bytes": 98,
+        "response_sha256": "0324c615464d165ae508134173868add2490efd3af5c3e857e0199536a77af12",
+        "headers": {
+          "date": "Wed, 09 Sep 2026 10:59:22 GMT",
+          "content-type": "binary/octet-stream",
+          "content-length": "98",
+          "last-modified": "Sat, 01 Aug 2026 08:09:07 GMT",
+          "etag": "\"6ac815d172297267d034f7752de3ed0b\""
+        },
+        "bounded_sample": "ece7f6c64d0e45fbd64929dec40bae525fe365381046e367de5ca0827bc623d3  ETHUSDT-fundingRate-2026-07.zip",
+        "declared_sha256": "ece7f6c64d0e45fbd64929dec40bae525fe365381046e367de5ca0827bc623d3"
+      },
+      "object_key": "data/futures/um/monthly/fundingRate/ETHUSDT/ETHUSDT-fundingRate-2026-07.zip",
+      "zip_sha256": "ece7f6c64d0e45fbd64929dec40bae525fe365381046e367de5ca0827bc623d3",
+      "checksum_matches_actual_bytes": true,
+      "member": "ETHUSDT-fundingRate-2026-07.csv",
+      "header_present": true,
+      "header": [
+        "calc_time",
+        "funding_interval_hours",
+        "last_funding_rate"
+      ],
+      "row_widths": [
+        3
+      ],
+      "row_count": 93,
+      "first_timestamp_ms": 1782864000000,
+      "first_timestamp_utc": "2026-07-01T00:00:00Z",
+      "last_timestamp_ms": 1785513600000,
+      "last_timestamp_utc": "2026-07-31T16:00:00Z",
+      "bounded_sample": {
+        "first": [
+          "1782864000000",
+          "8",
+          "0.00006151"
+        ],
+        "last": [
+          "1785513600000",
+          "8",
+          "-0.00002045"
+        ]
+      },
+      "sequence_checks": {
+        "duplicate_timestamps": 0,
+        "non_increasing_transitions": 0,
+        "missing_expected_grid_slots": 0,
+        "expected_step_ms": 28800000
+      },
+      "comparison_to_2026_08_30_snapshot": {
+        "old_zip_sha256": "ece7f6c64d0e45fbd64929dec40bae525fe365381046e367de5ca0827bc623d3",
+        "digest_unchanged": true
+      },
+      "consumer": "archive acquisition and dataset-specific parser"
+    }
+  ],
+  "rest_requests_not_executed": [
+    {
+      "semantic_id": "rest:contract_kline:BTCUSDT:recent",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m",
+      "normalized_window_formula": "[M-60min,M); startTime=M-3600000, endTime=M-1, limit=60",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    },
+    {
+      "semantic_id": "rest:contract_kline:BTCUSDT:gap",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m",
+      "normalized_window_formula": "first five complete minutes of recent; startTime=M-3600000, endTime=M-3300001, limit=5",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    },
+    {
+      "semantic_id": "rest:contract_kline:ETHUSDT:recent",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/klines?symbol=ETHUSDT&interval=1m",
+      "normalized_window_formula": "[M-60min,M); startTime=M-3600000, endTime=M-1, limit=60",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    },
+    {
+      "semantic_id": "rest:contract_kline:ETHUSDT:gap",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/klines?symbol=ETHUSDT&interval=1m",
+      "normalized_window_formula": "first five complete minutes of recent; startTime=M-3600000, endTime=M-3300001, limit=5",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    },
+    {
+      "semantic_id": "rest:mark_price_kline:BTCUSDT:recent",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/markPriceKlines?symbol=BTCUSDT&interval=1m",
+      "normalized_window_formula": "[M-60min,M); startTime=M-3600000, endTime=M-1, limit=60",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    },
+    {
+      "semantic_id": "rest:mark_price_kline:BTCUSDT:gap",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/markPriceKlines?symbol=BTCUSDT&interval=1m",
+      "normalized_window_formula": "first five complete minutes of recent; startTime=M-3600000, endTime=M-3300001, limit=5",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    },
+    {
+      "semantic_id": "rest:mark_price_kline:ETHUSDT:recent",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/markPriceKlines?symbol=ETHUSDT&interval=1m",
+      "normalized_window_formula": "[M-60min,M); startTime=M-3600000, endTime=M-1, limit=60",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    },
+    {
+      "semantic_id": "rest:mark_price_kline:ETHUSDT:gap",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/markPriceKlines?symbol=ETHUSDT&interval=1m",
+      "normalized_window_formula": "first five complete minutes of recent; startTime=M-3600000, endTime=M-3300001, limit=5",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    },
+    {
+      "semantic_id": "rest:index_price_kline:BTCUSDT:recent",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/indexPriceKlines?pair=BTCUSDT&interval=1m",
+      "normalized_window_formula": "[M-60min,M); startTime=M-3600000, endTime=M-1, limit=60",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    },
+    {
+      "semantic_id": "rest:index_price_kline:BTCUSDT:gap",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/indexPriceKlines?pair=BTCUSDT&interval=1m",
+      "normalized_window_formula": "first five complete minutes of recent; startTime=M-3600000, endTime=M-3300001, limit=5",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    },
+    {
+      "semantic_id": "rest:index_price_kline:ETHUSDT:recent",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/indexPriceKlines?pair=ETHUSDT&interval=1m",
+      "normalized_window_formula": "[M-60min,M); startTime=M-3600000, endTime=M-1, limit=60",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    },
+    {
+      "semantic_id": "rest:index_price_kline:ETHUSDT:gap",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/indexPriceKlines?pair=ETHUSDT&interval=1m",
+      "normalized_window_formula": "first five complete minutes of recent; startTime=M-3600000, endTime=M-3300001, limit=5",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    },
+    {
+      "semantic_id": "rest:settled_funding_rate:BTCUSDT:recent",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT",
+      "normalized_window_formula": "[T0-7days,T0); startTime=T0-604800000, endTime=T0-1, limit=1000",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    },
+    {
+      "semantic_id": "rest:settled_funding_rate:BTCUSDT:gap",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT",
+      "normalized_window_formula": "from first settled recent fundingTime to min(+1h,T0); inclusive endTime=end_exclusive-1, limit=100",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    },
+    {
+      "semantic_id": "rest:settled_funding_rate:ETHUSDT:recent",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/fundingRate?symbol=ETHUSDT",
+      "normalized_window_formula": "[T0-7days,T0); startTime=T0-604800000, endTime=T0-1, limit=1000",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    },
+    {
+      "semantic_id": "rest:settled_funding_rate:ETHUSDT:gap",
+      "method": "GET",
+      "url_prefix": "https://fapi.binance.com/fapi/v1/fundingRate?symbol=ETHUSDT",
+      "normalized_window_formula": "from first settled recent fundingTime to min(+1h,T0); inclusive endTime=end_exclusive-1, limit=100",
+      "status": "unknown",
+      "execution": "not_executed",
+      "reason": "official serverTime request returned HTTP 451; T0 is unavailable",
+      "http_status": null,
+      "response_bytes": null,
+      "response_sha256": null,
+      "bounded_sample": null,
+      "consumer": "recent/gap REST acquisition"
+    }
+  ],
+  "schema_contract": {
+    "contract_kline_archive": {
+      "required_columns": [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "count",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "ignore"
+      ],
+      "observed_width": 12
+    },
+    "mark_and_index_archive": {
+      "required_physical_columns": [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "count",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "ignore"
+      ],
+      "semantic_rule": "price OHLC and timestamps are meaningful; volume/quote/taker fields and count=60 are placeholders and must map to ignore/null"
+    },
+    "funding_archive": {
+      "required_columns": [
+        "calc_time",
+        "funding_interval_hours",
+        "last_funding_rate"
+      ],
+      "observed_width": 3,
+      "observed_interval_hours": 8
+    },
+    "funding_rest": {
+      "required_for_identity_and_value": [
+        "symbol",
+        "fundingRate",
+        "fundingTime"
+      ],
+      "optional_or_preserve_if_present": [
+        "markPrice",
+        "rateType"
+      ],
+      "unknown_in_this_run": [
+        "current field presence",
+        "current nullability",
+        "current extra fields"
+      ],
+      "old_snapshot_observation": "#191 described symbol,fundingRate,fundingTime,markPrice,rateType; #279 obtained no current REST body",
+      "non_inference_rule": "archive cannot supply symbol, markPrice, or rateType; missing fields remain missing"
+    }
+  },
+  "prior_evidence": {
+    "observed_date": "2026-08-30",
+    "report": {
+      "path": "docs/research/binance-usdm-public-history-source-contract.md",
+      "sha256": "713fd5b069e985ae23c721dff44d5afd172ae3cd446e66c9c173bc60d5ff52a3"
+    },
+    "manifest": {
+      "path": "docs/research/binance-usdm-public-history-probe-manifest.json",
+      "sha256": "cffaed42b5b5e65d58c67052e3517db56f54b7e9a06b0d6c8c2a7e0960c310c4"
+    },
+    "usdc_limit": "citation only; no #279 USDC request and no USDC implementation",
+    "usdc_conclusions": [
+      "BTCUSDC/ETHUSDC contract archive was observed from 2024-01 with partial first daily objects on 2024-01-04",
+      "BTCUSDC/ETHUSDC mark/index archive was observed from 2024-01 with 2024-01-03 daily objects",
+      "BTCUSDC/ETHUSDC funding archive was observed monthly from 2024-01; no daily funding object",
+      "index pair history is not proof of corresponding perpetual-symbol tradability",
+      "all four USDC REST funding earliest boundaries remained unknown"
+    ],
+    "snapshot_diff": {
+      "matching_fixed_archive_objects": 14,
+      "digest_unchanged": 14,
+      "digest_changed": 0,
+      "new_conflicts": [],
+      "rest_comparison": "not possible because #279 has no T0/current REST response"
+    }
+  },
+  "consumer_decisions": [
+    {
+      "consumer": "archive object planner/downloader",
+      "decision": "supported_for_exact_fixed_windows",
+      "allowed": "the 14 exact object URLs and checksums in archive_probes",
+      "limit": "does not prove all-history completeness or future publication"
+    },
+    {
+      "consumer": "contract/mark/index archive parser",
+      "decision": "implementable_with_dataset_specific_semantics",
+      "allowed": "12-column physical rows with explicit placeholder handling for mark/index",
+      "limit": "must still validate every acquired object for order, duplicates, gaps, and schema"
+    },
+    {
+      "consumer": "funding archive parser",
+      "decision": "implementable_for_monthly_archive_only",
+      "allowed": "calc_time,funding_interval_hours,last_funding_rate",
+      "limit": "no daily funding path; REST-only fields cannot be inferred"
+    },
+    {
+      "consumer": "recent/gap REST acquisition",
+      "decision": "blocked_by_unknown_window_evidence",
+      "allowed": null,
+      "limit": "do not claim availability or construct requests without official T0"
+    },
+    {
+      "consumer": "index REST adapter",
+      "decision": "parameter_contract_known_but_current_window_unknown",
+      "allowed": "pair=BTCUSDT or pair=ETHUSDT, never symbol= for this endpoint",
+      "limit": "pair history is independent from perpetual-instrument eligibility"
+    }
+  ],
+  "bounded_follow_up": {
+    "automatic_retry": false,
+    "recommendation": "from a permitted network location, run only serverTime plus the 8 recent and up to 8 derived gap requests",
+    "maximum_primary_requests": 17,
+    "maximum_requests_with_one_transient_retry_each": 34,
+    "maximum_response_bytes": 33554432,
+    "maximum_elapsed_seconds": 300,
+    "same_semantic_request_attempt_limit": 2,
+    "stop_conditions": [
+      "no serverTime",
+      "HTTP 429",
+      "response size limit",
+      "total size limit",
+      "elapsed limit"
+    ]
+  },
+  "limitations": [
+    "No official T0 was obtained; all absolute recent/gap windows remain unknown.",
+    "No current REST request was executed, so there is no legal-empty, positive-gap, or current funding-field evidence.",
+    "First/last rows plus grid checks prove only the downloaded fixed objects, not full-history continuity.",
+    "No USDC unit was reprobed; dated #191 conclusions were preserved without expansion."
+  ]
+}
