@@ -154,17 +154,19 @@ The currently implemented public package is `tracequant` under `src/`:
 - `tracequant.data`: typed Binance USDⓈ-M public-history contracts, an
   immutable local Raw Parquet/manifest store, and explicit archive-backfill
   adapters for BTCUSDT and ETHUSDT 1m contract, mark-price, and index-price
-  Klines. Backfill calls perform bounded public HTTP downloads, checksum and
-  ZIP/CSV validation, and Raw persistence; importing the module performs no I/O.
+  Klines plus settled funding-rate monthly objects. Backfill calls perform
+  bounded public HTTP downloads, checksum and ZIP/CSV validation, and Raw
+  persistence; importing the module performs no I/O.
 
 The `apps/`, `packages/`, and `deploy/` directories currently establish future
 boundaries through small README files. They are not implemented product
 packages. The implemented ingestion path is limited to Binance's public USDⓈ-M
-1m contract-Kline, mark-price-Kline, and index-price-Kline archives; there is no
-private or trading exchange client, REST recent synchronization, general data
-pipeline, canonical quality or repair layer, database, feature or label
-pipeline, backtester, strategy, machine-learning model, order or account
-service, risk engine, live runtime, or multi-exchange implementation.
+1m contract-Kline, mark-price-Kline, and index-price-Kline archives and settled
+funding-rate monthly archives; there is no private or trading exchange client,
+REST recent synchronization, general data pipeline, canonical quality or repair
+layer, database, feature or label pipeline, backtester, strategy,
+machine-learning model, order or account service, risk engine, live runtime, or
+multi-exchange implementation.
 
 ### Binance index-price archive backfill
 
@@ -211,6 +213,58 @@ non-trading `placeholder_*` fields. It has no REST/USDC fallback, tradability
 decision, retry scheduler, canonical repair, or aggregation behavior. Inspect
 every object status and `result.completed`; partial success or any gap/failure
 keeps the batch incomplete.
+
+### Binance settled funding-rate archive backfill
+
+`BinanceFundingRateBackfill.run(instrument, request_range)` accepts only
+BTCUSDT or ETHUSDT `InstrumentId` values. Every UTC month intersecting the
+half-open request maps to at most one complete official monthly object, even
+for a narrow point request. Frozen object evidence covers `2020-01` through
+`2026-07`; other months are explicit coverage gaps and do not trigger guessed
+monthly, daily, or REST URLs.
+
+```python
+from datetime import UTC, datetime
+
+from tracequant.data import BinanceFundingRateBackfill, RawObjectIdentity, RawStore
+from tracequant.domain import InstrumentId, TimeRange
+
+store = RawStore("raw")
+result = BinanceFundingRateBackfill(store).run(
+    InstrumentId("BTCUSDT"),
+    TimeRange(
+        start=datetime(2026, 7, 15, tzinfo=UTC),
+        end=datetime(2026, 7, 16, tzinfo=UTC),
+    ),
+)
+for object_result in result.objects:
+    if object_result.artifact_path is None:
+        continue
+    identity = RawObjectIdentity.from_request(object_result.plan.request)
+    for artifact in store.list_verified_revisions(identity):
+        revision = artifact.revision_identity
+        assert revision is not None
+        exact_artifact = store.read_exact_revision(identity, revision)
+```
+
+The Raw schema `binance.um.funding-rate.csv.v1` preserves the archive's exact
+three-field meaning: integer `calc_time`, positive integer
+`funding_interval_hours`, and the original finite `last_funding_rate` string.
+It does not invent REST-only symbol, mark-price, or rate-type fields. Funding
+rows are events, so `actual_record_range` is the observed point span
+`[first_calc_time,last_calc_time+1ms)`, not continuous month coverage. Object
+coverage is checked separately: a fixed declared interval must account for
+the first, every intermediate, and the tail event through the month boundary.
+Missing events, interval changes, or insufficient tail evidence remain an
+explicit coverage gap and are never exposed as completed Raw data.
+Each object result exposes its request range, actual event range (when parsed),
+coverage status, Raw artifact path, acquisition status, and detail.
+
+The backfill has no daily archive, REST/current-month fallback, prediction,
+fee/PnL derivation, generic retry loop, or CLI behavior. Inspect each monthly
+status and `result.completed`; successful months remain immutable and exactly
+revision-readable when another month fails or Binance later replaces an
+object.
 
 “Research MVP” therefore means a reliable foundation for later research work,
 not a claim that research, backtesting, Demo, or Live trading is available.
@@ -292,6 +346,7 @@ src/tracequant/                 implemented bootstrap package
   data/public_history.py        Binance public-history contracts
   data/raw_store.py             immutable Raw Parquet/manifest persistence
   data/binance_contract_kline.py  explicit Binance archive backfill adapter
+  data/binance_funding_rate.py  settled funding monthly archive adapter
   data/binance_index_price_kline.py  explicit index-price pair archive adapter
   data/binance_mark_price_kline.py  explicit mark-price archive adapter
 tests/                          package and workflow tests
