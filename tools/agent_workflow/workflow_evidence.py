@@ -25,7 +25,7 @@ from documentation_policy import (
 )
 from lck_core import shared_facts
 from lck_core.eligibility import evaluate_shared_blockers
-from lck_core.issue_profiles import resolve_leaf_issue_profile
+from lck_core.issue_profiles import LeafIssueWorkflowProfile, resolve_leaf_issue_profile
 from lck_core.profile_policies import (
     DEFAULT_PROFILE_POLICY_REGISTRY,
     PolicyContext,
@@ -415,7 +415,13 @@ def _issue_gates(
         gates["issue_type"] = _gate(
             "pass" if matches_type else "unknown", expected_type_label
         )
-    gates["formal_blockers"] = _formal_blockers_gate(relationships)
+    downstream_resolution = resolve_leaf_issue_profile(issue)
+    gates["formal_blockers"] = _formal_blockers_gate(
+        relationships,
+        downstream_profile=(
+            downstream_resolution.profile if downstream_resolution.resolved else None
+        ),
+    )
     return gates
 
 
@@ -423,6 +429,7 @@ def _audit_formal_blockers_gate(
     relationships: Mapping[str, Any],
     *,
     downstream_contract: Mapping[str, Any] | None = None,
+    downstream_profile: LeafIssueWorkflowProfile | None = None,
 ) -> dict[str, Any]:
     """Audit adapter for the shared gate and registered profile capabilities."""
     shared_gate = evaluate_shared_blockers(relationships)
@@ -479,6 +486,7 @@ def _audit_formal_blockers_gate(
                     if isinstance(relationships.get("repository"), str)
                     else None,
                     downstream_contract=downstream_contract,
+                    downstream_profile=downstream_profile,
                 ),
             )
         except (TypeError, ValueError) as exc:
@@ -493,6 +501,7 @@ def _audit_formal_blockers_gate(
                         "CONTRACT_INVALID",
                         "RESEARCH_OUTCOME_UNKNOWN",
                         "ARCHITECTURE_DECISION_UNMATCHED",
+                        "DOWNSTREAM_PROFILE_UNKNOWN",
                     }
                     else "fail",
                     blocker.detail,

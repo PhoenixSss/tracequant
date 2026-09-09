@@ -519,7 +519,8 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
                 "count": 1,
                 "truncated": False,
             },
-        }
+        },
+        downstream_profile=issue_profiles.TASK_PROFILE,
     )
     assert blocker_gate["status"] == "pass"
 
@@ -706,7 +707,12 @@ def test_research_blocker_uses_only_the_canonical_project_outcome() -> None:
 
     assert blocker["research_outcome"] == "DO NOT IMPLEMENT"
     assert blocker["research_outcome_is_canonical"] is True
-    assert _formal_blockers_gate(relationships)["status"] == "fail"
+    assert (
+        _formal_blockers_gate(
+            relationships, downstream_profile=issue_profiles.TASK_PROFILE
+        )["status"]
+        == "fail"
+    )
 
 
 def test_research_outcome_postcondition_paginates_past_first_page() -> None:
@@ -1302,7 +1308,8 @@ def test_closed_research_blocker_requires_an_implementation_outcome(
                 "count": 1,
                 "truncated": False,
             },
-        }
+        },
+        downstream_profile=issue_profiles.TASK_PROFILE,
     )
 
     assert result["status"] == expected
@@ -1329,6 +1336,7 @@ def test_closed_architecture_decision_requires_consistent_contract() -> None:
             downstream_contract={
                 "body": "### Decision Contract\n\nAdopt the repository-backed workflow contract and record the resulting ADR.\n",
             },
+            downstream_profile=issue_profiles.TASK_PROFILE,
         )["status"]
         == "pass"
     )

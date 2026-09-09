@@ -394,6 +394,7 @@ class PolicyContext:
     relationships: Mapping[str, Any] | None = None
     repository: str | None = None
     downstream_contract: Mapping[str, Any] | None = None
+    downstream_profile: LeafIssueWorkflowProfile | None = None
     repo_root: Path | None = None
     runner: Any = None
     base_sha: str | None = None
@@ -1386,6 +1387,29 @@ class _ResearchPolicy(_BuiltinPolicy):
                     code="RESEARCH_OUTCOME_UNKNOWN",
                     kind="research-outcome",
                     detail=str(exc),
+                ),
+            )
+
+        downstream_profile = context.downstream_profile
+        if downstream_profile is None:
+            return (
+                PolicyBlocker(
+                    code="DOWNSTREAM_PROFILE_UNKNOWN",
+                    kind="downstream-profile",
+                    detail="The downstream Issue profile is unavailable",
+                ),
+            )
+        if downstream_profile.profile_id in {"research", "documentation"}:
+            return ()
+        if downstream_profile.profile_id not in {"task", "bug"}:
+            return (
+                PolicyBlocker(
+                    code="DOWNSTREAM_PROFILE_UNKNOWN",
+                    kind="downstream-profile",
+                    detail=(
+                        "The downstream Issue profile does not have defined "
+                        "Research dependency semantics"
+                    ),
                 ),
             )
 

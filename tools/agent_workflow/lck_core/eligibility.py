@@ -164,6 +164,7 @@ class PhaseEligibilityResolver:
                             relationships=state.relationships,
                             repository=state.repository,
                             downstream_contract=downstream_contract,
+                            downstream_profile=profile,
                         ),
                     )
                     reasons.extend(
@@ -227,6 +228,7 @@ class PhaseEligibilityResolver:
                             relationships=state.relationships,
                             repository=state.repository,
                             downstream_contract=downstream_contract,
+                            downstream_profile=profile,
                         ),
                     )
                 except ValueError as exc:

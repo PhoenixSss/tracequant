@@ -19,8 +19,12 @@ if AGENT_WORKFLOW not in sys.path:
 from lck_core import eligibility, models, shared_facts  # type: ignore[import-not-found]  # noqa: E402
 from lck_core.issue_profiles import resolve_leaf_issue_profile  # type: ignore[import-not-found]  # noqa: E402
 from lck_core.profile_policies import validate_profile_contract  # type: ignore[import-not-found]  # noqa: E402
+from research_policy import decision_contract_snapshot, research_contract_snapshot  # type: ignore[import-not-found]  # noqa: E402
 from workflow_common import CommandResult, bounded_list, sha256_json  # type: ignore[import-not-found]  # noqa: E402
-from workflow_evidence import _relationship_snapshot as audit_relationship_snapshot  # type: ignore[import-not-found]  # noqa: E402
+from workflow_evidence import (  # type: ignore[import-not-found]  # noqa: E402
+    _formal_blockers_gate as audit_formal_blockers_gate,
+    _relationship_snapshot as audit_relationship_snapshot,
+)
 
 
 BUG_BODY = (
@@ -254,6 +258,169 @@ def test_lck_eligibility_accepts_long_research_architecture_dependency() -> None
         state, phase=models.Phase.REVIEW_PREPARE
     )
     assert reasons == ()
+
+
+def _research_dependency(outcome: str) -> dict[str, Any]:
+    dependency = _bounded_dependency(
+        _raw_dependency(number=191, label="type:research", body=RESEARCH_BODY)
+    )
+    dependency["research_outcome"] = outcome
+    dependency["decision_contract"] = decision_contract_snapshot(
+        RESEARCH_BODY, research=True
+    )
+    return dependency
+
+
+def _downstream_contract(label: str, *, matching_decision: bool) -> dict[str, Any]:
+    bodies = {
+        "type:task": "### Objective\n\nImplement the researched behavior.\n",
+        "type:bug": BUG_BODY,
+        "type:documentation": DOCUMENTATION_BODY,
+        "type:research": RESEARCH_BODY,
+    }
+    body = bodies[label]
+    if matching_decision:
+        body += (
+            "\n\n### Decision Contract\n\n"
+            "Adopt the repository-backed workflow contract.\n"
+        )
+    return {
+        "number": 300,
+        "body": body,
+        "body_sha256": sha256_json({"body": body}),
+    }
+
+
+@pytest.mark.parametrize(
+    ("downstream_label", "outcome", "matching_decision", "expected_code"),
+    [
+        ("type:research", "IMPLEMENT", False, None),
+        ("type:research", "DO NOT IMPLEMENT", False, None),
+        ("type:research", "NEEDS MORE EVIDENCE", False, None),
+        ("type:research", "ARCHITECTURE DECISION", False, None),
+        ("type:documentation", "IMPLEMENT", False, None),
+        ("type:documentation", "DO NOT IMPLEMENT", False, None),
+        ("type:documentation", "NEEDS MORE EVIDENCE", False, None),
+        ("type:documentation", "ARCHITECTURE DECISION", False, None),
+        ("type:task", "IMPLEMENT", False, None),
+        ("type:task", "DO NOT IMPLEMENT", False, "RESEARCH_OUTCOME_NOT_IMPLEMENTATION"),
+        (
+            "type:task",
+            "NEEDS MORE EVIDENCE",
+            False,
+            "RESEARCH_OUTCOME_NOT_IMPLEMENTATION",
+        ),
+        (
+            "type:task",
+            "ARCHITECTURE DECISION",
+            False,
+            "ARCHITECTURE_DECISION_UNMATCHED",
+        ),
+        ("type:task", "ARCHITECTURE DECISION", True, None),
+        ("type:bug", "IMPLEMENT", False, None),
+        ("type:bug", "DO NOT IMPLEMENT", False, "RESEARCH_OUTCOME_NOT_IMPLEMENTATION"),
+        (
+            "type:bug",
+            "NEEDS MORE EVIDENCE",
+            False,
+            "RESEARCH_OUTCOME_NOT_IMPLEMENTATION",
+        ),
+        ("type:bug", "ARCHITECTURE DECISION", False, "ARCHITECTURE_DECISION_UNMATCHED"),
+        ("type:bug", "ARCHITECTURE DECISION", True, None),
+    ],
+)
+def test_research_dependency_semantics_follow_downstream_profile(
+    downstream_label: str,
+    outcome: str,
+    matching_decision: bool,
+    expected_code: str | None,
+) -> None:
+    dependency = _research_dependency(outcome)
+    downstream = _downstream_contract(
+        downstream_label, matching_decision=matching_decision
+    )
+    issue = {
+        "number": 300,
+        "title": "Downstream leaf Issue",
+        "state": "OPEN",
+        "labels": [downstream_label],
+    }
+    resolution = resolve_leaf_issue_profile(issue)
+    assert resolution.resolved and resolution.profile is not None
+    relationships = {
+        "available": True,
+        "blocked_by": {"items": [dependency], "count": 1, "truncated": False},
+    }
+    state = models.LiveState(
+        issue_number=300,
+        repository="owner/repo",
+        issue=issue,
+        leaf_contract=downstream,
+        relationships=relationships,
+    )
+
+    reasons = eligibility.PhaseEligibilityResolver().blocker_reasons(
+        state, phase=models.Phase.REVIEW_PREPARE
+    )
+    audit_dependency = {
+        key: value for key, value in dependency.items() if key != "contract"
+    }
+    audit_dependency["research_contract"] = research_contract_snapshot(RESEARCH_BODY)
+    audit_result = audit_formal_blockers_gate(
+        {
+            **relationships,
+            "blocked_by": {
+                "items": [audit_dependency],
+                "count": 1,
+                "truncated": False,
+            },
+        },
+        downstream_contract=downstream,
+        downstream_profile=resolution.profile,
+    )
+
+    if expected_code is None:
+        assert reasons == ()
+        assert audit_result["status"] == "pass"
+    else:
+        assert any(f"[{expected_code}]" in reason for reason in reasons)
+        assert audit_result["status"] != "pass"
+
+
+def test_research_dependency_fails_closed_without_downstream_profile() -> None:
+    dependency = _research_dependency("IMPLEMENT")
+    state = models.LiveState(
+        issue_number=300,
+        repository="owner/repo",
+        issue={"number": 300, "state": "OPEN", "labels": ["type:unknown"]},
+        leaf_contract={"number": 300, "body": "Unknown profile"},
+        relationships={
+            "available": True,
+            "blocked_by": {"items": [dependency], "count": 1, "truncated": False},
+        },
+    )
+
+    reasons = eligibility.PhaseEligibilityResolver().blocker_reasons(
+        state, phase=models.Phase.REVIEW_PREPARE
+    )
+    assert any("[DOWNSTREAM_PROFILE_UNKNOWN]" in reason for reason in reasons)
+
+    audit_dependency = {
+        key: value for key, value in dependency.items() if key != "contract"
+    }
+    audit_dependency["research_contract"] = research_contract_snapshot(RESEARCH_BODY)
+    audit_result = audit_formal_blockers_gate(
+        {
+            "available": True,
+            "blocked_by": {
+                "items": [audit_dependency],
+                "count": 1,
+                "truncated": False,
+            },
+        }
+    )
+    assert audit_result["status"] == "unknown"
+    assert "downstream Issue profile is unavailable" in audit_result["detail"]
 
 
 @pytest.mark.parametrize(
