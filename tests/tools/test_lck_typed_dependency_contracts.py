@@ -97,10 +97,19 @@ Adopt the repository-backed workflow contract.
 DEPENDENCY_PROJECT = {
     "nodes": [
         {
-            "project": {"number": 1, "owner": {"login": "owner"}},
+            "project": {
+                "number": 1,
+                "title": "Quant System Development",
+                "owner": {"login": "owner"},
+            },
+            "content": {
+                "number": 191,
+                "repository": {"nameWithOwner": "owner/repo"},
+            },
             "fieldValues": {
                 "nodes": [
                     {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
                         "name": "ARCHITECTURE DECISION",
                         "field": {"name": "Research Outcome"},
                     }

@@ -27,6 +27,7 @@ from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     models as lck_models,
     review as lck_review,
     review_workspace as lck_review_workspace,
+    shared_facts as lck_shared_facts,
 )
 from lck_test_support import FakeReviewWorkspace  # noqa: E402
 from research_policy import (  # type: ignore[import-not-found]  # noqa: E402
@@ -89,20 +90,68 @@ def test_live_research_issue_contract_uses_research_form() -> None:
         repo_root = ROOT
 
         def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            value: dict[str, Any]
+            if command_id == "gh-issue-project-items-199":
+                value = {
+                    "data": {
+                        "repository": {
+                            "issue": {
+                                "number": 199,
+                                "projectItems": {
+                                    "nodes": [
+                                        {
+                                            "project": {
+                                                "number": 1,
+                                                "title": "Quant System Development",
+                                                "owner": {"login": "owner"},
+                                            },
+                                            "content": {
+                                                "number": 199,
+                                                "repository": {
+                                                    "nameWithOwner": "owner/repo"
+                                                },
+                                            },
+                                            "fieldValues": {
+                                                "nodes": [
+                                                    {
+                                                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                                                        "name": "Review",
+                                                        "field": {"name": "Status"},
+                                                    },
+                                                    {
+                                                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                                                        "name": "NEEDS MORE EVIDENCE",
+                                                        "field": {
+                                                            "name": "Research Outcome"
+                                                        },
+                                                    },
+                                                ],
+                                                "pageInfo": {"hasNextPage": False},
+                                            },
+                                        }
+                                    ],
+                                    "pageInfo": {"hasNextPage": False},
+                                },
+                            }
+                        }
+                    }
+                }
+            else:
+                value = {
+                    "number": 199,
+                    "title": "[Research] supported workflow",
+                    "state": "OPEN",
+                    "labels": [{"name": "type:research"}],
+                    "body": RESEARCH_BODY,
+                    # The CLI projection is intentionally incomplete and
+                    # conflicts with the authoritative GraphQL status.
+                    "projectItems": [{"status": {"name": "Ready"}}],
+                }
             return CommandResult(
                 command_id,
                 tuple(str(item) for item in argv),
                 0,
-                json.dumps(
-                    {
-                        "number": 199,
-                        "title": "[Research] supported workflow",
-                        "state": "OPEN",
-                        "labels": [{"name": "type:research"}],
-                        "body": RESEARCH_BODY,
-                        "projectItems": [],
-                    }
-                ),
+                json.dumps(value),
                 "",
             )
 
@@ -124,6 +173,98 @@ def test_live_research_issue_contract_uses_research_form() -> None:
     assert research_contract["template_path"] == ".github/ISSUE_TEMPLATE/research.yml"
     assert is_valid_research_contract(research_contract)
     assert contract["research_contract"] == research_contract
+    assert issue["project_status"] == "Review"
+    assert issue["research_outcome"] == "NEEDS MORE EVIDENCE"
+
+
+@pytest.mark.parametrize(
+    "defect",
+    (
+        "project-pagination",
+        "field-pagination",
+        "duplicate-canonical-project",
+        "wrong-owner",
+        "wrong-project-title",
+        "wrong-content-number",
+        "wrong-content-repository",
+        "malformed-single-select",
+    ),
+)
+def test_canonical_projectv2_facts_fail_closed(defect: str) -> None:
+    project_item: dict[str, Any] = {
+        "project": {
+            "number": 1,
+            "title": "Quant System Development",
+            "owner": {"login": "owner"},
+        },
+        "content": {
+            "number": 199,
+            "repository": {"nameWithOwner": "owner/repo"},
+        },
+        "fieldValues": {
+            "nodes": [
+                {
+                    "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                    "name": "Review",
+                    "field": {"name": "Status"},
+                }
+            ],
+            "pageInfo": {"hasNextPage": False},
+        },
+    }
+    raw: dict[str, Any] = {
+        "nodes": [project_item],
+        "pageInfo": {"hasNextPage": False},
+    }
+    if defect == "project-pagination":
+        raw["pageInfo"]["hasNextPage"] = True
+    elif defect == "field-pagination":
+        project_item["fieldValues"]["pageInfo"]["hasNextPage"] = True
+    elif defect == "duplicate-canonical-project":
+        raw["nodes"].append(json.loads(json.dumps(project_item)))
+    elif defect == "wrong-owner":
+        project_item["project"]["owner"]["login"] = "someone-else"
+    elif defect == "wrong-project-title":
+        project_item["project"]["title"] = "Different Project"
+    elif defect == "wrong-content-number":
+        project_item["content"]["number"] = 200
+    elif defect == "wrong-content-repository":
+        project_item["content"]["repository"]["nameWithOwner"] = "owner/other"
+    elif defect == "malformed-single-select":
+        project_item["fieldValues"]["nodes"][0].pop("__typename")
+
+    normalized = lck_shared_facts._normalize_project_items(raw)
+
+    assert (
+        lck_shared_facts.canonical_project_field(
+            normalized,
+            repository="owner/repo",
+            issue_number=199,
+            field_name="Status",
+        )
+        is None
+    )
+
+
+def test_root_projectv2_graphql_error_is_incomplete() -> None:
+    class Runner:
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            return CommandResult(
+                command_id,
+                tuple(str(item) for item in argv),
+                0,
+                json.dumps({"errors": [{"message": "query failed"}]}),
+                "",
+            )
+
+    warnings: list[dict[str, Any]] = []
+    project_items = lck_shared_facts._issue_project_items_snapshot(
+        Runner(), "owner/repo", 199, warnings
+    )
+
+    assert project_items["complete"] is False
+    assert project_items["truncated"] is True
+    assert warnings
 
 
 def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
@@ -166,7 +307,8 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
     # closed-PR Closeout path, Project Research Outcome, and blocker admission.
     report = tmp_path / "docs" / "research" / "lifecycle.md"
     report.write_text(
-        "# Research report\n\nResearch Outcome: IMPLEMENT\n", encoding="utf-8"
+        "# Research report\n\nResearch Outcome: NEEDS MORE EVIDENCE\n",
+        encoding="utf-8",
     )
     review_root = tmp_path / "review-root"
     review_report = review_root / "docs" / "research" / "lifecycle.md"
@@ -243,9 +385,9 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
                                                     },
                                                     "fieldValueByName": {
                                                         "name": (
-                                                            "IMPLEMENT"
+                                                            "NEEDS MORE EVIDENCE"
                                                             if self.project_writes
-                                                            else "DO NOT IMPLEMENT"
+                                                            else None
                                                         )
                                                     },
                                                 }
@@ -267,16 +409,54 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
             raise AssertionError(f"unsupported lifecycle command: {command}")
 
     runner = Runner()
+    root_project_items = lck_shared_facts._normalize_project_items(
+        {
+            "nodes": [
+                {
+                    "project": {
+                        "number": 1,
+                        "title": "Quant System Development",
+                        "owner": {"login": "owner"},
+                    },
+                    "content": {
+                        "number": 199,
+                        "repository": {"nameWithOwner": "owner/repo"},
+                    },
+                    "fieldValues": {
+                        "nodes": [
+                            {
+                                "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                                "name": "Review",
+                                "field": {"name": "Status"},
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                }
+            ],
+            "pageInfo": {"hasNextPage": False},
+        }
+    )
     issue = {
         "number": 199,
         "title": "[Research] supported workflow",
         "state": "OPEN",
         "labels": {"items": ["type:research", "codex:ready"]},
         "project_status": "Review",
+        "project_items": root_project_items,
         "body": RESEARCH_BODY,
         "body_sha256": body_sha,
         "research_contract": research_contract_snapshot(RESEARCH_BODY),
     }
+    assert (
+        lck_shared_facts.canonical_project_field(
+            root_project_items,
+            repository="owner/repo",
+            issue_number=199,
+            field_name="Research Outcome",
+        )
+        is None
+    )
     pr = {
         "number": 299,
         "state": "OPEN",
@@ -445,7 +625,7 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
     ).complete(199, review_id, verdict="PASS")
     assert review_result.status == "READY_FOR_MERGE_PREFLIGHT"
     review_record = review_store.read_record(199, review_id)
-    assert review_record["research_outcome"] == "IMPLEMENT"
+    assert review_record["research_outcome"] == "NEEDS MORE EVIDENCE"
 
     merge_result = lck_review.MergePreflight(
         resolver,
@@ -487,7 +667,6 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
 
     closeout = lck_closeout.CloseoutCompleter(
         resolver,
-        eligibility=cast(Any, Eligible()),
         main_effect=cast(Any, FixedEffect("synchronize_main", "synchronized")),
         metadata_effect=cast(
             Any, FixedEffect("converge_task_metadata", "already-converged")
@@ -499,7 +678,7 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
     closeout._validate_reviewed_identity = lambda _state, _pr: review_record
     closeout_result = closeout.complete(199)
     assert closeout_result.business_delivery == "COMPLETE"
-    assert closeout_result.research_outcome == "IMPLEMENT"
+    assert closeout_result.research_outcome == "NEEDS MORE EVIDENCE"
     assert runner.project_writes == 1
 
     blocker_gate = _formal_blockers_gate(
@@ -525,13 +704,14 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
     assert blocker_gate["status"] == "pass"
 
 
-def test_research_completion_rejects_artifact_divergence_from_review_identity(
-    tmp_path: Path,
+@pytest.mark.parametrize("outcome", ("IMPLEMENT", "DO NOT IMPLEMENT"))
+def test_research_completion_accepts_typed_outcomes_and_rejects_artifact_divergence(
+    tmp_path: Path, outcome: str
 ) -> None:
     artifact_path = tmp_path / "docs" / "research" / "report.md"
     artifact_path.parent.mkdir(parents=True)
     artifact_path.write_text(
-        "# Research report\n\nResearch Outcome: IMPLEMENT\n",
+        f"# Research report\n\nResearch Outcome: {outcome}\n",
         encoding="utf-8",
     )
     body_sha = sha256_json({"body": RESEARCH_BODY})
@@ -583,6 +763,7 @@ def test_research_completion_rejects_artifact_divergence_from_review_identity(
         completion_input,
     )
     assert result.effect is not None
+    assert result.effect.parameters["value"] == outcome
 
     tampered = dict(binding)
     tampered["artifact_sha256"] = "f" * 64
@@ -602,6 +783,85 @@ def test_research_completion_rejects_artifact_divergence_from_review_identity(
             issue,
             tampered_input,
         )
+
+
+def test_closeout_rejects_missing_review_artifact_before_any_effect(
+    tmp_path: Path,
+) -> None:
+    body_sha = sha256_json({"body": RESEARCH_BODY})
+    issue = {
+        "number": 199,
+        "title": "[Research] supported workflow",
+        "state": "CLOSED",
+        "labels": {"items": ["type:research", "codex:ready"]},
+        "project_status": "Review",
+        "body_sha256": body_sha,
+        "research_contract": research_contract_snapshot(RESEARCH_BODY),
+    }
+    state = lck_models.LiveState(
+        issue_number=199,
+        repository="owner/repo",
+        issue=issue,
+        leaf_contract={
+            "number": 199,
+            "title": issue["title"],
+            "body": RESEARCH_BODY,
+            "body_sha256": body_sha,
+            "research_contract": issue["research_contract"],
+        },
+        relationships={
+            "available": True,
+            "blocked_by": {"items": [], "count": 0, "truncated": False},
+        },
+        merged_pr={"number": 299},
+    )
+    resolver = cast(
+        Any,
+        type(
+            "Resolver",
+            (),
+            {
+                "repo_root": tmp_path,
+                "resolve": lambda _self, _task_number: state,
+            },
+        )(),
+    )
+
+    class Eligible:
+        def resolve(
+            self,
+            _state: lck_models.LiveState,
+            phase: lck_models.Phase,
+        ) -> lck_eligibility.PhaseDecision:
+            return lck_eligibility.PhaseDecision(phase=phase, eligible=True)
+
+    class ForbiddenEffect:
+        def execute(self, *_args: Any, **_kwargs: Any) -> lck_models.EffectReceipt:
+            raise AssertionError("Closeout effect ran before completion validation")
+
+    handler = lck_closeout.CloseoutCompleter(
+        resolver,
+        eligibility=cast(Any, Eligible()),
+        main_effect=cast(Any, ForbiddenEffect()),
+    )
+    handler._validate_merged_identity = lambda _state: ("2" * 40, "3" * 40)
+    handler._validate_reviewed_identity = lambda _state, _pr: {
+        "identity": {
+            "task_number": 199,
+            "pr_number": 299,
+            "base_sha": "1" * 40,
+            "head_sha": "2" * 40,
+            "task_body_sha256": body_sha,
+        }
+    }
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="reviewed artifact binding",
+    ):
+        handler.complete(199)
+
+    assert handler.last_effects == []
 
 
 def test_research_blocker_uses_only_the_canonical_project_outcome() -> None:
@@ -638,13 +898,21 @@ def test_research_blocker_uses_only_the_canonical_project_outcome() -> None:
                                                         {
                                                             "project": {
                                                                 "number": 17,
+                                                                "title": "Other",
                                                                 "owner": {
                                                                     "login": "owner"
+                                                                },
+                                                            },
+                                                            "content": {
+                                                                "number": 198,
+                                                                "repository": {
+                                                                    "nameWithOwner": "owner/repo"
                                                                 },
                                                             },
                                                             "fieldValues": {
                                                                 "nodes": [
                                                                     {
+                                                                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
                                                                         "name": "IMPLEMENT",
                                                                         "field": {
                                                                             "name": "Research Outcome"
@@ -659,13 +927,21 @@ def test_research_blocker_uses_only_the_canonical_project_outcome() -> None:
                                                         {
                                                             "project": {
                                                                 "number": 1,
+                                                                "title": "Quant System Development",
                                                                 "owner": {
                                                                     "login": "owner"
+                                                                },
+                                                            },
+                                                            "content": {
+                                                                "number": 198,
+                                                                "repository": {
+                                                                    "nameWithOwner": "owner/repo"
                                                                 },
                                                             },
                                                             "fieldValues": {
                                                                 "nodes": [
                                                                     {
+                                                                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
                                                                         "name": "DO NOT IMPLEMENT",
                                                                         "field": {
                                                                             "name": "Research Outcome"

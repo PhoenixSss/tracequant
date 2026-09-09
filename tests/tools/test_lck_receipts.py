@@ -80,7 +80,7 @@ def test_closeout_failure_receipt_preserves_completed_effects(
         metadata_effect=cast(Any, FailingMetadata()),
     )
     handler._validate_merged_identity = lambda _state: (SHA, "b" * 40)
-    handler._validate_reviewed_identity = lambda _state, _pr: None
+    handler._validate_reviewed_identity = lambda _state, _pr: {}
 
     with pytest.raises(lck_models.LckStopError, match="metadata convergence failed"):
         handler.complete(159)

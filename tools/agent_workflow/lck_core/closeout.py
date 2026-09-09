@@ -639,12 +639,6 @@ class CloseoutCompleter:
         if not isinstance(state.merged_pr, Mapping):
             raise LckStopError("Closeout STOP: merged PR identity is unavailable")
         review_record = self._validate_reviewed_identity(state, state.merged_pr)
-        main = self.main_effect.execute(state, merge_sha=merge_sha)
-        effects.append(main)
-
-        metadata = self.metadata_effect.execute(state)
-        effects.append(metadata)
-
         try:
             profile, _policy = resolve_issue_policy(
                 _policy_issue_from_state(state),
@@ -682,6 +676,15 @@ class CloseoutCompleter:
             ) from exc
 
         self.last_profile_evidence = completion.profile_evidence
+        # Validate the exact Review/artifact binding and bounded completion
+        # descriptor before any Closeout effect. Execution still follows the
+        # established main -> metadata -> profile completion -> cleanup order.
+        main = self.main_effect.execute(state, merge_sha=merge_sha)
+        effects.append(main)
+
+        metadata = self.metadata_effect.execute(state)
+        effects.append(metadata)
+
         completion_effect: EffectReceipt | None = None
         if completion.effect is not None:
             if main.action in {"synchronized", "already-synced"}:

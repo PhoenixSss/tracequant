@@ -165,6 +165,7 @@ class PhaseEligibilityResolver:
                             repository=state.repository,
                             downstream_contract=downstream_contract,
                             downstream_profile=profile,
+                            blocker_subject="target",
                         ),
                     )
                     reasons.extend(
@@ -229,6 +230,7 @@ class PhaseEligibilityResolver:
                             repository=state.repository,
                             downstream_contract=downstream_contract,
                             downstream_profile=profile,
+                            blocker_subject="dependency",
                         ),
                     )
                 except ValueError as exc:

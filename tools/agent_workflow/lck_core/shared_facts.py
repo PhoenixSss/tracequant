@@ -28,6 +28,43 @@ SCHEMA_VERSION: Final = 1
 MAX_CHILDREN: Final = 50
 MAX_FILES: Final = 100
 CANONICAL_PROJECT_NUMBER: Final = 1
+CANONICAL_PROJECT_TITLE: Final = "Quant System Development"
+
+ISSUE_PROJECT_ITEMS_QUERY: Final = r"""
+query($owner:String!, $name:String!, $number:Int!) {
+  repository(owner:$owner, name:$name) {
+    issue(number:$number) {
+      number
+      projectItems(first:20) {
+        nodes {
+          project {
+            number
+            title
+            owner {
+              ... on User { login }
+              ... on Organization { login }
+            }
+          }
+          content {
+            ... on Issue { number repository { nameWithOwner } }
+          }
+          fieldValues(first:100) {
+            nodes {
+              __typename
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+                field { ... on ProjectV2SingleSelectField { name } }
+              }
+            }
+            pageInfo { hasNextPage }
+          }
+        }
+        pageInfo { hasNextPage }
+      }
+    }
+  }
+}
+"""
 
 RELATIONSHIPS_QUERY: Final = r"""
 query($owner:String!, $name:String!, $number:Int!) {
@@ -61,13 +98,18 @@ query($owner:String!, $name:String!, $number:Int!) {
             nodes {
               project {
                 number
+                title
                 owner {
                   ... on User { login }
                   ... on Organization { login }
                 }
               }
-              fieldValues(first:20) {
+              content {
+                ... on Issue { number repository { nameWithOwner } }
+              }
+              fieldValues(first:100) {
                 nodes {
+                  __typename
                   ... on ProjectV2ItemFieldSingleSelectValue {
                     name
                     field { ... on ProjectV2SingleSelectField { name } }
@@ -92,13 +134,18 @@ query($owner:String!, $name:String!, $number:Int!) {
             nodes {
               project {
                 number
+                title
                 owner {
                   ... on User { login }
                   ... on Organization { login }
                 }
               }
-              fieldValues(first:20) {
+              content {
+                ... on Issue { number repository { nameWithOwner } }
+              }
+              fieldValues(first:100) {
                 nodes {
+                  __typename
                   ... on ProjectV2ItemFieldSingleSelectValue {
                     name
                     field { ... on ProjectV2SingleSelectField { name } }
@@ -459,39 +506,54 @@ def _graphql(
 
 
 def _normalize_project_items(value: Any) -> dict[str, Any]:
-    """Normalize Project metadata without interpreting any field name."""
+    """Normalize complete ProjectV2 single-select facts without policy meaning."""
     if isinstance(value, Mapping):
         nodes = value.get("nodes")
         page = value.get("pageInfo")
-    elif isinstance(value, list):
-        nodes = value
-        page = {"hasNextPage": False}
     else:
-        return {"items": [], "count": 0, "truncated": True}
+        return {"items": [], "count": 0, "truncated": True, "complete": False}
     if not isinstance(nodes, list) or not isinstance(page, Mapping):
-        return {"items": [], "count": 0, "truncated": True}
+        return {"items": [], "count": 0, "truncated": True, "complete": False}
+    page_complete = page.get("hasNextPage") is False
     normalized: list[dict[str, Any]] = []
+    all_items_complete = True
     for item in nodes:
         if not isinstance(item, Mapping):
+            all_items_complete = False
             continue
         project = item.get("project")
         if not isinstance(project, Mapping):
-            # Some GitHub/compatibility callers expose already-flattened
-            # Project fields (for example ``{"status": {"name": "Ready"}}``)
-            # rather than ProjectV2 item metadata. Preserve those normalized
-            # fields for generic status lookup, but never treat them as a
-            # canonical Project identity.
-            normalized.append(
-                {
-                    "number": None,
-                    "owner": None,
-                    "fields": dict(item),
-                    "fields_complete": True,
-                }
-            )
+            all_items_complete = False
             continue
         owner = project.get("owner")
         owner_login = owner.get("login") if isinstance(owner, Mapping) else None
+        project_number = project.get("number")
+        project_title = project.get("title")
+        content = item.get("content")
+        content_number = content.get("number") if isinstance(content, Mapping) else None
+        content_repository = (
+            content.get("repository") if isinstance(content, Mapping) else None
+        )
+        content_repository_name = (
+            content_repository.get("nameWithOwner")
+            if isinstance(content_repository, Mapping)
+            else None
+        )
+        item_identity_complete = (
+            isinstance(project_number, int)
+            and not isinstance(project_number, bool)
+            and project_number > 0
+            and isinstance(project_title, str)
+            and bool(project_title.strip())
+            and isinstance(owner_login, str)
+            and bool(owner_login.strip())
+            and isinstance(content, Mapping)
+            and isinstance(content_number, int)
+            and not isinstance(content_number, bool)
+            and content_number > 0
+            and isinstance(content_repository_name, str)
+            and bool(content_repository_name.strip())
+        )
         fields_value = item.get("fieldValues")
         fields: dict[str, str] = {}
         fields_complete = False
@@ -499,33 +561,103 @@ def _normalize_project_items(value: Any) -> dict[str, Any]:
             raw_fields = fields_value.get("nodes")
             field_page = fields_value.get("pageInfo")
             if isinstance(raw_fields, list):
+                fields_complete = (
+                    isinstance(field_page, Mapping)
+                    and field_page.get("hasNextPage") is False
+                )
                 for field_value in raw_fields:
                     if not isinstance(field_value, Mapping):
+                        fields_complete = False
+                        continue
+                    field_type = field_value.get("__typename")
+                    if field_type != "ProjectV2ItemFieldSingleSelectValue":
+                        if isinstance(field_type, str) and field_type:
+                            continue
+                        fields_complete = False
                         continue
                     field = field_value.get("field")
                     field_name = (
                         field.get("name") if isinstance(field, Mapping) else None
                     )
                     field_value_name = field_value.get("name")
-                    if isinstance(field_name, str) and isinstance(
-                        field_value_name, str
+                    if (
+                        isinstance(field_name, str)
+                        and isinstance(field_value_name, str)
+                        and field_name.strip()
+                        and field_value_name.strip()
                     ):
-                        fields[safe_text(field_name)] = safe_text(field_value_name)
-                fields_complete = (
-                    isinstance(field_page, Mapping)
-                    and field_page.get("hasNextPage") is False
-                )
+                        normalized_name = safe_text(field_name)
+                        normalized_value = safe_text(field_value_name)
+                        if normalized_name is None or normalized_value is None:
+                            fields_complete = False
+                        elif normalized_name in fields:
+                            fields_complete = False
+                        else:
+                            fields[normalized_name] = normalized_value
+                    else:
+                        fields_complete = False
+        item_complete = item_identity_complete and fields_complete
+        all_items_complete = all_items_complete and item_complete
         normalized.append(
             {
-                "number": project.get("number"),
+                "number": project_number,
+                "title": safe_text(project_title),
                 "owner": safe_text(owner_login),
+                "content_number": content_number,
+                "content_repository": safe_text(content_repository_name),
                 "fields": fields,
                 "fields_complete": fields_complete,
+                "identity_complete": item_identity_complete,
             }
         )
     bounded = bounded_list(normalized)
-    bounded["truncated"] = bounded["truncated"] or page.get("hasNextPage") is True
+    bounded["truncated"] = bounded["truncated"] or not page_complete
+    bounded["complete"] = (
+        page_complete and not bounded["truncated"] and all_items_complete
+    )
     return bounded
+
+
+def _issue_project_items_snapshot(
+    runner: CommandRunner,
+    repository: str,
+    number: int,
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Acquire one root Issue's canonical ProjectV2 facts."""
+    command_id = f"gh-issue-project-items-{number}"
+    value = _graphql(
+        runner,
+        repository,
+        number,
+        ISSUE_PROJECT_ITEMS_QUERY,
+        command_id=command_id,
+        warnings=warnings,
+    )
+    issue = None
+    if isinstance(value, Mapping):
+        data = value.get("data")
+        repo = data.get("repository") if isinstance(data, Mapping) else None
+        issue = repo.get("issue") if isinstance(repo, Mapping) else None
+    if not isinstance(issue, Mapping) or issue.get("number") != number:
+        warnings.append(
+            {
+                "command_id": command_id,
+                "exit_code": 0,
+                "error": "ProjectV2 Issue response is missing or has the wrong identity",
+            }
+        )
+        return {"items": [], "count": 0, "truncated": True, "complete": False}
+    project_items = _normalize_project_items(issue.get("projectItems"))
+    if project_items.get("complete") is not True:
+        warnings.append(
+            {
+                "command_id": command_id,
+                "exit_code": 0,
+                "error": "ProjectV2 item or single-select field facts are incomplete",
+            }
+        )
+    return project_items
 
 
 def _find_project_field(value: Any, field_name: str) -> str | None:
@@ -570,6 +702,7 @@ def canonical_project_field(
     value: Any,
     *,
     repository: str | None,
+    issue_number: int | None,
     field_name: str,
 ) -> str | None:
     """Return a field from the repository owner's canonical Project item.
@@ -577,7 +710,11 @@ def canonical_project_field(
     Project identity and field normalization are mechanical facts.  The caller
     chooses which normalized field has business meaning.
     """
-    if not isinstance(value, Mapping) or repository is None:
+    if (
+        not isinstance(value, Mapping)
+        or repository is None
+        or value.get("complete") is not True
+    ):
         return None
     owner, separator, _name = repository.partition("/")
     if not separator or not owner:
@@ -590,8 +727,13 @@ def canonical_project_field(
         for item in items
         if isinstance(item, Mapping)
         and item.get("number") == CANONICAL_PROJECT_NUMBER
+        and item.get("title") == CANONICAL_PROJECT_TITLE
         and isinstance(item.get("owner"), str)
         and item.get("owner", "").casefold() == owner.casefold()
+        and isinstance(item.get("content_repository"), str)
+        and item.get("content_repository", "").casefold() == repository.casefold()
+        and item.get("content_number") == issue_number
+        and item.get("identity_complete") is True
         and item.get("fields_complete") is True
     ]
     if len(canonical) != 1:
@@ -752,7 +894,7 @@ def _issue_view_with_contract(
     include_contract: bool = True,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Read and normalize one Issue without profile interpretation."""
-    fields = ["number", "title", "state", "labels", "projectItems", "url"]
+    fields = ["number", "title", "state", "labels", "url"]
     if include_contract:
         fields.append("body")
     if include_comments:
@@ -789,7 +931,6 @@ def _issue_view_with_contract(
                     if field
                     not in {
                         "comments",
-                        "projectItems",
                         "closedByPullRequestsReferences",
                     }
                 ),
@@ -838,7 +979,7 @@ def _issue_view_with_contract(
                 }
             )
     body = value.get("body") if isinstance(value.get("body"), str) else None
-    project_items = _normalize_project_items(value.get("projectItems"))
+    project_items = _issue_project_items_snapshot(runner, repository, number, warnings)
     pull_refs: list[dict[str, Any]] = []
     raw_pull_refs = value.get("closedByPullRequestsReferences", [])
     if isinstance(raw_pull_refs, list):
@@ -859,7 +1000,12 @@ def _issue_view_with_contract(
         "state": safe_text(value.get("state")),
         "labels": bounded_list(sorted(normalized_labels)),
         "project_items": project_items,
-        "project_status": _find_project_status(project_items),
+        "project_status": canonical_project_field(
+            project_items,
+            repository=repository,
+            issue_number=number,
+            field_name="Status",
+        ),
         "url": safe_text(value.get("url")),
         "closed_at": safe_text(value.get("closedAt")),
         "closing_pull_requests": bounded_list(pull_refs),

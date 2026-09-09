@@ -878,6 +878,36 @@ Verification test: tests/tools/test_lck_delivery.py::test_task_160_critical_outc
                     "pageInfo": {"hasPreviousPage": False},
                 },
             }
+        elif "projectItems(first:20)" in query and "blockedBy" not in query:
+            issue = {
+                "number": 160,
+                "projectItems": {
+                    "nodes": [
+                        {
+                            "project": {
+                                "number": 1,
+                                "title": "Quant System Development",
+                                "owner": {"login": "owner"},
+                            },
+                            "content": {
+                                "number": 160,
+                                "repository": {"nameWithOwner": "owner/repo"},
+                            },
+                            "fieldValues": {
+                                "nodes": [
+                                    {
+                                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                                        "name": self.project_status,
+                                        "field": {"name": "Status"},
+                                    }
+                                ],
+                                "pageInfo": {"hasNextPage": False},
+                            },
+                        }
+                    ],
+                    "pageInfo": {"hasNextPage": False},
+                },
+            }
         else:
             issue = {
                 "issueType": {"name": "Task"},

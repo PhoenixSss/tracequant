@@ -110,6 +110,20 @@ elif args[:2] == ['api','graphql']:
                 number_value=arg.split('=',1)[1]
         issue=state.get('issues',{{}}).get(number_value)
         dump({{'data':{{'repository':{{'issue':issue}}}}}})
+    elif 'projectItems(first:20)' in query and 'blockedBy' not in query:
+        number_value=None
+        for arg in args:
+            if arg.startswith('number='):
+                number_value=arg.split('=',1)[1]
+        issue=state.get('issues',{{}}).get(number_value)
+        status=None
+        if issue is not None:
+            items=issue.get('projectItems',[])
+            if items:
+                status=items[0].get('status',{{}}).get('name')
+        fields=[] if status is None else [{{'__typename':'ProjectV2ItemFieldSingleSelectValue','name':status,'field':{{'name':'Status'}}}}]
+        project_items={{'nodes':[{{'project':{{'number':1,'title':'Quant System Development','owner':{{'login':'owner'}}}},'content':{{'number':int(number_value),'repository':{{'nameWithOwner':'owner/repo'}}}},'fieldValues':{{'nodes':fields,'pageInfo':{{'hasNextPage':False}}}}}}],'pageInfo':{{'hasNextPage':False}}}}
+        dump({{'data':{{'repository':{{'issue':{{'number':int(number_value),'projectItems':project_items}}}}}}}})
     else:
         number_value=None
         for arg in args:
