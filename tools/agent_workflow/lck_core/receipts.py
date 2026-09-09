@@ -182,6 +182,28 @@ def _effect_agent_view(value: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _delivery_prepare_effect_agent_view(value: Any) -> list[dict[str, Any]]:
+    result = _effect_agent_view(value)
+    if not isinstance(value, (list, tuple)):
+        return result
+    for compact, item in zip(result, value, strict=False):
+        details = (
+            item.details
+            if isinstance(item, EffectReceipt)
+            else item.get("details")
+            if isinstance(item, Mapping)
+            else None
+        )
+        if compact.get("effect") == "set_in_progress_status" and isinstance(
+            details, Mapping
+        ):
+            compact["postcondition"] = {
+                "status": details.get("postcondition"),
+                "project_status": details.get("status"),
+            }
+    return result
+
+
 def _delivery_pr_agent_view(effects: Any) -> dict[str, Any] | None:
     if not isinstance(effects, (list, tuple)):
         return None
@@ -242,6 +264,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
                 "eligible": value.eligibility.eligible,
                 "reasons": list(value.eligibility.reasons),
             },
+            "effects": _delivery_prepare_effect_agent_view(value.effects),
             "human_boundary": "implement the Task before LCK Delivery Complete",
             "next_action": "implement the Task and run LCK Delivery Complete",
         }

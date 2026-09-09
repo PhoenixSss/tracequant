@@ -354,6 +354,63 @@ def test_lifecycle_agent_views_include_the_selected_issue_profile(
         assert value.to_dict()["issue_profile"] == profile
 
 
+def test_delivery_prepare_receipt_preserves_status_effect_and_postcondition(
+    tmp_path: Path,
+) -> None:
+    state = _review_state()
+    state = replace(
+        state,
+        issue={**(state.issue or {}), "project_status": "Ready"},
+    )
+    snapshot = lck_models.OperationSnapshot(
+        operation=lck_models.Phase.DELIVERY_PREPARE.value,
+        state=state,
+    )
+    effect = lck_models.EffectReceipt(
+        effect="set_in_progress_status",
+        action="updated",
+        details={"status": "In Progress", "postcondition": "verified"},
+    )
+    context = lck_delivery.DeliveryContext(
+        task_number=159,
+        repository="owner/repo",
+        branch=state.target_branch,
+        base_sha=SHA,
+        action="created-from-main",
+        operation_snapshot=snapshot,
+        eligibility=lck_eligibility.PhaseDecision(
+            phase=lck_models.Phase.DELIVERY_PREPARE,
+            eligible=True,
+        ),
+        effects=(effect,),
+    )
+    store = lck_receipts.AuditReceiptStore(tmp_path)
+
+    payload = lck_receipts._write_success_receipt(
+        context,
+        operation="delivery-prepare",
+        task_number=159,
+        operation_id="f" * 32,
+        store=store,
+    )
+    receipt = store.read(payload["receipt_reference"])
+
+    assert payload["effects"] == [
+        {
+            "effect": "set_in_progress_status",
+            "action": "updated",
+            "postcondition": {
+                "status": "verified",
+                "project_status": "In Progress",
+            },
+        }
+    ]
+    assert receipt["audit"]["effects"] == [effect.to_dict()]
+    assert receipt["operation_snapshot"]["state"]["issue"]["project_status"] == (
+        "Ready"
+    )
+
+
 def test_review_prepare_failure_receipt_preserves_validation_payload(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -20,7 +20,8 @@ Codex 与 Claude Code 的 workflow Skills 引用本文件作为生命周期语�
 ```text
 Issue (Specifying)
   → Ready（codex:ready + Project Ready + 无 blocker）
-  → Delivery（branch → implementation/tests → commit/push → PR）
+  → Delivery Prepare（workspace postcondition → Project In Progress）
+  → Delivery（implementation/tests → commit/push → PR → Project Review）
   → Independent Review（fresh session，read-only；可与 CI 并行）
   → maintainer manual Squash Merge
   → Closeout（merge identity / state convergence / branch cleanup）
@@ -154,6 +155,11 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
 - Initial Delivery 的 lifecycle mechanics（workspace prepare、commit validated tree、
   remote synchronization、OPEN PR resolve/create、Project Status → Review）由 LCK
   deterministic control 执行；Agent/Skill 不提供 branch/SHA/PR/refspec authority。
+- Delivery Prepare 只有在 workspace 创建、选择或恢复及其 postcondition 成功后，
+  才通过 kernel-owned bounded effect 执行 Project Status `Ready → In Progress`，
+  并在返回 `READY_FOR_DELIVERY` 前验证 live status。already-`In Progress` 的安全
+  恢复路径幂等成功且不重复写入；admission、workspace、status write 或 status
+  postcondition 失败均不得声称 Prepare 成功。
 - Documentation 使用独立的 `documentation/<Issue>-<slug>` branch namespace；Task 的
   `task/`、历史 Task aliases 与其匹配规则保持不变。
 - Bug 使用独立的 `bug/<Issue>-<slug>` branch namespace；不会创建 wrapper Task，且与
@@ -165,10 +171,14 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
 - Research Review PASS 必须携带四个精确值之一：`IMPLEMENT`、`DO NOT IMPLEMENT`、
   `NEEDS MORE EVIDENCE`、`ARCHITECTURE DECISION`。后两者是成功的 Research 结果，不能
   被误报为 lifecycle failure；Closeout 在合并后写入并确认 Project 的 `Research Outcome`。
-- 一次 Initial Delivery 覆盖：LCK Delivery Prepare → semantic implementation / targeted
+- 一次 Initial Delivery 覆盖：LCK Delivery Prepare → Project Status `In Progress` →
+  semantic implementation / targeted
   development validation → LCK Delivery Complete → Critical Outcome → formal validation →
   commit validated tree → ensure remote branch → ensure OPEN PR → observe current CI checks
   （non-blocking）→ Project Status `Review` → final live verification → `READY_FOR_REVIEW`。
+- 正常 Delivery Complete 只接受 `In Progress`；若 live status 仍为 `Ready`，必须
+  fail closed 并要求重新执行 Delivery Prepare。仅保留 operation-owned partial
+  `Review` 的 completion recovery 语义。
 - 一个 Task 通常产生一个 PR（base = `main`）。
 - Initial Task branch bootstrap is LCK-owned. An existing branch is reusable only when
   Task identity, ownership, base, and the required worktree state are mechanically proven.

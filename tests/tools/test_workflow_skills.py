@@ -203,6 +203,8 @@ def test_delivery_runner_uses_lck_for_initial_delivery_and_explicit_remediation(
     assert "Agent / Skill MUST NOT directly" in text
     assert "branch/SHA/base/PR identity as workflow authority" in text
     assert "no alternate write route" in text
+    assert "Project\nStatus transition from `Ready` to `In Progress`" in text
+    assert "require Project Status `In Progress`" in text
 
     assert "## Review remediation" in text
     assert "tools/agent_workflow/lck.py remediation prepare" in text

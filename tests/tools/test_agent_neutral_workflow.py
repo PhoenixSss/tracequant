@@ -88,6 +88,17 @@ def test_source_of_truth_is_dual_layer_not_linear_precedence() -> None:
     assert "不得覆盖 current Issue requirement" in text
 
 
+def test_initial_delivery_lifecycle_requires_in_progress_between_ready_and_review() -> (
+    None
+):
+    text = ISSUE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "Project In Progress" in text
+    assert "`Ready → In Progress`" in text
+    assert "正常 Delivery Complete 只接受 `In Progress`" in text
+    assert "重新执行 Delivery Prepare" in text
+
+
 def test_failure_and_ambiguity_handling_has_review_stop_and_local_stale_results() -> (
     None
 ):

@@ -876,6 +876,95 @@ class ReuseExistingOpenPrEffect:
         )
 
 
+def _query_issue_project_status(
+    resolver: LiveStateResolver,
+    repository: str,
+    task_number: int,
+    *,
+    command_id: str,
+) -> str | None:
+    result = resolver.runner.run(
+        [
+            "gh",
+            "issue",
+            "view",
+            str(task_number),
+            "--repo",
+            repository,
+            "--json",
+            "projectItems",
+        ],
+        command_id=command_id,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    value = read_json_text(result.stdout, field=command_id)
+    if not isinstance(value, Mapping):
+        return None
+    return _find_project_status(value.get("projectItems"))
+
+
+class SetInProgressStatusEffect:
+    """Move Delivery Prepare to In Progress after workspace verification."""
+
+    def __init__(self, resolver: LiveStateResolver) -> None:
+        self.resolver = resolver
+
+    def execute(self, state: LiveState) -> EffectReceipt:
+        if state.repository is None:
+            raise LckStopError(
+                "cannot set In Progress status without repository identity"
+            )
+        observed = _query_issue_project_status(
+            self.resolver,
+            state.repository,
+            state.issue_number,
+            command_id="lck-in-progress-status-precondition",
+        )
+        if observed == "In Progress":
+            return EffectReceipt(
+                effect="set_in_progress_status",
+                action="already-in-progress",
+                details={"status": "In Progress", "postcondition": "verified"},
+            )
+        if observed != "Ready":
+            raise LckStopError(
+                "Project Status precondition failed: Delivery Prepare requires "
+                "live Ready or In Progress"
+            )
+        try:
+            set_project_status_with_runner(
+                self.resolver.runner,
+                state.repository,
+                state.issue_number,
+                value="In Progress",
+            )
+        except WorkflowToolError as exc:
+            raise LckStopError(
+                f"Project Status In Progress write failed: {exc}"
+            ) from exc
+        observed = _query_issue_project_status(
+            self.resolver,
+            state.repository,
+            state.issue_number,
+            command_id="lck-in-progress-status-postcondition",
+        )
+        if observed != "In Progress":
+            raise LckStopError(
+                "Project Status In Progress postcondition failed: live status "
+                "was not In Progress"
+            )
+        return EffectReceipt(
+            effect="set_in_progress_status",
+            action="updated",
+            details={
+                "previous_status": "Ready",
+                "status": "In Progress",
+                "postcondition": "verified",
+            },
+        )
+
+
 class SetReviewStatusEffect:
     """Move the Task to Review and verify only that metadata effect."""
 
@@ -883,25 +972,12 @@ class SetReviewStatusEffect:
         self.resolver = resolver
 
     def _query_project_status(self, repository: str, task_number: int) -> str | None:
-        result = self.resolver.runner.run(
-            [
-                "gh",
-                "issue",
-                "view",
-                str(task_number),
-                "--repo",
-                repository,
-                "--json",
-                "projectItems",
-            ],
+        return _query_issue_project_status(
+            self.resolver,
+            repository,
+            task_number,
             command_id="lck-review-status-postcondition",
         )
-        if result.returncode != 0 or not result.stdout.strip():
-            return None
-        value = read_json_text(result.stdout, field="lck-review-status-postcondition")
-        if not isinstance(value, Mapping):
-            return None
-        return _find_project_status(value.get("projectItems"))
 
     def execute(
         self,
@@ -943,9 +1019,10 @@ class SetReviewStatusEffect:
                 effect="set_review_status", action="already-review", details={}
             )
         previous_status = state.project_status
-        if previous_status not in {"Ready", "In Progress"}:
+        if previous_status != "In Progress":
             raise LckStopError(
-                "Project Status precondition failed: prior status cannot be restored"
+                "Project Status precondition failed: Delivery Complete requires "
+                "In Progress before Review"
             )
         set_project_status_with_runner(
             self.resolver.runner,

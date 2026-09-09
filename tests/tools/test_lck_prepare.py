@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import (
@@ -17,11 +18,16 @@ if AGENT_WORKFLOW not in sys.path:
 
 from lck_core import (  # type: ignore[import-not-found]  # noqa: E402
     delivery as lck_delivery,
+    effects as lck_effects,
     eligibility as lck_eligibility,
     models as lck_models,
     state as lck_state,
 )
 from pr_resolve import resolve_open_pr  # type: ignore[import-not-found]  # noqa: E402
+from workflow_common import (  # type: ignore[import-not-found]  # noqa: E402
+    CommandResult,
+    WorkflowToolError,
+)
 from lck_test_support import (  # noqa: E402
     FakeRunner,
     SHA,
@@ -32,6 +38,65 @@ from lck_test_support import (  # noqa: E402
     _relationships,
     _resolver,
 )
+
+
+class ProjectStatusRunner(FakeRunner):
+    def __init__(self, *, project_status: str = "Ready", **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.project_status = project_status
+
+    def run(
+        self,
+        argv: list[str] | tuple[str, ...],
+        *,
+        command_id: str,
+        **kwargs: Any,
+    ) -> CommandResult:
+        command = tuple(str(item) for item in argv)
+        if command[:3] == ("gh", "issue", "view") and command[-1] == "projectItems":
+            self.commands.append(command)
+            return CommandResult(
+                command_id=command_id,
+                argv=command,
+                returncode=0,
+                stdout=json.dumps(
+                    {"projectItems": [{"status": {"name": self.project_status}}]}
+                ),
+                stderr="",
+            )
+        return super().run(argv, command_id=command_id, **kwargs)
+
+
+def _install_project_status_write(
+    monkeypatch: pytest.MonkeyPatch,
+    fake: ProjectStatusRunner,
+    issue: dict[str, Any],
+    *,
+    update_status: bool = True,
+    fail: bool = False,
+) -> list[str]:
+    writes: list[str] = []
+
+    def write(
+        runner: Any,
+        repository: str,
+        task: int,
+        *,
+        value: str,
+        **_kwargs: Any,
+    ) -> None:
+        assert runner is fake
+        assert repository == "owner/repo"
+        assert task == 159
+        writes.append(value)
+        if fail:
+            raise WorkflowToolError("simulated status write failure")
+        if update_status:
+            fake.project_status = value
+            issue["project_status"] = value
+
+    monkeypatch.setattr(lck_effects, "set_project_status_with_runner", write)
+    return writes
 
 
 def test_lck_live_snapshot_overrides_legacy_read_only_environment(
@@ -180,8 +245,10 @@ def test_multiple_task_branches_stop_fail_closed(
 def test_delivery_prepare_creates_then_reuses_workspace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake = FakeRunner(branch="main")
-    _install_facts(monkeypatch, fake)
+    fake = ProjectStatusRunner(branch="main")
+    issue = _issue()
+    writes = _install_project_status_write(monkeypatch, fake, issue)
+    _install_facts(monkeypatch, fake, issue=issue)
     preparer = lck_delivery.DeliveryPreparer(_resolver(fake))
 
     created = preparer.prepare(159)
@@ -190,6 +257,17 @@ def test_delivery_prepare_creates_then_reuses_workspace(
     assert created.action == "created-from-main"
     assert reused.action == "already-prepared"
     assert created.to_dict()["task_contract"]["body"] == "Task Contract"
+    assert created.effects[0].to_dict() == {
+        "effect": "set_in_progress_status",
+        "action": "updated",
+        "details": {
+            "previous_status": "Ready",
+            "status": "In Progress",
+            "postcondition": "verified",
+        },
+    }
+    assert reused.effects[0].action == "already-in-progress"
+    assert writes == ["In Progress"]
     assert fake.branch == "task/159-lck-core-live-state-resolution"
     assert sum(command[:2] == ("git", "switch") for command in fake.commands) == 1
     assert not any(
@@ -222,14 +300,103 @@ def test_delivery_prepare_restores_remote_workspace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     branch = "task/159-lck-core-live-state-resolution"
-    fake = FakeRunner(branch="main", remote_branches={branch: SHA})
-    _install_facts(monkeypatch, fake)
+    fake = ProjectStatusRunner(branch="main", remote_branches={branch: SHA})
+    issue = _issue()
+    writes = _install_project_status_write(monkeypatch, fake, issue)
+    _install_facts(monkeypatch, fake, issue=issue)
 
     context = lck_delivery.DeliveryPreparer(_resolver(fake)).prepare(159)
 
     assert context.action == "restored-from-remote"
+    assert context.effects[0].action == "updated"
+    assert writes == ["In Progress"]
     assert fake.branch == branch
     assert branch in fake.local_branches
+
+
+def test_delivery_prepare_stops_before_status_write_when_workspace_postcondition_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = ProjectStatusRunner(branch="main")
+    issue = _issue()
+    writes = _install_project_status_write(monkeypatch, fake, issue)
+    _install_facts(monkeypatch, fake, issue=issue)
+    preparer = lck_delivery.DeliveryPreparer(_resolver(fake))
+
+    def fail_postcondition(_branch: str, _expected_head: str | None) -> None:
+        raise lck_models.LckStopError("simulated workspace postcondition failure")
+
+    monkeypatch.setattr(preparer, "_verify_workspace", fail_postcondition)
+
+    with pytest.raises(
+        lck_models.LckStopError, match="workspace postcondition failure"
+    ):
+        preparer.prepare(159)
+
+    assert writes == []
+    assert not any(command[:3] == ("gh", "issue", "view") for command in fake.commands)
+
+
+def test_delivery_prepare_status_write_failure_stops_after_reusable_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = ProjectStatusRunner(branch="main")
+    issue = _issue()
+    writes = _install_project_status_write(monkeypatch, fake, issue, fail=True)
+    _install_facts(monkeypatch, fake, issue=issue)
+
+    with pytest.raises(lck_models.LckStopError, match="status write failure"):
+        lck_delivery.DeliveryPreparer(_resolver(fake)).prepare(159)
+
+    assert writes == ["In Progress"]
+    assert fake.branch == "task/159-lck-core-live-state-resolution"
+    assert fake.project_status == "Ready"
+
+
+def test_delivery_prepare_status_postcondition_failure_stops_and_reuses_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = ProjectStatusRunner(branch="main")
+    issue = _issue()
+    writes = _install_project_status_write(
+        monkeypatch, fake, issue, update_status=False
+    )
+    _install_facts(monkeypatch, fake, issue=issue)
+
+    with pytest.raises(lck_models.LckStopError, match="postcondition failed"):
+        lck_delivery.DeliveryPreparer(_resolver(fake)).prepare(159)
+
+    branch = "task/159-lck-core-live-state-resolution"
+    assert writes == ["In Progress"]
+    assert fake.branch == branch
+    assert branch in fake.local_branches
+
+    fake.project_status = "In Progress"
+    issue["project_status"] = "In Progress"
+    recovered = lck_delivery.DeliveryPreparer(_resolver(fake)).prepare(159)
+
+    assert recovered.action == "already-prepared"
+    assert recovered.effects[0].action == "already-in-progress"
+    assert writes == ["In Progress"]
+
+
+def test_delivery_complete_ready_requires_delivery_prepare(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRunner()
+    _install_facts(monkeypatch, fake)
+    state = _resolver(fake).resolve(159)
+
+    decision = lck_eligibility.PhaseEligibilityResolver().resolve(
+        state, lck_models.Phase.DELIVERY_COMPLETE
+    )
+
+    assert decision.eligible is False
+    assert (
+        "Delivery Complete requires Project Status In Progress; "
+        "run Delivery Prepare first"
+    ) in decision.reasons
+    assert "Project Status is unavailable or unknown" not in decision.reasons
 
 
 def test_dirty_unrelated_worktree_is_not_switched(
