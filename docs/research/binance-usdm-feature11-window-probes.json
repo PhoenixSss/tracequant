@@ -6,10 +6,19 @@
     "url": "https://github.com/PhoenixSss/tracequant/issues/279"
   },
   "research_outcome": "NEEDS MORE EVIDENCE",
+  "artifact_binding": {
+    "observation_set_id": "issue-279-probe-run-2026-09-09T10:58:43.717234Z",
+    "manifest_path": "docs/research/binance-usdm-feature11-window-probes.json",
+    "report_path": "docs/research/binance-usdm-feature11-window-supplement.md",
+    "binding_rule": "the manifest and report share this observation_set_id; response_sha256 and archive checksum fields bind the recorded observations"
+  },
   "probe_run": {
     "started_at": "2026-09-09T10:58:43.717234Z",
     "finished_at": "2026-09-09T10:59:19.501987Z",
     "elapsed_seconds": 33.618988,
+    "elapsed_time_basis": "monotonic_clock",
+    "wall_clock_elapsed_seconds": 35.784753,
+    "wall_clock_note": "finished_at minus started_at; the 900-second budget was enforced using elapsed_seconds from a monotonic clock",
     "policy": {
       "request_limit": 64,
       "total_response_bytes_limit": 134217728,
@@ -191,7 +200,20 @@
     "legal_empty": "HTTP 200 JSON [] for an executed REST request; none observed in this run",
     "archive_missing": "archive object HTTP 404; none observed in this run",
     "checksum_or_format_failure": "downloaded object failed checksum/ZIP/schema validation; none observed in this run",
-    "network_or_http_failure": "transport/HTTP failure, kept distinct from unsupported and legal empty"
+    "http_error": "an HTTP response other than the archive_missing special case had a non-success status; preserve http_status, response bytes, and digest; serverTime HTTP 451 was observed in this run",
+    "network_failure": "DNS, connection, TLS, timeout, or other transport failure before any HTTP response; http_status must be null and the transport error must be recorded; none observed in this run"
+  },
+  "failure_handling": {
+    "http_error": {
+      "recording": "http_status is required because an HTTP response exists; retain bounded headers/body metadata and actual-byte digest when a body exists",
+      "bounded_retry": "at most one retry for transient HTTP 5xx, only while the per-request and global budgets remain available; HTTP 429 is not retried by this plan",
+      "stop": "stop immediately on HTTP 429 or a non-transient 4xx such as the observed 451; stop any dependent recent/gap plan when T0 is unavailable; never switch domains to bypass the failure"
+    },
+    "network_failure": {
+      "recording": "http_status is null because no HTTP response exists; retain the bounded transport failure category and do not fabricate response bytes or digest",
+      "bounded_retry": "at most one retry for DNS, connection, TLS, or timeout failure, only while the per-request and global budgets remain available",
+      "stop": "after the second failed attempt or any global budget limit, stop the semantic request and its dependent plan; never switch domains or start an unbounded retry loop"
+    }
   },
   "core_units": [
     {

@@ -8,9 +8,12 @@ Research Outcome: NEEDS MORE EVIDENCE
 > 请求。下游可以实现本文明确支持的 archive 路径，但不能据此宣称 recent/gap REST
 > 路径已验收。
 
-本报告与 [probe manifest](./binance-usdm-feature11-window-probes.json) 相互引用；精确
-URL、UTC 观测时间、响应 bytes/SHA-256/header、ZIP 成员、首尾 bounded sample 和
-序列检查均在 manifest。完整响应保留在忽略的本地证据目录，未版本化提交。
+本报告与 [probe manifest](./binance-usdm-feature11-window-probes.json) 相互引用；两者以
+`issue-279-probe-run-2026-09-09T10:58:43.717234Z` 作为共同 observation set ID。manifest
+中的 `artifact_binding.report_path` 反向指向本报告，实际响应由其中的 response SHA-256
+和 archive checksum 字段绑定。精确 URL、UTC 观测时间、响应 bytes/SHA-256/header、
+ZIP 成员、首尾 bounded sample 和序列检查均在 manifest。完整响应保留在忽略的本地
+证据目录，未版本化提交。
 
 ## 1. 有限请求清单与预算
 
@@ -19,8 +22,9 @@ URL、UTC 观测时间、响应 bytes/SHA-256/header、ZIP 成员、首尾 bound
 硬上限为 64 次 HTTP（含重试与 redirect）、128 MiB 累计响应、单响应 16 MiB、从首个
 请求起 15 分钟、单次 timeout 10 秒、同一语义请求最多 2 次；不跟随 redirect。
 
-实际执行于 `2026-09-09T10:58:43.717234Z` 至 `2026-09-09T10:59:19.501987Z`，耗时
-33.619 秒；29 次 HTTP、0 次重试、0 次 redirect、累计
+实际执行于 `2026-09-09T10:58:43.717234Z` 至 `2026-09-09T10:59:19.501987Z`，墙钟
+区间为 35.785 秒；预算计时采用 monotonic clock，耗时 33.619 秒。两者均明确记录在
+manifest，且远低于 900 秒上限。共 29 次 HTTP、0 次重试、0 次 redirect、累计
 7,917,924 bytes。未触及任何预算上限。archive 的 28 个请求全部 HTTP
 200；`serverTime` 为 HTTP 451。由于 T0 不存在，其余 16 个 REST 计划项不是 HTTP
 空响应或 endpoint unsupported，而是 `unknown / not_executed`。
@@ -125,9 +129,17 @@ REST earliest boundary 均为 unknown。Index pair 历史早于 symbol onboardDa
 | index REST adapter | 参数合同已知、窗口未验收 | `pair=BTCUSDT` / `pair=ETHUSDT` | pair history 与 symbol eligibility 分离 |
 
 状态必须分开：archive 404 是 `archive_missing`；checksum/ZIP/schema 失败是
-`checksum_or_format_failure`；REST HTTP 200 `[]` 才是 `legal_empty`；429/5xx/transport
-与本次 451 都是上游/网络失败；未执行则是 `unknown`。本轮只观察到 archive success、
-checksum/格式 success 和 serverTime HTTP 451，未观察到其余状态。
+`checksum_or_format_failure`；REST HTTP 200 `[]` 才是 `legal_empty`；除 archive 404
+特例外，收到非成功 HTTP 响应是 `http_error`，必须保留 `http_status`、有响应 body 时的
+实际 bytes/digest 和有界 header/body。HTTP 5xx 仅可在单语义请求与总预算都允许时
+重试一次；HTTP 429 和非 transient 4xx（包括本次 451）不重试，并停止相关语义请求；
+无法取得 T0 时同时停止依赖 T0 的 recent/gap 计划。
+
+DNS、连接、TLS、timeout 等在收到 HTTP 响应前失败是独立的 `network_failure`：此时
+`http_status` 必须为 null，记录有界 transport error，且不得伪造响应 bytes 或 digest。
+它同样最多在预算内重试一次，第二次失败或任一全局上限到达即停止。两类失败都不得换域
+绕过限制或开启无限重试；未执行仍是 `unknown`。本轮只观察到 archive success、
+checksum/格式 success 和 serverTime `http_error` 451，未观察到 network failure 或其余状态。
 
 ## 8. 限制与有界处置建议
 
