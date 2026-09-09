@@ -292,7 +292,7 @@ class PhaseEligibilityResolver:
                 # a later final verification stopped.  Allow the same LCK
                 # Delivery Complete path to reacquire and safely finish that
                 # partial invocation.
-                Phase.DELIVERY_COMPLETE: {"Ready", "In Progress", "Review"},
+                Phase.DELIVERY_COMPLETE: {"In Progress", "Review"},
                 Phase.REVIEW_PREPARE: {"Review", "In Progress"},
                 Phase.REVIEW_COMPLETE: {"Review", "In Progress"},
                 Phase.REMEDIATION_PREPARE: {"Review"},
@@ -308,7 +308,12 @@ class PhaseEligibilityResolver:
                     "Done",
                 },
             }[phase]
-            if project not in allowed_projects:
+            if phase is Phase.DELIVERY_COMPLETE and project == "Ready":
+                reasons.append(
+                    "Delivery Complete requires Project Status In Progress; "
+                    "run Delivery Prepare first"
+                )
+            elif project not in allowed_projects:
                 reasons.append("Project Status is unavailable or unknown")
 
         reasons.extend(self.blocker_reasons(state, phase=phase))

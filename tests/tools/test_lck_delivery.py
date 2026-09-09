@@ -2188,3 +2188,29 @@ def test_set_review_status_accepts_nonblocking_checks_observation(
     )
 
     assert receipt.action == "already-review"
+
+
+def test_set_review_status_rejects_ready_without_mutation(tmp_path: Path) -> None:
+    head = "b" * 40
+    state = _live_state(
+        head=head,
+        clean=True,
+        project_status="Ready",
+        open_pr=None,
+        remote_oid=head,
+    )
+    runner = CompletionRunner()
+    resolver = SequenceResolver(tmp_path, runner, [state])
+    identity = {"number": 10, "head_sha": head, "base_sha": SHA}
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="requires In Progress before Review",
+    ):
+        lck_effects.SetReviewStatusEffect(cast(Any, resolver)).execute(
+            state,
+            expected_pr=identity,
+            checks_result={"status": "observed", "pr": identity},
+        )
+
+    assert not any(command[:2] == ("gh", "project") for command in runner.commands)

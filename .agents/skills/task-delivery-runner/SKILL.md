@@ -163,8 +163,12 @@ uv run --frozen python tools/agent_workflow/lck.py delivery prepare <TASK>
 
 Proceed only when LCK returns a resolved Delivery context. LCK reacquires live
 Git/GitHub facts, resolves the canonical leaf profile, verifies readiness and
-blockers, and creates, selects, or restores the one correct profile-owned
-workspace.
+blockers, creates, selects, or restores the one correct profile-owned workspace,
+verifies its postcondition, then performs and verifies the kernel-owned Project
+Status transition from `Ready` to `In Progress`. An already-`In Progress` safe
+recovery is idempotent and does not repeat the status write. LCK must not return
+`READY_FOR_DELIVERY` after an admission, workspace, status-write, or status-
+postcondition failure.
 
 Do not pass branch, expected SHA, base SHA, PR number, remote, or refspec.
 
@@ -242,6 +246,7 @@ Within one bounded invocation, LCK performs the deterministic sequence:
 ```text
 reacquire live Task/Git/GitHub facts and the canonical leaf profile
 → validate Delivery Complete eligibility
+→ require Project Status `In Progress` (or operation-owned partial `Review` recovery)
 → parse the Task Critical Outcome only when the selected profile requires it
 → stage current candidate tree
 → run the selected profile's delivery gates

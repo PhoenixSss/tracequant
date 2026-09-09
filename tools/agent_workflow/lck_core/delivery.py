@@ -11,6 +11,7 @@ from .effects import (
     EnsureOpenPrEffect,
     EnsureRemoteBranchEffect,
     ReuseExistingOpenPrEffect,
+    SetInProgressStatusEffect,
     SetReviewStatusEffect,
 )
 from .eligibility import PhaseDecision, PhaseEligibilityResolver
@@ -57,6 +58,7 @@ class DeliveryContext:
     action: str
     operation_snapshot: OperationSnapshot
     eligibility: PhaseDecision
+    effects: tuple[EffectReceipt, ...] = ()
 
     @property
     def state(self) -> LiveState:
@@ -75,6 +77,7 @@ class DeliveryContext:
             "task_contract": _jsonable(_leaf_contract_from_state(self.state)),
             "operation_snapshot": self.operation_snapshot.to_dict(),
             "eligibility": self.eligibility.to_dict(),
+            "effects": [item.to_dict() for item in self.effects],
         }
 
 
@@ -87,6 +90,7 @@ class DeliveryPreparer:
         *,
         eligibility: PhaseEligibilityResolver | None = None,
         profile_resolver: ProfileResolver | None = None,
+        status_effect: SetInProgressStatusEffect | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
@@ -98,7 +102,9 @@ class DeliveryPreparer:
         self.eligibility = eligibility or PhaseEligibilityResolver(
             profile_resolver=self.profile_resolver
         )
+        self.status_effect = status_effect or SetInProgressStatusEffect(resolver)
         self.last_snapshot: OperationSnapshot | None = None
+        self.last_effects: list[EffectReceipt] = []
 
     def _run_git(self, args: Sequence[str], command_id: str) -> None:
         result = self.resolver.runner.run(
@@ -133,6 +139,7 @@ class DeliveryPreparer:
             )
 
     def prepare(self, task_number: int) -> DeliveryContext:
+        self.last_effects = []
         snapshot = self.snapshots.acquire(
             task_number,
             operation=Phase.DELIVERY_PREPARE.value,
@@ -194,6 +201,8 @@ class DeliveryPreparer:
             else base_sha
         )
         self._verify_workspace(branch, expected_head)
+        status_receipt = self.status_effect.execute(state)
+        self.last_effects.append(status_receipt)
         return DeliveryContext(
             task_number=task_number,
             repository=state.repository,
@@ -202,6 +211,7 @@ class DeliveryPreparer:
             action=action,
             operation_snapshot=snapshot,
             eligibility=decision,
+            effects=tuple(self.last_effects),
         )
 
 
