@@ -55,6 +55,11 @@ the generic shared blocker gate and registered policy blockers; it must not
 contain a special case for a profile or blocker. A profile cannot use an
 arbitrary callable or hidden side effect to bypass the registry, policy
 validation, bounded effect executor, postcondition, or receipt authority.
+For Closeout, the generic policy context distinguishes the target being
+completed from a closed dependency: a target completion postcondition is not
+an admission prerequisite. Research derives its Project outcome only from the
+exact reviewed artifact binding and asks the bounded effect executor to set and
+verify it; maintainers do not pre-populate that field.
 
 The generic registry injection seam is independently testable: an isolated
 registry may register an additional policy and resolve it through the same

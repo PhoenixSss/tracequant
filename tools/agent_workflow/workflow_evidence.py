@@ -233,6 +233,7 @@ def _audit_issue_view_with_contract(
         shared_facts.canonical_project_field(
             result.get("project_items"),
             repository=repository,
+            issue_number=result.get("number"),
             field_name=RESEARCH_OUTCOME_FIELD,
         )
         if is_research
@@ -302,6 +303,7 @@ def _audit_relationship_snapshot(
                 shared_facts.canonical_project_field(
                     item.get("project_items"),
                     repository=repository,
+                    issue_number=item.get("number"),
                     field_name=RESEARCH_OUTCOME_FIELD,
                 )
                 if is_research
@@ -487,6 +489,7 @@ def _audit_formal_blockers_gate(
                     else None,
                     downstream_contract=downstream_contract,
                     downstream_profile=downstream_profile,
+                    blocker_subject="dependency",
                 ),
             )
         except (TypeError, ValueError) as exc:

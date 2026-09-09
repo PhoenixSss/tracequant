@@ -395,6 +395,7 @@ class PolicyContext:
     repository: str | None = None
     downstream_contract: Mapping[str, Any] | None = None
     downstream_profile: LeafIssueWorkflowProfile | None = None
+    blocker_subject: str | None = None
     repo_root: Path | None = None
     runner: Any = None
     base_sha: str | None = None
@@ -1371,12 +1372,18 @@ class _ResearchPolicy(_BuiltinPolicy):
         )
         if str(leaf_contract.get("state", "")).upper() != "CLOSED":
             return ()
+        if context.phase == "Closeout" and context.blocker_subject == "target":
+            # The target's completion postcondition is produced only after
+            # the exact reviewed artifact has been validated. It is not a
+            # prerequisite for entering that same completion path.
+            return ()
 
         outcome = leaf_contract.get("research_outcome")
         if outcome is None:
             outcome = canonical_project_field(
                 leaf_contract.get("project_items"),
                 repository=context.repository,
+                issue_number=leaf_contract.get("number"),
                 field_name=RESEARCH_OUTCOME_FIELD,
             )
         try:

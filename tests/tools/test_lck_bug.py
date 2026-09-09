@@ -86,20 +86,52 @@ def test_live_issue_view_carries_the_bug_form_contract() -> None:
         repo_root = ROOT
 
         def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            value: dict[str, Any]
+            if command_id == "gh-issue-project-items-159":
+                value = {
+                    "data": {
+                        "repository": {
+                            "issue": {
+                                "number": 159,
+                                "projectItems": {
+                                    "nodes": [
+                                        {
+                                            "project": {
+                                                "number": 1,
+                                                "title": "Quant System Development",
+                                                "owner": {"login": "owner"},
+                                            },
+                                            "content": {
+                                                "number": 159,
+                                                "repository": {
+                                                    "nameWithOwner": "owner/repo"
+                                                },
+                                            },
+                                            "fieldValues": {
+                                                "nodes": [],
+                                                "pageInfo": {"hasNextPage": False},
+                                            },
+                                        }
+                                    ],
+                                    "pageInfo": {"hasNextPage": False},
+                                },
+                            }
+                        }
+                    }
+                }
+            else:
+                value = {
+                    "number": 159,
+                    "title": "[Bug] enable implementation-bearing Bug workflow",
+                    "state": "OPEN",
+                    "labels": [{"name": "type:bug"}],
+                    "body": BUG_BODY,
+                }
             return CommandResult(
                 command_id,
                 tuple(str(item) for item in argv),
                 0,
-                json.dumps(
-                    {
-                        "number": 159,
-                        "title": "[Bug] enable implementation-bearing Bug workflow",
-                        "state": "OPEN",
-                        "labels": [{"name": "type:bug"}],
-                        "body": BUG_BODY,
-                        "projectItems": [],
-                    }
-                ),
+                json.dumps(value),
                 "",
             )
 

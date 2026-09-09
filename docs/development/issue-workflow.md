@@ -315,7 +315,10 @@ Closeout 仅在 maintainer 已人工 Squash Merge 后执行：
 2. 将 Business Delivery 与 Cleanup 分离：merged PR 可立即得到
    Business Delivery = COMPLETE，cleanup 失败只产生 Cleanup = PENDING。Research 的
    `Research Outcome` 写入与 postcondition 也必须完成；DO NOT IMPLEMENT 与
-   NEEDS MORE EVIDENCE 仍然是 Business Delivery 的成功结果；
+   NEEDS MORE EVIDENCE 仍然是 Business Delivery 的成功结果。该值由 LCK 在验证
+   current Task contract、merged PR/base/head 与最新 Review PASS 的 exact artifact
+   binding 后，通过受约束 completion effect 自动写入 canonical Project；人工预设
+   不是正常步骤，也不是 fallback；
 3. 收敛 Issue / Project lifecycle（state、Status、labels）并同步 canonical
    `main`；
 4. 仅在 head/tree/worktree proof 完整时删除已验证的 Task branch，识别
