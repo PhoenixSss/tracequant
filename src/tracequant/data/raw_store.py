@@ -1215,6 +1215,13 @@ class RawManifest:
                 raise RawArtifactValidationError(
                     "manifest contains invalid revision identity evidence"
                 ) from error
+            if (
+                version == _REST_MANIFEST_VERSION
+                and evidence_kind is not RawRevisionEvidenceKind.RESPONSE_SHA256
+            ):
+                raise RawArtifactValidationError(
+                    "REST manifest revision evidence must be response_sha256"
+                )
             if revision_id != revision_identity.revision_id:
                 raise RawArtifactValidationError(
                     "manifest revision id does not match revision evidence"

@@ -7,11 +7,13 @@ uses synthetic fixtures as source-availability evidence.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import http.client
 import json
 import math
-import threading
+import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -105,19 +107,33 @@ _CONTRACT_COLUMNS: Final = (
     "taker_buy_quote_volume",
     "ignore",
 )
-_PRICE_COLUMNS: Final = (
+_MARK_PRICE_COLUMNS: Final = (
     "open_time",
-    "open",
-    "high",
-    "low",
-    "close",
-    "ignore_5",
+    "mark_open",
+    "mark_high",
+    "mark_low",
+    "mark_close",
+    "placeholder_volume",
     "close_time",
-    "ignore_7",
-    "ignore_8",
-    "ignore_9",
-    "ignore_10",
-    "ignore_11",
+    "placeholder_quote_volume",
+    "placeholder_count",
+    "placeholder_taker_buy_volume",
+    "placeholder_taker_buy_quote_volume",
+    "placeholder_ignore",
+)
+_INDEX_PRICE_COLUMNS: Final = (
+    "open_time",
+    "index_open",
+    "index_high",
+    "index_low",
+    "index_close",
+    "placeholder_volume",
+    "close_time",
+    "placeholder_quote_volume",
+    "placeholder_count",
+    "placeholder_taker_buy_volume",
+    "placeholder_taker_buy_quote_volume",
+    "placeholder_ignore",
 )
 _SCHEMA_IDENTIFIERS: Final = {
     BinanceRestEndpoint.CONTRACT_KLINES: "binance.um.contract-kline.rest-json.v1",
@@ -173,77 +189,80 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _urllib_http_get(
+    url: str, timeout: float, maximum_response_bytes: int
+) -> BinanceKlineRestHttpResponse:
+    request = urllib.request.Request(url, headers={"User-Agent": _PRODUCER_VERSION})
+    opener = urllib.request.build_opener(_NoRedirectHandler())
+    try:
+        response = opener.open(request, timeout=timeout)
+    except urllib.error.HTTPError as error:
+        try:
+            try:
+                body = error.read(maximum_response_bytes + 1)
+                complete = True
+            except http.client.IncompleteRead as incomplete:
+                body = bytes(incomplete.partial)
+                complete = False
+            return BinanceKlineRestHttpResponse(
+                status=error.code,
+                body=body,
+                headers=(
+                    dict(error.headers.items()) if error.headers is not None else {}
+                ),
+                complete=complete,
+            )
+        finally:
+            error.close()
+    with response:
+        try:
+            body = response.read(maximum_response_bytes + 1)
+            complete = True
+        except http.client.IncompleteRead as error:
+            body = bytes(error.partial)
+            complete = False
+    return BinanceKlineRestHttpResponse(
+        status=response.status,
+        body=body,
+        headers=dict(response.headers.items()),
+        complete=complete,
+    )
+
+
 def _default_http_get(
     url: str, timeout: float, maximum_response_bytes: int
 ) -> BinanceKlineRestHttpResponse:
-    """Read one response within an absolute wall-clock attempt deadline."""
-    result: list[BinanceKlineRestHttpResponse] = []
-    failure: list[BaseException] = []
-    active_response: list[object] = []
-    finished = threading.Event()
-
-    def fetch() -> None:
-        request = urllib.request.Request(url, headers={"User-Agent": _PRODUCER_VERSION})
-        opener = urllib.request.build_opener(_NoRedirectHandler())
-        try:
-            response = opener.open(request, timeout=timeout)
-            active_response.append(response)
-            with response:
-                try:
-                    body = response.read(maximum_response_bytes + 1)
-                    complete = True
-                except http.client.IncompleteRead as error:
-                    body = bytes(error.partial)
-                    complete = False
-                result.append(
-                    BinanceKlineRestHttpResponse(
-                        status=response.status,
-                        body=body,
-                        headers=dict(response.headers.items()),
-                        complete=complete,
-                    )
-                )
-        except urllib.error.HTTPError as error:
-            active_response.append(error)
-            try:
-                try:
-                    body = error.read(maximum_response_bytes + 1)
-                    complete = True
-                except http.client.IncompleteRead as incomplete:
-                    body = bytes(incomplete.partial)
-                    complete = False
-                result.append(
-                    BinanceKlineRestHttpResponse(
-                        status=error.code,
-                        body=body,
-                        headers=(
-                            dict(error.headers.items())
-                            if error.headers is not None
-                            else {}
-                        ),
-                        complete=complete,
-                    )
-                )
-            finally:
-                error.close()
-        except BaseException as error:
-            failure.append(error)
-        finally:
-            finished.set()
-
-    worker = threading.Thread(target=fetch, name="binance-rest-http", daemon=True)
-    worker.start()
-    if not finished.wait(timeout):
-        if active_response:
-            close = getattr(active_response[0], "close", None)
-            if callable(close):
-                close()
-        raise TimeoutError("HTTP attempt exceeded its absolute elapsed-time deadline")
-    if failure:
-        raise failure[0]
-    if not result:
-        raise RuntimeError("HTTP transport finished without a response or failure")
-    return result[0]
+    """Read one response in a worker that cannot outlive the attempt deadline."""
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "tracequant.data._binance_rest_http_worker",
+                url,
+                repr(timeout),
+                str(maximum_response_bytes),
+            ],
+            check=False,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise TimeoutError(
+            "HTTP attempt exceeded its absolute elapsed-time deadline"
+        ) from error
+    if completed.returncode != 0:
+        raise OSError("HTTP worker exited without a valid result")
+    try:
+        payload = json.loads(completed.stdout)
+        if payload["kind"] == "failure":
+            raise OSError(f"{payload['error_type']}: {payload['detail']}")
+        body = base64.b64decode(payload["body_base64"], validate=True)
+        return BinanceKlineRestHttpResponse(
+            payload["status"], body, payload["headers"], payload["complete"]
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise OSError("HTTP worker returned an invalid result") from error
 
 
 class BinanceKlineRestCoverageStatus(StrEnum):
@@ -432,9 +451,24 @@ class BinanceRestPageParsed:
     """Provider-specific parse output consumed by the shared page executor."""
 
     frame: pl.DataFrame
-    actual_record_range: TimeRange
+    actual_record_range: TimeRange | None
     records: Mapping[int, tuple[object, ...]]
     next_cursor_ms: int
+    terminal: bool = False
+
+    def __post_init__(self) -> None:
+        if self.frame.is_empty() and (
+            not self.terminal or self.actual_record_range is not None or self.records
+        ):
+            raise ValueError(
+                "an empty parsed page must be terminal and contain no record range"
+            )
+        if not self.frame.is_empty() and self.actual_record_range is None:
+            raise ValueError("a non-empty parsed page requires an actual record range")
+        if type(self.next_cursor_ms) is not int or self.next_cursor_ms < 0:
+            raise ValueError("next_cursor_ms must be a non-negative integer")
+        if not isinstance(self.terminal, bool):
+            raise TypeError("terminal must be a bool")
 
 
 class BinanceRestPageAdapter(Protocol):
@@ -482,8 +516,10 @@ def _response_digest(body: bytes) -> str:
 
 
 def _require_int(value: object, *, field: str) -> int:
-    if type(value) is not int or value < 0:
-        raise BinanceRestPageParseError(f"{field} must be a non-negative integer")
+    if type(value) is not int or not 0 <= value <= 2**63 - 1:
+        raise BinanceRestPageParseError(
+            f"{field} must be a non-negative signed 64-bit integer"
+        )
     return value
 
 
@@ -611,12 +647,17 @@ def _parse_kline_page(
             )
         rows.append(parsed)
 
-    columns = (
-        _CONTRACT_COLUMNS
-        if request.endpoint is BinanceRestEndpoint.CONTRACT_KLINES
-        else _PRICE_COLUMNS
-    )
-    frame = pl.DataFrame(rows, schema=list(columns), orient="row")
+    columns = {
+        BinanceRestEndpoint.CONTRACT_KLINES: _CONTRACT_COLUMNS,
+        BinanceRestEndpoint.MARK_PRICE_KLINES: _MARK_PRICE_COLUMNS,
+        BinanceRestEndpoint.INDEX_PRICE_KLINES: _INDEX_PRICE_COLUMNS,
+    }[request.endpoint]
+    try:
+        frame = pl.DataFrame(rows, schema=list(columns), orient="row")
+    except Exception as error:
+        raise BinanceRestPageParseError(
+            "response fields cannot be represented by the REST Raw schema"
+        ) from error
     assert previous_open is not None
     first_open = next(iter(seen))
     actual_range = TimeRange(
@@ -999,23 +1040,6 @@ class BinanceRestPageAcquisition:
                         0.0, self._monotonic_clock() - started
                     )
                     detail = str(error).strip() or type(error).__name__
-                    try:
-                        self._record_attempt(
-                            current,
-                            status=BinanceKlineRestStatus.RETRYABLE_FAILURE,
-                            detail=f"transport attempt {page_attempt}: {detail}",
-                            source_url=url,
-                            response=None,
-                        )
-                    except (RawStoreError, OSError, ValueError) as store_error:
-                        return self._finish(
-                            status=BinanceKlineRestStatus.LOCAL_FAILURE,
-                            request=request,
-                            pages=pages,
-                            tracker=tracker,
-                            cursor_ms=cursor_ms,
-                            reason=f"failed to persist transport evidence: {store_error}",
-                        )
                     delay = float(min(2 ** (page_attempt - 1), 60))
                     will_retry = page_attempt < budget.maximum_attempts_per_page
                     attempts.append(
@@ -1033,6 +1057,37 @@ class BinanceRestPageAcquisition:
                             ),
                         )
                     )
+                    try:
+                        self._record_attempt(
+                            current,
+                            status=BinanceKlineRestStatus.RETRYABLE_FAILURE,
+                            detail=f"transport attempt {page_attempt}: {detail}",
+                            source_url=url,
+                            response=None,
+                        )
+                    except (RawStoreError, OSError, ValueError) as store_error:
+                        pages.append(
+                            BinanceKlineRestPageResult(
+                                request=current,
+                                attempts=tuple(attempts),
+                                status=BinanceKlineRestStatus.LOCAL_FAILURE,
+                                short_page=False,
+                                record_count=0,
+                                actual_record_range=None,
+                                response_sha256=None,
+                                revision=None,
+                                artifact_path=None,
+                                detail=f"failed to persist transport evidence: {store_error}",
+                            )
+                        )
+                        return self._finish(
+                            status=BinanceKlineRestStatus.LOCAL_FAILURE,
+                            request=request,
+                            pages=pages,
+                            tracker=tracker,
+                            cursor_ms=cursor_ms,
+                            reason=f"failed to persist transport evidence: {store_error}",
+                        )
                     response = None
                     if not will_retry:
                         break
@@ -1098,6 +1153,17 @@ class BinanceRestPageAcquisition:
                             headers=response.headers,
                         )
                         detail = "response exceeds maximum_response_bytes"
+                        bounded_digest = _response_digest(bounded.body)
+                        attempts.append(
+                            BinanceKlineRestAttemptResult(
+                                attempt_number=tracker.attempts,
+                                page_attempt_number=page_attempt,
+                                outcome="response_too_large",
+                                http_status=bounded.status,
+                                response_sha256=bounded_digest,
+                                detail=detail,
+                            )
+                        )
                         try:
                             self._record_attempt(
                                 current,
@@ -1107,6 +1173,23 @@ class BinanceRestPageAcquisition:
                                 response=bounded,
                             )
                         except (RawStoreError, OSError, ValueError) as store_error:
+                            pages.append(
+                                BinanceKlineRestPageResult(
+                                    request=current,
+                                    attempts=tuple(attempts),
+                                    status=BinanceKlineRestStatus.LOCAL_FAILURE,
+                                    short_page=False,
+                                    record_count=0,
+                                    actual_record_range=None,
+                                    response_sha256=bounded_digest,
+                                    revision=None,
+                                    artifact_path=None,
+                                    detail=(
+                                        "failed to persist oversized response: "
+                                        f"{store_error}"
+                                    ),
+                                )
+                            )
                             return self._finish(
                                 status=BinanceKlineRestStatus.LOCAL_FAILURE,
                                 request=request,
@@ -1115,16 +1198,6 @@ class BinanceRestPageAcquisition:
                                 cursor_ms=cursor_ms,
                                 reason=f"failed to persist oversized response: {store_error}",
                             )
-                        attempts.append(
-                            BinanceKlineRestAttemptResult(
-                                attempt_number=tracker.attempts,
-                                page_attempt_number=page_attempt,
-                                outcome="response_too_large",
-                                http_status=bounded.status,
-                                response_sha256=_response_digest(bounded.body),
-                                detail=detail,
-                            )
-                        )
                         pages.append(
                             BinanceKlineRestPageResult(
                                 request=current,
@@ -1133,7 +1206,7 @@ class BinanceRestPageAcquisition:
                                 short_page=False,
                                 record_count=0,
                                 actual_record_range=None,
-                                response_sha256=_response_digest(bounded.body),
+                                response_sha256=bounded_digest,
                                 revision=None,
                                 artifact_path=None,
                                 detail=detail,
@@ -1151,6 +1224,16 @@ class BinanceRestPageAcquisition:
                     if not response.complete:
                         digest = _response_digest(response.body)
                         detail = "HTTP response body was incomplete"
+                        attempts.append(
+                            BinanceKlineRestAttemptResult(
+                                attempt_number=tracker.attempts,
+                                page_attempt_number=page_attempt,
+                                outcome="incomplete_response",
+                                http_status=response.status,
+                                response_sha256=digest,
+                                detail=detail,
+                            )
+                        )
                         try:
                             self._record_attempt(
                                 current,
@@ -1160,6 +1243,23 @@ class BinanceRestPageAcquisition:
                                 response=response,
                             )
                         except (RawStoreError, OSError, ValueError) as store_error:
+                            pages.append(
+                                BinanceKlineRestPageResult(
+                                    request=current,
+                                    attempts=tuple(attempts),
+                                    status=BinanceKlineRestStatus.LOCAL_FAILURE,
+                                    short_page=False,
+                                    record_count=0,
+                                    actual_record_range=None,
+                                    response_sha256=digest,
+                                    revision=None,
+                                    artifact_path=None,
+                                    detail=(
+                                        "failed to persist partial response evidence: "
+                                        f"{store_error}"
+                                    ),
+                                )
+                            )
                             return self._finish(
                                 status=BinanceKlineRestStatus.LOCAL_FAILURE,
                                 request=request,
@@ -1171,16 +1271,6 @@ class BinanceRestPageAcquisition:
                                     f"{store_error}"
                                 ),
                             )
-                        attempts.append(
-                            BinanceKlineRestAttemptResult(
-                                attempt_number=tracker.attempts,
-                                page_attempt_number=page_attempt,
-                                outcome="incomplete_response",
-                                http_status=response.status,
-                                response_sha256=digest,
-                                detail=detail,
-                            )
-                        )
                         pages.append(
                             BinanceKlineRestPageResult(
                                 request=current,
@@ -1209,26 +1299,6 @@ class BinanceRestPageAcquisition:
                         detail = (
                             "total elapsed-time budget exhausted during HTTP attempt"
                         )
-                        try:
-                            self._record_attempt(
-                                current,
-                                status=BinanceKlineRestStatus.BUDGET_EXHAUSTED,
-                                detail=detail,
-                                source_url=url,
-                                response=response,
-                            )
-                        except (RawStoreError, OSError, ValueError) as store_error:
-                            return self._finish(
-                                status=BinanceKlineRestStatus.LOCAL_FAILURE,
-                                request=request,
-                                pages=pages,
-                                tracker=tracker,
-                                cursor_ms=cursor_ms,
-                                reason=(
-                                    "failed to persist elapsed-budget response: "
-                                    f"{store_error}"
-                                ),
-                            )
                         attempts.append(
                             BinanceKlineRestAttemptResult(
                                 attempt_number=tracker.attempts,
@@ -1239,6 +1309,41 @@ class BinanceRestPageAcquisition:
                                 detail=detail,
                             )
                         )
+                        try:
+                            self._record_attempt(
+                                current,
+                                status=BinanceKlineRestStatus.BUDGET_EXHAUSTED,
+                                detail=detail,
+                                source_url=url,
+                                response=response,
+                            )
+                        except (RawStoreError, OSError, ValueError) as store_error:
+                            failure_detail = (
+                                "failed to persist elapsed-budget response: "
+                                f"{store_error}"
+                            )
+                            pages.append(
+                                BinanceKlineRestPageResult(
+                                    request=current,
+                                    attempts=tuple(attempts),
+                                    status=BinanceKlineRestStatus.LOCAL_FAILURE,
+                                    short_page=False,
+                                    record_count=0,
+                                    actual_record_range=None,
+                                    response_sha256=digest,
+                                    revision=None,
+                                    artifact_path=None,
+                                    detail=failure_detail,
+                                )
+                            )
+                            return self._finish(
+                                status=BinanceKlineRestStatus.LOCAL_FAILURE,
+                                request=request,
+                                pages=pages,
+                                tracker=tracker,
+                                cursor_ms=cursor_ms,
+                                reason=failure_detail,
+                            )
                         pages.append(
                             BinanceKlineRestPageResult(
                                 request=current,
@@ -1266,23 +1371,6 @@ class BinanceRestPageAcquisition:
                     if retryable:
                         digest = _response_digest(response.body)
                         detail = f"retryable HTTP {response.status}"
-                        try:
-                            self._record_attempt(
-                                current,
-                                status=BinanceKlineRestStatus.RETRYABLE_FAILURE,
-                                detail=detail,
-                                source_url=url,
-                                response=response,
-                            )
-                        except (RawStoreError, OSError, ValueError) as store_error:
-                            return self._finish(
-                                status=BinanceKlineRestStatus.LOCAL_FAILURE,
-                                request=request,
-                                pages=pages,
-                                tracker=tracker,
-                                cursor_ms=cursor_ms,
-                                reason=f"failed to persist HTTP evidence: {store_error}",
-                            )
                         retry_delay = _retry_after_seconds(
                             next(
                                 (
@@ -1312,6 +1400,40 @@ class BinanceRestPageAcquisition:
                                 ),
                             )
                         )
+                        try:
+                            self._record_attempt(
+                                current,
+                                status=BinanceKlineRestStatus.RETRYABLE_FAILURE,
+                                detail=detail,
+                                source_url=url,
+                                response=response,
+                            )
+                        except (RawStoreError, OSError, ValueError) as store_error:
+                            failure_detail = (
+                                f"failed to persist HTTP evidence: {store_error}"
+                            )
+                            pages.append(
+                                BinanceKlineRestPageResult(
+                                    request=current,
+                                    attempts=tuple(attempts),
+                                    status=BinanceKlineRestStatus.LOCAL_FAILURE,
+                                    short_page=False,
+                                    record_count=0,
+                                    actual_record_range=None,
+                                    response_sha256=digest,
+                                    revision=None,
+                                    artifact_path=None,
+                                    detail=failure_detail,
+                                )
+                            )
+                            return self._finish(
+                                status=BinanceKlineRestStatus.LOCAL_FAILURE,
+                                request=request,
+                                pages=pages,
+                                tracker=tracker,
+                                cursor_ms=cursor_ms,
+                                reason=failure_detail,
+                            )
                         if page_attempt == budget.maximum_attempts_per_page:
                             response = None
                             break
@@ -1501,6 +1623,47 @@ class BinanceRestPageAcquisition:
                     reason=detail,
                 )
 
+            if frame.is_empty():
+                detail = "adapter declared a terminal legal-empty page"
+                status = BinanceKlineRestStatus.LEGAL_EMPTY
+                try:
+                    self._record_attempt(
+                        current,
+                        status=status,
+                        detail=detail,
+                        source_url=url,
+                        response=response,
+                    )
+                except (RawStoreError, OSError, ValueError) as store_error:
+                    detail = f"failed to persist empty response evidence: {store_error}"
+                    status = BinanceKlineRestStatus.LOCAL_FAILURE
+                pages.append(
+                    BinanceKlineRestPageResult(
+                        request=current,
+                        attempts=tuple(attempts),
+                        status=status,
+                        short_page=True,
+                        record_count=0,
+                        actual_record_range=None,
+                        response_sha256=digest,
+                        revision=None,
+                        artifact_path=None,
+                        detail=detail,
+                    )
+                )
+                return self._finish(
+                    status=(
+                        BinanceKlineRestStatus.COMPLETE
+                        if status is BinanceKlineRestStatus.LEGAL_EMPTY
+                        else status
+                    ),
+                    request=request,
+                    pages=pages,
+                    tracker=tracker,
+                    cursor_ms=(caller_end_ms if parsed.terminal else cursor_ms),
+                    reason=detail,
+                )
+
             if tracker.remaining <= 0:
                 detail = "total elapsed-time budget exhausted while validating page"
                 try:
@@ -1512,16 +1675,30 @@ class BinanceRestPageAcquisition:
                         response=response,
                     )
                 except (RawStoreError, OSError, ValueError) as store_error:
+                    failure_detail = (
+                        f"failed to persist validation-budget response: {store_error}"
+                    )
+                    pages.append(
+                        BinanceKlineRestPageResult(
+                            request=current,
+                            attempts=tuple(attempts),
+                            status=BinanceKlineRestStatus.LOCAL_FAILURE,
+                            short_page=frame.height < current.limit,
+                            record_count=frame.height,
+                            actual_record_range=actual_range,
+                            response_sha256=digest,
+                            revision=None,
+                            artifact_path=None,
+                            detail=failure_detail,
+                        )
+                    )
                     return self._finish(
                         status=BinanceKlineRestStatus.LOCAL_FAILURE,
                         request=request,
                         pages=pages,
                         tracker=tracker,
                         cursor_ms=cursor_ms,
-                        reason=(
-                            "failed to persist validation-budget response: "
-                            f"{store_error}"
-                        ),
+                        reason=failure_detail,
                     )
                 pages.append(
                     BinanceKlineRestPageResult(
@@ -1547,6 +1724,7 @@ class BinanceRestPageAcquisition:
                 )
 
             observed_at = self._now()
+            assert actual_range is not None
             provenance = BinanceRestPageProvenance.from_response(
                 request=current,
                 response_body=response.body,
@@ -1621,6 +1799,15 @@ class BinanceRestPageAcquisition:
                     reason="page cursor did not advance",
                 )
             cursor_ms = next_cursor
+            if parsed.terminal:
+                return self._finish(
+                    status=BinanceKlineRestStatus.COMPLETE,
+                    request=request,
+                    pages=pages,
+                    tracker=tracker,
+                    cursor_ms=caller_end_ms,
+                    reason="adapter declared the point-event range complete",
+                )
             if tracker.remaining <= 0:
                 return self._finish(
                     status=BinanceKlineRestStatus.BUDGET_EXHAUSTED,

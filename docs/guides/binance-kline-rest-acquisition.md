@@ -120,8 +120,9 @@ available. A later observation alone does not overwrite the first persisted
 provenance for identical content.
 
 Contract Klines expose their actual volume, quote-volume, trade-count, and
-taker fields. Mark-price and index-price Klines retain positions 5, 7, and
-8–11 as `ignore_*` values; they are not published as volume or trade counts.
+taker fields. Mark-price and index-price Klines use `mark_*` and `index_*`
+price columns respectively, and retain positions 5, 7, and 8–11 as explicit
+`placeholder_*` values; they are not published as volume or trade counts.
 Empty/invalid/HTTP-failure responses are retained as acquisition evidence and
 never become a zero-filled or falsely complete Parquet page. A transport can
 return `BinanceKlineRestHttpResponse(..., complete=False)` when it received an
@@ -133,7 +134,10 @@ the Kline facade. A dataset adapter supplies request/coverage checks, a parser
 returning `BinanceRestPageParsed`, and a Raw schema identifier; the shared
 executor owns URL construction, bounded HTTP/retry/wait behavior, elapsed and
 page budgets, failure evidence, result assembly, and immutable page
-publication. L05 can therefore provide a funding adapter and reuse this path
-without copying the state machine. This Task does not itself implement funding
-parsing, a CLI, archive fallback, source refresh, gap repair, scheduling, or
-another provider.
+publication. A point-event adapter may return a terminal parsed page, including
+a terminal empty page with no Raw publication, once its response proves the
+requested range has been exhausted. This lets L05 advance by the last actual
+`fundingTime + 1ms` and complete after a legal empty response without pretending
+that sparse events cover a continuous bar grid. This Task does not itself
+implement funding parsing, a CLI, archive fallback, source refresh, gap repair,
+scheduling, or another provider.
