@@ -38,6 +38,10 @@ from tracequant.data.binance_kline_rest import (
     BinanceKlineRestPageResult,
     BinanceKlineRestRunResult,
     BinanceKlineRestStatus,
+    BinanceRestPageAcquisition,
+    BinanceRestPageAdapter,
+    BinanceRestPageParsed,
+    BinanceRestPageParseError,
 )
 from tracequant.data.binance_mark_price_kline import (
     BinanceMarkPriceKlineBackfill,
@@ -127,6 +131,10 @@ __all__ = [
     "BinanceKlineRestPageResult",
     "BinanceKlineRestRunResult",
     "BinanceKlineRestStatus",
+    "BinanceRestPageAcquisition",
+    "BinanceRestPageAdapter",
+    "BinanceRestPageParseError",
+    "BinanceRestPageParsed",
     "BinanceIndexPriceKlineBackfill",
     "BinanceIndexPriceKlineCoverageGapPlan",
     "BinanceIndexPriceKlineObjectResult",

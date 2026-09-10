@@ -1234,7 +1234,8 @@ class RawManifest:
                     )
             elif manifest.rest_provenance is not None:
                 if (
-                    manifest.rest_provenance.request.identity
+                    not manifest.rest_provenance.is_successful_response
+                    or manifest.rest_provenance.request.identity
                     != object_identity.rest_page_identity
                     or manifest.rest_provenance.revision_checksum != verified_checksum
                     or manifest.rest_provenance.record_count != manifest.record_count
@@ -1954,7 +1955,7 @@ class RawStore:
             rest_provenance_matches = existing_rest is candidate_rest
         else:
             rest_provenance_matches = (
-                existing_rest.request == candidate_rest.request
+                existing_rest.request.identity == candidate_rest.request.identity
                 and existing_rest.response_sha256 == candidate_rest.response_sha256
                 and existing_rest.http_status == candidate_rest.http_status
                 and existing_rest.record_count == candidate_rest.record_count

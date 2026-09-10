@@ -1,11 +1,13 @@
 import hashlib
+import http.client
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import polars as pl
 import pytest
 
 from tracequant.data import (
@@ -19,6 +21,8 @@ from tracequant.data import (
     BinanceKlineRestStatus,
     BinancePriceIndexId,
     BinanceRestEndpoint,
+    BinanceRestPageAcquisition,
+    BinanceRestPageParsed,
     BinanceRestPageProvenance,
     BinanceRestPageRequest,
     RawArtifactIncompleteError,
@@ -189,18 +193,68 @@ class _QueueTransport:
         return response
 
 
+class _FundingPageAdapter:
+    """Small L05-shaped adapter proving reuse without implementing L05 itself."""
+
+    def request_failure(
+        self, request: BinanceRestPageRequest, now: datetime
+    ) -> tuple[BinanceKlineRestStatus, str] | None:
+        assert request.endpoint is BinanceRestEndpoint.FUNDING_RATE_HISTORY
+        return None
+
+    def coverage_failure(
+        self, request: BinanceRestPageRequest, coverage: object | None
+    ) -> tuple[BinanceKlineRestStatus, str] | None:
+        if coverage != "verified-funding-coverage":
+            return (
+                BinanceKlineRestStatus.REST_BOUNDARY_UNKNOWN,
+                "funding coverage is not verified",
+            )
+        return None
+
+    def parse_page(
+        self,
+        request: BinanceRestPageRequest,
+        body: bytes,
+        prior_records: Mapping[int, tuple[object, ...]],
+    ) -> BinanceRestPageParsed:
+        payload = json.loads(body)
+        assert isinstance(payload, list) and len(payload) == 1
+        raw = payload[0]
+        assert isinstance(raw, dict)
+        funding_time = raw["fundingTime"]
+        assert isinstance(funding_time, int)
+        row = (funding_time, raw["fundingRate"])
+        assert funding_time not in prior_records
+        return BinanceRestPageParsed(
+            frame=pl.DataFrame(
+                [row], schema=["funding_time", "funding_rate"], orient="row"
+            ),
+            actual_record_range=TimeRange(
+                start=datetime.fromtimestamp(funding_time / 1_000, tz=UTC),
+                end=datetime.fromtimestamp((funding_time + 1) / 1_000, tz=UTC),
+            ),
+            records={funding_time: row},
+            next_cursor_ms=funding_time + 1,
+        )
+
+    def raw_schema_identifier(self, request: BinanceRestPageRequest) -> str:
+        return "test.binance.funding-rate.rest-json.v1"
+
+
 def _acquisition(
     root: Path,
     transport: BinanceKlineRestHttpGet,
     *,
     wait: Callable[[float], None] | None = None,
     monotonic_clock: Callable[[], float] | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> tuple[RawStore, BinanceKlineRestAcquisition]:
     store = RawStore(root, clock=lambda: NOW)
     return store, BinanceKlineRestAcquisition(
         store,
         http_get=transport,
-        clock=lambda: NOW,
+        clock=clock or (lambda: NOW),
         wait=wait,
         monotonic_clock=monotonic_clock,
     )
@@ -266,6 +320,39 @@ def test_kline_rest_run_publishes_verified_page_raw(tmp_path: Path) -> None:
                 assert isinstance(
                     artifact.manifest.rest_provenance, BinanceRestPageProvenance
                 )
+                expected_rows = [tuple(row) for row in json.loads(exact_body)]
+                assert artifact.frame.rows() == expected_rows
+                assert artifact.frame.columns == (
+                    [
+                        "open_time",
+                        "open",
+                        "high",
+                        "low",
+                        "close",
+                        "volume",
+                        "close_time",
+                        "quote_volume",
+                        "trade_count",
+                        "taker_buy_volume",
+                        "taker_buy_quote_volume",
+                        "ignore",
+                    ]
+                    if endpoint is BinanceRestEndpoint.CONTRACT_KLINES
+                    else [
+                        "open_time",
+                        "open",
+                        "high",
+                        "low",
+                        "close",
+                        "ignore_5",
+                        "close_time",
+                        "ignore_7",
+                        "ignore_8",
+                        "ignore_9",
+                        "ignore_10",
+                        "ignore_11",
+                    ]
+                )
 
             first_revision = result.pages[0].revision
             assert first_revision is not None
@@ -299,6 +386,64 @@ def test_kline_rest_run_publishes_verified_page_raw(tmp_path: Path) -> None:
                 first_revision.logical_identity, first_revision
             )
             assert persisted.manifest == first_artifact.manifest
+
+
+def test_shared_rest_page_executor_accepts_funding_adapter(tmp_path: Path) -> None:
+    start_ms = int(START.timestamp() * 1_000)
+    request = BinanceRestPageRequest(
+        endpoint=BinanceRestEndpoint.FUNDING_RATE_HISTORY,
+        subject=InstrumentId("BTCUSDT"),
+        caller_range=TimeRange(
+            start=START,
+            end=START + timedelta(milliseconds=2),
+        ),
+        interval=None,
+        limit=1,
+    )
+
+    def funding_body(url: str) -> bytes:
+        start = int(parse_qs(urlsplit(url).query)["startTime"][0])
+        return json.dumps(
+            [{"fundingTime": start, "fundingRate": "0.00010000"}],
+            separators=(",", ":"),
+        ).encode()
+
+    calls = 0
+
+    def transport(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return BinanceKlineRestHttpResponse(503, b"busy", {})
+        return BinanceKlineRestHttpResponse(200, funding_body(url), {})
+
+    store = RawStore(tmp_path, clock=lambda: NOW)
+    acquisition = BinanceRestPageAcquisition(
+        store,
+        adapter=_FundingPageAdapter(),
+        http_get=transport,
+        clock=lambda: NOW,
+        wait=lambda unused: None,
+        monotonic_clock=lambda: 0.0,
+    )
+
+    result = acquisition.run(request, "verified-funding-coverage", _budget())
+
+    assert result.status is BinanceKlineRestStatus.COMPLETE
+    assert result.attempts_used == 3
+    assert len(result.pages) == 2
+    assert [len(page.attempts) for page in result.pages] == [2, 1]
+    for offset, page in enumerate(result.pages):
+        assert page.revision is not None
+        artifact = store.read_exact_revision(
+            page.revision.logical_identity, page.revision
+        )
+        assert artifact.manifest.raw_schema_identifier == (
+            "test.binance.funding-rate.rest-json.v1"
+        )
+        assert artifact.frame.rows() == [(start_ms + offset, "0.00010000")]
 
 
 @pytest.mark.parametrize(
@@ -670,6 +815,49 @@ def test_per_page_attempt_limit_is_not_reset(tmp_path: Path) -> None:
     assert waits == [1.0]
 
 
+@pytest.mark.parametrize("exhaust_budget", [False, True])
+def test_retry_termination_keeps_recorded_attempts(
+    tmp_path: Path, exhaust_budget: bool
+) -> None:
+    request = _request(minutes=1, limit=1)
+    transport = _QueueTransport([BinanceKlineRestHttpResponse(503, b"busy", {})])
+    now = [0.0]
+
+    def wait(seconds: float) -> None:
+        if exhaust_budget:
+            now[0] += seconds
+            return
+        raise RuntimeError("wait interrupted")
+
+    _, acquisition = _acquisition(
+        tmp_path,
+        transport,
+        wait=wait,
+        monotonic_clock=lambda: now[0],
+    )
+
+    result = acquisition.run(
+        request,
+        _coverage(request),
+        _budget(attempts=2, elapsed=1.0),
+    )
+
+    expected = (
+        BinanceKlineRestStatus.BUDGET_EXHAUSTED
+        if exhaust_budget
+        else BinanceKlineRestStatus.LOCAL_FAILURE
+    )
+    assert result.status is expected
+    assert result.attempts_used == 1
+    assert len(result.pages) == 1
+    assert len(result.pages[0].attempts) == 1
+    assert result.pages[0].attempts[0].http_status == 503
+    assert (
+        result.pages[0].attempts[0].response_sha256
+        == hashlib.sha256(b"busy").hexdigest()
+    )
+
+
 def test_http_attempt_that_exceeds_total_elapsed_budget_is_not_published(
     tmp_path: Path,
 ) -> None:
@@ -721,6 +909,52 @@ def test_nonretryable_http_and_response_size_limit_are_observable(
     assert (evidence_path / "response.json").read_bytes() == b"123456"
 
 
+def test_partial_http_response_preserves_status_and_received_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _request(minutes=1, limit=1)
+    partial = b'[[1788975180000,"100.0"'
+
+    class PartialResponse:
+        status = 200
+        headers: Mapping[str, str] = {"Content-Type": "application/json"}
+
+        def __enter__(self) -> "PartialResponse":
+            return self
+
+        def __exit__(self, *unused: object) -> None:
+            return None
+
+        def read(self, unused_limit: int) -> bytes:
+            raise http.client.IncompleteRead(partial, len(partial) + 10)
+
+    class PartialOpener:
+        def open(self, unused_request: object, *, timeout: float) -> PartialResponse:
+            return PartialResponse()
+
+    monkeypatch.setattr(
+        "tracequant.data.binance_kline_rest.urllib.request.build_opener",
+        lambda *unused: PartialOpener(),
+    )
+    store = RawStore(tmp_path, clock=lambda: NOW)
+    acquisition = BinanceKlineRestAcquisition(store, clock=lambda: NOW)
+
+    result = acquisition.run(request, _coverage(request), _budget())
+
+    digest = hashlib.sha256(partial).hexdigest()
+    assert result.status is BinanceKlineRestStatus.INVALID_RESPONSE
+    assert result.pages[0].attempts[0].outcome == "incomplete_response"
+    assert result.pages[0].attempts[0].http_status == 200
+    assert result.pages[0].attempts[0].response_sha256 == digest
+    identity = RawObjectIdentity.from_rest_page_request(request)
+    record = store.list_acquisition_manifests(identity)[0]
+    evidence_path = store.acquisition_path_for(identity) / record.record_id
+    assert record.source_http_status == 200
+    assert record.source_body_sha256 == digest
+    assert (evidence_path / "response.json").read_bytes() == partial
+    assert store.list_verified_revisions(identity) == ()
+
+
 def test_response_digest_creates_new_revision_without_overwriting_old_content(
     tmp_path: Path,
 ) -> None:
@@ -751,6 +985,47 @@ def test_response_digest_creates_new_revision_without_overwriting_old_content(
     )
 
 
+def test_overlapping_caller_range_reuses_revision_and_reports_new_observation(
+    tmp_path: Path,
+) -> None:
+    first_observation = datetime(2026, 9, 9, 19, 1, tzinfo=UTC)
+    second_observation = datetime(2026, 9, 9, 19, 2, tzinfo=UTC)
+    first_request = _request(minutes=3, limit=1)
+    store, first_acquisition = _acquisition(
+        tmp_path,
+        _DynamicTransport(),
+        clock=lambda: first_observation,
+    )
+    first = first_acquisition.run(first_request, _coverage(first_request), _budget())
+    overlapping_request = _request(
+        start=START + timedelta(minutes=1), minutes=2, limit=1
+    )
+    _, second_acquisition = _acquisition(
+        tmp_path,
+        _DynamicTransport(),
+        clock=lambda: second_observation,
+    )
+
+    second = second_acquisition.run(
+        overlapping_request, _coverage(overlapping_request), _budget()
+    )
+
+    assert first.status is BinanceKlineRestStatus.COMPLETE
+    assert second.status is BinanceKlineRestStatus.COMPLETE
+    original_revision = first.pages[1].revision
+    assert original_revision is not None
+    assert second.pages[0].revision == original_revision
+    assert second.pages[0].detail == "existing immutable revision"
+    assert second.pages[0].observed_at == second_observation
+    persisted = store.read_exact_revision(
+        original_revision.logical_identity, original_revision
+    )
+    provenance = persisted.manifest.rest_provenance
+    assert provenance is not None
+    assert provenance.observed_at == first_observation
+    assert provenance.request.caller_range == first_request.caller_range
+
+
 @pytest.mark.parametrize("mutation", ["missing", "corrupt"])
 def test_rest_reader_rejects_missing_or_corrupt_response_evidence(
     tmp_path: Path, mutation: str
@@ -771,6 +1046,27 @@ def test_rest_reader_rejects_missing_or_corrupt_response_evidence(
         expected_error = RawArtifactValidationError
 
     with pytest.raises(expected_error):
+        store.read_exact_revision(revision.logical_identity, revision)
+
+
+def test_rest_reader_rejects_completed_manifest_with_failed_http_status(
+    tmp_path: Path,
+) -> None:
+    request = _request(minutes=1, limit=1)
+    store, acquisition = _acquisition(tmp_path, _DynamicTransport())
+    result = acquisition.run(request, _coverage(request), _budget())
+    revision = result.pages[0].revision
+    assert revision is not None
+    artifact = store.read_exact_revision(revision.logical_identity, revision)
+    manifest_path = artifact.path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["provenance"]["http_status"] = 500
+    manifest_path.write_text(
+        json.dumps(manifest, separators=(",", ":"), sort_keys=True),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RawArtifactValidationError):
         store.read_exact_revision(revision.logical_identity, revision)
 
 

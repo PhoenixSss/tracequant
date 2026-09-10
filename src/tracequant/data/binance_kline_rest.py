@@ -52,6 +52,10 @@ from tracequant.data.raw_store import (
 from tracequant.domain import InstrumentId, TimeRange
 
 __all__ = [
+    "BinanceRestPageAcquisition",
+    "BinanceRestPageAdapter",
+    "BinanceRestPageParseError",
+    "BinanceRestPageParsed",
     "BinanceKlineRestAcquisition",
     "BinanceKlineRestAttemptResult",
     "BinanceKlineRestBudget",
@@ -130,6 +134,7 @@ class BinanceKlineRestHttpResponse:
     status: int
     body: bytes
     headers: Mapping[str, str]
+    complete: bool = True
 
     def __post_init__(self) -> None:
         if type(self.status) is not int or not 100 <= self.status <= 599:
@@ -138,6 +143,8 @@ class BinanceKlineRestHttpResponse:
             raise TypeError("body must be bytes")
         if not isinstance(self.headers, Mapping):
             raise TypeError("headers must be a mapping")
+        if not isinstance(self.complete, bool):
+            raise TypeError("complete must be a bool")
         normalized: dict[str, str] = {}
         for name, value in self.headers.items():
             if not isinstance(name, str) or not isinstance(value, str):
@@ -172,18 +179,30 @@ def _default_http_get(
     opener = urllib.request.build_opener(_NoRedirectHandler())
     try:
         with opener.open(request, timeout=timeout) as response:
-            body = response.read(maximum_response_bytes + 1)
+            try:
+                body = response.read(maximum_response_bytes + 1)
+                complete = True
+            except http.client.IncompleteRead as error:
+                body = bytes(error.partial)
+                complete = False
             return BinanceKlineRestHttpResponse(
                 status=response.status,
                 body=body,
                 headers=dict(response.headers.items()),
+                complete=complete,
             )
     except urllib.error.HTTPError as error:
-        body = error.read(maximum_response_bytes + 1)
+        try:
+            body = error.read(maximum_response_bytes + 1)
+            complete = True
+        except http.client.IncompleteRead as incomplete:
+            body = bytes(incomplete.partial)
+            complete = False
         return BinanceKlineRestHttpResponse(
             status=error.code,
             body=body,
             headers=dict(error.headers.items()) if error.headers is not None else {},
+            complete=complete,
         )
 
 
@@ -320,6 +339,7 @@ class BinanceKlineRestPageResult:
     revision: RawRevisionIdentity | None
     artifact_path: Path | None
     detail: str
+    observed_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,7 +347,7 @@ class BinanceKlineRestRunResult:
     """Bounded acquisition result; only ``COMPLETE`` satisfies the full range."""
 
     status: BinanceKlineRestStatus
-    coverage: BinanceKlineRestCoverage | None
+    coverage: object | None
     pages: tuple[BinanceKlineRestPageResult, ...]
     requested_range: TimeRange
     actual_record_range: TimeRange | None
@@ -345,7 +365,7 @@ class BinanceKlineRestRunResult:
 @dataclass(slots=True)
 class _BudgetTracker:
     budget: BinanceKlineRestBudget
-    coverage: BinanceKlineRestCoverage | None
+    coverage: object | None
     monotonic_clock: Callable[[], float]
     started_at: float
     transport_seconds: float = 0.0
@@ -363,8 +383,39 @@ class _BudgetTracker:
         return max(0.0, self.budget.maximum_elapsed_seconds - self.elapsed)
 
 
-class _InvalidPageError(ValueError):
-    pass
+class BinanceRestPageParseError(ValueError):
+    """A response page is complete HTTP evidence but invalid dataset content."""
+
+
+@dataclass(frozen=True, slots=True)
+class BinanceRestPageParsed:
+    """Provider-specific parse output consumed by the shared page executor."""
+
+    frame: pl.DataFrame
+    actual_record_range: TimeRange
+    records: Mapping[int, tuple[object, ...]]
+    next_cursor_ms: int
+
+
+class BinanceRestPageAdapter(Protocol):
+    """Dataset hook set for the shared HTTP/budget/Raw page state machine."""
+
+    def request_failure(
+        self, request: BinanceRestPageRequest, now: datetime
+    ) -> tuple[BinanceKlineRestStatus, str] | None: ...
+
+    def coverage_failure(
+        self, request: BinanceRestPageRequest, coverage: object | None
+    ) -> tuple[BinanceKlineRestStatus, str] | None: ...
+
+    def parse_page(
+        self,
+        request: BinanceRestPageRequest,
+        body: bytes,
+        prior_records: Mapping[int, tuple[object, ...]],
+    ) -> BinanceRestPageParsed: ...
+
+    def raw_schema_identifier(self, request: BinanceRestPageRequest) -> str: ...
 
 
 def _datetime_ms(value: datetime) -> int:
@@ -392,19 +443,21 @@ def _response_digest(body: bytes) -> str:
 
 def _require_int(value: object, *, field: str) -> int:
     if type(value) is not int or value < 0:
-        raise _InvalidPageError(f"{field} must be a non-negative integer")
+        raise BinanceRestPageParseError(f"{field} must be a non-negative integer")
     return value
 
 
 def _require_finite_numeric_string(value: object, *, field: str) -> str:
     if not isinstance(value, str) or not value:
-        raise _InvalidPageError(f"{field} must be a non-empty numeric string")
+        raise BinanceRestPageParseError(f"{field} must be a non-empty numeric string")
     try:
         number = Decimal(value)
     except InvalidOperation as error:
-        raise _InvalidPageError(f"{field} must be a finite numeric string") from error
+        raise BinanceRestPageParseError(
+            f"{field} must be a finite numeric string"
+        ) from error
     if not number.is_finite():
-        raise _InvalidPageError(f"{field} must be a finite numeric string")
+        raise BinanceRestPageParseError(f"{field} must be a finite numeric string")
     return value
 
 
@@ -422,19 +475,25 @@ def _parse_kline_page(
             ),
         )
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
-        raise _InvalidPageError("response body is not strict UTF-8 JSON") from error
+        raise BinanceRestPageParseError(
+            "response body is not strict UTF-8 JSON"
+        ) from error
     if not isinstance(payload, list):
-        raise _InvalidPageError("response JSON must be an array, not an error object")
+        raise BinanceRestPageParseError(
+            "response JSON must be an array, not an error object"
+        )
     if not payload:
-        raise _InvalidPageError("empty")
+        raise BinanceRestPageParseError("empty")
     if len(payload) > request.limit:
-        raise _InvalidPageError("response contains more rows than the page limit")
+        raise BinanceRestPageParseError(
+            "response contains more rows than the page limit"
+        )
 
     seen: dict[int, tuple[object, ...]] = {}
     previous_seen: int | None = None
     for row_number, raw_row in enumerate(payload):
         if not isinstance(raw_row, list) or len(raw_row) != 12:
-            raise _InvalidPageError(
+            raise BinanceRestPageParseError(
                 f"row {row_number} must contain exactly 12 array elements"
             )
         open_time = _require_int(raw_row[0], field=f"row {row_number} open_time")
@@ -442,15 +501,17 @@ def _parse_kline_page(
         prior = prior_rows.get(open_time)
         if prior is not None:
             detail = "conflicting duplicate" if prior != frozen_row else "duplicate"
-            raise _InvalidPageError(
+            raise BinanceRestPageParseError(
                 f"row {row_number} has a cross-page {detail} open_time"
             )
         previous = seen.get(open_time)
         if previous is not None:
             detail = "conflicting duplicate" if previous != frozen_row else "duplicate"
-            raise _InvalidPageError(f"row {row_number} has a {detail} open_time")
+            raise BinanceRestPageParseError(
+                f"row {row_number} has a {detail} open_time"
+            )
         if previous_seen is not None and open_time < previous_seen:
-            raise _InvalidPageError(f"row {row_number} is out of order")
+            raise BinanceRestPageParseError(f"row {row_number} is out of order")
         seen[open_time] = frozen_row
         previous_seen = open_time
 
@@ -463,9 +524,11 @@ def _parse_kline_page(
         open_time = _require_int(raw_row[0], field=f"row {row_number} open_time")
         close_time = _require_int(raw_row[6], field=f"row {row_number} close_time")
         if open_time % _MINUTE_MS != 0:
-            raise _InvalidPageError(f"row {row_number} open_time is not minute-aligned")
+            raise BinanceRestPageParseError(
+                f"row {row_number} open_time is not minute-aligned"
+            )
         if close_time != open_time + _MINUTE_MS - 1:
-            raise _InvalidPageError(
+            raise BinanceRestPageParseError(
                 f"row {row_number} does not describe one complete minute"
             )
         if not (
@@ -473,9 +536,11 @@ def _parse_kline_page(
             <= open_time
             <= request.page_boundary.end_time_ms
         ):
-            raise _InvalidPageError(f"row {row_number} is outside the page boundary")
+            raise BinanceRestPageParseError(
+                f"row {row_number} is outside the page boundary"
+            )
         if open_time != expected_open:
-            raise _InvalidPageError(f"row {row_number} leaves a missing minute")
+            raise BinanceRestPageParseError(f"row {row_number} leaves a missing minute")
         expected_open += _MINUTE_MS
         previous_open = open_time
 
@@ -535,50 +600,63 @@ def _retry_after_seconds(value: str | None, *, now: datetime) -> float | None:
     return seconds
 
 
-class BinanceKlineRestAcquisition:
-    """Acquire verified Binance Kline pages and publish immutable Raw revisions."""
+class _KlineRestPageAdapter:
+    def request_failure(
+        self, request: BinanceRestPageRequest, now: datetime
+    ) -> tuple[BinanceKlineRestStatus, str] | None:
+        if request.endpoint not in _SCHEMA_IDENTIFIERS:
+            return (
+                BinanceKlineRestStatus.UNSUPPORTED,
+                "only contract, mark-price, and index-price Klines are supported",
+            )
+        if request.interval is not BinanceKlineInterval.ONE_MINUTE:
+            return (BinanceKlineRestStatus.UNSUPPORTED, "only 1m Klines are supported")
+        if str(request.subject) not in _ALLOWED_SUBJECTS:
+            return (
+                BinanceKlineRestStatus.UNSUPPORTED,
+                "only BTCUSDT and ETHUSDT are supported",
+            )
+        if request.endpoint is BinanceRestEndpoint.INDEX_PRICE_KLINES:
+            if not isinstance(request.subject, BinancePriceIndexId):
+                return (
+                    BinanceKlineRestStatus.UNSUPPORTED,
+                    "index-price Klines require a typed price-index pair",
+                )
+        elif not isinstance(request.subject, InstrumentId):
+            return (
+                BinanceKlineRestStatus.UNSUPPORTED,
+                "contract and mark-price Klines require a typed instrument",
+            )
+        start_ms = _datetime_ms(request.caller_range.start)
+        end_ms = _datetime_ms(request.caller_range.end)
+        if start_ms % _MINUTE_MS or end_ms % _MINUTE_MS:
+            return (
+                BinanceKlineRestStatus.INVALID_REQUEST,
+                "caller range must be aligned to complete UTC minutes",
+            )
+        if request.page_boundary != request.caller_bounds:
+            return (
+                BinanceKlineRestStatus.INVALID_REQUEST,
+                "public run must start at the complete normalized caller range",
+            )
+        closed_bar_end_ms = (_datetime_ms(now) // _MINUTE_MS) * _MINUTE_MS
+        if end_ms > closed_bar_end_ms:
+            return (
+                BinanceKlineRestStatus.INVALID_REQUEST,
+                "caller range includes the current unclosed 1m bar",
+            )
+        return None
 
-    def __init__(
-        self,
-        store: RawStore,
-        *,
-        http_get: BinanceKlineRestHttpGet | None = None,
-        clock: Callable[[], datetime] | None = None,
-        wait: Callable[[float], None] | None = None,
-        monotonic_clock: Callable[[], float] | None = None,
-    ) -> None:
-        if not isinstance(store, RawStore):
-            raise TypeError("store must be a RawStore")
-        self._store = store
-        self._http_get = http_get or _default_http_get
-        self._clock = clock or (lambda: datetime.now(UTC))
-        self._wait = wait or time.sleep
-        self._monotonic_clock = monotonic_clock or time.monotonic
-
-    def _now(self) -> datetime:
-        value = self._clock()
-        if not isinstance(value, datetime):
-            raise TypeError("clock must return a datetime")
-        try:
-            return to_utc(value)
-        except ValueError as error:
-            raise ValueError("clock must return a timezone-aware datetime") from error
-
-    @staticmethod
-    def _request_url(request: BinanceRestPageRequest) -> str:
-        query = urllib.parse.urlencode(sorted(request.normalized_params.items()))
-        return f"{_BASE_URL}{request.endpoint.value}?{query}"
-
-    @staticmethod
-    def _coverage_failure(
-        request: BinanceRestPageRequest,
-        coverage: BinanceKlineRestCoverage | None,
+    def coverage_failure(
+        self, request: BinanceRestPageRequest, coverage: object | None
     ) -> tuple[BinanceKlineRestStatus, str] | None:
         if coverage is None:
             return (
                 BinanceKlineRestStatus.REST_BOUNDARY_UNKNOWN,
                 "REST coverage evidence is missing",
             )
+        if not isinstance(coverage, BinanceKlineRestCoverage):
+            raise TypeError("coverage must be a BinanceKlineRestCoverage or None")
         if coverage.status is BinanceKlineRestCoverageStatus.UNKNOWN:
             return (
                 BinanceKlineRestStatus.REST_BOUNDARY_UNKNOWN,
@@ -619,51 +697,69 @@ class BinanceKlineRestAcquisition:
             )
         return None
 
-    def _request_failure(
-        self, request: BinanceRestPageRequest
-    ) -> tuple[BinanceKlineRestStatus, str] | None:
-        if request.endpoint not in _SCHEMA_IDENTIFIERS:
-            return (
-                BinanceKlineRestStatus.UNSUPPORTED,
-                "only contract, mark-price, and index-price Klines are supported",
-            )
-        if request.interval is not BinanceKlineInterval.ONE_MINUTE:
-            return (BinanceKlineRestStatus.UNSUPPORTED, "only 1m Klines are supported")
-        if str(request.subject) not in _ALLOWED_SUBJECTS:
-            return (
-                BinanceKlineRestStatus.UNSUPPORTED,
-                "only BTCUSDT and ETHUSDT are supported",
-            )
-        if request.endpoint is BinanceRestEndpoint.INDEX_PRICE_KLINES:
-            if not isinstance(request.subject, BinancePriceIndexId):
-                return (
-                    BinanceKlineRestStatus.UNSUPPORTED,
-                    "index-price Klines require a typed price-index pair",
-                )
-        elif not isinstance(request.subject, InstrumentId):
-            return (
-                BinanceKlineRestStatus.UNSUPPORTED,
-                "contract and mark-price Klines require a typed instrument",
-            )
-        start_ms = _datetime_ms(request.caller_range.start)
-        end_ms = _datetime_ms(request.caller_range.end)
-        if start_ms % _MINUTE_MS or end_ms % _MINUTE_MS:
-            return (
-                BinanceKlineRestStatus.INVALID_REQUEST,
-                "caller range must be aligned to complete UTC minutes",
-            )
-        if request.page_boundary != request.caller_bounds:
-            return (
-                BinanceKlineRestStatus.INVALID_REQUEST,
-                "public run must start at the complete normalized caller range",
-            )
-        closed_bar_end_ms = (_datetime_ms(self._now()) // _MINUTE_MS) * _MINUTE_MS
-        if end_ms > closed_bar_end_ms:
-            return (
-                BinanceKlineRestStatus.INVALID_REQUEST,
-                "caller range includes the current unclosed 1m bar",
-            )
-        return None
+    def parse_page(
+        self,
+        request: BinanceRestPageRequest,
+        body: bytes,
+        prior_records: Mapping[int, tuple[object, ...]],
+    ) -> BinanceRestPageParsed:
+        frame, actual_range, records = _parse_kline_page(request, body, prior_records)
+        return BinanceRestPageParsed(
+            frame=frame,
+            actual_record_range=actual_range,
+            records=records,
+            next_cursor_ms=int(frame["open_time"][-1]) + _MINUTE_MS,
+        )
+
+    def raw_schema_identifier(self, request: BinanceRestPageRequest) -> str:
+        return _SCHEMA_IDENTIFIERS[request.endpoint]
+
+
+class BinanceRestPageAcquisition:
+    """Shared bounded HTTP, retry, evidence, and immutable page publisher."""
+
+    def __init__(
+        self,
+        store: RawStore,
+        *,
+        adapter: BinanceRestPageAdapter,
+        http_get: BinanceKlineRestHttpGet | None = None,
+        clock: Callable[[], datetime] | None = None,
+        wait: Callable[[float], None] | None = None,
+        monotonic_clock: Callable[[], float] | None = None,
+    ) -> None:
+        if not isinstance(store, RawStore):
+            raise TypeError("store must be a RawStore")
+        # Protocol runtime checks are intentionally avoided; verify the small
+        # callable surface without constraining adapter classes.
+        for method in (
+            "request_failure",
+            "coverage_failure",
+            "parse_page",
+            "raw_schema_identifier",
+        ):
+            if not callable(getattr(adapter, method, None)):
+                raise TypeError(f"adapter must provide callable {method}")
+        self._adapter = adapter
+        self._store = store
+        self._http_get = http_get or _default_http_get
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._wait = wait or time.sleep
+        self._monotonic_clock = monotonic_clock or time.monotonic
+
+    def _now(self) -> datetime:
+        value = self._clock()
+        if not isinstance(value, datetime):
+            raise TypeError("clock must return a datetime")
+        try:
+            return to_utc(value)
+        except ValueError as error:
+            raise ValueError("clock must return a timezone-aware datetime") from error
+
+    @staticmethod
+    def _request_url(request: BinanceRestPageRequest) -> str:
+        query = urllib.parse.urlencode(sorted(request.normalized_params.items()))
+        return f"{_BASE_URL}{request.endpoint.value}?{query}"
 
     def _record_attempt(
         self,
@@ -759,14 +855,12 @@ class BinanceKlineRestAcquisition:
     def run(
         self,
         request: BinanceRestPageRequest,
-        coverage: BinanceKlineRestCoverage | None,
+        coverage: object | None,
         budget: BinanceKlineRestBudget,
     ) -> BinanceKlineRestRunResult:
         """Fetch, validate, and publish every page needed for the caller range."""
         if not isinstance(request, BinanceRestPageRequest):
             raise TypeError("request must be a BinanceRestPageRequest")
-        if coverage is not None and not isinstance(coverage, BinanceKlineRestCoverage):
-            raise TypeError("coverage must be a BinanceKlineRestCoverage or None")
         if not isinstance(budget, BinanceKlineRestBudget):
             raise TypeError("budget must be a BinanceKlineRestBudget")
         tracker = _BudgetTracker(
@@ -779,9 +873,9 @@ class BinanceKlineRestAcquisition:
         observed_rows: dict[int, tuple[object, ...]] = {}
         cursor_ms = request.caller_bounds.start_time_ms
 
-        failure = self._request_failure(request)
+        failure = self._adapter.request_failure(request, self._now())
         if failure is None:
-            failure = self._coverage_failure(request, coverage)
+            failure = self._adapter.coverage_failure(request, coverage)
         if failure is not None:
             status, detail = failure
             return self._finish(
@@ -812,6 +906,24 @@ class BinanceKlineRestAcquisition:
 
             for page_attempt in range(1, budget.maximum_attempts_per_page + 1):
                 if tracker.remaining <= 0:
+                    if attempts:
+                        pages.append(
+                            BinanceKlineRestPageResult(
+                                request=current,
+                                attempts=tuple(attempts),
+                                status=BinanceKlineRestStatus.BUDGET_EXHAUSTED,
+                                short_page=False,
+                                record_count=0,
+                                actual_record_range=None,
+                                response_sha256=attempts[-1].response_sha256,
+                                revision=None,
+                                artifact_path=None,
+                                detail=(
+                                    "total elapsed-time budget exhausted before "
+                                    "the next HTTP attempt"
+                                ),
+                            )
+                        )
                     return self._finish(
                         status=BinanceKlineRestStatus.BUDGET_EXHAUSTED,
                         request=request,
@@ -902,13 +1014,28 @@ class BinanceKlineRestAcquisition:
                     try:
                         self._wait(delay)
                     except Exception as wait_error:
+                        detail = f"retry wait failed: {wait_error}"
+                        pages.append(
+                            BinanceKlineRestPageResult(
+                                request=current,
+                                attempts=tuple(attempts),
+                                status=BinanceKlineRestStatus.LOCAL_FAILURE,
+                                short_page=False,
+                                record_count=0,
+                                actual_record_range=None,
+                                response_sha256=attempts[-1].response_sha256,
+                                revision=None,
+                                artifact_path=None,
+                                detail=detail,
+                            )
+                        )
                         return self._finish(
                             status=BinanceKlineRestStatus.LOCAL_FAILURE,
                             request=request,
                             pages=pages,
                             tracker=tracker,
                             cursor_ms=cursor_ms,
-                            reason=f"retry wait failed: {wait_error}",
+                            reason=detail,
                         )
                     tracker.waited_seconds += delay
                     continue
@@ -959,6 +1086,62 @@ class BinanceKlineRestAcquisition:
                                 record_count=0,
                                 actual_record_range=None,
                                 response_sha256=_response_digest(bounded.body),
+                                revision=None,
+                                artifact_path=None,
+                                detail=detail,
+                            )
+                        )
+                        return self._finish(
+                            status=BinanceKlineRestStatus.INVALID_RESPONSE,
+                            request=request,
+                            pages=pages,
+                            tracker=tracker,
+                            cursor_ms=cursor_ms,
+                            reason=detail,
+                        )
+
+                    if not response.complete:
+                        digest = _response_digest(response.body)
+                        detail = "HTTP response body was incomplete"
+                        try:
+                            self._record_attempt(
+                                current,
+                                status=BinanceKlineRestStatus.INVALID_RESPONSE,
+                                detail=detail,
+                                source_url=url,
+                                response=response,
+                            )
+                        except (RawStoreError, OSError, ValueError) as store_error:
+                            return self._finish(
+                                status=BinanceKlineRestStatus.LOCAL_FAILURE,
+                                request=request,
+                                pages=pages,
+                                tracker=tracker,
+                                cursor_ms=cursor_ms,
+                                reason=(
+                                    "failed to persist partial response evidence: "
+                                    f"{store_error}"
+                                ),
+                            )
+                        attempts.append(
+                            BinanceKlineRestAttemptResult(
+                                attempt_number=tracker.attempts,
+                                page_attempt_number=page_attempt,
+                                outcome="incomplete_response",
+                                http_status=response.status,
+                                response_sha256=digest,
+                                detail=detail,
+                            )
+                        )
+                        pages.append(
+                            BinanceKlineRestPageResult(
+                                request=current,
+                                attempts=tuple(attempts),
+                                status=BinanceKlineRestStatus.INVALID_RESPONSE,
+                                short_page=False,
+                                record_count=0,
+                                actual_record_range=None,
+                                response_sha256=digest,
                                 revision=None,
                                 artifact_path=None,
                                 detail=detail,
@@ -1103,13 +1286,28 @@ class BinanceKlineRestAcquisition:
                         try:
                             self._wait(retry_delay)
                         except Exception as error:
+                            detail = f"retry wait failed: {error}"
+                            pages.append(
+                                BinanceKlineRestPageResult(
+                                    request=current,
+                                    attempts=tuple(attempts),
+                                    status=BinanceKlineRestStatus.LOCAL_FAILURE,
+                                    short_page=False,
+                                    record_count=0,
+                                    actual_record_range=None,
+                                    response_sha256=attempts[-1].response_sha256,
+                                    revision=None,
+                                    artifact_path=None,
+                                    detail=detail,
+                                )
+                            )
                             return self._finish(
                                 status=BinanceKlineRestStatus.LOCAL_FAILURE,
                                 request=request,
                                 pages=pages,
                                 tracker=tracker,
                                 cursor_ms=cursor_ms,
-                                reason=f"retry wait failed: {error}",
+                                reason=detail,
                             )
                         tracker.waited_seconds += retry_delay
                         response = None
@@ -1191,10 +1389,11 @@ class BinanceKlineRestAcquisition:
                 )
 
             try:
-                frame, actual_range, page_rows = _parse_kline_page(
-                    current, response.body, observed_rows
-                )
-            except _InvalidPageError as error:
+                parsed = self._adapter.parse_page(current, response.body, observed_rows)
+                frame = parsed.frame
+                actual_range = parsed.actual_record_range
+                page_rows = parsed.records
+            except BinanceRestPageParseError as error:
                 detail = str(error)
                 status = (
                     BinanceKlineRestStatus.LEGAL_EMPTY
@@ -1282,10 +1481,11 @@ class BinanceKlineRestAcquisition:
                     reason=detail,
                 )
 
+            observed_at = self._now()
             provenance = BinanceRestPageProvenance.from_response(
                 request=current,
                 response_body=response.body,
-                observed_at=self._now(),
+                observed_at=observed_at,
                 http_status=response.status,
                 response_headers=_sanitize_headers(response.headers),
                 record_count=frame.height,
@@ -1294,7 +1494,7 @@ class BinanceKlineRestAcquisition:
                 request=current,
                 rows=frame,
                 actual_record_range=actual_range,
-                raw_schema_identifier=_SCHEMA_IDENTIFIERS[current.endpoint],
+                raw_schema_identifier=self._adapter.raw_schema_identifier(current),
                 producer_version=_PRODUCER_VERSION,
                 provenance=provenance,
                 response_body=response.body,
@@ -1331,6 +1531,7 @@ class BinanceKlineRestAcquisition:
                     else None,
                     artifact_path=artifact_path,
                     detail=detail,
+                    observed_at=observed_at,
                 )
             )
             if status is not BinanceKlineRestStatus.COMPLETE:
@@ -1344,8 +1545,7 @@ class BinanceKlineRestAcquisition:
                 )
             observed_rows.update(page_rows)
 
-            last_open_ms = int(frame["open_time"][-1])
-            next_cursor = last_open_ms + _MINUTE_MS
+            next_cursor = parsed.next_cursor_ms
             if next_cursor <= cursor_ms:
                 return self._finish(
                     status=BinanceKlineRestStatus.INVALID_RESPONSE,
@@ -1366,7 +1566,7 @@ class BinanceKlineRestAcquisition:
                     reason="total elapsed-time budget exhausted after Raw publication",
                 )
             if cursor_ms < caller_end_ms:
-                current = current.next_page(last_open_ms)
+                current = current.with_cursor(cursor_ms)
 
         return self._finish(
             status=BinanceKlineRestStatus.COMPLETE,
@@ -1375,4 +1575,26 @@ class BinanceKlineRestAcquisition:
             tracker=tracker,
             cursor_ms=cursor_ms,
             reason="requested range was fully published as immutable REST pages",
+        )
+
+
+class BinanceKlineRestAcquisition(BinanceRestPageAcquisition):
+    """Acquire verified Binance Kline pages through the shared REST executor."""
+
+    def __init__(
+        self,
+        store: RawStore,
+        *,
+        http_get: BinanceKlineRestHttpGet | None = None,
+        clock: Callable[[], datetime] | None = None,
+        wait: Callable[[float], None] | None = None,
+        monotonic_clock: Callable[[], float] | None = None,
+    ) -> None:
+        super().__init__(
+            store,
+            adapter=_KlineRestPageAdapter(),
+            http_get=http_get,
+            clock=clock,
+            wait=wait,
+            monotonic_clock=monotonic_clock,
         )

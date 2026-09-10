@@ -106,7 +106,10 @@ The run result reports every page and attempt, the terminal reason, exact Raw
 revision identity/path, actual record range, unmet range, and consumed
 page/attempt/elapsed budgets. A non-empty valid response page is independently
 published. Earlier valid pages remain readable if a later page fails, but the
-run remains incomplete.
+run remains incomplete. Each successfully parsed page also reports this run's
+`observed_at`; an idempotent repeat therefore preserves the first persisted
+provenance while still making the new observation traceable in its current
+result.
 
 Each REST revision stores `data.parquet`, `manifest.json`, and the exact
 `response.json` bytes. It uses `response_sha256` revision evidence and
@@ -120,9 +123,17 @@ Contract Klines expose their actual volume, quote-volume, trade-count, and
 taker fields. Mark-price and index-price Klines retain positions 5, 7, and
 8–11 as `ignore_*` values; they are not published as volume or trade counts.
 Empty/invalid/HTTP-failure responses are retained as acquisition evidence and
-never become a zero-filled or falsely complete Parquet page.
+never become a zero-filled or falsely complete Parquet page. A transport can
+return `BinanceKlineRestHttpResponse(..., complete=False)` when it received an
+HTTP status and only a body prefix; the prefix bytes, digest, and status remain
+failure evidence and are never published as completed Raw.
 
-The injectable transport, finite budget, attempt reporting, and page-level Raw
-publication are the minimum mechanics a later funding adapter may reuse. This
-entry point does not implement funding parsing, a CLI, archive fallback,
-source refresh, gap repair, scheduling, or another provider.
+`BinanceRestPageAcquisition` is the public reusable execution boundary behind
+the Kline facade. A dataset adapter supplies request/coverage checks, a parser
+returning `BinanceRestPageParsed`, and a Raw schema identifier; the shared
+executor owns URL construction, bounded HTTP/retry/wait behavior, elapsed and
+page budgets, failure evidence, result assembly, and immutable page
+publication. L05 can therefore provide a funding adapter and reuse this path
+without copying the state machine. This Task does not itself implement funding
+parsing, a CLI, archive fallback, source refresh, gap repair, scheduling, or
+another provider.
