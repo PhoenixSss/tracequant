@@ -1201,6 +1201,7 @@ class _SharedBudget:
     downloaded_bytes: int = 0
     waited_seconds: float = 0.0
     exhaustion_reason: str | None = None
+    cancelled: bool = False
 
     @property
     def elapsed(self) -> float:
@@ -1422,6 +1423,11 @@ class BinancePublicHistoryAcquisition:
 
     def _archive_transport(self, shared: _SharedBudget) -> ArchiveHttpGet:
         def get(url: str, timeout: float) -> ArchiveHttpResponse:
+            if self._cancelled():
+                shared.cancelled = True
+                raise ConnectionError(
+                    "acquisition cancelled before archive HTTP request"
+                )
             shared.before_http()
             remaining_download = (
                 shared.budget.maximum_download_bytes - shared.downloaded_bytes
@@ -1464,6 +1470,11 @@ class BinancePublicHistoryAcquisition:
         def get(
             url: str, timeout: float, maximum_response_bytes: int
         ) -> BinanceKlineRestHttpResponse:
+            if self._cancelled():
+                shared.cancelled = True
+                raise _SharedBudgetExceeded(
+                    "acquisition cancelled before REST HTTP request"
+                )
             shared.before_http()
             remaining_download = (
                 shared.budget.maximum_download_bytes - shared.downloaded_bytes
@@ -1494,7 +1505,11 @@ class BinancePublicHistoryAcquisition:
                     complete=False,
                 )
             shared.after_http(response.body)
-            if cumulative_limit_is_binding and len(response.body) >= remaining_download:
+            if (
+                cumulative_limit_is_binding
+                and not response.complete
+                and len(response.body) >= remaining_download
+            ):
                 shared.exhaustion_reason = "maximum_download_bytes exhausted"
             if shared.exhaustion_reason is not None:
                 response = replace(response, complete=False)
@@ -1504,11 +1519,17 @@ class BinancePublicHistoryAcquisition:
 
     def _shared_wait(self, shared: _SharedBudget) -> Callable[[float], None]:
         def wait(seconds: float) -> None:
+            if self._cancelled():
+                shared.cancelled = True
+                raise _SharedBudgetExceeded("acquisition cancelled before retry wait")
             if seconds > shared.remaining_seconds:
                 shared.exhaustion_reason = "retry wait exceeds remaining elapsed budget"
                 raise _SharedBudgetExceeded(shared.exhaustion_reason)
             self._wait(seconds)
             shared.waited_seconds += seconds
+            if self._cancelled():
+                shared.cancelled = True
+                raise _SharedBudgetExceeded("acquisition cancelled after retry wait")
 
         return wait
 
@@ -1529,6 +1550,10 @@ class BinancePublicHistoryAcquisition:
         detail: str | None = None
         actual_record_range: TimeRange | None = None
         for attempt in range(1, shared.budget.maximum_attempts_per_object + 1):
+            if self._cancelled():
+                shared.cancelled = True
+                detail = "acquisition cancelled before archive attempt"
+                break
             if request.data_type is BinancePublicHistoryDataType.CONTRACT_KLINE:
                 contract_outcome = BinanceContractKlineBackfill(
                     store, http_get=transport, timeout=timeout, clock=self._clock
@@ -1561,10 +1586,13 @@ class BinancePublicHistoryAcquisition:
                 artifact_path = funding_outcome.artifact_path
                 detail = funding_outcome.detail
                 actual_record_range = funding_outcome.actual_record_range
+            if self._cancelled():
+                shared.cancelled = True
             if status is not BinanceArchiveAcquisitionStatus.RETRYABLE_FAILURE:
                 break
             if (
-                shared.exhaustion_reason is not None
+                shared.cancelled
+                or shared.exhaustion_reason is not None
                 or attempt == shared.budget.maximum_attempts_per_object
             ):
                 break
@@ -1575,6 +1603,8 @@ class BinancePublicHistoryAcquisition:
                 status = BinanceArchiveAcquisitionStatus.BUDGET_EXHAUSTED
                 detail = f"{detail or 'archive retryable failure'}; {error}"
                 break
+        if status is None:
+            status = BinanceArchiveAcquisitionStatus.RETRYABLE_FAILURE
         assert status is not None
         references: tuple[BinancePublicHistoryRawReference, ...] = ()
         if artifact_path is not None:
@@ -1672,12 +1702,16 @@ class BinancePublicHistoryAcquisition:
             step.rest_request, step.rest_coverage, rest_budget
         )
         shared.rest_pages += result.pages_used
-        if result.status is BinanceKlineRestStatus.BUDGET_EXHAUSTED:
+        if (
+            not shared.cancelled
+            and result.status is BinanceKlineRestStatus.BUDGET_EXHAUSTED
+        ):
             shared.exhaustion_reason = (
                 shared.exhaustion_reason or result.termination_reason
             )
         elif (
-            result.status is not BinanceKlineRestStatus.COMPLETE
+            not shared.cancelled
+            and result.status is not BinanceKlineRestStatus.COMPLETE
             and shared.http_requests >= shared.budget.maximum_http_requests
         ):
             shared.exhaustion_reason = "maximum_http_requests exhausted"
@@ -1732,18 +1766,26 @@ class BinancePublicHistoryAcquisition:
     ) -> tuple[int, tuple[BinancePublicHistoryConflict, ...]]:
         duplicates = 0
         conflicts: list[BinancePublicHistoryConflict] = []
-        loaded = [
-            (
-                reference,
-                _semantic_records(
-                    request.data_type,
-                    store.read_revision(
-                        reference.object_identity, reference.revision
-                    ).frame,
-                ),
+        range_start = int(request.request_range.start.timestamp() * 1_000)
+        range_end = int(request.request_range.end.timestamp() * 1_000)
+        loaded = []
+        for reference in references:
+            records = _semantic_records(
+                request.data_type,
+                store.read_revision(
+                    reference.object_identity, reference.revision
+                ).frame,
             )
-            for reference in references
-        ]
+            loaded.append(
+                (
+                    reference,
+                    {
+                        key: value
+                        for key, value in records.items()
+                        if range_start <= key < range_end
+                    },
+                )
+            )
         for left_index, (left_ref, left_rows) in enumerate(loaded):
             for right_ref, right_rows in loaded[left_index + 1 :]:
                 for key in sorted(left_rows.keys() & right_rows.keys()):
@@ -1885,8 +1927,22 @@ class BinancePublicHistoryAcquisition:
                             request, step, stores[request.output_root], shared
                         )
                 except _SharedBudgetExceeded as error:
-                    shared.exhaustion_reason = str(error)
-                    unmet = str(error)
+                    if shared.cancelled:
+                        cancelled = True
+                        unmet = "cancelled during source execution"
+                    else:
+                        shared.exhaustion_reason = str(error)
+                        unmet = str(error)
+                    break
+                if shared.cancelled:
+                    source = replace(
+                        source,
+                        status=BinancePublicHistoryRunStatus.CANCELLED.value,
+                        detail="cancelled during source execution",
+                    )
+                    sources.append(source)
+                    cancelled = True
+                    unmet = source.detail
                     break
                 sources.append(source)
                 if self._source_satisfied(request, obligation.required_range, source):
@@ -1986,58 +2042,73 @@ class BinancePublicHistoryAcquisition:
                 [],
             ).append(index)
         for (root, _data_type, _subject), indices in comparison_groups.items():
-            unique_references: dict[
+            group_references: dict[
                 tuple[str, str], BinancePublicHistoryRawReference
             ] = {}
             for index in indices:
                 for reference in request_results[index].raw_references:
-                    unique_references[
+                    group_references[
                         (
                             reference.object_identity.object_id,
                             reference.revision.revision_id,
                         )
                     ] = reference
-            touched_identities = {
-                reference.object_identity.object_id: reference.object_identity
-                for reference in unique_references.values()
-            }
-            for identity in touched_identities.values():
-                try:
-                    artifacts = stores[root].list_verified_revisions(identity)
-                    for artifact in artifacts:
-                        reference = _artifact_reference(stores[root], artifact)
-                        unique_references[
-                            (
-                                reference.object_identity.object_id,
-                                reference.revision.revision_id,
-                            )
-                        ] = reference
-                except (RawStoreError, OSError) as error:
-                    detail = f"Raw revision overlap inspection failed: {error}"
-                    for index in indices:
+            for index in indices:
+                item = request_results[index]
+                request_range = item.request.request_range
+                unique_references = {
+                    key: reference
+                    for key, reference in group_references.items()
+                    if reference.actual_record_range.start < request_range.end
+                    and request_range.start < reference.actual_record_range.end
+                }
+                touched_identities = {
+                    reference.object_identity.object_id: reference.object_identity
+                    for reference in unique_references.values()
+                }
+                comparison_failed = False
+                for identity in touched_identities.values():
+                    try:
+                        artifacts = stores[root].list_verified_revisions(identity)
+                        for artifact in artifacts:
+                            reference = _artifact_reference(stores[root], artifact)
+                            if (
+                                reference.actual_record_range.start < request_range.end
+                                and request_range.start
+                                < reference.actual_record_range.end
+                            ):
+                                unique_references[
+                                    (
+                                        reference.object_identity.object_id,
+                                        reference.revision.revision_id,
+                                    )
+                                ] = reference
+                    except (RawStoreError, OSError) as error:
+                        detail = f"Raw revision overlap inspection failed: {error}"
                         request_results[index] = self._record_overlap_local_failure(
                             request_results[index],
                             detail=detail,
                             identity=identity,
                         )
-            try:
-                duplicates, conflicts = self._compare(
-                    request_results[indices[0]].request,
-                    tuple(unique_references.values()),
-                    stores[root],
-                )
-            except (RawStoreError, OSError) as error:
-                detail = f"Raw overlap comparison failed: {error}"
-                for index in indices:
+                        comparison_failed = True
+                if comparison_failed:
+                    continue
+                try:
+                    duplicates, conflicts = self._compare(
+                        item.request,
+                        tuple(unique_references.values()),
+                        stores[root],
+                    )
+                except (RawStoreError, OSError) as error:
+                    detail = f"Raw overlap comparison failed: {error}"
                     request_results[index] = self._record_overlap_local_failure(
                         request_results[index],
                         detail=detail,
                         identity=None,
                     )
-                continue
-            if not duplicates and not conflicts:
-                continue
-            for index in indices:
+                    continue
+                if not duplicates and not conflicts:
+                    continue
                 item = request_results[index]
                 request_results[index] = replace(
                     item,
