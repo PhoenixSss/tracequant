@@ -523,6 +523,7 @@ def test_missing_minute_is_reported_as_coverage_gap_and_not_published(
     assert result.completed is False
     assert result.objects[0].status is BinanceContractKlineStatus.COVERAGE_GAP
     assert result.objects[0].detail == "archive rows contain a missing 1m timestamp"
+    assert result.objects[0].actual_record_range == request_range
     assert not store.path_for(RawObjectIdentity.from_request(plan.request)).exists()
 
 

@@ -356,6 +356,7 @@ def test_partial_first_daily_object_is_a_coverage_gap(tmp_path: Path) -> None:
     assert result.objects[0].detail == (
         "archive rows do not cover the complete source object boundary"
     )
+    assert result.objects[0].actual_record_range == request_range
 
 
 @pytest.mark.parametrize(

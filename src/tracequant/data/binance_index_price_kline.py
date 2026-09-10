@@ -151,6 +151,7 @@ class BinanceIndexPriceKlineObjectResult:
     status: BinanceIndexPriceKlineStatus
     artifact_path: Path | None = None
     detail: str | None = None
+    actual_record_range: TimeRange | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,7 +297,8 @@ def _validate_complete_object_coverage(
 ) -> None:
     if actual_range != _archive_object_range(plan):
         raise _coverage_gap(
-            "archive rows do not cover the complete source object boundary"
+            "archive rows do not cover the complete source object boundary",
+            actual_record_range=actual_range,
         )
 
 
@@ -309,7 +311,8 @@ def _validate_required_coverage(
         or actual_range.end < required_range.end
     ):
         raise _coverage_gap(
-            "archive rows do not cover the caller range within this source object"
+            "archive rows do not cover the caller range within this source object",
+            actual_record_range=actual_range,
         )
 
 
@@ -352,6 +355,7 @@ def _parse_archive(
 
     columns: dict[str, list[str | int]] = {name: [] for name in _RAW_COLUMNS}
     previous_open: int | None = None
+    has_missing_minute = False
     object_range = _archive_object_range(plan)
     object_start_ms = int(object_range.start.timestamp() * 1000)
     object_end_ms = int(object_range.end.timestamp() * 1000)
@@ -381,7 +385,7 @@ def _parse_archive(
                     "row open_time values must be strictly increasing"
                 )
             if open_time != previous_open + _ONE_MINUTE_MS:
-                raise _coverage_gap("archive rows contain a missing 1m timestamp")
+                has_missing_minute = True
         previous_open = open_time
         for index in (1, 2, 3, 4, 5, 7, 9, 10, 11):
             _validate_decimal(row[index], field=_RAW_COLUMNS[index])
@@ -409,6 +413,11 @@ def _parse_archive(
         start=datetime.fromtimestamp(first_open / 1000, tz=UTC),
         end=datetime.fromtimestamp((last_open + _ONE_MINUTE_MS) / 1000, tz=UTC),
     )
+    if has_missing_minute:
+        raise _coverage_gap(
+            "archive rows contain a missing 1m timestamp",
+            actual_record_range=actual_range,
+        )
     _validate_complete_object_coverage(plan, actual_range)
     _validate_required_coverage(plan, actual_range)
     return BinanceArchiveParseResult(
@@ -493,4 +502,5 @@ class BinanceIndexPriceKlineBackfill:
             outcome.status,
             artifact_path=outcome.artifact_path,
             detail=outcome.detail,
+            actual_record_range=outcome.actual_record_range,
         )

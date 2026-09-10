@@ -1508,7 +1508,7 @@ class BinancePublicHistoryAcquisition:
                 status = contract_outcome.status
                 artifact_path = contract_outcome.artifact_path
                 detail = contract_outcome.detail
-                actual_record_range = None
+                actual_record_range = contract_outcome.actual_record_range
             elif request.data_type is BinancePublicHistoryDataType.MARK_PRICE_KLINE:
                 mark_outcome = BinanceMarkPriceKlineBackfill(
                     store, http_get=transport, timeout=timeout, clock=self._clock
@@ -1516,7 +1516,7 @@ class BinancePublicHistoryAcquisition:
                 status = mark_outcome.status
                 artifact_path = mark_outcome.artifact_path
                 detail = mark_outcome.detail
-                actual_record_range = None
+                actual_record_range = mark_outcome.actual_record_range
             elif request.data_type is BinancePublicHistoryDataType.INDEX_PRICE_KLINE:
                 index_outcome = BinanceIndexPriceKlineBackfill(
                     store, http_get=transport, timeout=timeout, clock=self._clock
@@ -1524,7 +1524,7 @@ class BinancePublicHistoryAcquisition:
                 status = index_outcome.status
                 artifact_path = index_outcome.artifact_path
                 detail = index_outcome.detail
-                actual_record_range = None
+                actual_record_range = index_outcome.actual_record_range
             else:
                 funding_outcome = BinanceFundingRateBackfill(
                     store, http_get=transport, timeout=timeout, clock=self._clock
@@ -1729,6 +1729,66 @@ class BinancePublicHistoryAcquisition:
                         )
         return duplicates, tuple(conflicts)
 
+    @staticmethod
+    def _record_overlap_local_failure(
+        result: BinancePublicHistoryRequestResult,
+        *,
+        detail: str,
+        identity: RawObjectIdentity | None,
+    ) -> BinancePublicHistoryRequestResult:
+        """Keep valid references while making a failed overlap audit explicit."""
+        affected = False
+        obligations: list[BinancePublicHistoryObligationResult] = []
+        for obligation in result.obligations:
+            obligation_affected = False
+            sources: list[BinancePublicHistorySourceResult] = []
+            for source in obligation.sources:
+                source_affected = any(
+                    identity is None or reference.object_identity == identity
+                    for reference in source.raw_references
+                )
+                if source_affected:
+                    affected = True
+                    obligation_affected = True
+                    source = replace(
+                        source,
+                        status=BinanceArchiveAcquisitionStatus.LOCAL_FAILURE.value,
+                        detail=detail,
+                    )
+                sources.append(source)
+            obligations.append(
+                replace(
+                    obligation,
+                    sources=tuple(sources),
+                    satisfied=(False if obligation_affected else obligation.satisfied),
+                    unmet_reason=(
+                        detail if obligation_affected else obligation.unmet_reason
+                    ),
+                )
+            )
+        if not affected:
+            return result
+        frozen_obligations = tuple(obligations)
+        return replace(
+            result,
+            obligations=frozen_obligations,
+            satisfied_ranges=tuple(
+                obligation.plan.required_range
+                for obligation in frozen_obligations
+                if obligation.satisfied
+            ),
+            unmet_ranges=tuple(
+                obligation.plan.required_range
+                for obligation in frozen_obligations
+                if not obligation.satisfied
+            ),
+            status=(
+                BinancePublicHistoryRunStatus.PARTIAL
+                if result.raw_references
+                else BinancePublicHistoryRunStatus.FAILED
+            ),
+        )
+
     def run(
         self, plan: BinancePublicHistoryAcquisitionPlan
     ) -> BinancePublicHistoryRunResult:
@@ -1909,19 +1969,39 @@ class BinancePublicHistoryAcquisition:
                 for reference in unique_references.values()
             }
             for identity in touched_identities.values():
-                for artifact in stores[root].list_verified_revisions(identity):
-                    reference = _artifact_reference(stores[root], artifact)
-                    unique_references[
-                        (
-                            reference.object_identity.object_id,
-                            reference.revision.revision_id,
+                try:
+                    artifacts = stores[root].list_verified_revisions(identity)
+                    for artifact in artifacts:
+                        reference = _artifact_reference(stores[root], artifact)
+                        unique_references[
+                            (
+                                reference.object_identity.object_id,
+                                reference.revision.revision_id,
+                            )
+                        ] = reference
+                except (RawStoreError, OSError) as error:
+                    detail = f"Raw revision overlap inspection failed: {error}"
+                    for index in indices:
+                        request_results[index] = self._record_overlap_local_failure(
+                            request_results[index],
+                            detail=detail,
+                            identity=identity,
                         )
-                    ] = reference
-            duplicates, conflicts = self._compare(
-                request_results[indices[0]].request,
-                tuple(unique_references.values()),
-                stores[root],
-            )
+            try:
+                duplicates, conflicts = self._compare(
+                    request_results[indices[0]].request,
+                    tuple(unique_references.values()),
+                    stores[root],
+                )
+            except (RawStoreError, OSError) as error:
+                detail = f"Raw overlap comparison failed: {error}"
+                for index in indices:
+                    request_results[index] = self._record_overlap_local_failure(
+                        request_results[index],
+                        detail=detail,
+                        identity=None,
+                    )
+                continue
             if not duplicates and not conflicts:
                 continue
             for index in indices:

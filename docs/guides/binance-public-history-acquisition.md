@@ -86,6 +86,9 @@ artifact = RawStore(request.output_root).read_revision(
 count/taker 字段；mark/index 只比较价格语义，不把 placeholder/schema 差异当冲突；funding
 只比较已确认的 `calc_time ↔ fundingTime` 与 `last_funding_rate ↔ fundingRate`。相同记录只在
 结果中计数，Raw 不删除；不同内容返回双方精确 revision 引用并使整体保持 `conflict`。
+运行时发现 Kline archive 覆盖缺口时，对象及统一来源结果仍保留已观测记录的首末范围；若枚举
+或比较历史 revision 时发现本地损坏，`run()` 返回受影响来源的 `local_failure` 和未满足范围，
+同时保留本次已验证的 Raw 引用，而不会让异常逃逸或覆盖损坏内容。
 
 只有全部显式请求义务成立且不存在 gap、failure 或 conflict 时，整体状态才是 `completed`。
 合法 REST empty、未知 coverage、funding point 实际范围和正常 endpoint 终止始终保持各自语义，

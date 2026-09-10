@@ -407,6 +407,7 @@ def test_partial_first_archive_is_not_published_as_a_completed_object(
     assert result.objects[0].detail == (
         "archive rows do not cover the complete source object boundary"
     )
+    assert result.objects[0].actual_record_range == request_range
     assert not store.path_for(RawObjectIdentity.from_request(plan.request)).exists()
 
 

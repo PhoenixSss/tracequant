@@ -1227,6 +1227,71 @@ def test_changed_upstream_rerun_compares_all_preserved_revisions(
     assert conflict.right.artifact_path.exists()
 
 
+def test_corrupt_old_revision_returns_local_failure_with_current_reference(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def changing_rest(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        del url, timeout, maximum_response_bytes
+        nonlocal calls
+        calls += 1
+        value = "100.0" if calls == 1 else "999.0"
+        start_ms = int(REST_START.timestamp() * 1000)
+        return BinanceKlineRestHttpResponse(
+            status=200,
+            body=json.dumps(
+                [_contract_row(start_ms, value), _contract_row(start_ms + 60_000)]
+            ).encode(),
+            headers={},
+        )
+
+    root = tmp_path / "corrupt-old-revision"
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=root,
+    )
+    acquisition = BinancePublicHistoryAcquisition(
+        rest_http_get=changing_rest,
+        clock=lambda: NOW,
+        wait=lambda _seconds: None,
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(rest_windows=(_rest_coverage(),)),
+        _budget(),
+    )
+    first = acquisition.run(plan)
+    second = acquisition.run(plan)
+    old_data_path = first.requests[0].raw_references[0].artifact_path / "data.parquet"
+    old_data_path.write_bytes(b"corrupt historical revision")
+
+    result = acquisition.run(plan)
+
+    assert second.status is BinancePublicHistoryRunStatus.CONFLICT
+    assert result.status is BinancePublicHistoryRunStatus.PARTIAL
+    request_result = result.requests[0]
+    assert request_result.status is BinancePublicHistoryRunStatus.PARTIAL
+    assert request_result.satisfied_ranges == ()
+    assert request_result.unmet_ranges == (request.request_range,)
+    assert len(request_result.raw_references) == 1
+    source = request_result.obligations[0].sources[0]
+    assert source.status == "local_failure"
+    assert source.raw_references == request_result.raw_references
+    assert "Raw revision overlap inspection failed" in source.detail
+    current = request_result.raw_references[0]
+    assert (
+        RawStore(root).read_revision(current.object_identity, current.revision).path
+        == current.artifact_path
+    )
+    assert old_data_path.read_bytes() == b"corrupt historical revision"
+
+
 @pytest.mark.parametrize(
     "data_type",
     [
@@ -1302,6 +1367,111 @@ def test_all_four_families_execute_backfill_through_real_archive_adapters(
         .path
         == reference.artifact_path
     )
+
+
+@pytest.mark.parametrize(
+    "data_type",
+    [
+        BinancePublicHistoryDataType.CONTRACT_KLINE,
+        BinancePublicHistoryDataType.MARK_PRICE_KLINE,
+        BinancePublicHistoryDataType.INDEX_PRICE_KLINE,
+    ],
+)
+def test_runtime_kline_archive_gap_preserves_range_before_rest_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    data_type: BinancePublicHistoryDataType,
+) -> None:
+    request_range = TimeRange(start=REST_START, end=REST_END)
+    rows = [
+        "open_time,open,high,low,close,volume,close_time,quote_volume,count,"
+        "taker_buy_volume,taker_buy_quote_volume,ignore",
+        *(
+            ",".join(
+                str(value)
+                for value in _contract_row(
+                    int((REST_START + timedelta(minutes=minute)).timestamp() * 1000)
+                )
+            )
+            for minute in range(2)
+        ),
+    ]
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("BTCUSDT-1m-2026-09-09.csv", "\n".join(rows) + "\n")
+    archive_payload = buffer.getvalue()
+    subject = (
+        BinancePriceIndexId("BTCUSDT")
+        if data_type is BinancePublicHistoryDataType.INDEX_PRICE_KLINE
+        else InstrumentId("BTCUSDT")
+    )
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=subject,
+        data_type=data_type,
+        request_range=request_range,
+        purpose=BinancePublicHistoryPurpose.BACKFILL,
+        output_root=tmp_path / f"runtime-gap-{data_type.value}",
+    )
+    evidence = BinancePublicHistoryArchiveEvidence(
+        data_type=data_type,
+        subject=subject,
+        boundary=BinanceArchiveObjectBoundary.day(date(2026, 9, 9)),
+        status=BinanceArchiveEvidenceStatus.SUPPORTED,
+        evidence_version="runtime-gap-fixture",
+        evidence_reference="tests/data/runtime-gap-fixture",
+        evidence_sha256="f" * 64,
+        observed_at=NOW,
+        object_sha256=hashlib.sha256(archive_payload).hexdigest(),
+        actual_range=request_range,
+    )
+
+    def archive_get(url: str, timeout: float) -> ArchiveHttpResponse:
+        del timeout
+        filename = url.removesuffix(".CHECKSUM").rsplit("/", 1)[-1]
+        checksum = f"{hashlib.sha256(archive_payload).hexdigest()}  {filename}\n"
+        return ArchiveHttpResponse(
+            status=200,
+            body=checksum.encode() if url.endswith(".CHECKSUM") else archive_payload,
+            headers={},
+        )
+
+    def rest_get(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        del url, timeout, maximum_response_bytes
+        return BinanceKlineRestHttpResponse(
+            status=200,
+            body=_family_rest_body(data_type),
+            headers={},
+        )
+
+    acquisition = BinancePublicHistoryAcquisition(
+        archive_http_get=archive_get,
+        rest_http_get=rest_get,
+        clock=lambda: NOW,
+    )
+    _approve_archive_evidence(monkeypatch, evidence)
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(
+            archive_objects=(evidence,),
+            rest_windows=(
+                _family_rest_coverage(
+                    data_type, request_range, BinancePublicHistoryPurpose.BACKFILL
+                ),
+            ),
+        ),
+        _budget(),
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.status is BinancePublicHistoryRunStatus.COMPLETED
+    sources = result.requests[0].obligations[0].sources
+    assert [source.status for source in sources] == ["coverage_gap", "complete"]
+    assert sources[0].actual_record_range == request_range
+    assert sources[0].raw_references == ()
+    assert sources[1].raw_references[0].actual_record_range == request_range
 
 
 @pytest.mark.parametrize(
