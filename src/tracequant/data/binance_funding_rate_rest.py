@@ -202,6 +202,17 @@ def _require_numeric_string(value: object, *, field: str) -> str:
     return value
 
 
+def _reject_duplicate_object_members(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError(f"duplicate JSON object member {name!r}")
+        result[name] = value
+    return result
+
+
 def _strict_json_array(body: bytes) -> list[object]:
     try:
         payload = json.loads(
@@ -209,6 +220,7 @@ def _strict_json_array(body: bytes) -> list[object]:
             parse_constant=lambda value: (_ for _ in ()).throw(
                 ValueError(f"invalid JSON constant {value}")
             ),
+            object_pairs_hook=_reject_duplicate_object_members,
         )
     except (
         UnicodeDecodeError,

@@ -136,10 +136,10 @@ incomplete.
 
 A short or empty response may terminate pagination under the confirmed
 ascending bounded endpoint semantics. An empty response is stored only as
-acquisition evidence and never as a zero-row Raw artifact. `COMPLETE` means
-that the bounded response sequence terminated normally; it does not prove a
-continuous calendar range, the absence of unreported exchange events, the
-earliest available history, or that an external gap-repair objective is
-satisfied. Callers must compare returned point events and `actual_record_range`
-with their own coverage requirement rather than treating the request envelope
-as continuous event coverage.
+acquisition evidence and never as a zero-row Raw artifact. It returns
+`LEGAL_EMPTY`, keeps `complete` false, and reports the range from the current
+cursor as unmet; it does not prove a gap repaired or the earliest available
+history. `COMPLETE` is reserved for a request whose full range is satisfied by
+published point events. Even then, callers must not treat the request envelope
+as continuous event coverage or proof that the exchange never omitted an
+event.

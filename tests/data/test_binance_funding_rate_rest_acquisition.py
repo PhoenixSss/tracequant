@@ -583,13 +583,51 @@ def test_empty_response_records_evidence_without_zero_row_raw(tmp_path: Path) ->
         monotonic_clock=lambda: 0.0,
     ).run(request, _coverage(request), _budget())
 
-    assert result.status is BinanceFundingRateRestStatus.COMPLETE
+    assert result.status is BinanceFundingRateRestStatus.LEGAL_EMPTY
+    assert not result.complete
     assert result.pages[0].status is BinanceFundingRateRestStatus.LEGAL_EMPTY
     assert result.pages[0].response_sha256 is not None
     assert result.pages[0].revision is None
     assert result.actual_record_range is None
+    assert result.unmet_range == request.caller_range
     assert not list(tmp_path.rglob("data.parquet"))
     assert list(tmp_path.rglob("response.json"))
+
+
+def test_duplicate_json_object_members_are_rejected_and_preserved(
+    tmp_path: Path,
+) -> None:
+    body = (
+        b'[{"symbol":"ETHUSDT","symbol":"BTCUSDT",'
+        b'"fundingTime":1788393600000,"fundingRate":"0.1",'
+        b'"fundingRate":"0.9"}]'
+    )
+
+    def transport(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        del url, timeout, maximum_response_bytes
+        return BinanceKlineRestHttpResponse(200, body, {})
+
+    store = RawStore(tmp_path)
+    request = _request(end_ms=FIRST_FUNDING_MS + 1, limit=100)
+    result = BinanceFundingRateRestAcquisition(
+        store,
+        http_get=transport,
+        clock=lambda: NOW,
+        monotonic_clock=lambda: 0.0,
+    ).run(request, _coverage(request), _budget())
+
+    assert result.status is BinanceFundingRateRestStatus.INVALID_RESPONSE
+    assert "strict UTF-8 JSON" in result.termination_reason
+    assert result.unmet_range == request.caller_range
+    assert result.pages[0].revision is None
+    identity = RawObjectIdentity.from_rest_page_request(request)
+    records = store.list_acquisition_manifests(identity)
+    assert len(records) == 1
+    evidence_path = store.acquisition_path_for(identity) / records[0].record_id
+    assert (evidence_path / "response.json").read_bytes() == body
+    assert not list(tmp_path.rglob("data.parquet"))
 
 
 def test_shared_retry_budget_and_failure_evidence_apply_to_funding(

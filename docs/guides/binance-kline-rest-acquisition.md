@@ -150,9 +150,9 @@ returning `BinanceRestPageParsed`, and a Raw schema identifier; the shared
 executor owns URL construction, bounded HTTP/retry/wait behavior, elapsed and
 page budgets, failure evidence, result assembly, and immutable page
 publication. A point-event adapter may return a terminal parsed page, including
-a terminal empty page with no Raw publication, once its response proves the
-requested range has been exhausted. This lets L05 advance by the last actual
-`fundingTime + 1ms` and complete after a legal empty response without pretending
-that sparse events cover a continuous bar grid. This Task does not itself
-implement funding parsing, a CLI, archive fallback, source refresh, gap repair,
-scheduling, or another provider.
+a terminal empty page with no Raw publication. The executor reports that page
+as `LEGAL_EMPTY` and leaves the range from the current cursor unmet; an empty
+response alone does not prove the requested range has been exhausted. A
+point-event adapter advances only by the last actual event timestamp. This Task
+does not itself implement funding parsing, a CLI, archive fallback, source
+refresh, gap repair, scheduling, or another provider.
