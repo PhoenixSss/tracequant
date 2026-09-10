@@ -770,15 +770,17 @@ class _KlineRestPageAdapter:
                 BinanceKlineRestStatus.REST_BOUNDARY_UNKNOWN,
                 "coverage evidence binding is missing or unrecognized",
             )
-        coverage_start = _datetime_ms(coverage.allowed_range.start)
-        coverage_end = _datetime_ms(coverage.allowed_range.end)
-        if coverage_start < _APPROVED_START_MS or coverage_end > _APPROVED_END_MS:
+        approved_start = datetime.fromtimestamp(_APPROVED_START_MS / 1_000, tz=UTC)
+        approved_end = datetime.fromtimestamp(_APPROVED_END_MS / 1_000, tz=UTC)
+        coverage_start = coverage.allowed_range.start
+        coverage_end = coverage.allowed_range.end
+        if coverage_start < approved_start or coverage_end > approved_end:
             return (
                 BinanceKlineRestStatus.REST_BOUNDARY_UNKNOWN,
                 "coverage range extends beyond the frozen source observation",
             )
-        request_start = _datetime_ms(request.caller_range.start)
-        request_end = _datetime_ms(request.caller_range.end)
+        request_start = request.caller_range.start
+        request_end = request.caller_range.end
         if request_start < coverage_start or request_end > coverage_end:
             return (
                 BinanceKlineRestStatus.REST_BOUNDARY_UNKNOWN,
@@ -1224,6 +1226,27 @@ class BinanceRestPageAcquisition:
                     if not response.complete:
                         digest = _response_digest(response.body)
                         detail = "HTTP response body was incomplete"
+                        retryable_http_status = response.status == 429 or (
+                            500 <= response.status <= 599
+                        )
+                        retry_delay = (
+                            _retry_after_seconds(
+                                next(
+                                    (
+                                        value
+                                        for name, value in response.headers.items()
+                                        if name.strip().lower() == "retry-after"
+                                    ),
+                                    None,
+                                ),
+                                now=self._now(),
+                            )
+                            if retryable_http_status
+                            else None
+                        )
+                        if retry_delay is None:
+                            retry_delay = float(min(2 ** (page_attempt - 1), 60))
+                        will_retry = page_attempt < budget.maximum_attempts_per_page
                         attempts.append(
                             BinanceKlineRestAttemptResult(
                                 attempt_number=tracker.attempts,
@@ -1232,12 +1255,17 @@ class BinanceRestPageAcquisition:
                                 http_status=response.status,
                                 response_sha256=digest,
                                 detail=detail,
+                                waited_seconds=(
+                                    retry_delay
+                                    if will_retry and retry_delay <= tracker.remaining
+                                    else 0.0
+                                ),
                             )
                         )
                         try:
                             self._record_attempt(
                                 current,
-                                status=BinanceKlineRestStatus.INVALID_RESPONSE,
+                                status=BinanceKlineRestStatus.RETRYABLE_FAILURE,
                                 detail=detail,
                                 source_url=url,
                                 response=response,
@@ -1271,28 +1299,65 @@ class BinanceRestPageAcquisition:
                                     f"{store_error}"
                                 ),
                             )
-                        pages.append(
-                            BinanceKlineRestPageResult(
-                                request=current,
-                                attempts=tuple(attempts),
-                                status=BinanceKlineRestStatus.INVALID_RESPONSE,
-                                short_page=False,
-                                record_count=0,
-                                actual_record_range=None,
-                                response_sha256=digest,
-                                revision=None,
-                                artifact_path=None,
-                                detail=detail,
+                        response = None
+                        if not will_retry:
+                            break
+                        if retry_delay > tracker.remaining:
+                            pages.append(
+                                BinanceKlineRestPageResult(
+                                    request=current,
+                                    attempts=tuple(attempts),
+                                    status=BinanceKlineRestStatus.BUDGET_EXHAUSTED,
+                                    short_page=False,
+                                    record_count=0,
+                                    actual_record_range=None,
+                                    response_sha256=digest,
+                                    revision=None,
+                                    artifact_path=None,
+                                    detail=(
+                                        "incomplete-response backoff exceeds "
+                                        "remaining elapsed budget"
+                                    ),
+                                )
                             )
-                        )
-                        return self._finish(
-                            status=BinanceKlineRestStatus.INVALID_RESPONSE,
-                            request=request,
-                            pages=pages,
-                            tracker=tracker,
-                            cursor_ms=cursor_ms,
-                            reason=detail,
-                        )
+                            return self._finish(
+                                status=BinanceKlineRestStatus.BUDGET_EXHAUSTED,
+                                request=request,
+                                pages=pages,
+                                tracker=tracker,
+                                cursor_ms=cursor_ms,
+                                reason=(
+                                    "retry wait cannot fit in the elapsed-time budget"
+                                ),
+                            )
+                        try:
+                            self._wait(retry_delay)
+                        except Exception as error:
+                            detail = f"retry wait failed: {error}"
+                            pages.append(
+                                BinanceKlineRestPageResult(
+                                    request=current,
+                                    attempts=tuple(attempts),
+                                    status=BinanceKlineRestStatus.LOCAL_FAILURE,
+                                    short_page=False,
+                                    record_count=0,
+                                    actual_record_range=None,
+                                    response_sha256=digest,
+                                    revision=None,
+                                    artifact_path=None,
+                                    detail=detail,
+                                )
+                            )
+                            return self._finish(
+                                status=BinanceKlineRestStatus.LOCAL_FAILURE,
+                                request=request,
+                                pages=pages,
+                                tracker=tracker,
+                                cursor_ms=cursor_ms,
+                                reason=detail,
+                            )
+                        tracker.waited_seconds += retry_delay
+                        continue
 
                     if tracker.remaining <= 0:
                         digest = _response_digest(response.body)

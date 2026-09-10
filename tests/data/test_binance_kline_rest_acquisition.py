@@ -529,6 +529,29 @@ def test_shared_rest_page_executor_accepts_funding_adapter(tmp_path: Path) -> No
             BinanceKlineRestStatus.REST_BOUNDARY_UNKNOWN,
             "outside",
         ),
+        (
+            lambda request: _coverage(
+                request,
+                allowed_range=TimeRange(
+                    start=START + timedelta(microseconds=1),
+                    end=START + timedelta(minutes=4),
+                ),
+            ),
+            BinanceKlineRestStatus.REST_BOUNDARY_UNKNOWN,
+            "outside",
+        ),
+        (
+            lambda request: _coverage(
+                request,
+                allowed_range=TimeRange(
+                    start=START,
+                    end=datetime(2026, 9, 9, 18, 33, tzinfo=UTC)
+                    + timedelta(microseconds=1),
+                ),
+            ),
+            BinanceKlineRestStatus.REST_BOUNDARY_UNKNOWN,
+            "extends",
+        ),
     ],
 )
 def test_coverage_is_fail_closed_before_http(
@@ -1126,32 +1149,54 @@ def test_nonretryable_http_and_response_size_limit_are_observable(
     assert (evidence_path / "response.json").read_bytes() == b"123456"
 
 
-def test_partial_http_response_preserves_status_and_received_bytes(
-    tmp_path: Path,
+@pytest.mark.parametrize("status", [200, 503])
+def test_partial_http_response_retries_same_page_and_preserves_received_bytes(
+    tmp_path: Path, status: int
 ) -> None:
     request = _request(minutes=1, limit=1)
     partial = b'[[1788975180000,"100.0"'
+    url = BinanceKlineRestAcquisition._request_url(request)
+    success = BinanceKlineRestHttpResponse(200, _body_for_url(url), {})
+    waits: list[float] = []
+    transport = _QueueTransport(
+        [
+            BinanceKlineRestHttpResponse(
+                status, partial, {"Retry-After": "1"}, complete=False
+            ),
+            success,
+        ]
+    )
     store, acquisition = _acquisition(
         tmp_path,
-        _QueueTransport(
-            [BinanceKlineRestHttpResponse(200, partial, {}, complete=False)]
-        ),
+        transport,
+        wait=waits.append,
+        monotonic_clock=lambda: 0.0,
     )
 
     result = acquisition.run(request, _coverage(request), _budget())
 
     digest = hashlib.sha256(partial).hexdigest()
-    assert result.status is BinanceKlineRestStatus.INVALID_RESPONSE
+    assert result.status is BinanceKlineRestStatus.COMPLETE
+    assert result.attempts_used == 2
+    assert result.pages[0].attempts[0].page_attempt_number == 1
+    assert result.pages[0].attempts[1].page_attempt_number == 2
     assert result.pages[0].attempts[0].outcome == "incomplete_response"
-    assert result.pages[0].attempts[0].http_status == 200
+    assert result.pages[0].attempts[0].http_status == status
     assert result.pages[0].attempts[0].response_sha256 == digest
+    assert transport.calls == [url, url]
+    assert waits == [1]
     identity = RawObjectIdentity.from_rest_page_request(request)
-    record = store.list_acquisition_manifests(identity)[0]
+    record = next(
+        manifest
+        for manifest in store.list_acquisition_manifests(identity)
+        if manifest.source_body_sha256 == digest
+    )
     evidence_path = store.acquisition_path_for(identity) / record.record_id
-    assert record.source_http_status == 200
+    assert record.status == BinanceKlineRestStatus.RETRYABLE_FAILURE.value
+    assert record.source_http_status == status
     assert record.source_body_sha256 == digest
     assert (evidence_path / "response.json").read_bytes() == partial
-    assert store.list_verified_revisions(identity) == ()
+    assert len(store.list_verified_revisions(identity)) == 1
 
 
 def test_response_digest_creates_new_revision_without_overwriting_old_content(
