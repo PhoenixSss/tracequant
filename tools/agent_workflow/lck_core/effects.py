@@ -12,7 +12,6 @@ from workflow_common import (
     WorkflowToolError,
     is_sha,
     read_json_text,
-    safe_text,
     stderr_tail,
 )
 
@@ -26,7 +25,7 @@ from .models import (
     _remote_refs,
 )
 from .profile_policies import ProfileEffectDescriptor
-from .shared_facts import _find_project_status
+from .shared_facts import _find_project_status, query_project_single_select_field
 from .state import LiveStateResolver
 
 
@@ -84,38 +83,6 @@ def _pending_effect(
     return EffectReceipt(effect=effect, action="pending", details=payload)
 
 
-_PROJECT_FIELD_QUERY: Final = r"""
-query($owner:String!, $projectNumber:Int!, $fieldName:String!, $userAfter:String, $organizationAfter:String) {
-  user(login:$owner) {
-    projectV2(number:$projectNumber) {
-      items(first:100, after:$userAfter) {
-        nodes {
-          content { ... on Issue { number repository { nameWithOwner } } }
-          fieldValueByName(name:$fieldName) {
-            ... on ProjectV2ItemFieldSingleSelectValue { name }
-          }
-        }
-        pageInfo { hasNextPage endCursor }
-      }
-    }
-  }
-  organization(login:$owner) {
-    projectV2(number:$projectNumber) {
-      items(first:100, after:$organizationAfter) {
-        nodes {
-          content { ... on Issue { number repository { nameWithOwner } } }
-          fieldValueByName(name:$fieldName) {
-            ... on ProjectV2ItemFieldSingleSelectValue { name }
-          }
-        }
-        pageInfo { hasNextPage endCursor }
-      }
-    }
-  }
-}
-"""
-
-
 class ProjectSingleSelectEffectExecutor:
     """Execute the one generic Project single-select effect kind."""
 
@@ -170,99 +137,14 @@ class ProjectSingleSelectEffectExecutor:
         task_number: int,
         field: str,
     ) -> str | None:
-        owner, separator, _name = repository.partition("/")
-        if not separator or not owner:
-            return None
-        cursors: dict[str, str | None] = {"user": None, "organization": None}
-        seen: dict[str, set[str]] = {"user": set(), "organization": set()}
-        complete: set[str] = set()
-        while len(complete) < 2:
-            argv = [
-                "gh",
-                "api",
-                "graphql",
-                "-f",
-                f"query={' '.join(_PROJECT_FIELD_QUERY.split())}",
-                "-F",
-                f"owner={owner}",
-                "-F",
-                f"projectNumber={project_number}",
-                "-F",
-                f"fieldName={field}",
-            ]
-            if cursors["user"] is not None:
-                argv.extend(("-F", f"userAfter={cursors['user']}"))
-            if cursors["organization"] is not None:
-                argv.extend(("-F", f"organizationAfter={cursors['organization']}"))
-            result = resolver.runner.run(
-                argv, command_id="lck-profile-effect-postcondition", retries=1
-            )
-            if result.returncode != 0 or not result.stdout.strip():
-                return None
-            value = read_json_text(
-                result.stdout, field="lck-profile-effect-postcondition"
-            )
-            if not isinstance(value, Mapping) or value.get("errors"):
-                return None
-            data = value.get("data")
-            if not isinstance(data, Mapping):
-                return None
-            for scope in ("user", "organization"):
-                if scope in complete:
-                    continue
-                owner_data = data.get(scope)
-                if owner_data is None:
-                    complete.add(scope)
-                    continue
-                if not isinstance(owner_data, Mapping):
-                    return None
-                project = owner_data.get("projectV2")
-                if project is None:
-                    complete.add(scope)
-                    continue
-                if not isinstance(project, Mapping):
-                    return None
-                items = project.get("items")
-                if not isinstance(items, Mapping):
-                    return None
-                nodes = items.get("nodes")
-                page_info = items.get("pageInfo")
-                if not isinstance(nodes, list) or not isinstance(page_info, Mapping):
-                    return None
-                for item in nodes:
-                    if not isinstance(item, Mapping):
-                        continue
-                    content = item.get("content")
-                    repo = (
-                        content.get("repository")
-                        if isinstance(content, Mapping)
-                        else None
-                    )
-                    if (
-                        isinstance(content, Mapping)
-                        and content.get("number") == task_number
-                        and isinstance(repo, Mapping)
-                        and repo.get("nameWithOwner") == repository
-                    ):
-                        field_value = item.get("fieldValueByName")
-                        if not isinstance(field_value, Mapping):
-                            return None
-                        return safe_text(field_value.get("name"))
-                if page_info.get("hasNextPage") is False:
-                    complete.add(scope)
-                elif page_info.get("hasNextPage") is True:
-                    cursor = page_info.get("endCursor")
-                    if (
-                        not isinstance(cursor, str)
-                        or not cursor
-                        or cursor in seen[scope]
-                    ):
-                        return None
-                    seen[scope].add(cursor)
-                    cursors[scope] = cursor
-                else:
-                    return None
-        return None
+        return query_project_single_select_field(
+            resolver.runner,
+            repository=repository,
+            issue_number=task_number,
+            project_number=project_number,
+            field_name=field,
+            command_id="lck-profile-effect-postcondition",
+        )
 
     @classmethod
     def execute(

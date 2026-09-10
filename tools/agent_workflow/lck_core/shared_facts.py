@@ -623,15 +623,17 @@ def _issue_project_items_snapshot(
     repository: str,
     number: int,
     warnings: list[dict[str, Any]],
+    *,
+    command_id: str | None = None,
 ) -> dict[str, Any]:
     """Acquire one root Issue's canonical ProjectV2 facts."""
-    command_id = f"gh-issue-project-items-{number}"
+    query_command_id = command_id or f"gh-issue-project-items-{number}"
     value = _graphql(
         runner,
         repository,
         number,
         ISSUE_PROJECT_ITEMS_QUERY,
-        command_id=command_id,
+        command_id=query_command_id,
         warnings=warnings,
     )
     issue = None
@@ -642,7 +644,7 @@ def _issue_project_items_snapshot(
     if not isinstance(issue, Mapping) or issue.get("number") != number:
         warnings.append(
             {
-                "command_id": command_id,
+                "command_id": query_command_id,
                 "exit_code": 0,
                 "error": "ProjectV2 Issue response is missing or has the wrong identity",
             }
@@ -652,7 +654,7 @@ def _issue_project_items_snapshot(
     if project_items.get("complete") is not True:
         warnings.append(
             {
-                "command_id": command_id,
+                "command_id": query_command_id,
                 "exit_code": 0,
                 "error": "ProjectV2 item or single-select field facts are incomplete",
             }
@@ -743,6 +745,88 @@ def canonical_project_field(
         return None
     result = fields.get(field_name)
     return safe_text(result) if isinstance(result, str) and result.strip() else None
+
+
+def project_single_select_field(
+    value: Any,
+    *,
+    repository: str,
+    issue_number: int,
+    project_number: int,
+    field_name: str,
+) -> str | None:
+    """Return one exact Project single-select field from complete Issue facts."""
+    if not isinstance(value, Mapping) or value.get("complete") is not True:
+        return None
+    owner, separator, name = repository.partition("/")
+    if (
+        not separator
+        or not owner
+        or not name
+        or not isinstance(issue_number, int)
+        or isinstance(issue_number, bool)
+        or issue_number <= 0
+        or not isinstance(project_number, int)
+        or isinstance(project_number, bool)
+        or project_number <= 0
+        or not field_name
+    ):
+        return None
+    items = value.get("items")
+    if not isinstance(items, list) or value.get("truncated") is True:
+        return None
+    matching = [
+        item
+        for item in items
+        if isinstance(item, Mapping)
+        and item.get("number") == project_number
+        and isinstance(item.get("owner"), str)
+        and item.get("owner", "").casefold() == owner.casefold()
+        and isinstance(item.get("content_repository"), str)
+        and item.get("content_repository", "").casefold() == repository.casefold()
+        and item.get("content_number") == issue_number
+        and item.get("identity_complete") is True
+        and item.get("fields_complete") is True
+    ]
+    if len(matching) != 1:
+        return None
+    fields = matching[0].get("fields")
+    if not isinstance(fields, Mapping):
+        return None
+    result = fields.get(field_name)
+    return safe_text(result) if isinstance(result, str) and result.strip() else None
+
+
+def query_project_single_select_field(
+    runner: CommandRunner,
+    *,
+    repository: str,
+    issue_number: int,
+    project_number: int,
+    field_name: str,
+    command_id: str,
+) -> str | None:
+    """Freshly read one exact field through the repository-owned Issue path."""
+    owner, separator, name = repository.partition("/")
+    if not separator or not owner or not name:
+        return None
+    warnings: list[dict[str, Any]] = []
+    project_items = _issue_project_items_snapshot(
+        runner,
+        repository,
+        issue_number,
+        warnings,
+        command_id=command_id,
+    )
+    if warnings:
+        return None
+    return project_single_select_field(
+        project_items,
+        repository=repository,
+        issue_number=issue_number,
+        project_number=project_number,
+        field_name=field_name,
+    )
 
 
 def _issue_closure_snapshot(

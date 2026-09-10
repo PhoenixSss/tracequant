@@ -45,7 +45,7 @@ from research_policy import (
     research_artifact_outcome,
     research_contract_snapshot,
 )
-from workflow_common import read_json_text, safe_text, sha256_json
+from workflow_common import sha256_json
 
 from .effective_diff import calculate_effective_diff
 from .issue_profiles import (
@@ -54,7 +54,11 @@ from .issue_profiles import (
     resolve_leaf_issue_profile,
 )
 from .models import LckStopError
-from .shared_facts import canonical_project_field, relationship_contract
+from .shared_facts import (
+    canonical_project_field,
+    query_project_single_select_field,
+    relationship_contract,
+)
 
 PROFILE_EVIDENCE_SCHEMA_VERSION: Final = 1
 PROFILE_EVIDENCE_STAGES: Final = ("contract", "candidate", "review", "completion")
@@ -976,38 +980,6 @@ class ResearchValidationGate:
         return result
 
 
-RESEARCH_OUTCOME_QUERY: Final = r"""
-query($owner:String!, $projectNumber:Int!, $userAfter:String, $organizationAfter:String) {
-  user(login:$owner) {
-    projectV2(number:$projectNumber) {
-      items(first:100, after:$userAfter) {
-        nodes {
-          content { ... on Issue { number repository { nameWithOwner } } }
-          fieldValueByName(name:"Research Outcome") {
-            ... on ProjectV2ItemFieldSingleSelectValue { name }
-          }
-        }
-        pageInfo { hasNextPage endCursor }
-      }
-    }
-  }
-  organization(login:$owner) {
-    projectV2(number:$projectNumber) {
-      items(first:100, after:$organizationAfter) {
-        nodes {
-          content { ... on Issue { number repository { nameWithOwner } } }
-          fieldValueByName(name:"Research Outcome") {
-            ... on ProjectV2ItemFieldSingleSelectValue { name }
-          }
-        }
-        pageInfo { hasNextPage endCursor }
-      }
-    }
-  }
-}
-"""
-
-
 class ResearchOutcomeEffect:
     """Legacy read-only adapter retained for callers of the old helper.
 
@@ -1019,92 +991,14 @@ class ResearchOutcomeEffect:
         self.resolver = resolver
 
     def _query_outcome(self, repository: str, task_number: int) -> str | None:
-        owner, separator, _name = repository.partition("/")
-        if not separator or not owner:
-            return None
-        cursors: dict[str, str | None] = {"user": None, "organization": None}
-        seen: dict[str, set[str]] = {"user": set(), "organization": set()}
-        complete: set[str] = set()
-        while len(complete) < 2:
-            argv = [
-                "gh",
-                "api",
-                "graphql",
-                "-f",
-                f"query={' '.join(RESEARCH_OUTCOME_QUERY.split())}",
-                "-F",
-                f"owner={owner}",
-                "-F",
-                "projectNumber=1",
-            ]
-            if cursors["user"] is not None:
-                argv.extend(("-F", f"userAfter={cursors['user']}"))
-            if cursors["organization"] is not None:
-                argv.extend(("-F", f"organizationAfter={cursors['organization']}"))
-            result = self.resolver.runner.run(
-                argv, command_id="lck-research-outcome-postcondition", retries=1
-            )
-            if result.returncode != 0 or not result.stdout.strip():
-                return None
-            value = read_json_text(
-                result.stdout, field="lck-research-outcome-postcondition"
-            )
-            if not isinstance(value, Mapping) or value.get("errors"):
-                return None
-            data = value.get("data")
-            if not isinstance(data, Mapping):
-                return None
-            for scope in ("user", "organization"):
-                if scope in complete:
-                    continue
-                owner_data = data.get(scope)
-                if owner_data is None:
-                    complete.add(scope)
-                    continue
-                if not isinstance(owner_data, Mapping):
-                    return None
-                project = owner_data.get("projectV2")
-                if project is None:
-                    complete.add(scope)
-                    continue
-                if not isinstance(project, Mapping):
-                    return None
-                items = project.get("items")
-                if not isinstance(items, Mapping):
-                    return None
-                nodes = items.get("nodes")
-                page_info = items.get("pageInfo")
-                if not isinstance(nodes, list) or not isinstance(page_info, Mapping):
-                    return None
-                for item in nodes:
-                    if not isinstance(item, Mapping):
-                        continue
-                    content = item.get("content")
-                    if not isinstance(content, Mapping):
-                        continue
-                    content_repository = content.get("repository")
-                    if (
-                        content.get("number") == task_number
-                        and isinstance(content_repository, Mapping)
-                        and content_repository.get("nameWithOwner") == repository
-                    ):
-                        field_value = item.get("fieldValueByName")
-                        if not isinstance(field_value, Mapping):
-                            return None
-                        return safe_text(field_value.get("name"))
-                if page_info.get("hasNextPage") is False:
-                    complete.add(scope)
-                elif page_info.get("hasNextPage") is True:
-                    end_cursor = page_info.get("endCursor")
-                    if not isinstance(end_cursor, str) or not end_cursor:
-                        return None
-                    if end_cursor in seen[scope]:
-                        return None
-                    seen[scope].add(end_cursor)
-                    cursors[scope] = end_cursor
-                else:
-                    return None
-        return None
+        return query_project_single_select_field(
+            self.resolver.runner,
+            repository=repository,
+            issue_number=task_number,
+            project_number=1,
+            field_name=RESEARCH_OUTCOME_FIELD,
+            command_id="lck-research-outcome-postcondition",
+        )
 
 
 class _TaskPolicy(_BuiltinPolicy):

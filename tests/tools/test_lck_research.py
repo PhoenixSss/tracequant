@@ -85,6 +85,65 @@ Adopt the repository-backed workflow contract and record the resulting ADR.
 """
 
 
+def _project_field_query_payload(
+    value: str | None,
+    *,
+    owner_type: str = "User",
+    repository: str = "owner/repo",
+    issue_number: int = 199,
+    project_number: int = 1,
+    project_has_next_page: bool = False,
+    fields_have_next_page: bool = False,
+) -> dict[str, Any]:
+    field_values = [
+        {
+            "__typename": "ProjectV2ItemFieldSingleSelectValue",
+            "name": "Review",
+            "field": {"name": "Status"},
+        }
+    ]
+    if value is not None:
+        field_values.append(
+            {
+                "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                "name": value,
+                "field": {"name": "Research Outcome"},
+            }
+        )
+    return {
+        "data": {
+            "repository": {
+                "issue": {
+                    "number": issue_number,
+                    "projectItems": {
+                        "nodes": [
+                            {
+                                "project": {
+                                    "number": project_number,
+                                    "title": "Quant System Development",
+                                    "owner": {
+                                        "__typename": owner_type,
+                                        "login": repository.split("/", 1)[0],
+                                    },
+                                },
+                                "content": {
+                                    "number": issue_number,
+                                    "repository": {"nameWithOwner": repository},
+                                },
+                                "fieldValues": {
+                                    "nodes": field_values,
+                                    "pageInfo": {"hasNextPage": fields_have_next_page},
+                                },
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": project_has_next_page},
+                    },
+                }
+            }
+        }
+    }
+
+
 def test_live_research_issue_contract_uses_research_form() -> None:
     class Runner:
         repo_root = ROOT
@@ -365,40 +424,16 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
                 self.project_writes += 1
                 return CommandResult(command_id, command, 0, "", "")
             if command[:3] == ("gh", "api", "graphql"):
+                query = next(item for item in command if item.startswith("query="))
+                assert "repository(owner:$owner, name:$name)" in query
                 return CommandResult(
                     command_id,
                     command,
                     0,
                     json.dumps(
-                        {
-                            "data": {
-                                "user": {
-                                    "projectV2": {
-                                        "items": {
-                                            "nodes": [
-                                                {
-                                                    "content": {
-                                                        "number": 199,
-                                                        "repository": {
-                                                            "nameWithOwner": "owner/repo"
-                                                        },
-                                                    },
-                                                    "fieldValueByName": {
-                                                        "name": (
-                                                            "NEEDS MORE EVIDENCE"
-                                                            if self.project_writes
-                                                            else None
-                                                        )
-                                                    },
-                                                }
-                                            ],
-                                            "pageInfo": {"hasNextPage": False},
-                                        }
-                                    }
-                                },
-                                "organization": None,
-                            }
-                        }
+                        _project_field_query_payload(
+                            "NEEDS MORE EVIDENCE" if self.project_writes else None
+                        )
                     ),
                     "",
                 )
@@ -677,7 +712,9 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
     closeout._validate_merged_identity = lambda _state: (head_sha, merge_sha)
     closeout._validate_reviewed_identity = lambda _state, _pr: review_record
     closeout_result = closeout.complete(199)
+    assert closeout_result.status == "BUSINESS_DELIVERY_COMPLETE"
     assert closeout_result.business_delivery == "COMPLETE"
+    assert closeout_result.cleanup == "COMPLETE"
     assert closeout_result.research_outcome == "NEEDS MORE EVIDENCE"
     assert runner.project_writes == 1
 
@@ -991,7 +1028,7 @@ def test_research_blocker_uses_only_the_canonical_project_outcome() -> None:
     )
 
 
-def test_research_outcome_postcondition_paginates_past_first_page() -> None:
+def test_research_outcome_postcondition_fails_closed_on_incomplete_pagination() -> None:
     class Runner:
         def __init__(self) -> None:
             self.calls: list[tuple[str, ...]] = []
@@ -999,33 +1036,13 @@ def test_research_outcome_postcondition_paginates_past_first_page() -> None:
         def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
             command = tuple(str(item) for item in argv)
             self.calls.append(command)
-            paged = any(item == "userAfter=cursor-page-1" for item in command)
-            user_items = {
-                "nodes": (
-                    [
-                        {
-                            "content": {
-                                "number": 199,
-                                "repository": {"nameWithOwner": "owner/repo"},
-                            },
-                            "fieldValueByName": {"name": "IMPLEMENT"},
-                        }
-                    ]
-                    if paged
-                    else []
-                ),
-                "pageInfo": (
-                    {"hasNextPage": False}
-                    if paged
-                    else {"hasNextPage": True, "endCursor": "cursor-page-1"}
-                ),
-            }
-            payload = {
-                "data": {
-                    "user": {"projectV2": {"items": user_items}},
-                    "organization": None,
-                }
-            }
+            query = next(item for item in command if item.startswith("query="))
+            assert "repository(owner:$owner, name:$name)" in query
+            assert "user(login:$owner)" not in query
+            assert "organization(login:$owner)" not in query
+            payload = _project_field_query_payload(
+                "IMPLEMENT", project_has_next_page=True
+            )
             return CommandResult(command_id, command, 0, json.dumps(payload), "")
 
     runner = Runner()
@@ -1037,12 +1054,90 @@ def test_research_outcome_postcondition_paginates_past_first_page() -> None:
         "owner/repo", 199
     )
 
-    assert outcome == "IMPLEMENT"
-    assert len(runner.calls) == 2
-    assert "userAfter=cursor-page-1" in runner.calls[1]
+    assert outcome is None
+    assert len(runner.calls) == 1
 
 
-def test_research_outcome_effect_uses_canonical_read_for_idempotency() -> None:
+@pytest.mark.parametrize(
+    "defect",
+    (
+        "wrong-issue",
+        "wrong-repository",
+        "wrong-project",
+        "wrong-owner",
+        "missing-field",
+        "project-pagination",
+        "field-pagination",
+        "duplicate-item",
+    ),
+)
+def test_project_field_fresh_read_rejects_incomplete_or_wrong_identity(
+    defect: str,
+) -> None:
+    payload = _project_field_query_payload("IMPLEMENT")
+    issue = payload["data"]["repository"]["issue"]
+    project_items = issue["projectItems"]
+    project_item = project_items["nodes"][0]
+    if defect == "wrong-issue":
+        issue["number"] = 200
+    elif defect == "wrong-repository":
+        project_item["content"]["repository"]["nameWithOwner"] = "owner/other"
+    elif defect == "wrong-project":
+        project_item["project"]["number"] = 2
+    elif defect == "wrong-owner":
+        project_item["project"]["owner"]["login"] = "someone-else"
+    elif defect == "missing-field":
+        project_item["fieldValues"]["nodes"] = []
+    elif defect == "project-pagination":
+        project_items["pageInfo"]["hasNextPage"] = True
+    elif defect == "field-pagination":
+        project_item["fieldValues"]["pageInfo"]["hasNextPage"] = True
+    elif defect == "duplicate-item":
+        project_items["nodes"].append(json.loads(json.dumps(project_item)))
+
+    class Runner:
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            return CommandResult(command_id, command, 0, json.dumps(payload), "")
+
+    assert (
+        lck_shared_facts.query_project_single_select_field(
+            Runner(),
+            repository="owner/repo",
+            issue_number=199,
+            project_number=1,
+            field_name="Research Outcome",
+            command_id="test-project-field-query",
+        )
+        is None
+    )
+
+
+def test_project_field_fresh_read_rejects_graphql_partial_error() -> None:
+    class Runner:
+        def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            command = tuple(str(item) for item in argv)
+            payload = _project_field_query_payload("IMPLEMENT")
+            payload["errors"] = [{"type": "NOT_FOUND", "message": "query failed"}]
+            return CommandResult(command_id, command, 1, json.dumps(payload), "")
+
+    assert (
+        lck_shared_facts.query_project_single_select_field(
+            Runner(),
+            repository="owner/repo",
+            issue_number=199,
+            project_number=1,
+            field_name="Research Outcome",
+            command_id="test-project-field-query",
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("owner_type", ("User", "Organization"))
+def test_research_outcome_effect_uses_owner_safe_read_for_idempotency(
+    owner_type: str,
+) -> None:
     class Runner:
         def __init__(self) -> None:
             self.calls: list[tuple[str, ...]] = []
@@ -1052,39 +1147,16 @@ def test_research_outcome_effect_uses_canonical_read_for_idempotency() -> None:
             self.calls.append(command)
             if command[:3] != ("gh", "api", "graphql"):
                 raise AssertionError(f"unexpected Project write: {command}")
+            query = next(item for item in command if item.startswith("query="))
+            assert "repository(owner:$owner, name:$name)" in query
+            assert "user(login:$owner)" not in query
+            assert "organization(login:$owner)" not in query
             return CommandResult(
                 command_id,
                 command,
                 0,
                 json.dumps(
-                    {
-                        "data": {
-                            "user": {
-                                "projectV2": {
-                                    "items": {
-                                        "nodes": [
-                                            {
-                                                "content": {
-                                                    "number": 199,
-                                                    "repository": {
-                                                        "nameWithOwner": "owner/repo"
-                                                    },
-                                                },
-                                                "fieldValueByName": {
-                                                    "name": "IMPLEMENT"
-                                                },
-                                            }
-                                        ],
-                                        "pageInfo": {
-                                            "hasNextPage": False,
-                                            "endCursor": None,
-                                        },
-                                    }
-                                }
-                            },
-                            "organization": None,
-                        }
-                    }
+                    _project_field_query_payload("IMPLEMENT", owner_type=owner_type)
                 ),
                 "",
             )
@@ -1131,8 +1203,9 @@ def test_research_outcome_effect_uses_canonical_read_for_idempotency() -> None:
     assert len(runner.calls) == 1
 
 
-def test_research_outcome_effect_writes_when_only_noncanonical_state_matches(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("owner_type", ("User", "Organization"))
+def test_research_outcome_effect_write_then_owner_safe_fresh_read(
+    monkeypatch: pytest.MonkeyPatch, owner_type: str
 ) -> None:
     class Runner:
         def __init__(self) -> None:
@@ -1141,6 +1214,10 @@ def test_research_outcome_effect_writes_when_only_noncanonical_state_matches(
         def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
             command = tuple(str(item) for item in argv)
             assert command[:3] == ("gh", "api", "graphql")
+            query = next(item for item in command if item.startswith("query="))
+            assert "repository(owner:$owner, name:$name)" in query
+            assert "user(login:$owner)" not in query
+            assert "organization(login:$owner)" not in query
             self.queries += 1
             outcome = "DO NOT IMPLEMENT" if self.queries == 1 else "IMPLEMENT"
             return CommandResult(
@@ -1148,32 +1225,7 @@ def test_research_outcome_effect_writes_when_only_noncanonical_state_matches(
                 command,
                 0,
                 json.dumps(
-                    {
-                        "data": {
-                            "user": {
-                                "projectV2": {
-                                    "items": {
-                                        "nodes": [
-                                            {
-                                                "content": {
-                                                    "number": 199,
-                                                    "repository": {
-                                                        "nameWithOwner": "owner/repo"
-                                                    },
-                                                },
-                                                "fieldValueByName": {"name": outcome},
-                                            }
-                                        ],
-                                        "pageInfo": {
-                                            "hasNextPage": False,
-                                            "endCursor": None,
-                                        },
-                                    }
-                                }
-                            },
-                            "organization": None,
-                        }
-                    }
+                    _project_field_query_payload(outcome, owner_type=owner_type)
                 ),
                 "",
             )
