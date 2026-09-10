@@ -120,6 +120,13 @@ _APPROVED_ARCHIVE_EVIDENCE_REFERENCE: Final = (
 _APPROVED_ARCHIVE_EVIDENCE_SHA256: Final = (
     "c4080de0dff862cebd1ad3363c8048c67805316a1700c4ff9e2b1621eaeb64d6"
 )
+_SOURCE_CONTRACT_ARCHIVE_EVIDENCE_VERSION: Final = "issue-191-manifest-v2-2026-08-30"
+_SOURCE_CONTRACT_ARCHIVE_EVIDENCE_REFERENCE: Final = (
+    "docs/research/binance-usdm-public-history-probe-manifest.json"
+)
+_SOURCE_CONTRACT_ARCHIVE_EVIDENCE_SHA256: Final = (
+    "cffaed42b5b5e65d58c67052e3517db56f54b7e9a06b0d6c8c2a7e0960c310c4"
+)
 
 
 class BinancePublicHistoryPurpose(StrEnum):
@@ -396,6 +403,33 @@ def _approved_month_actual_end(data_type: str) -> str:
     )
 
 
+def _approved_source_contract_archive_membership(
+    data_type: str,
+    subject: str,
+    granularity: str,
+    period_start: str,
+    status: str,
+    observed_at: str,
+    object_sha256: str = "",
+    actual_start: str = "",
+    actual_end: str = "",
+) -> tuple[str, ...]:
+    return (
+        data_type,
+        subject,
+        granularity,
+        period_start,
+        status,
+        _SOURCE_CONTRACT_ARCHIVE_EVIDENCE_VERSION,
+        _SOURCE_CONTRACT_ARCHIVE_EVIDENCE_REFERENCE,
+        _SOURCE_CONTRACT_ARCHIVE_EVIDENCE_SHA256,
+        observed_at,
+        object_sha256,
+        actual_start,
+        actual_end,
+    )
+
+
 _APPROVED_ARCHIVE_EVIDENCE_MEMBERSHIPS: Final = frozenset(
     {
         _approved_archive_membership(
@@ -527,6 +561,57 @@ _APPROVED_ARCHIVE_EVIDENCE_MEMBERSHIPS: Final = frozenset(
             ),
         )
     }
+    | {
+        _approved_source_contract_archive_membership(
+            data_type,
+            subject,
+            "day",
+            "2026-08-30",
+            BinanceArchiveEvidenceStatus.NOT_FOUND.value,
+            "2026-08-30T19:12:53.125822Z",
+        )
+        for data_type in (
+            "contract_kline",
+            "mark_price_kline",
+            "index_price_kline",
+        )
+        for subject in ("BTCUSDT", "ETHUSDT")
+    }
+    | {
+        _approved_source_contract_archive_membership(
+            data_type,
+            subject,
+            "day",
+            "2019-12-23",
+            BinanceArchiveEvidenceStatus.PARTIAL.value,
+            "2026-08-30T18:35:22.520317Z",
+            object_sha256,
+            "2019-12-23T11:58:00Z",
+            "2019-12-24T00:00:00Z",
+        )
+        for data_type, subject, object_sha256 in (
+            (
+                "mark_price_kline",
+                "BTCUSDT",
+                "fdc53a2e20d4b74d0070981d261717e1ef56e613db9bb5d0a865b014326f3106",
+            ),
+            (
+                "mark_price_kline",
+                "ETHUSDT",
+                "e929d970986234c767f01ce7717f20c0184593c6ffe9187b6c22ee5669b418bc",
+            ),
+            (
+                "index_price_kline",
+                "BTCUSDT",
+                "ac11957cac17d513fc5bc9a524f0e690363fc08f9f8b41a1cf0359e95c023bda",
+            ),
+            (
+                "index_price_kline",
+                "ETHUSDT",
+                "607309c0b992c4683b342a34db7f847802ae2cb8acfc6e2d5c6ec2edd09445ce",
+            ),
+        )
+    }
 )
 
 
@@ -553,7 +638,7 @@ class BinancePublicHistoryCoverage:
         ]
         if unapproved:
             raise ValueError(
-                "archive evidence is not an exact approved #279 report cell"
+                "archive evidence is not an exact approved source-report cell"
             )
         archive_keys = [
             (item.data_type, item.subject, item.boundary) for item in archive_objects
@@ -1864,6 +1949,43 @@ class BinancePublicHistoryAcquisition:
             ),
         )
 
+    @staticmethod
+    def _record_overlap_conflicts(
+        result: BinancePublicHistoryRequestResult,
+        conflicts: tuple[BinancePublicHistoryConflict, ...],
+    ) -> BinancePublicHistoryRequestResult:
+        """Make every obligation touched by a semantic conflict unresolved."""
+        conflict_keys = {conflict.record_key for conflict in conflicts}
+        obligations = tuple(
+            replace(
+                obligation,
+                satisfied=False,
+                unmet_reason="overlapping Raw revisions contain unresolved conflicts",
+            )
+            if any(
+                int(obligation.plan.required_range.start.timestamp() * 1_000)
+                <= key
+                < int(obligation.plan.required_range.end.timestamp() * 1_000)
+                for key in conflict_keys
+            )
+            else obligation
+            for obligation in result.obligations
+        )
+        return replace(
+            result,
+            obligations=obligations,
+            satisfied_ranges=tuple(
+                obligation.plan.required_range
+                for obligation in obligations
+                if obligation.satisfied
+            ),
+            unmet_ranges=tuple(
+                obligation.plan.required_range
+                for obligation in obligations
+                if not obligation.satisfied
+            ),
+        )
+
     def run(
         self, plan: BinancePublicHistoryAcquisitionPlan
     ) -> BinancePublicHistoryRunResult:
@@ -2110,6 +2232,8 @@ class BinancePublicHistoryAcquisition:
                 if not duplicates and not conflicts:
                     continue
                 item = request_results[index]
+                if conflicts:
+                    item = self._record_overlap_conflicts(item, conflicts)
                 request_results[index] = replace(
                     item,
                     duplicate_overlap_records=duplicates,

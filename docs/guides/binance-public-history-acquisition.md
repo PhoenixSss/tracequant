@@ -16,9 +16,12 @@ backfill、REST page acquisition 和不可变 Raw/revision；它不扫描数据�
 - `preserve_and_report` 冲突策略；gap 还必须包含非空的来源原因。
 
 `BinancePublicHistoryCoverage` 将可用来源限制为调用者提交的证据。Archive 证据必须逐字段匹配
-已核定 #279 manifest 的 exact cell，包括数据族、typed subject、日/月 boundary、证据
+已核定来源报告的 exact cell：#279 manifest 提供 14 个固定成功对象，原始 source-contract
+manifest 还提供 BTCUSDT/ETHUSDT 三类 Kline 在 2026-08-30 的实测 404，以及 mark/index
+在 2019-12-23 的首日 partial。匹配字段包括数据族、typed subject、日/月 boundary、证据
 版本/reference/manifest digest、观测时间、状态、object digest 和实际范围；复制旧证据元数据到
-另一个 boundary 不会获得网络访问授权。REST 直接复用 `BinanceKlineRestCoverage` 或
+另一个 boundary 不会获得网络访问授权。报告绑定的 `not_found`/`partial` 会保留为明确的
+未满足或仅使用已证实 REST fallback 的来源决策，不会因对象名存在而变成成功。REST 直接复用 `BinanceKlineRestCoverage` 或
 `BinanceFundingRateRestCoverage` 的逐 endpoint/subject/window 合同。`unknown`、`partial`、
 错 endpoint/subject 或超出观测窗口的证据不会授权远程访问。旧 probe 截止也不会按今天的
 日期自动延长。
@@ -85,7 +88,8 @@ artifact = RawStore(request.output_root).read_revision(
 使用 `open_time`，funding 使用 `calc_time`/`fundingTime`。Contract 比较真实 OHLC/volume/
 count/taker 字段；mark/index 只比较价格语义，不把 placeholder/schema 差异当冲突；funding
 只比较已确认的 `calc_time ↔ fundingTime` 与 `last_funding_rate ↔ fundingRate`。相同记录只在
-结果中计数，Raw 不删除；不同内容返回双方精确 revision 引用并使整体保持 `conflict`。
+结果中计数，Raw 不删除；不同内容返回双方精确 revision 引用并使整体保持 `conflict`，同时把
+包含冲突语义 key 的 obligation/range 从 satisfied 改为明确 unmet。
 运行时发现 Kline archive 覆盖缺口时，对象及统一来源结果仍保留已观测记录的首末范围；若枚举
 或比较历史 revision 时发现本地损坏，`run()` 返回受影响来源的 `local_failure` 和未满足范围，
 同时保留本次已验证的 Raw 引用，而不会让异常逃逸或覆盖损坏内容。
