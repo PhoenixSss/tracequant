@@ -83,6 +83,93 @@ _APPROVED_COVERAGE_SHA256: Final = (
 )
 _APPROVED_START_MS: Final = 1_788_975_180_000
 _APPROVED_END_MS: Final = 1_788_978_780_000
+_APPROVED_GAP_END_MS: Final = 1_788_975_480_000
+_APPROVED_COVERAGE_OBSERVATIONS: Final = (
+    (
+        BinanceRestEndpoint.CONTRACT_KLINES,
+        "BTCUSDT",
+        _APPROVED_END_MS,
+        "2026-09-09T18:33:31.368694+00:00",
+        "a253a934a1badc71edda32c22ab9204e8aee257109f7dc9473662b1c55a0c976",
+    ),
+    (
+        BinanceRestEndpoint.CONTRACT_KLINES,
+        "ETHUSDT",
+        _APPROVED_END_MS,
+        "2026-09-09T18:33:31.676945+00:00",
+        "82d2a49a6751df1137c1293e969dfc2f991e0b20c296edda0e52b69d9aef7cd7",
+    ),
+    (
+        BinanceRestEndpoint.MARK_PRICE_KLINES,
+        "BTCUSDT",
+        _APPROVED_END_MS,
+        "2026-09-09T18:33:32.207139+00:00",
+        "32c27367498032aa538e19bb06d90812c2a15a3766c935f2ceb9d61858f6957c",
+    ),
+    (
+        BinanceRestEndpoint.MARK_PRICE_KLINES,
+        "ETHUSDT",
+        _APPROVED_END_MS,
+        "2026-09-09T18:33:32.440732+00:00",
+        "c7163b4f125e983fb4ede8d707a70ff8e80a39462714732a020503a1f7e15ea6",
+    ),
+    (
+        BinanceRestEndpoint.INDEX_PRICE_KLINES,
+        "BTCUSDT",
+        _APPROVED_END_MS,
+        "2026-09-09T18:33:32.805179+00:00",
+        "e66727e9d38c6959847fe5efb1dd602d4aa31262c95df041a09117e7ff5a1515",
+    ),
+    (
+        BinanceRestEndpoint.INDEX_PRICE_KLINES,
+        "ETHUSDT",
+        _APPROVED_END_MS,
+        "2026-09-09T18:33:33.608919+00:00",
+        "e87aad187eae9bf664b39f7acb468114962dc25d7daad35509d8b67e07004531",
+    ),
+    (
+        BinanceRestEndpoint.CONTRACT_KLINES,
+        "BTCUSDT",
+        _APPROVED_GAP_END_MS,
+        "2026-09-09T18:33:36.290610+00:00",
+        "1087f26b529e5b0fc4f8a690533186333396ddfdeee6df3d4f6a223deba27b23",
+    ),
+    (
+        BinanceRestEndpoint.CONTRACT_KLINES,
+        "ETHUSDT",
+        _APPROVED_GAP_END_MS,
+        "2026-09-09T18:33:36.544279+00:00",
+        "2f73448e36f9fca77f89cd4485ce6bccafab40dc6edcafcbb349b7ba6694e12d",
+    ),
+    (
+        BinanceRestEndpoint.MARK_PRICE_KLINES,
+        "BTCUSDT",
+        _APPROVED_GAP_END_MS,
+        "2026-09-09T18:33:37.859947+00:00",
+        "f82e8808b2d7551789fc000d667b44c4ba1b5f1957b3db1fbe45b0ce52b72769",
+    ),
+    (
+        BinanceRestEndpoint.MARK_PRICE_KLINES,
+        "ETHUSDT",
+        _APPROVED_GAP_END_MS,
+        "2026-09-09T18:33:38.415210+00:00",
+        "24de765be36ea51df0c2f989e6167959b7196fcc871f8626f2335ee39e617c75",
+    ),
+    (
+        BinanceRestEndpoint.INDEX_PRICE_KLINES,
+        "BTCUSDT",
+        _APPROVED_GAP_END_MS,
+        "2026-09-09T18:33:39.345326+00:00",
+        "8e28c4123a103faf9c14bb329edabe2420839be7d42858e4bf4b41df8a9ce455",
+    ),
+    (
+        BinanceRestEndpoint.INDEX_PRICE_KLINES,
+        "ETHUSDT",
+        _APPROVED_GAP_END_MS,
+        "2026-09-09T18:33:39.681945+00:00",
+        "c8703db8d702ccee58c8830c7a3ad0ab098bb89d54907cd0054694da82c97b24",
+    ),
+)
 _ALLOWED_SUBJECTS: Final = frozenset({"BTCUSDT", "ETHUSDT"})
 _RESPONSE_HEADERS: Final = frozenset(
     {
@@ -285,6 +372,9 @@ class BinanceKlineRestCoverage:
     evidence_reference: str
     evidence_sha256: str
     observed_at: datetime
+    normalized_params: Mapping[str, str | int]
+    response_sha256: str
+    actual_range: TimeRange
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, BinanceKlineRestCoverageStatus):
@@ -325,6 +415,30 @@ class BinanceKlineRestCoverage:
         except ValueError as error:
             raise ValueError("observed_at must be timezone-aware") from error
         object.__setattr__(self, "observed_at", observed_at)
+        if not isinstance(self.normalized_params, Mapping):
+            raise TypeError("normalized_params must be a mapping")
+        normalized_params = dict(self.normalized_params)
+        if any(not isinstance(key, str) or not key for key in normalized_params):
+            raise ValueError("normalized_params keys must be non-empty strings")
+        if any(
+            not isinstance(value, (str, int)) or isinstance(value, bool)
+            for value in normalized_params.values()
+        ):
+            raise TypeError("normalized_params values must be strings or integers")
+        object.__setattr__(
+            self, "normalized_params", MappingProxyType(normalized_params)
+        )
+        if (
+            not isinstance(self.response_sha256, str)
+            or len(self.response_sha256) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.response_sha256
+            )
+        ):
+            raise ValueError("response_sha256 must be a lowercase SHA-256 digest")
+        if not isinstance(self.actual_range, TimeRange):
+            raise TypeError("actual_range must be a TimeRange")
 
 
 @dataclass(frozen=True, slots=True)
@@ -769,6 +883,53 @@ class _KlineRestPageAdapter:
             return (
                 BinanceKlineRestStatus.REST_BOUNDARY_UNKNOWN,
                 "coverage evidence binding is missing or unrecognized",
+            )
+        matched_observation_range: TimeRange | None = None
+        for (
+            endpoint,
+            subject,
+            observed_end_ms,
+            observed_at,
+            response_sha256,
+        ) in _APPROVED_COVERAGE_OBSERVATIONS:
+            if endpoint != coverage.endpoint or subject != str(coverage.subject):
+                continue
+            subject_parameter = (
+                "pair"
+                if endpoint is BinanceRestEndpoint.INDEX_PRICE_KLINES
+                else "symbol"
+            )
+            expected_params: dict[str, str | int] = {
+                subject_parameter: subject,
+                "interval": "1m",
+                "startTime": _APPROVED_START_MS,
+                "endTime": observed_end_ms - 1,
+                "limit": (observed_end_ms - _APPROVED_START_MS) // _MINUTE_MS,
+            }
+            expected_range = TimeRange(
+                start=datetime.fromtimestamp(_APPROVED_START_MS / 1_000, tz=UTC),
+                end=datetime.fromtimestamp(observed_end_ms / 1_000, tz=UTC),
+            )
+            if (
+                dict(coverage.normalized_params) == expected_params
+                and coverage.response_sha256 == response_sha256
+                and coverage.observed_at == datetime.fromisoformat(observed_at)
+                and coverage.actual_range == expected_range
+            ):
+                matched_observation_range = expected_range
+                break
+        if matched_observation_range is None:
+            return (
+                BinanceKlineRestStatus.REST_BOUNDARY_UNKNOWN,
+                "per-window coverage observation is missing or unrecognized",
+            )
+        if (
+            coverage.allowed_range.start < matched_observation_range.start
+            or coverage.allowed_range.end > matched_observation_range.end
+        ):
+            return (
+                BinanceKlineRestStatus.REST_BOUNDARY_UNKNOWN,
+                "coverage range extends beyond its bound per-window observation",
             )
         approved_start = datetime.fromtimestamp(_APPROVED_START_MS / 1_000, tz=UTC)
         approved_end = datetime.fromtimestamp(_APPROVED_END_MS / 1_000, tz=UTC)
@@ -1229,6 +1390,63 @@ class BinanceRestPageAcquisition:
                         retryable_http_status = response.status == 429 or (
                             500 <= response.status <= 599
                         )
+                        retryable_incomplete = (
+                            response.status == 200 or retryable_http_status
+                        )
+                        if not retryable_incomplete:
+                            detail = f"incomplete non-retryable HTTP {response.status}"
+                            attempts.append(
+                                BinanceKlineRestAttemptResult(
+                                    attempt_number=tracker.attempts,
+                                    page_attempt_number=page_attempt,
+                                    outcome="incomplete_response",
+                                    http_status=response.status,
+                                    response_sha256=digest,
+                                    detail=detail,
+                                )
+                            )
+                            try:
+                                self._record_attempt(
+                                    current,
+                                    status=BinanceKlineRestStatus.INVALID_RESPONSE,
+                                    detail=detail,
+                                    source_url=url,
+                                    response=response,
+                                )
+                            except (
+                                RawStoreError,
+                                OSError,
+                                ValueError,
+                            ) as store_error:
+                                detail = (
+                                    "failed to persist partial response evidence: "
+                                    f"{store_error}"
+                                )
+                                status = BinanceKlineRestStatus.LOCAL_FAILURE
+                            else:
+                                status = BinanceKlineRestStatus.INVALID_RESPONSE
+                            pages.append(
+                                BinanceKlineRestPageResult(
+                                    request=current,
+                                    attempts=tuple(attempts),
+                                    status=status,
+                                    short_page=False,
+                                    record_count=0,
+                                    actual_record_range=None,
+                                    response_sha256=digest,
+                                    revision=None,
+                                    artifact_path=None,
+                                    detail=detail,
+                                )
+                            )
+                            return self._finish(
+                                status=status,
+                                request=request,
+                                pages=pages,
+                                tracker=tracker,
+                                cursor_ms=cursor_ms,
+                                reason=detail,
+                            )
                         retry_delay = (
                             _retry_after_seconds(
                                 next(

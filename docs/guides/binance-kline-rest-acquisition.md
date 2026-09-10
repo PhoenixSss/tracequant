@@ -16,7 +16,10 @@ unmet range is complete.
 
 `BinanceKlineRestCoverage` is source evidence, not a request to probe or extend
 availability. A supported coverage value must match the request's endpoint and
-typed subject, contain the request range, and bind the frozen #295 conclusion:
+typed subject, contain the request range, and bind one exact family/subject/window
+observation from the frozen #295 conclusion. The binding includes that observation's
+normalized parameters, response SHA-256, observation time, and actual response range,
+in addition to the aggregate artifact identity:
 
 - evidence version:
   `issue-295-probe-run-2026-09-09T18:33:30.868474Z`;
@@ -66,14 +69,15 @@ request = BinanceRestPageRequest(
     interval=BinanceKlineInterval.ONE_MINUTE,
     limit=2,
 )
+observed_range = TimeRange(
+    start=datetime(2026, 9, 9, 17, 33, tzinfo=UTC),
+    end=datetime(2026, 9, 9, 18, 33, tzinfo=UTC),
+)
 coverage = BinanceKlineRestCoverage(
     status=BinanceKlineRestCoverageStatus.SUPPORTED,
     endpoint=request.endpoint,
     subject=request.subject,
-    allowed_range=TimeRange(
-        start=datetime(2026, 9, 9, 17, 33, tzinfo=UTC),
-        end=datetime(2026, 9, 9, 18, 33, tzinfo=UTC),
-    ),
+    allowed_range=observed_range,
     evidence_version="issue-295-probe-run-2026-09-09T18:33:30.868474Z",
     evidence_reference=(
         "docs/research/binance-usdm-feature11-rest-window-follow-up-probes.json"
@@ -81,7 +85,18 @@ coverage = BinanceKlineRestCoverage(
     evidence_sha256=(
         "30682f83b887514ef2a0e20ec21203cff70529ac1518fb538277ae0881920b45"
     ),
-    observed_at=datetime(2026, 9, 9, 18, 33, 40, tzinfo=UTC),
+    observed_at=datetime(2026, 9, 9, 18, 33, 31, 368694, tzinfo=UTC),
+    normalized_params={
+        "symbol": "BTCUSDT",
+        "interval": "1m",
+        "startTime": 1788975180000,
+        "endTime": 1788978779999,
+        "limit": 60,
+    },
+    response_sha256=(
+        "a253a934a1badc71edda32c22ab9204e8aee257109f7dc9473662b1c55a0c976"
+    ),
+    actual_range=observed_range,
 )
 budget = BinanceKlineRestBudget(
     timeout_seconds=10,

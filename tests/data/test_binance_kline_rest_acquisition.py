@@ -44,6 +44,33 @@ EVIDENCE_REFERENCE = (
     "docs/research/binance-usdm-feature11-rest-window-follow-up-probes.json"
 )
 EVIDENCE_SHA256 = "30682f83b887514ef2a0e20ec21203cff70529ac1518fb538277ae0881920b45"
+RECENT_END = datetime(2026, 9, 9, 18, 33, tzinfo=UTC)
+CELL_EVIDENCE = {
+    (BinanceRestEndpoint.CONTRACT_KLINES, "BTCUSDT"): (
+        datetime(2026, 9, 9, 18, 33, 31, 368694, tzinfo=UTC),
+        "a253a934a1badc71edda32c22ab9204e8aee257109f7dc9473662b1c55a0c976",
+    ),
+    (BinanceRestEndpoint.CONTRACT_KLINES, "ETHUSDT"): (
+        datetime(2026, 9, 9, 18, 33, 31, 676945, tzinfo=UTC),
+        "82d2a49a6751df1137c1293e969dfc2f991e0b20c296edda0e52b69d9aef7cd7",
+    ),
+    (BinanceRestEndpoint.MARK_PRICE_KLINES, "BTCUSDT"): (
+        datetime(2026, 9, 9, 18, 33, 32, 207139, tzinfo=UTC),
+        "32c27367498032aa538e19bb06d90812c2a15a3766c935f2ceb9d61858f6957c",
+    ),
+    (BinanceRestEndpoint.MARK_PRICE_KLINES, "ETHUSDT"): (
+        datetime(2026, 9, 9, 18, 33, 32, 440732, tzinfo=UTC),
+        "c7163b4f125e983fb4ede8d707a70ff8e80a39462714732a020503a1f7e15ea6",
+    ),
+    (BinanceRestEndpoint.INDEX_PRICE_KLINES, "BTCUSDT"): (
+        datetime(2026, 9, 9, 18, 33, 32, 805179, tzinfo=UTC),
+        "e66727e9d38c6959847fe5efb1dd602d4aa31262c95df041a09117e7ff5a1515",
+    ),
+    (BinanceRestEndpoint.INDEX_PRICE_KLINES, "ETHUSDT"): (
+        datetime(2026, 9, 9, 18, 33, 33, 608919, tzinfo=UTC),
+        "e87aad187eae9bf664b39f7acb468114962dc25d7daad35509d8b67e07004531",
+    ),
+}
 
 
 def _subject(
@@ -77,19 +104,34 @@ def _coverage(
     status: BinanceKlineRestCoverageStatus = BinanceKlineRestCoverageStatus.SUPPORTED,
     allowed_range: TimeRange | None = None,
 ) -> BinanceKlineRestCoverage:
+    observed_at, response_sha256 = CELL_EVIDENCE.get(
+        (request.endpoint, str(request.subject)),
+        CELL_EVIDENCE[(request.endpoint, "BTCUSDT")],
+    )
+    subject_parameter = (
+        "pair"
+        if request.endpoint is BinanceRestEndpoint.INDEX_PRICE_KLINES
+        else "symbol"
+    )
+    actual_range = TimeRange(start=START, end=RECENT_END)
     return BinanceKlineRestCoverage(
         status=status,
         endpoint=request.endpoint,
         subject=request.subject,
-        allowed_range=allowed_range
-        or TimeRange(
-            start=START,
-            end=datetime(2026, 9, 9, 18, 33, tzinfo=UTC),
-        ),
+        allowed_range=allowed_range or actual_range,
         evidence_version=EVIDENCE_VERSION,
         evidence_reference=EVIDENCE_REFERENCE,
         evidence_sha256=EVIDENCE_SHA256,
-        observed_at=datetime(2026, 9, 9, 18, 33, 40, tzinfo=UTC),
+        observed_at=observed_at,
+        normalized_params={
+            subject_parameter: str(request.subject),
+            "interval": "1m",
+            "startTime": int(START.timestamp() * 1_000),
+            "endTime": int(RECENT_END.timestamp() * 1_000) - 1,
+            "limit": 60,
+        },
+        response_sha256=response_sha256,
+        actual_range=actual_range,
     )
 
 
@@ -572,6 +614,38 @@ def test_coverage_is_fail_closed_before_http(
     assert detail in result.termination_reason
     assert result.unmet_range == request.caller_range
     assert transport.calls == []
+
+
+def test_coverage_requires_exact_per_window_observation_evidence(
+    tmp_path: Path,
+) -> None:
+    request = _request(minutes=3)
+    valid = _coverage(request)
+    changed_params = dict(valid.normalized_params)
+    changed_params["limit"] = 5
+    invalid_coverages = (
+        replace(valid, observed_at=valid.observed_at + timedelta(seconds=1)),
+        replace(valid, normalized_params=changed_params),
+        replace(valid, response_sha256="0" * 64),
+        replace(
+            valid,
+            actual_range=TimeRange(
+                start=START,
+                end=START + timedelta(minutes=5),
+            ),
+        ),
+    )
+
+    for index, coverage in enumerate(invalid_coverages):
+        transport = _DynamicTransport()
+        _, acquisition = _acquisition(tmp_path / str(index), transport)
+
+        result = acquisition.run(request, coverage, _budget())
+
+        assert result.status is BinanceKlineRestStatus.REST_BOUNDARY_UNKNOWN
+        assert "per-window" in result.termination_reason
+        assert result.unmet_range == request.caller_range
+        assert transport.calls == []
 
 
 def test_unaligned_unclosed_and_unsupported_requests_fail_before_http(
@@ -1197,6 +1271,40 @@ def test_partial_http_response_retries_same_page_and_preserves_received_bytes(
     assert record.source_body_sha256 == digest
     assert (evidence_path / "response.json").read_bytes() == partial
     assert len(store.list_verified_revisions(identity)) == 1
+
+
+@pytest.mark.parametrize("status", [302, 400])
+def test_partial_nonretryable_http_response_is_terminal(
+    tmp_path: Path, status: int
+) -> None:
+    request = _request(minutes=1, limit=1)
+    partial = b'{"code":-1100'
+    transport = _QueueTransport(
+        [BinanceKlineRestHttpResponse(status, partial, {}, complete=False)]
+    )
+    waits: list[float] = []
+    store, acquisition = _acquisition(
+        tmp_path,
+        transport,
+        wait=waits.append,
+        monotonic_clock=lambda: 0.0,
+    )
+
+    result = acquisition.run(request, _coverage(request), _budget(attempts=3))
+
+    digest = hashlib.sha256(partial).hexdigest()
+    assert result.status is BinanceKlineRestStatus.INVALID_RESPONSE
+    assert result.attempts_used == 1
+    assert len(transport.calls) == 1
+    assert waits == []
+    assert result.pages[0].attempts[0].outcome == "incomplete_response"
+    assert result.pages[0].attempts[0].http_status == status
+    assert result.pages[0].response_sha256 == digest
+    identity = RawObjectIdentity.from_rest_page_request(request)
+    record = store.list_acquisition_manifests(identity)[0]
+    assert record.status == BinanceKlineRestStatus.INVALID_RESPONSE.value
+    assert record.source_http_status == status
+    assert record.source_body_sha256 == digest
 
 
 def test_response_digest_creates_new_revision_without_overwriting_old_content(
