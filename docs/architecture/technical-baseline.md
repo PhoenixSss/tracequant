@@ -172,11 +172,13 @@ public exchange data
 ```
 
 Only the first, narrow part of this flow currently exists: callers can retrieve
-approved Binance USDⓈ-M BTCUSDT/ETHUSDT 1m contract-Kline, mark-price-Kline, or
-index-price-Kline archives and publish immutable Raw Parquet objects with
-manifests. There is no general Binance or private API client, REST recent/gap
+approved Binance USDⓈ-M BTCUSDT/ETHUSDT 1m contract-Kline, mark-price-Kline,
+index-price-Kline, and monthly settled-funding archives, and can acquire
+source-evidence-bound Kline or settled-funding REST pages. Valid responses are
+published as immutable Raw Parquet objects with exact response provenance and
+manifests. There is no general Binance or private API client, rolling REST
 synchronization, canonical schema, data repair, feature pipeline, label
-pipeline, or future-data-leakage check. Each adapter validates missing,
+pipeline, or future-data-leakage check. Each Kline adapter validates missing,
 duplicate, and out-of-order minutes before publication. The preserved 12-field
 wire values are Raw source data and must not be treated as a canonical schema;
 mark/index volume, quote, count, taker, and ignore fields have explicit
@@ -221,10 +223,12 @@ boundaries until such an Issue is implemented and reviewed.
 ## 8. Research and trading scope limits
 
 The current public-data capability is limited to explicitly requested Binance
-USDⓈ-M BTCUSDT/ETHUSDT 1m contract-Kline, mark-price-Kline, and index-price-Kline
-archives and local immutable Raw artifacts. None of the following is currently
-available: private Binance API access, REST recent/gap synchronization, funding
-ingestion, USDC archive acquisition, multi-timeframe aggregation, factors,
+USDⓈ-M BTCUSDT/ETHUSDT 1m contract-Kline, mark-price-Kline, index-price-Kline,
+and settled-funding archive/REST inputs plus local immutable Raw artifacts.
+REST requests remain restricted to frozen observed windows and are not a
+rolling synchronizer or a claim of continuous event coverage. None of the
+following is currently available: private Binance API access, general REST
+synchronization, USDC archive acquisition, multi-timeframe aggregation, factors,
 models, backtests, Demo orders, Live orders, private API credentials, database
 state, or multi-exchange production execution.
 

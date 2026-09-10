@@ -2047,15 +2047,11 @@ class BinanceRestPageAcquisition:
                     )
                 )
                 return self._finish(
-                    status=(
-                        BinanceKlineRestStatus.COMPLETE
-                        if status is BinanceKlineRestStatus.LEGAL_EMPTY
-                        else status
-                    ),
+                    status=status,
                     request=request,
                     pages=pages,
                     tracker=tracker,
-                    cursor_ms=(caller_end_ms if parsed.terminal else cursor_ms),
+                    cursor_ms=cursor_ms,
                     reason=detail,
                 )
 

@@ -518,9 +518,12 @@ def test_shared_rest_page_executor_accepts_funding_adapter(tmp_path: Path) -> No
 
     result = acquisition.run(request, "verified-funding-coverage", _budget())
 
-    assert result.status is BinanceKlineRestStatus.COMPLETE
+    assert result.status is BinanceKlineRestStatus.LEGAL_EMPTY
     assert result.attempts_used == 3
-    assert result.unmet_range is None
+    assert result.unmet_range == TimeRange(
+        start=START + timedelta(hours=8, milliseconds=1),
+        end=request.caller_range.end,
+    )
     assert len(result.pages) == 2
     assert [len(page.attempts) for page in result.pages] == [2, 1]
     assert result.pages[1].status is BinanceKlineRestStatus.LEGAL_EMPTY

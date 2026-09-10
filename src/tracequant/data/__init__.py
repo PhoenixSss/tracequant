@@ -19,6 +19,16 @@ from tracequant.data.binance_funding_rate import (
     BinanceFundingRateStatus,
     plan_binance_funding_rate_archives,
 )
+from tracequant.data.binance_funding_rate_rest import (
+    BinanceFundingRateRestAcquisition,
+    BinanceFundingRateRestAttemptResult,
+    BinanceFundingRateRestBudget,
+    BinanceFundingRateRestCoverage,
+    BinanceFundingRateRestCoverageStatus,
+    BinanceFundingRateRestPageResult,
+    BinanceFundingRateRestRunResult,
+    BinanceFundingRateRestStatus,
+)
 from tracequant.data.binance_index_price_kline import (
     BinanceIndexPriceKlineBackfill,
     BinanceIndexPriceKlineCoverageGapPlan,
@@ -120,6 +130,14 @@ __all__ = [
     "BinanceFundingRateObjectResult",
     "BinanceFundingRateRunResult",
     "BinanceFundingRateStatus",
+    "BinanceFundingRateRestAcquisition",
+    "BinanceFundingRateRestAttemptResult",
+    "BinanceFundingRateRestBudget",
+    "BinanceFundingRateRestCoverage",
+    "BinanceFundingRateRestCoverageStatus",
+    "BinanceFundingRateRestPageResult",
+    "BinanceFundingRateRestRunResult",
+    "BinanceFundingRateRestStatus",
     "BinanceKlineInterval",
     "BinanceKlineRestAcquisition",
     "BinanceKlineRestAttemptResult",
