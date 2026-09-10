@@ -1087,6 +1087,81 @@ def test_default_http_transport_terminates_the_entire_worker_at_deadline(
     assert elapsed < 3.0
     identity = RawObjectIdentity.from_rest_page_request(request)
     assert store.list_verified_revisions(identity) == ()
+    record = store.list_acquisition_manifests(identity)[0]
+    if blocked_stage == "body":
+        digest = hashlib.sha256(b"[").hexdigest()
+        assert result.pages[0].attempts[0].outcome == "incomplete_response"
+        assert result.pages[0].attempts[0].http_status == 200
+        assert result.pages[0].attempts[0].response_sha256 == digest
+        assert record.source_http_status == 200
+        assert record.source_body_sha256 == digest
+        evidence_path = store.acquisition_path_for(identity) / record.record_id
+        assert (evidence_path / "response.json").read_bytes() == b"["
+    else:
+        assert record.source_http_status is None
+        assert record.source_body_sha256 is None
+
+
+def test_default_http_transport_rejects_truncated_content_length(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _request(minutes=1, limit=1)
+    body = json.dumps(
+        [_row(request.caller_bounds.start_time_ms, request.endpoint)],
+        separators=(",", ":"),
+    ).encode()
+
+    class TruncatedHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body) + 10))
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            self.close_connection = True
+
+        def log_message(self, unused_format: str, *unused_args: object) -> None:
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), TruncatedHandler)
+    server.daemon_threads = True
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    monkeypatch.setattr(
+        "tracequant.data.binance_kline_rest._BASE_URL",
+        f"http://127.0.0.1:{server.server_port}",
+    )
+    store = RawStore(tmp_path, clock=lambda: NOW)
+    acquisition = BinanceKlineRestAcquisition(store, clock=lambda: NOW)
+
+    try:
+        result = acquisition.run(
+            request,
+            _coverage(request),
+            replace(
+                _budget(attempts=1),
+                timeout_seconds=2.0,
+                maximum_elapsed_seconds=5.0,
+            ),
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join()
+
+    digest = hashlib.sha256(body).hexdigest()
+    assert result.status is BinanceKlineRestStatus.RETRY_EXHAUSTED
+    assert result.pages[0].attempts[0].outcome == "incomplete_response"
+    assert result.pages[0].attempts[0].http_status == 200
+    assert result.pages[0].attempts[0].response_sha256 == digest
+    identity = RawObjectIdentity.from_rest_page_request(request)
+    assert store.list_verified_revisions(identity) == ()
+    record = store.list_acquisition_manifests(identity)[0]
+    assert record.source_http_status == 200
+    assert record.source_body_sha256 == digest
+    evidence_path = store.acquisition_path_for(identity) / record.record_id
+    assert (evidence_path / "response.json").read_bytes() == body
 
 
 def test_deep_json_parser_failure_is_quarantined_with_received_bytes(

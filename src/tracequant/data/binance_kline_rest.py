@@ -180,6 +180,7 @@ _RESPONSE_HEADERS: Final = frozenset(
         "x-mbx-used-weight-1m",
     }
 )
+_HTTP_READ_CHUNK_BYTES: Final = 64 * 1024
 _CONTRACT_COLUMNS: Final = (
     "open_time",
     "open",
@@ -277,43 +278,150 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 
 def _urllib_http_get(
-    url: str, timeout: float, maximum_response_bytes: int
+    url: str,
+    timeout: float,
+    maximum_response_bytes: int,
+    progress: Callable[[str, int, Mapping[str, str], bytes], None] | None = None,
 ) -> BinanceKlineRestHttpResponse:
+    def consume(
+        stream: object, status: int, headers: Mapping[str, str]
+    ) -> BinanceKlineRestHttpResponse:
+        if progress is not None:
+            progress("start", status, headers, b"")
+        body = bytearray()
+        while len(body) <= maximum_response_bytes:
+            amount = min(
+                _HTTP_READ_CHUNK_BYTES,
+                maximum_response_bytes + 1 - len(body),
+            )
+            if amount <= 0:
+                break
+            try:
+                read1 = getattr(stream, "read1", None)
+                chunk = (
+                    read1(amount)
+                    if callable(read1)
+                    else getattr(stream, "read")(amount)
+                )
+            except http.client.IncompleteRead as error:
+                chunk = bytes(error.partial)
+                if chunk:
+                    body.extend(chunk[:amount])
+                    if progress is not None:
+                        progress("body", status, headers, chunk[:amount])
+                return BinanceKlineRestHttpResponse(
+                    status, bytes(body), headers, complete=False
+                )
+            except (TimeoutError, OSError, http.client.HTTPException):
+                return BinanceKlineRestHttpResponse(
+                    status, bytes(body), headers, complete=False
+                )
+            if not isinstance(chunk, bytes):
+                raise TypeError("HTTP response body reader must return bytes")
+            if not chunk:
+                remaining = getattr(stream, "length", None)
+                complete = not (type(remaining) is int and remaining > 0)
+                return BinanceKlineRestHttpResponse(
+                    status, bytes(body), headers, complete=complete
+                )
+            body.extend(chunk)
+            if progress is not None:
+                progress("body", status, headers, chunk)
+        return BinanceKlineRestHttpResponse(
+            status, bytes(body), headers, complete=False
+        )
+
     request = urllib.request.Request(url, headers={"User-Agent": _PRODUCER_VERSION})
     opener = urllib.request.build_opener(_NoRedirectHandler())
     try:
         response = opener.open(request, timeout=timeout)
     except urllib.error.HTTPError as error:
         try:
-            try:
-                body = error.read(maximum_response_bytes + 1)
-                complete = True
-            except http.client.IncompleteRead as incomplete:
-                body = bytes(incomplete.partial)
-                complete = False
-            return BinanceKlineRestHttpResponse(
-                status=error.code,
-                body=body,
-                headers=(
-                    dict(error.headers.items()) if error.headers is not None else {}
-                ),
-                complete=complete,
+            return consume(
+                error,
+                error.code,
+                dict(error.headers.items()) if error.headers is not None else {},
             )
         finally:
             error.close()
     with response:
+        return consume(
+            response,
+            response.status,
+            dict(response.headers.items()),
+        )
+
+
+def _worker_http_response(
+    output: bytes,
+    maximum_response_bytes: int,
+    *,
+    allow_incomplete_stream: bool,
+) -> BinanceKlineRestHttpResponse:
+    status: int | None = None
+    headers: dict[str, str] | None = None
+    body = bytearray()
+    complete: bool | None = None
+    failure: str | None = None
+    lines = output.splitlines()
+    for index, line in enumerate(lines):
         try:
-            body = response.read(maximum_response_bytes + 1)
-            complete = True
-        except http.client.IncompleteRead as error:
-            body = bytes(error.partial)
-            complete = False
-    return BinanceKlineRestHttpResponse(
-        status=response.status,
-        body=body,
-        headers=dict(response.headers.items()),
-        complete=complete,
-    )
+            payload = json.loads(line)
+        except json.JSONDecodeError as error:
+            if allow_incomplete_stream and index == len(lines) - 1:
+                break
+            raise OSError("HTTP worker returned an invalid result") from error
+        try:
+            kind = payload["kind"]
+            if kind == "response-start":
+                if status is not None:
+                    raise ValueError("duplicate response start")
+                candidate_status = payload["status"]
+                candidate_headers = payload["headers"]
+                if type(candidate_status) is not int or not isinstance(
+                    candidate_headers, dict
+                ):
+                    raise TypeError("invalid response metadata")
+                if any(
+                    not isinstance(name, str) or not isinstance(value, str)
+                    for name, value in candidate_headers.items()
+                ):
+                    raise TypeError("invalid response headers")
+                status = candidate_status
+                headers = dict(candidate_headers)
+            elif kind == "response-body":
+                if status is None:
+                    raise ValueError("response body preceded response start")
+                body.extend(base64.b64decode(payload["body_base64"], validate=True))
+                if len(body) > maximum_response_bytes + 1:
+                    raise ValueError("HTTP worker exceeded its bounded response size")
+            elif kind == "response-complete":
+                if status is None or complete is not None:
+                    raise ValueError("invalid response completion")
+                candidate_complete = payload["complete"]
+                if not isinstance(candidate_complete, bool):
+                    raise TypeError("invalid response completion flag")
+                complete = candidate_complete
+            elif kind == "failure":
+                failure = f"{payload['error_type']}: {payload['detail']}"
+            else:
+                raise ValueError("unknown HTTP worker result kind")
+        except (KeyError, TypeError, ValueError) as error:
+            raise OSError("HTTP worker returned an invalid result") from error
+    if status is not None:
+        if headers is None:
+            raise OSError("HTTP worker omitted response headers")
+        if complete is None and not (allow_incomplete_stream or failure is not None):
+            raise OSError("HTTP worker returned an incomplete result stream")
+        return BinanceKlineRestHttpResponse(
+            status,
+            bytes(body),
+            headers,
+            complete=complete if complete is not None else False,
+        )
+    if failure is not None:
+        raise OSError(failure)
+    raise OSError("HTTP worker exited without a valid result")
 
 
 def _default_http_get(
@@ -335,21 +443,25 @@ def _default_http_get(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as error:
+        partial_output = error.stdout if isinstance(error.stdout, bytes) else b""
+        try:
+            return _worker_http_response(
+                partial_output,
+                maximum_response_bytes,
+                allow_incomplete_stream=True,
+            )
+        except OSError:
+            pass
         raise TimeoutError(
             "HTTP attempt exceeded its absolute elapsed-time deadline"
         ) from error
     if completed.returncode != 0:
         raise OSError("HTTP worker exited without a valid result")
-    try:
-        payload = json.loads(completed.stdout)
-        if payload["kind"] == "failure":
-            raise OSError(f"{payload['error_type']}: {payload['detail']}")
-        body = base64.b64decode(payload["body_base64"], validate=True)
-        return BinanceKlineRestHttpResponse(
-            payload["status"], body, payload["headers"], payload["complete"]
-        )
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-        raise OSError("HTTP worker returned an invalid result") from error
+    return _worker_http_response(
+        completed.stdout,
+        maximum_response_bytes,
+        allow_incomplete_stream=False,
+    )
 
 
 class BinanceKlineRestCoverageStatus(StrEnum):
