@@ -15,9 +15,10 @@ backfill、REST page acquisition 和不可变 Raw/revision；它不扫描数据�
   决定本地相对路径；
 - `preserve_and_report` 冲突策略；gap 还必须包含非空的来源原因。
 
-`BinancePublicHistoryCoverage` 将可用来源限制为调用者提交的证据。Archive 证据逐一绑定
-数据族、typed subject、日/月 boundary、证据版本/reference/digest、观测时间、状态和已知
-object digest；REST 直接复用 `BinanceKlineRestCoverage` 或
+`BinancePublicHistoryCoverage` 将可用来源限制为调用者提交的证据。Archive 证据必须逐字段匹配
+已核定 #279 manifest 的 exact cell，包括数据族、typed subject、日/月 boundary、证据
+版本/reference/manifest digest、观测时间、状态、object digest 和实际范围；复制旧证据元数据到
+另一个 boundary 不会获得网络访问授权。REST 直接复用 `BinanceKlineRestCoverage` 或
 `BinanceFundingRateRestCoverage` 的逐 endpoint/subject/window 合同。`unknown`、`partial`、
 错 endpoint/subject 或超出观测窗口的证据不会授权远程访问。旧 probe 截止也不会按今天的
 日期自动延长。
@@ -40,8 +41,10 @@ plan = acquisition.plan(requests, coverage, budget)
 
 ## 来源选择与 fallback
 
-- Backfill 的完整、已有证据的关闭月份优先 monthly；三类 Kline 的月边缘使用 daily。
-  Funding 只允许 monthly，绝不构造 `daily/fundingRate`。
+- Backfill 的完整、已有证据的关闭月份优先 monthly；三类 Kline 的月边缘使用 daily。若
+  monthly 在执行时 404/checksum 404，计划只会逐日切换到同一月份内预先绑定且已证实的 daily
+  cells；这些 daily objects 在计划时计入共享 object/HTTP 上限。Funding 只允许 monthly，
+  绝不构造 `daily/fundingRate`。
 - `recent` 和显式 `gap` 只在匹配的 frozen REST coverage 内生成请求；未知边界形成初始
   unmet obligation。
 - 计划内 archive 404/checksum 404 或完整性 gap 可以进入已预先绑定、仍在预算内的 REST
@@ -53,7 +56,8 @@ plan = acquisition.plan(requests, coverage, budget)
 result = acquisition.run(plan)
 ```
 
-Archive 下载、REST 内部 retry/backoff、page 发布和 revision 判断仍由既有消费者负责。
+Archive 下载、REST 内部 retry/backoff、page 发布和 revision 判断仍由既有消费者的内部受控
+执行 seam 负责；调用者不能向单个适配器提交自造 object key/URL plan。
 统一层只分配共享剩余预算、按计划调用它们并聚合结果；不会在上层叠加 REST 尝试次数或重置
 总耗时。取消、无进展、预算耗尽和局部失败只停止受影响的剩余 obligations，已经发布的不可变
 Raw 仍可精确读取。
@@ -75,8 +79,9 @@ artifact = RawStore(request.output_root).read_revision(
 )
 ```
 
-同一个 family/typed subject/output root 的所有不同 Raw revisions（包括相同来源类型）重叠时按
-真实语义 key 比较；相同 object/revision identity 只比较一次。Kline
+同一个 family/typed subject/output root 中，本次 run 触及的每个逻辑对象都会枚举 RawStore
+里全部已验证 revisions（包括先前 run 保存的相同来源 revision），再按真实语义 key 比较；
+相同 object/revision identity 只比较一次。Kline
 使用 `open_time`，funding 使用 `calc_time`/`fundingTime`。Contract 比较真实 OHLC/volume/
 count/taker 字段；mark/index 只比较价格语义，不把 placeholder/schema 差异当冲突；funding
 只比较已确认的 `calc_time ↔ fundingTime` 与 `last_funding_rate ↔ fundingRate`。相同记录只在

@@ -445,10 +445,10 @@ class BinanceContractKlineBackfill:
             request_range=request_range, objects=results
         )
 
-    def run_plan(
+    def _run_controlled_plan(
         self, plan: BinanceArchiveObjectPlan
     ) -> BinanceContractKlineObjectResult:
-        """Execute one caller-supplied, explicitly evidenced archive object."""
+        """Execute one orchestrator-derived archive object."""
         if not isinstance(plan, BinanceArchiveObjectPlan):
             raise TypeError("plan must be a BinanceArchiveObjectPlan")
         if plan.request.data_type is not BinancePublicHistoryDataType.CONTRACT_KLINE:

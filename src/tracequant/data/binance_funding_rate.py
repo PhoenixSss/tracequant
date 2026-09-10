@@ -447,10 +447,10 @@ class BinanceFundingRateBackfill:
             objects=results,
         )
 
-    def run_plan(
+    def _run_controlled_plan(
         self, plan: BinanceArchiveObjectPlan
     ) -> BinanceFundingRateObjectResult:
-        """Execute one caller-supplied, explicitly evidenced monthly object."""
+        """Execute one orchestrator-derived monthly object."""
         if not isinstance(plan, BinanceArchiveObjectPlan):
             raise TypeError("plan must be a BinanceArchiveObjectPlan")
         if (

@@ -48,6 +48,7 @@ from tracequant.domain import TimeRange
 
 __all__ = [
     "ArchiveHttpGet",
+    "ArchiveHttpBudgetExceeded",
     "ArchiveHttpResponse",
     "BinanceArchiveAcquisitionOutcome",
     "BinanceArchiveAcquisitionStatus",
@@ -75,6 +76,14 @@ class ArchiveHttpResponse:
 
 class ArchiveHttpGet(Protocol):
     def __call__(self, url: str, timeout: float) -> ArchiveHttpResponse: ...
+
+
+class ArchiveHttpBudgetExceeded(RuntimeError):
+    """A received archive response exhausted an enclosing shared budget."""
+
+    def __init__(self, message: str, *, response: ArchiveHttpResponse) -> None:
+        super().__init__(message)
+        self.response = response
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +146,7 @@ class BinanceArchiveAcquisitionStatus(StrEnum):
     NOT_FOUND = "not_found"
     CHECKSUM_NOT_FOUND = "checksum_not_found"
     RETRYABLE_FAILURE = "retryable_failure"
+    BUDGET_EXHAUSTED = "budget_exhausted"
     INVALID_CONTENT = "invalid_content"
     LOCAL_FAILURE = "local_failure"
     CONFLICT = "conflict"
@@ -178,6 +188,19 @@ class _RetryableDownloadError(RuntimeError):
         *,
         resource: str,
         response: ArchiveHttpResponse | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.resource = resource
+        self.response = response
+
+
+class _BudgetExhaustedDownloadError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        resource: str,
+        response: ArchiveHttpResponse,
     ) -> None:
         super().__init__(message)
         self.resource = resource
@@ -235,6 +258,10 @@ def _download(
 ) -> _DownloadedResponse:
     try:
         response = http_get(url, timeout)
+    except ArchiveHttpBudgetExceeded as error:
+        raise _BudgetExhaustedDownloadError(
+            str(error), resource=resource, response=error.response
+        ) from error
     except _InvalidContentError:
         raise
     except (
@@ -575,6 +602,22 @@ class BinancePublicArchiveAcquisition:
             return self.record_failure(
                 plan.request,
                 BinanceArchiveAcquisitionStatus.RETRYABLE_FAILURE,
+                str(error),
+                source_url=plan.url,
+                checksum_url=plan.checksum_url,
+                source_response=self._to_raw_response(archive_payload)
+                or archive_response,
+                checksum_response=self._to_raw_response(checksum_payload)
+                or checksum_response,
+            )
+        except _BudgetExhaustedDownloadError as error:
+            if error.resource == "checksum":
+                checksum_response = self._to_raw_response(error.response)
+            else:
+                archive_response = self._to_raw_response(error.response)
+            return self.record_failure(
+                plan.request,
+                BinanceArchiveAcquisitionStatus.BUDGET_EXHAUSTED,
                 str(error),
                 source_url=plan.url,
                 checksum_url=plan.checksum_url,

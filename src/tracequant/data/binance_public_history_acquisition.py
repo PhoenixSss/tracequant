@@ -46,6 +46,7 @@ from tracequant.data.binance_kline_rest import (
 )
 from tracequant.data.binance_mark_price_kline import BinanceMarkPriceKlineBackfill
 from tracequant.data.binance_public_archive import (
+    ArchiveHttpBudgetExceeded,
     ArchiveHttpGet,
     ArchiveHttpResponse,
     BinanceArchiveAcquisitionStatus,
@@ -109,6 +110,15 @@ _KLINE_TYPES: Final = frozenset(
 )
 _ARCHIVE_ROOT: Final = "https://data.binance.vision"
 _ONE_MINUTE_MS: Final = 60_000
+_APPROVED_ARCHIVE_EVIDENCE_VERSION: Final = (
+    "issue-279-probe-run-2026-09-09T10:58:43.717234Z"
+)
+_APPROVED_ARCHIVE_EVIDENCE_REFERENCE: Final = (
+    "docs/research/binance-usdm-feature11-window-probes.json"
+)
+_APPROVED_ARCHIVE_EVIDENCE_SHA256: Final = (
+    "c4080de0dff862cebd1ad3363c8048c67805316a1700c4ff9e2b1621eaeb64d6"
+)
 
 
 class BinancePublicHistoryPurpose(StrEnum):
@@ -326,6 +336,199 @@ class BinancePublicHistoryArchiveEvidence:
         }
 
 
+def _archive_evidence_membership(
+    item: BinancePublicHistoryArchiveEvidence,
+) -> tuple[str, ...]:
+    actual_start = (
+        format_utc(item.actual_range.start) if item.actual_range is not None else ""
+    )
+    actual_end = (
+        format_utc(item.actual_range.end) if item.actual_range is not None else ""
+    )
+    return (
+        item.data_type.value,
+        str(item.subject),
+        item.boundary.granularity.value,
+        item.boundary.period_start.isoformat(),
+        item.status.value,
+        item.evidence_version,
+        item.evidence_reference,
+        item.evidence_sha256,
+        format_utc(item.observed_at),
+        item.object_sha256 or "",
+        actual_start,
+        actual_end,
+    )
+
+
+def _approved_archive_membership(
+    data_type: str,
+    subject: str,
+    granularity: str,
+    period_start: str,
+    observed_at: str,
+    object_sha256: str,
+    actual_start: str,
+    actual_end: str,
+) -> tuple[str, ...]:
+    return (
+        data_type,
+        subject,
+        granularity,
+        period_start,
+        BinanceArchiveEvidenceStatus.SUPPORTED.value,
+        _APPROVED_ARCHIVE_EVIDENCE_VERSION,
+        _APPROVED_ARCHIVE_EVIDENCE_REFERENCE,
+        _APPROVED_ARCHIVE_EVIDENCE_SHA256,
+        observed_at,
+        object_sha256,
+        actual_start,
+        actual_end,
+    )
+
+
+def _approved_month_actual_end(data_type: str) -> str:
+    return (
+        "2026-07-31T16:00:00.001000Z"
+        if data_type == BinancePublicHistoryDataType.SETTLED_FUNDING_RATE.value
+        else "2026-08-01T00:00:00Z"
+    )
+
+
+_APPROVED_ARCHIVE_EVIDENCE_MEMBERSHIPS: Final = frozenset(
+    {
+        _approved_archive_membership(
+            *values,
+            "2026-07-01T00:00:00Z",
+            _approved_month_actual_end(values[0]),
+        )
+        for values in (
+            (
+                "contract_kline",
+                "BTCUSDT",
+                "month",
+                "2026-07-01",
+                "2026-09-09T10:58:44.433753Z",
+                "f18440bb58f0c7e1ff63cbb906132002877c4914540c8aebab920da6937cff73",
+            ),
+            (
+                "contract_kline",
+                "ETHUSDT",
+                "month",
+                "2026-07-01",
+                "2026-09-09T10:58:53.579519Z",
+                "5c98ad0cfa152fbe08df59838ead7c8bbfa433af943bbfb4d082626ebee2d83e",
+            ),
+            (
+                "index_price_kline",
+                "BTCUSDT",
+                "month",
+                "2026-07-01",
+                "2026-09-09T10:59:07.659838Z",
+                "80f701b6e752ee9a04e9069472d6eb1165c4f379ee9cfd4c7bc11eb98a4a8175",
+            ),
+            (
+                "index_price_kline",
+                "ETHUSDT",
+                "month",
+                "2026-07-01",
+                "2026-09-09T10:59:12.258116Z",
+                "dd2524b6c7fbfcc8da296da3e8068818660f590f32f6467236cd0f1585b4bc73",
+            ),
+            (
+                "mark_price_kline",
+                "BTCUSDT",
+                "month",
+                "2026-07-01",
+                "2026-09-09T10:58:59.001048Z",
+                "5bb16a0707eef96d648480ab45943f25b27425154b2ccb881c200cfd51e594ed",
+            ),
+            (
+                "mark_price_kline",
+                "ETHUSDT",
+                "month",
+                "2026-07-01",
+                "2026-09-09T10:59:03.480234Z",
+                "641ce19380be3671714cf4e358d671737af834534e6e6f1f75852ffc07ce3e7d",
+            ),
+            (
+                "settled_funding_rate",
+                "BTCUSDT",
+                "month",
+                "2026-07-01",
+                "2026-09-09T10:59:16.668628Z",
+                "e36fcc66f493d7d9ec348c852fc22e9f318c79cf7adae17398a3994ae0adc41e",
+            ),
+            (
+                "settled_funding_rate",
+                "ETHUSDT",
+                "month",
+                "2026-07-01",
+                "2026-09-09T10:59:18.094691Z",
+                "ece7f6c64d0e45fbd64929dec40bae525fe365381046e367de5ca0827bc623d3",
+            ),
+        )
+    }
+    | {
+        _approved_archive_membership(
+            *values,
+            "2026-08-29T00:00:00Z",
+            "2026-08-30T00:00:00Z",
+        )
+        for values in (
+            (
+                "contract_kline",
+                "BTCUSDT",
+                "day",
+                "2026-08-29",
+                "2026-09-09T10:58:50.895074Z",
+                "41e554b2a312bfadb74e4865c5cbef8dd401586c7d973c623d0915869eb81ebc",
+            ),
+            (
+                "contract_kline",
+                "ETHUSDT",
+                "day",
+                "2026-08-29",
+                "2026-09-09T10:58:56.525232Z",
+                "6d64864dff240b52550814cb981d14325fb716d0705d4ca6f02116b321f1f91b",
+            ),
+            (
+                "index_price_kline",
+                "BTCUSDT",
+                "day",
+                "2026-08-29",
+                "2026-09-09T10:59:10.153893Z",
+                "26241ffe071d9019db8302b9e1765fd05160b9db5dd8704df6fb2cecdb79a2d1",
+            ),
+            (
+                "index_price_kline",
+                "ETHUSDT",
+                "day",
+                "2026-08-29",
+                "2026-09-09T10:59:14.809964Z",
+                "c15bec3556193e76d4a2144f57865e9610453a550177a81be966aa8eb5ab2eb7",
+            ),
+            (
+                "mark_price_kline",
+                "BTCUSDT",
+                "day",
+                "2026-08-29",
+                "2026-09-09T10:59:01.857074Z",
+                "2146dff9db1e1ddc3af33f00696f735d0076174602e659377532db817860f4ac",
+            ),
+            (
+                "mark_price_kline",
+                "ETHUSDT",
+                "day",
+                "2026-08-29",
+                "2026-09-09T10:59:06.084103Z",
+                "ba0613355d8ae1a47367d99a4c39543b5f5cd8aacb70480e5670b38d076b359a",
+            ),
+        )
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class BinancePublicHistoryCoverage:
     archive_objects: tuple[BinancePublicHistoryArchiveEvidence, ...] = ()
@@ -341,6 +544,16 @@ class BinancePublicHistoryCoverage:
             raise TypeError("archive_objects must contain archive evidence")
         if any(not isinstance(item, BinanceKlineRestCoverage) for item in rest_windows):
             raise TypeError("rest_windows must contain REST coverage evidence")
+        unapproved = [
+            item
+            for item in archive_objects
+            if _archive_evidence_membership(item)
+            not in _APPROVED_ARCHIVE_EVIDENCE_MEMBERSHIPS
+        ]
+        if unapproved:
+            raise ValueError(
+                "archive evidence is not an exact approved #279 report cell"
+            )
         archive_keys = [
             (item.data_type, item.subject, item.boundary) for item in archive_objects
         ]
@@ -665,33 +878,44 @@ def _rest_step(
     )
 
 
+def _archive_step(
+    request: BinancePublicHistoryAcquisitionRequest,
+    boundary: BinanceArchiveObjectBoundary,
+    evidence: BinancePublicHistoryArchiveEvidence,
+    *,
+    reason: str | None = None,
+) -> BinancePublicHistorySourceStep:
+    plan = _archive_plan(request, boundary)
+    return BinancePublicHistorySourceStep(
+        source_kind=plan.request.source_kind,
+        reason=reason
+        or (
+            f"explicit {evidence.status.value} archive evidence "
+            f"{evidence.evidence_version} for {boundary.period_start.isoformat()}"
+        ),
+        archive_plan=plan,
+        archive_evidence=evidence,
+    )
+
+
 def _plan_archive_obligation(
     request_index: int,
     request: BinancePublicHistoryAcquisitionRequest,
     boundary: BinanceArchiveObjectBoundary,
     coverage: BinancePublicHistoryCoverage,
+    *,
+    preferred: tuple[BinancePublicHistorySourceStep, ...] = (),
 ) -> BinancePublicHistoryObligationPlan:
     required = _intersection(request.request_range, _boundary_range(boundary))
     assert required is not None
     evidence = _archive_evidence(coverage, request, boundary)
     rest = _rest_evidence(coverage, request, required)
-    candidates: list[BinancePublicHistorySourceStep] = []
+    candidates: list[BinancePublicHistorySourceStep] = list(preferred)
     if evidence is not None and evidence.status in {
         BinanceArchiveEvidenceStatus.SUPPORTED,
         BinanceArchiveEvidenceStatus.NOT_FOUND,
     }:
-        plan = _archive_plan(request, boundary)
-        candidates.append(
-            BinancePublicHistorySourceStep(
-                source_kind=plan.request.source_kind,
-                reason=(
-                    f"explicit {evidence.status.value} archive evidence "
-                    f"{evidence.evidence_version} for {boundary.period_start.isoformat()}"
-                ),
-                archive_plan=plan,
-                archive_evidence=evidence,
-            )
-        )
+        candidates.append(_archive_step(request, boundary, evidence))
         if rest is not None:
             candidates.append(
                 _rest_step(
@@ -788,11 +1012,40 @@ def _plan_request(
             and month_evidence is not None
             and month_evidence.status is BinanceArchiveEvidenceStatus.SUPPORTED
         )
-        boundary = month if full_month else BinanceArchiveObjectBoundary.day(cursor)
-        obligations.append(
-            _plan_archive_obligation(request_index, request, boundary, coverage)
-        )
-        cursor = next_month if full_month else cursor + timedelta(days=1)
+        if full_month:
+            assert month_evidence is not None
+            monthly = _archive_step(
+                request,
+                month,
+                month_evidence,
+                reason=(
+                    "preferred explicitly supported monthly archive; proven daily "
+                    "objects remain bounded runtime fallbacks"
+                ),
+            )
+            day = cursor
+            while day < next_month:
+                obligations.append(
+                    _plan_archive_obligation(
+                        request_index,
+                        request,
+                        BinanceArchiveObjectBoundary.day(day),
+                        coverage,
+                        preferred=(monthly,),
+                    )
+                )
+                day += timedelta(days=1)
+            cursor = next_month
+        else:
+            obligations.append(
+                _plan_archive_obligation(
+                    request_index,
+                    request,
+                    BinanceArchiveObjectBoundary.day(cursor),
+                    coverage,
+                )
+            )
+            cursor += timedelta(days=1)
     return tuple(obligations)
 
 
@@ -813,6 +1066,7 @@ def _backfill_obligation_count(
         )
 
     count = (last.date() - request.request_range.start.date()).days + 1
+    supported_month_ranges: list[TimeRange] = []
     for item in coverage.archive_objects:
         if (
             item.data_type is not request.data_type
@@ -828,6 +1082,23 @@ def _backfill_obligation_count(
         ):
             days = (boundary_range.end.date() - boundary_range.start.date()).days
             count -= days - 1
+            supported_month_ranges.append(boundary_range)
+    count += sum(
+        1
+        for item in coverage.archive_objects
+        if item.data_type is request.data_type
+        and item.subject == request.subject
+        and item.status
+        in {
+            BinanceArchiveEvidenceStatus.SUPPORTED,
+            BinanceArchiveEvidenceStatus.NOT_FOUND,
+        }
+        and item.boundary.granularity is BinanceArchiveObjectGranularity.DAY
+        and any(
+            month.start <= _boundary_range(item.boundary).start < month.end
+            for month in supported_month_ranges
+        )
+    )
     return count
 
 
@@ -915,7 +1186,7 @@ def _plan_id(payload: Mapping[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-class _SharedBudgetExceeded(OSError):
+class _SharedBudgetExceeded(RuntimeError):
     pass
 
 
@@ -943,6 +1214,8 @@ class _SharedBudget:
         return max(0.0, self.budget.maximum_elapsed_seconds - self.elapsed)
 
     def before_http(self) -> None:
+        if self.exhaustion_reason is not None:
+            raise _SharedBudgetExceeded(self.exhaustion_reason)
         if self.remaining_seconds <= 0:
             self.exhaustion_reason = "maximum_elapsed_seconds exhausted"
             raise _SharedBudgetExceeded(self.exhaustion_reason)
@@ -952,13 +1225,12 @@ class _SharedBudget:
         self.http_requests += 1
 
     def after_http(self, body: bytes) -> None:
+        self.downloaded_bytes += len(body)
         if len(body) > self.budget.maximum_response_bytes:
             self.exhaustion_reason = "maximum_response_bytes exceeded"
-            raise _SharedBudgetExceeded(self.exhaustion_reason)
-        if self.downloaded_bytes + len(body) > self.budget.maximum_download_bytes:
+            return
+        if self.downloaded_bytes > self.budget.maximum_download_bytes:
             self.exhaustion_reason = "maximum_download_bytes exhausted"
-            raise _SharedBudgetExceeded(self.exhaustion_reason)
-        self.downloaded_bytes += len(body)
 
 
 def _artifact_reference(
@@ -1077,12 +1349,13 @@ class BinancePublicHistoryAcquisition:
             for index, request in enumerate(frozen_requests)
             for obligation in _plan_request(index, request, coverage)
         )
-        archive_count = sum(
-            1
+        archive_keys = {
+            (obligation.request_index, step.archive_plan.object_key)
             for obligation in obligations
-            for step in obligation.candidates[:1]
+            for step in obligation.candidates
             if step.archive_plan is not None
-        )
+        }
+        archive_count = len(archive_keys)
         if archive_count > budget.maximum_archive_objects:
             raise ValueError("planned archive objects exceed maximum_archive_objects")
         rest_actions = sum(
@@ -1091,11 +1364,19 @@ class BinancePublicHistoryAcquisition:
             for step in obligation.candidates
             if step.rest_request is not None
         )
-        minimum_http = sum(
-            2 if obligation.candidates[0].archive_plan is not None else 1
+        preferred_archive_keys = {
+            (obligation.request_index, obligation.candidates[0].archive_plan.object_key)
             for obligation in obligations
             if obligation.candidates
+            and obligation.candidates[0].archive_plan is not None
+        }
+        preferred_rest_actions = sum(
+            1
+            for obligation in obligations
+            if obligation.candidates
+            and obligation.candidates[0].rest_request is not None
         )
+        minimum_http = len(preferred_archive_keys) * 2 + preferred_rest_actions
         if minimum_http > budget.maximum_http_requests:
             raise ValueError(
                 "plan cannot make minimum progress within maximum_http_requests"
@@ -1139,6 +1420,11 @@ class BinancePublicHistoryAcquisition:
                 url, min(timeout, shared.remaining_seconds)
             )
             shared.after_http(response.body)
+            if shared.exhaustion_reason is not None:
+                raise ArchiveHttpBudgetExceeded(
+                    shared.exhaustion_reason,
+                    response=response,
+                )
             return response
 
         return get
@@ -1188,7 +1474,7 @@ class BinancePublicHistoryAcquisition:
             if request.data_type is BinancePublicHistoryDataType.CONTRACT_KLINE:
                 contract_outcome = BinanceContractKlineBackfill(
                     store, http_get=transport, timeout=timeout, clock=self._clock
-                ).run_plan(step.archive_plan)
+                )._run_controlled_plan(step.archive_plan)
                 status = contract_outcome.status
                 artifact_path = contract_outcome.artifact_path
                 detail = contract_outcome.detail
@@ -1196,7 +1482,7 @@ class BinancePublicHistoryAcquisition:
             elif request.data_type is BinancePublicHistoryDataType.MARK_PRICE_KLINE:
                 mark_outcome = BinanceMarkPriceKlineBackfill(
                     store, http_get=transport, timeout=timeout, clock=self._clock
-                ).run_plan(step.archive_plan)
+                )._run_controlled_plan(step.archive_plan)
                 status = mark_outcome.status
                 artifact_path = mark_outcome.artifact_path
                 detail = mark_outcome.detail
@@ -1204,7 +1490,7 @@ class BinancePublicHistoryAcquisition:
             elif request.data_type is BinancePublicHistoryDataType.INDEX_PRICE_KLINE:
                 index_outcome = BinanceIndexPriceKlineBackfill(
                     store, http_get=transport, timeout=timeout, clock=self._clock
-                ).run_plan(step.archive_plan)
+                )._run_controlled_plan(step.archive_plan)
                 status = index_outcome.status
                 artifact_path = index_outcome.artifact_path
                 detail = index_outcome.detail
@@ -1212,7 +1498,7 @@ class BinancePublicHistoryAcquisition:
             else:
                 funding_outcome = BinanceFundingRateBackfill(
                     store, http_get=transport, timeout=timeout, clock=self._clock
-                ).run_plan(step.archive_plan)
+                )._run_controlled_plan(step.archive_plan)
                 status = funding_outcome.status
                 artifact_path = funding_outcome.artifact_path
                 detail = funding_outcome.detail
@@ -1408,6 +1694,7 @@ class BinancePublicHistoryAcquisition:
         by_request: list[list[BinancePublicHistoryObligationResult]] = [
             [] for _ in plan.requests
         ]
+        archive_cache: dict[tuple[int, str], BinancePublicHistorySourceResult] = {}
         cancelled = False
         for obligation in plan.obligations:
             request = plan.requests[obligation.request_index]
@@ -1439,15 +1726,21 @@ class BinancePublicHistoryAcquisition:
                     unmet = shared.exhaustion_reason
                     break
                 try:
-                    source = (
-                        self._run_archive(
+                    if step.archive_plan is not None:
+                        cache_key = (
+                            obligation.request_index,
+                            step.archive_plan.object_key,
+                        )
+                        source = archive_cache.get(cache_key)
+                        if source is None:
+                            source = self._run_archive(
+                                request, step, stores[request.output_root], shared
+                            )
+                            archive_cache[cache_key] = source
+                    else:
+                        source = self._run_rest(
                             request, step, stores[request.output_root], shared
                         )
-                        if step.archive_plan is not None
-                        else self._run_rest(
-                            request, step, stores[request.output_root], shared
-                        )
-                    )
                 except _SharedBudgetExceeded as error:
                     shared.exhaustion_reason = str(error)
                     unmet = str(error)
@@ -1494,12 +1787,16 @@ class BinancePublicHistoryAcquisition:
         request_results: list[BinancePublicHistoryRequestResult] = []
         for index, request in enumerate(plan.requests):
             obligations = tuple(by_request[index])
-            references = tuple(
-                reference
+            references_by_revision = {
+                (
+                    reference.object_identity.object_id,
+                    reference.revision.revision_id,
+                ): reference
                 for obligation in obligations
                 for source in obligation.sources
                 for reference in source.raw_references
-            )
+            }
+            references = tuple(references_by_revision.values())
             satisfied_ranges = tuple(
                 item.plan.required_range for item in obligations if item.satisfied
             )
@@ -1551,6 +1848,19 @@ class BinancePublicHistoryAcquisition:
             ] = {}
             for index in indices:
                 for reference in request_results[index].raw_references:
+                    unique_references[
+                        (
+                            reference.object_identity.object_id,
+                            reference.revision.revision_id,
+                        )
+                    ] = reference
+            touched_identities = {
+                reference.object_identity.object_id: reference.object_identity
+                for reference in unique_references.values()
+            }
+            for identity in touched_identities.values():
+                for artifact in stores[root].list_verified_revisions(identity):
+                    reference = _artifact_reference(stores[root], artifact)
                     unique_references[
                         (
                             reference.object_identity.object_id,
