@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import tracequant.data.binance_public_archive as archive_module
 import tracequant.data.binance_public_history_acquisition as history_module
 from tracequant.data import (
     ArchiveHttpResponse,
@@ -575,6 +576,79 @@ def test_plan_keeps_unknown_ranges_unmet_without_io_or_directory_creation(
     assert result.requests[0].unmet_ranges == (request.request_range,)
     assert calls == 0
     assert not root.exists()
+
+
+@pytest.mark.parametrize(
+    ("coverage_status", "source_status"),
+    [
+        (
+            BinanceKlineRestCoverageStatus.UNKNOWN,
+            BinanceKlineRestStatus.REST_BOUNDARY_UNKNOWN,
+        ),
+        (
+            BinanceKlineRestCoverageStatus.UNSUPPORTED,
+            BinanceKlineRestStatus.UNSUPPORTED,
+        ),
+    ],
+)
+def test_plan_retains_matching_negative_rest_evidence_without_io(
+    tmp_path: Path,
+    coverage_status: BinanceKlineRestCoverageStatus,
+    source_status: BinanceKlineRestStatus,
+) -> None:
+    calls = 0
+
+    def forbidden_rest(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        nonlocal calls
+        calls += 1
+        raise AssertionError((url, timeout, maximum_response_bytes))
+
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=tmp_path / coverage_status.value,
+    )
+    coverage = replace(_rest_coverage(), status=coverage_status)
+    acquisition = BinancePublicHistoryAcquisition(
+        rest_http_get=forbidden_rest, clock=lambda: NOW
+    )
+
+    plan = acquisition.plan(
+        (request,), BinancePublicHistoryCoverage(rest_windows=(coverage,)), _budget()
+    )
+    result = acquisition.run(plan)
+
+    assert plan.obligations[0].initial_unmet_reason is None
+    assert plan.obligations[0].candidates[0].rest_coverage is coverage
+    assert result.status is BinancePublicHistoryRunStatus.FAILED
+    source = result.requests[0].obligations[0].sources[0]
+    assert source.status == source_status.value
+    assert source.step.rest_coverage is coverage
+    assert calls == 0
+
+
+def test_supported_rest_evidence_for_another_subject_stays_unknown(
+    tmp_path: Path,
+) -> None:
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=tmp_path / "mismatched-rest-subject",
+    )
+    coverage = replace(_rest_coverage(), subject=InstrumentId("ETHUSDT"))
+
+    plan = BinancePublicHistoryAcquisition().plan(
+        (request,), BinancePublicHistoryCoverage(rest_windows=(coverage,)), _budget()
+    )
+
+    assert plan.obligations[0].candidates == ()
+    assert plan.obligations[0].initial_unmet_reason == "rest_boundary_unknown"
 
 
 def test_plan_keeps_four_family_subjects_and_archive_cadence_distinct(
@@ -1297,7 +1371,13 @@ def test_all_four_families_execute_recent_and_explicit_gap_through_rest(
 
     result = acquisition.run(plan)
 
-    assert result.completed
+    if funding:
+        assert result.status is BinancePublicHistoryRunStatus.PARTIAL
+        assert not result.completed
+        assert result.requests[0].satisfied_ranges == ()
+        assert result.requests[0].unmet_ranges == (request_range,)
+    else:
+        assert result.completed
     source = result.requests[0].obligations[0].sources[0]
     assert source.status == BinanceKlineRestStatus.COMPLETE.value
     assert len(source.rest_pages) == 1
@@ -1379,6 +1459,130 @@ def test_partial_multi_page_rest_failure_keeps_every_page_outcome(
     )
     assert source.rest_pages[1].attempts[0].outcome == "received"
     assert "JSON" in source.rest_pages[1].detail
+
+
+def test_shared_http_exhaustion_keeps_completed_rest_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_rest_step = history_module._rest_step
+
+    def one_record_pages(
+        request: BinancePublicHistoryAcquisitionRequest,
+        required: TimeRange,
+        evidence: BinanceKlineRestCoverage,
+        *,
+        reason: str,
+    ) -> history_module.BinancePublicHistorySourceStep:
+        step = original_rest_step(request, required, evidence, reason=reason)
+        assert step.rest_request is not None
+        return replace(step, rest_request=replace(step.rest_request, limit=1))
+
+    monkeypatch.setattr(history_module, "_rest_step", one_record_pages)
+    calls = 0
+
+    def first_page_then_unavailable(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return BinanceKlineRestHttpResponse(
+                status=200,
+                body=json.dumps(
+                    [_contract_row(int(REST_START.timestamp() * 1000))]
+                ).encode(),
+                headers={},
+            )
+        return BinanceKlineRestHttpResponse(status=503, body=b"busy", headers={})
+
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=tmp_path / "shared-http-pages",
+    )
+    acquisition = BinancePublicHistoryAcquisition(
+        rest_http_get=first_page_then_unavailable,
+        clock=lambda: NOW,
+        wait=lambda _seconds: None,
+        monotonic_clock=lambda: 0.0,
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(rest_windows=(_rest_coverage(),)),
+        replace(_budget(), maximum_http_requests=2),
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.status is BinancePublicHistoryRunStatus.BUDGET_EXHAUSTED
+    assert result.http_requests_used == 2
+    assert calls == 2
+    source = result.requests[0].obligations[0].sources[0]
+    assert source.status == BinanceKlineRestStatus.BUDGET_EXHAUSTED.value
+    assert len(source.rest_pages) == 2
+    assert source.rest_pages[0].status is BinanceKlineRestStatus.COMPLETE
+    assert source.rest_pages[0].revision == source.raw_references[0].revision
+    assert source.rest_pages[1].status is BinanceKlineRestStatus.BUDGET_EXHAUSTED
+    assert source.rest_pages[1].attempts[-1].outcome == "budget_exhausted"
+
+
+def test_rest_page_exhaustion_propagates_to_shared_run_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_rest_step = history_module._rest_step
+
+    def one_record_pages(
+        request: BinancePublicHistoryAcquisitionRequest,
+        required: TimeRange,
+        evidence: BinanceKlineRestCoverage,
+        *,
+        reason: str,
+    ) -> history_module.BinancePublicHistorySourceStep:
+        step = original_rest_step(request, required, evidence, reason=reason)
+        assert step.rest_request is not None
+        return replace(step, rest_request=replace(step.rest_request, limit=1))
+
+    monkeypatch.setattr(history_module, "_rest_step", one_record_pages)
+
+    def one_page(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        return BinanceKlineRestHttpResponse(
+            status=200,
+            body=json.dumps(
+                [_contract_row(int(REST_START.timestamp() * 1000))]
+            ).encode(),
+            headers={},
+        )
+
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=tmp_path / "rest-page-budget",
+    )
+    acquisition = BinancePublicHistoryAcquisition(
+        rest_http_get=one_page,
+        clock=lambda: NOW,
+        monotonic_clock=lambda: 0.0,
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(rest_windows=(_rest_coverage(),)),
+        replace(_budget(), maximum_rest_pages=1),
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.status is BinancePublicHistoryRunStatus.BUDGET_EXHAUSTED
+    assert result.rest_pages_used == 1
+    source = result.requests[0].obligations[0].sources[0]
+    assert source.status == BinanceKlineRestStatus.BUDGET_EXHAUSTED.value
+    assert source.raw_references[0].revision == source.rest_pages[0].revision
+    assert source.detail == "page or total elapsed-time budget exhausted"
 
 
 def test_plan_selection_is_bounded_by_month_edges_partial_and_exact_rest_cell(
@@ -1741,7 +1945,7 @@ def test_archive_byte_exhaustion_preserves_received_checksum_evidence(
     result = acquisition.run(plan)
 
     assert result.status is BinancePublicHistoryRunStatus.BUDGET_EXHAUSTED
-    assert result.downloaded_bytes == 6
+    assert result.downloaded_bytes == 5
     assert calls == 1
     source = result.requests[0].obligations[0].sources[0]
     assert source.status == "budget_exhausted"
@@ -1752,9 +1956,158 @@ def test_archive_byte_exhaustion_preserves_received_checksum_evidence(
     )
     assert len(manifests) == 1
     assert manifests[0].checksum_http_status == 200
-    assert (
-        manifests[0].checksum_response_sha256 == hashlib.sha256(b"123456").hexdigest()
+    assert manifests[0].checksum_response_sha256 == hashlib.sha256(b"12345").hexdigest()
+
+
+def test_default_archive_transport_caps_the_stream_while_reading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    read_limits: list[int] = []
+
+    class Response:
+        status = 200
+        headers = {"Content-Length": "6"}
+
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self, limit: int) -> bytes:
+            read_limits.append(limit)
+            return b"123456"[:limit]
+
+    monkeypatch.setattr(
+        "tracequant.data.binance_public_archive.urllib.request.urlopen",
+        lambda request, timeout: Response(),
     )
+
+    response = archive_module._default_http_get(
+        "https://example.invalid/archive.zip",
+        5.0,
+        maximum_response_bytes=5,
+    )
+
+    assert read_limits == [5]
+    assert response.body == b"12345"
+    assert not response.complete
+
+
+def test_archive_cumulative_budget_caps_each_production_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload, checksum = _daily_archive(date(2026, 8, 29))
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(
+            start=datetime(2026, 8, 29, tzinfo=UTC),
+            end=datetime(2026, 8, 30, tzinfo=UTC),
+        ),
+        purpose=BinancePublicHistoryPurpose.BACKFILL,
+        output_root=tmp_path / "archive-cumulative-budget",
+    )
+    evidence = BinancePublicHistoryArchiveEvidence(
+        data_type=request.data_type,
+        subject=request.subject,
+        boundary=BinanceArchiveObjectBoundary.day(date(2026, 8, 29)),
+        status=BinanceArchiveEvidenceStatus.SUPPORTED,
+        evidence_version="archive-cumulative-budget-fixture",
+        evidence_reference="tests/data/archive-cumulative-budget-fixture",
+        evidence_sha256="a" * 64,
+        observed_at=NOW,
+        object_sha256=hashlib.sha256(payload).hexdigest(),
+        actual_range=request.request_range,
+    )
+    maximum_download_bytes = len(checksum) + 5
+    response_limits: list[int] = []
+
+    def bounded_default(
+        url: str, timeout: float, *, maximum_response_bytes: int | None = None
+    ) -> ArchiveHttpResponse:
+        assert maximum_response_bytes is not None
+        response_limits.append(maximum_response_bytes)
+        body = checksum if url.endswith(".CHECKSUM") else payload
+        return ArchiveHttpResponse(
+            status=200,
+            body=body[:maximum_response_bytes],
+            headers={},
+            complete=len(body) <= maximum_response_bytes,
+        )
+
+    monkeypatch.setattr(history_module, "_default_archive_http_get", bounded_default)
+    _approve_archive_evidence(monkeypatch, evidence)
+    acquisition = BinancePublicHistoryAcquisition(
+        clock=lambda: NOW, monotonic_clock=lambda: 0.0
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(archive_objects=(evidence,)),
+        replace(
+            _budget(),
+            maximum_response_bytes=maximum_download_bytes,
+            maximum_download_bytes=maximum_download_bytes,
+        ),
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.status is BinancePublicHistoryRunStatus.BUDGET_EXHAUSTED
+    assert result.downloaded_bytes == maximum_download_bytes
+    assert response_limits == [maximum_download_bytes, 5]
+    assert result.requests[0].raw_references == ()
+
+
+def test_archive_final_response_cannot_publish_after_elapsed_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock_value = 0.0
+
+    def late_checksum(url: str, timeout: float) -> ArchiveHttpResponse:
+        nonlocal clock_value
+        clock_value = 6.0
+        return ArchiveHttpResponse(status=200, body=b"late", headers={})
+
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(
+            start=datetime(2026, 8, 29, tzinfo=UTC),
+            end=datetime(2026, 8, 30, tzinfo=UTC),
+        ),
+        purpose=BinancePublicHistoryPurpose.BACKFILL,
+        output_root=tmp_path / "archive-elapsed-budget",
+    )
+    evidence = BinancePublicHistoryArchiveEvidence(
+        data_type=request.data_type,
+        subject=request.subject,
+        boundary=BinanceArchiveObjectBoundary.day(date(2026, 8, 29)),
+        status=BinanceArchiveEvidenceStatus.SUPPORTED,
+        evidence_version="archive-elapsed-budget-fixture",
+        evidence_reference="tests/data/archive-elapsed-budget-fixture",
+        evidence_sha256="a" * 64,
+        observed_at=NOW,
+        object_sha256="b" * 64,
+        actual_range=request.request_range,
+    )
+    _approve_archive_evidence(monkeypatch, evidence)
+    acquisition = BinancePublicHistoryAcquisition(
+        archive_http_get=late_checksum,
+        clock=lambda: NOW,
+        monotonic_clock=lambda: clock_value,
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(archive_objects=(evidence,)),
+        replace(_budget(), maximum_elapsed_seconds=5),
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.status is BinancePublicHistoryRunStatus.BUDGET_EXHAUSTED
+    assert result.termination_reason == "maximum_elapsed_seconds exhausted"
+    assert result.requests[0].raw_references == ()
 
 
 def test_rest_timeout_exhaustion_preserves_bounded_page_attempts(

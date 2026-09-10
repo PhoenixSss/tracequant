@@ -72,6 +72,7 @@ class ArchiveHttpResponse:
     status: int
     body: bytes
     headers: Mapping[str, str]
+    complete: bool = True
 
 
 class ArchiveHttpGet(Protocol):
@@ -227,23 +228,61 @@ class _DownloadNotFoundError(FileNotFoundError):
         self.response = response
 
 
-def _default_http_get(url: str, timeout: float) -> ArchiveHttpResponse:
+def _default_http_get(
+    url: str,
+    timeout: float,
+    *,
+    maximum_response_bytes: int | None = None,
+) -> ArchiveHttpResponse:
     request = urllib.request.Request(url, headers={"User-Agent": _PRODUCER_VERSION})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = response.read(_MAX_ARCHIVE_BYTES + 1)
-            if len(body) > _MAX_ARCHIVE_BYTES:
-                raise _InvalidContentError("archive response exceeds the size limit")
+            if maximum_response_bytes is None:
+                body = response.read(_MAX_ARCHIVE_BYTES + 1)
+                if len(body) > _MAX_ARCHIVE_BYTES:
+                    raise _InvalidContentError(
+                        "archive response exceeds the size limit"
+                    )
+                complete = True
+            else:
+                limit = min(maximum_response_bytes, _MAX_ARCHIVE_BYTES)
+                body = response.read(limit)
+                declared_length = response.headers.get("Content-Length")
+                try:
+                    complete = declared_length is not None and int(
+                        declared_length
+                    ) <= len(body)
+                except ValueError:
+                    complete = False
+                if declared_length is None:
+                    complete = len(body) < limit
             return ArchiveHttpResponse(
                 status=response.status,
                 body=body,
                 headers=dict(response.headers.items()),
+                complete=complete,
             )
     except urllib.error.HTTPError as error:
+        limit = (
+            4096
+            if maximum_response_bytes is None
+            else min(4096, maximum_response_bytes)
+        )
+        body = error.read(limit)
+        declared_length = error.headers.get("Content-Length") if error.headers else None
+        try:
+            complete = (
+                len(body) < limit
+                if declared_length is None
+                else int(declared_length) <= len(body)
+            )
+        except ValueError:
+            complete = False
         return ArchiveHttpResponse(
             status=error.code,
-            body=error.read(4096),
+            body=body,
             headers=dict(error.headers.items()) if error.headers is not None else {},
+            complete=complete,
         )
     except (TimeoutError, urllib.error.URLError):
         raise

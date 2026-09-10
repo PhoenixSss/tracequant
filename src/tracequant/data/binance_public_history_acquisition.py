@@ -33,8 +33,8 @@ from tracequant.data.binance_index_price_kline import BinanceIndexPriceKlineBack
 from tracequant.data.binance_kline_rest import (
     BinanceKlineRestAcquisition,
     BinanceKlineRestBudget,
+    BinanceKlineRestBudgetExceeded,
     BinanceKlineRestCoverage,
-    BinanceKlineRestCoverageStatus,
     BinanceKlineRestHttpGet,
     BinanceKlineRestHttpResponse,
     BinanceKlineRestPageResult,
@@ -843,8 +843,7 @@ def _rest_evidence(
     matches = [
         item
         for item in coverage.rest_windows
-        if item.status is BinanceKlineRestCoverageStatus.SUPPORTED
-        and item.endpoint is endpoint
+        if item.endpoint is endpoint
         and item.subject == request.subject
         and item.allowed_range.start <= required.start
         and item.allowed_range.end >= required.end
@@ -1186,7 +1185,7 @@ def _plan_id(payload: Mapping[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-class _SharedBudgetExceeded(RuntimeError):
+class _SharedBudgetExceeded(BinanceKlineRestBudgetExceeded):
     pass
 
 
@@ -1222,6 +1221,9 @@ class _SharedBudget:
         if self.http_requests >= self.budget.maximum_http_requests:
             self.exhaustion_reason = "maximum_http_requests exhausted"
             raise _SharedBudgetExceeded(self.exhaustion_reason)
+        if self.downloaded_bytes >= self.budget.maximum_download_bytes:
+            self.exhaustion_reason = "maximum_download_bytes exhausted"
+            raise _SharedBudgetExceeded(self.exhaustion_reason)
         self.http_requests += 1
 
     def after_http(self, body: bytes) -> None:
@@ -1231,6 +1233,9 @@ class _SharedBudget:
             return
         if self.downloaded_bytes > self.budget.maximum_download_bytes:
             self.exhaustion_reason = "maximum_download_bytes exhausted"
+            return
+        if self.remaining_seconds <= 0:
+            self.exhaustion_reason = "maximum_elapsed_seconds exhausted"
 
 
 def _artifact_reference(
@@ -1310,6 +1315,7 @@ class BinancePublicHistoryAcquisition:
         cancelled: Callable[[], bool] | None = None,
     ) -> None:
         self._archive_http_get = archive_http_get or _default_archive_http_get
+        self._uses_default_archive_http_get = archive_http_get is None
         self._rest_http_get = rest_http_get or _default_rest_http_get
         self._clock = clock or (lambda: datetime.now(UTC))
         self._monotonic_clock = monotonic_clock or time.monotonic
@@ -1416,10 +1422,34 @@ class BinancePublicHistoryAcquisition:
     def _archive_transport(self, shared: _SharedBudget) -> ArchiveHttpGet:
         def get(url: str, timeout: float) -> ArchiveHttpResponse:
             shared.before_http()
-            response = self._archive_http_get(
-                url, min(timeout, shared.remaining_seconds)
+            remaining_download = (
+                shared.budget.maximum_download_bytes - shared.downloaded_bytes
             )
+            response_limit = min(
+                shared.budget.maximum_response_bytes, remaining_download
+            )
+            bounded_timeout = min(timeout, shared.remaining_seconds)
+            if self._uses_default_archive_http_get:
+                response = _default_archive_http_get(
+                    url,
+                    bounded_timeout,
+                    maximum_response_bytes=response_limit,
+                )
+            else:
+                response = self._archive_http_get(url, bounded_timeout)
+            if len(response.body) > response_limit:
+                response = replace(
+                    response,
+                    body=response.body[:response_limit],
+                    complete=False,
+                )
             shared.after_http(response.body)
+            if not response.complete and shared.exhaustion_reason is None:
+                shared.exhaustion_reason = (
+                    "maximum_response_bytes exceeded"
+                    if shared.budget.maximum_response_bytes <= remaining_download
+                    else "maximum_download_bytes exhausted"
+                )
             if shared.exhaustion_reason is not None:
                 raise ArchiveHttpBudgetExceeded(
                     shared.exhaustion_reason,
@@ -1609,7 +1639,11 @@ class BinancePublicHistoryAcquisition:
             step.rest_request, step.rest_coverage, rest_budget
         )
         shared.rest_pages += result.pages_used
-        if (
+        if result.status is BinanceKlineRestStatus.BUDGET_EXHAUSTED:
+            shared.exhaustion_reason = (
+                shared.exhaustion_reason or result.termination_reason
+            )
+        elif (
             result.status is not BinanceKlineRestStatus.COMPLETE
             and shared.http_requests >= shared.budget.maximum_http_requests
         ):
@@ -1634,12 +1668,28 @@ class BinancePublicHistoryAcquisition:
         )
 
     @staticmethod
-    def _source_satisfied(result: BinancePublicHistorySourceResult) -> bool:
-        return result.status in {
+    def _source_satisfied(
+        request: BinancePublicHistoryAcquisitionRequest,
+        required_range: TimeRange,
+        result: BinancePublicHistorySourceResult,
+    ) -> bool:
+        satisfied = result.status in {
             BinanceArchiveAcquisitionStatus.PUBLISHED.value,
             BinanceArchiveAcquisitionStatus.EXISTING.value,
             BinanceKlineRestStatus.COMPLETE.value,
         }
+        if (
+            satisfied
+            and request.data_type is BinancePublicHistoryDataType.SETTLED_FUNDING_RATE
+            and result.step.rest_request is not None
+        ):
+            actual = result.actual_record_range
+            return (
+                actual is not None
+                and actual.start <= required_range.start
+                and actual.end >= required_range.end
+            )
+        return satisfied
 
     def _compare(
         self,
@@ -1746,7 +1796,7 @@ class BinancePublicHistoryAcquisition:
                     unmet = str(error)
                     break
                 sources.append(source)
-                if self._source_satisfied(source):
+                if self._source_satisfied(request, obligation.required_range, source):
                     satisfied = True
                     break
                 fallback_allowed = source.status in {

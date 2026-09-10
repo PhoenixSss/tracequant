@@ -62,6 +62,7 @@ __all__ = [
     "BinanceKlineRestAcquisition",
     "BinanceKlineRestAttemptResult",
     "BinanceKlineRestBudget",
+    "BinanceKlineRestBudgetExceeded",
     "BinanceKlineRestCoverage",
     "BinanceKlineRestCoverageStatus",
     "BinanceKlineRestHttpGet",
@@ -595,6 +596,10 @@ class BinanceKlineRestStatus(StrEnum):
     BUDGET_EXHAUSTED = "budget_exhausted"
     LOCAL_FAILURE = "local_failure"
     CONFLICT = "conflict"
+
+
+class BinanceKlineRestBudgetExceeded(RuntimeError):
+    """An enclosing shared budget stopped a REST attempt before completion."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1304,6 +1309,43 @@ class BinanceRestPageAcquisition:
                         min(budget.timeout_seconds, tracker.remaining),
                         budget.maximum_response_bytes,
                     )
+                except BinanceKlineRestBudgetExceeded as error:
+                    tracker.transport_seconds += max(
+                        0.0, self._monotonic_clock() - started
+                    )
+                    detail = str(error).strip() or type(error).__name__
+                    attempts.append(
+                        BinanceKlineRestAttemptResult(
+                            attempt_number=tracker.attempts,
+                            page_attempt_number=page_attempt,
+                            outcome="budget_exhausted",
+                            http_status=None,
+                            response_sha256=None,
+                            detail=detail,
+                        )
+                    )
+                    pages.append(
+                        BinanceKlineRestPageResult(
+                            request=current,
+                            attempts=tuple(attempts),
+                            status=BinanceKlineRestStatus.BUDGET_EXHAUSTED,
+                            short_page=False,
+                            record_count=0,
+                            actual_record_range=None,
+                            response_sha256=None,
+                            revision=None,
+                            artifact_path=None,
+                            detail=detail,
+                        )
+                    )
+                    return self._finish(
+                        status=BinanceKlineRestStatus.BUDGET_EXHAUSTED,
+                        request=request,
+                        pages=pages,
+                        tracker=tracker,
+                        cursor_ms=cursor_ms,
+                        reason=detail,
+                    )
                 except (
                     TimeoutError,
                     ConnectionError,
@@ -1391,6 +1433,30 @@ class BinanceRestPageAcquisition:
                         )
                     try:
                         self._wait(delay)
+                    except BinanceKlineRestBudgetExceeded as wait_error:
+                        detail = str(wait_error).strip() or type(wait_error).__name__
+                        pages.append(
+                            BinanceKlineRestPageResult(
+                                request=current,
+                                attempts=tuple(attempts),
+                                status=BinanceKlineRestStatus.BUDGET_EXHAUSTED,
+                                short_page=False,
+                                record_count=0,
+                                actual_record_range=None,
+                                response_sha256=attempts[-1].response_sha256,
+                                revision=None,
+                                artifact_path=None,
+                                detail=detail,
+                            )
+                        )
+                        return self._finish(
+                            status=BinanceKlineRestStatus.BUDGET_EXHAUSTED,
+                            request=request,
+                            pages=pages,
+                            tracker=tracker,
+                            cursor_ms=cursor_ms,
+                            reason=detail,
+                        )
                     except Exception as wait_error:
                         detail = f"retry wait failed: {wait_error}"
                         pages.append(
@@ -1662,6 +1728,30 @@ class BinanceRestPageAcquisition:
                             )
                         try:
                             self._wait(retry_delay)
+                        except BinanceKlineRestBudgetExceeded as error:
+                            detail = str(error).strip() or type(error).__name__
+                            pages.append(
+                                BinanceKlineRestPageResult(
+                                    request=current,
+                                    attempts=tuple(attempts),
+                                    status=BinanceKlineRestStatus.BUDGET_EXHAUSTED,
+                                    short_page=False,
+                                    record_count=0,
+                                    actual_record_range=None,
+                                    response_sha256=digest,
+                                    revision=None,
+                                    artifact_path=None,
+                                    detail=detail,
+                                )
+                            )
+                            return self._finish(
+                                status=BinanceKlineRestStatus.BUDGET_EXHAUSTED,
+                                request=request,
+                                pages=pages,
+                                tracker=tracker,
+                                cursor_ms=cursor_ms,
+                                reason=detail,
+                            )
                         except Exception as error:
                             detail = f"retry wait failed: {error}"
                             pages.append(
@@ -1857,6 +1947,30 @@ class BinanceRestPageAcquisition:
                             )
                         try:
                             self._wait(retry_delay)
+                        except BinanceKlineRestBudgetExceeded as error:
+                            detail = str(error).strip() or type(error).__name__
+                            pages.append(
+                                BinanceKlineRestPageResult(
+                                    request=current,
+                                    attempts=tuple(attempts),
+                                    status=BinanceKlineRestStatus.BUDGET_EXHAUSTED,
+                                    short_page=False,
+                                    record_count=0,
+                                    actual_record_range=None,
+                                    response_sha256=digest,
+                                    revision=None,
+                                    artifact_path=None,
+                                    detail=detail,
+                                )
+                            )
+                            return self._finish(
+                                status=BinanceKlineRestStatus.BUDGET_EXHAUSTED,
+                                request=request,
+                                pages=pages,
+                                tracker=tracker,
+                                cursor_ms=cursor_ms,
+                                reason=detail,
+                            )
                         except Exception as error:
                             detail = f"retry wait failed: {error}"
                             pages.append(
