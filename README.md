@@ -156,15 +156,21 @@ The currently implemented public package is `tracequant` under `src/`:
   adapters for BTCUSDT and ETHUSDT 1m contract, mark-price, and index-price
   Klines plus settled funding-rate monthly objects. Backfill calls perform
   bounded public HTTP downloads, checksum and ZIP/CSV validation, and Raw
-  persistence; importing the module performs no I/O.
+  persistence. A separate, coverage-gated public REST entry point acquires
+  bounded BTCUSDT/ETHUSDT 1m contract, mark-price, and index-price Kline pages
+  into response-digest Raw revisions. Importing the module performs no I/O.
+
+The [Binance Kline REST acquisition guide](docs/guides/binance-kline-rest-acquisition.md)
+documents its required coverage evidence, finite budget, results, persistence,
+and limitations.
 
 The `apps/`, `packages/`, and `deploy/` directories currently establish future
 boundaries through small README files. They are not implemented product
 packages. The implemented ingestion path is limited to Binance's public USDⓈ-M
 1m contract-Kline, mark-price-Kline, and index-price-Kline archives and settled
 funding-rate monthly archives; there is no private or trading exchange client,
-REST recent synchronization, general data pipeline, canonical quality or repair
-layer, database, feature or label pipeline, backtester, strategy,
+general source-selection orchestration, canonical quality or repair layer, REST
+funding adapter, CLI, database, feature or label pipeline, backtester, strategy,
 machine-learning model, order or account service, risk engine, live runtime, or
 multi-exchange implementation.
 
