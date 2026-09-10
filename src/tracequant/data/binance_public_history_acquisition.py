@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as datetime_time
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Final
@@ -1269,7 +1270,7 @@ def _reference_for_path(
 
 def _semantic_records(
     data_type: BinancePublicHistoryDataType, frame: pl.DataFrame
-) -> dict[int, tuple[object, ...]]:
+) -> dict[int, tuple[Decimal, ...]]:
     names = set(frame.columns)
     if data_type is BinancePublicHistoryDataType.CONTRACT_KLINE:
         count = "trade_count" if "trade_count" in names else "count"
@@ -1296,7 +1297,7 @@ def _semantic_records(
         rate = "fundingRate" if "fundingRate" in names else "last_funding_rate"
         columns = (rate,)
     return {
-        int(row[key]): tuple(row[column] for column in columns)
+        int(row[key]): tuple(Decimal(str(row[column])) for column in columns)
         for row in frame.select((key, *columns)).iter_rows(named=True)
     }
 
@@ -1464,12 +1465,39 @@ class BinancePublicHistoryAcquisition:
             url: str, timeout: float, maximum_response_bytes: int
         ) -> BinanceKlineRestHttpResponse:
             shared.before_http()
+            remaining_download = (
+                shared.budget.maximum_download_bytes - shared.downloaded_bytes
+            )
+            response_limit = min(
+                maximum_response_bytes,
+                shared.budget.maximum_response_bytes,
+                remaining_download,
+            )
+            cumulative_limit_is_binding = remaining_download <= min(
+                maximum_response_bytes,
+                shared.budget.maximum_response_bytes,
+            )
             response = self._rest_http_get(
                 url,
                 min(timeout, shared.remaining_seconds),
-                min(maximum_response_bytes, shared.budget.maximum_response_bytes),
+                response_limit,
             )
+            if len(response.body) > response_limit:
+                retained_bytes = (
+                    response_limit
+                    if cumulative_limit_is_binding
+                    else response_limit + 1
+                )
+                response = replace(
+                    response,
+                    body=response.body[:retained_bytes],
+                    complete=False,
+                )
             shared.after_http(response.body)
+            if cumulative_limit_is_binding and len(response.body) >= remaining_download:
+                shared.exhaustion_reason = "maximum_download_bytes exhausted"
+            if shared.exhaustion_reason is not None:
+                response = replace(response, complete=False)
             return response
 
         return get
@@ -1541,7 +1569,12 @@ class BinancePublicHistoryAcquisition:
             ):
                 break
             delay = float(min(2 ** (attempt - 1), 60))
-            self._shared_wait(shared)(delay)
+            try:
+                self._shared_wait(shared)(delay)
+            except _SharedBudgetExceeded as error:
+                status = BinanceArchiveAcquisitionStatus.BUDGET_EXHAUSTED
+                detail = f"{detail or 'archive retryable failure'}; {error}"
+                break
         assert status is not None
         references: tuple[BinancePublicHistoryRawReference, ...] = ()
         if artifact_path is not None:
