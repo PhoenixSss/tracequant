@@ -32,7 +32,11 @@ plan = acquisition.plan(requests, coverage, budget)
 ```
 
 `plan()` 只做确定性划分和校验，不访问网络，也不创建 `output_root`/Raw 目录。计划 identity
-绑定原请求、证据、预算和候选步骤；`run()` 在执行前重新核对这一绑定。
+绑定原请求、证据、预算和候选步骤，包括 archive 的 object key、URL、checksum URL、ZIP member
+以及每个 REST step 的精确 coverage。`run()` 在执行前从原请求、证据和预算重新派生受控计划并
+做结构化比较；任何执行定位、framing 或 step evidence 被替换都会在 I/O 前拒绝。Backfill 的
+日/月 source-window 数会先以常量时间日历计算与显式月证据折叠核对预算，超限请求不会先展开
+逐日或逐月 obligation 列表。
 
 ## 来源选择与 fallback
 
@@ -57,8 +61,11 @@ Raw 仍可精确读取。
 ## 结果、重叠与精确读取
 
 `BinancePublicHistoryRunResult` 保留计划 identity、每个原请求、逐 obligation/来源状态与理由、
-实际记录范围、满足/未满足范围、HTTP/object/page/bytes/time 用量和终止原因。每个成功来源
-返回 `BinancePublicHistoryRawReference`，其中包含完整 `RawObjectIdentity`、
+实际记录范围、满足/未满足范围、HTTP/object/page/bytes/time 用量和终止原因。每个 REST 来源
+还通过 `BinancePublicHistorySourceResult.rest_pages` 原样保留有界的逐页 request、attempts、状态、
+detail、response digest、观测时间、实际范围与 Raw revision/path；因此前页成功、后页失败时不会
+丢失局部成功或失败语义。每个成功来源返回 `BinancePublicHistoryRawReference`，其中包含完整
+`RawObjectIdentity`、
 `RawRevisionIdentity`、精确 artifact path、记录数和实际范围，可用：
 
 ```python
@@ -68,7 +75,8 @@ artifact = RawStore(request.output_root).read_revision(
 )
 ```
 
-同一个 family/typed subject/output root 的 archive 与 REST 重叠按真实语义 key 比较：Kline
+同一个 family/typed subject/output root 的所有不同 Raw revisions（包括相同来源类型）重叠时按
+真实语义 key 比较；相同 object/revision identity 只比较一次。Kline
 使用 `open_time`，funding 使用 `calc_time`/`fundingTime`。Contract 比较真实 OHLC/volume/
 count/taker 字段；mark/index 只比较价格语义，不把 placeholder/schema 差异当冲突；funding
 只比较已确认的 `calc_time ↔ fundingTime` 与 `last_funding_rate ↔ fundingRate`。相同记录只在

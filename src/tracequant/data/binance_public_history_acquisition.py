@@ -37,6 +37,7 @@ from tracequant.data.binance_kline_rest import (
     BinanceKlineRestCoverageStatus,
     BinanceKlineRestHttpGet,
     BinanceKlineRestHttpResponse,
+    BinanceKlineRestPageResult,
     BinanceKlineRestRunResult,
     BinanceKlineRestStatus,
 )
@@ -458,6 +459,7 @@ class BinancePublicHistorySourceResult:
     attempts_used: int = 0
     pages_used: int = 0
     actual_record_range: TimeRange | None = None
+    rest_pages: tuple[BinanceKlineRestPageResult, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -794,6 +796,67 @@ def _plan_request(
     return tuple(obligations)
 
 
+def _backfill_obligation_count(
+    request: BinancePublicHistoryAcquisitionRequest,
+    coverage: BinancePublicHistoryCoverage,
+) -> int:
+    """Count source windows without iterating over the requested calendar range."""
+    if request.purpose is not BinancePublicHistoryPurpose.BACKFILL:
+        return 0
+    last = request.request_range.end - timedelta(microseconds=1)
+    if request.data_type is BinancePublicHistoryDataType.SETTLED_FUNDING_RATE:
+        return (
+            (last.year - request.request_range.start.year) * 12
+            + last.month
+            - request.request_range.start.month
+            + 1
+        )
+
+    count = (last.date() - request.request_range.start.date()).days + 1
+    for item in coverage.archive_objects:
+        if (
+            item.data_type is not request.data_type
+            or item.subject != request.subject
+            or item.status is not BinanceArchiveEvidenceStatus.SUPPORTED
+            or item.boundary.granularity is not BinanceArchiveObjectGranularity.MONTH
+        ):
+            continue
+        boundary_range = _boundary_range(item.boundary)
+        if (
+            request.request_range.start <= boundary_range.start
+            and request.request_range.end >= boundary_range.end
+        ):
+            days = (boundary_range.end.date() - boundary_range.start.date()).days
+            count -= days - 1
+    return count
+
+
+def _rest_coverage_payload(item: BinanceKlineRestCoverage) -> dict[str, object]:
+    return {
+        "endpoint": item.endpoint.value,
+        "subject": _subject_payload(item.subject),
+        "allowed_range": item.allowed_range.to_dict(),
+        "evidence_version": item.evidence_version,
+        "evidence_reference": item.evidence_reference,
+        "evidence_sha256": item.evidence_sha256,
+        "observed_at": format_utc(item.observed_at),
+        "normalized_params": dict(item.normalized_params),
+        "response_sha256": item.response_sha256,
+        "actual_range": item.actual_range.to_dict(),
+        "status": item.status.value,
+    }
+
+
+def _archive_plan_payload(item: BinanceArchiveObjectPlan) -> dict[str, object]:
+    return {
+        "request": item.request.to_dict(),
+        "object_key": item.object_key,
+        "url": item.url,
+        "checksum_url": item.checksum_url,
+        "member_name": item.member_name,
+    }
+
+
 def _plan_payload(
     requests: tuple[BinancePublicHistoryAcquisitionRequest, ...],
     coverage: BinancePublicHistoryCoverage,
@@ -804,22 +867,7 @@ def _plan_payload(
         "requests": [item.to_dict() for item in requests],
         "coverage": {
             "archive": [item.to_dict() for item in coverage.archive_objects],
-            "rest": [
-                {
-                    "endpoint": item.endpoint.value,
-                    "subject": _subject_payload(item.subject),
-                    "allowed_range": item.allowed_range.to_dict(),
-                    "evidence_version": item.evidence_version,
-                    "evidence_reference": item.evidence_reference,
-                    "evidence_sha256": item.evidence_sha256,
-                    "observed_at": format_utc(item.observed_at),
-                    "normalized_params": dict(item.normalized_params),
-                    "response_sha256": item.response_sha256,
-                    "actual_range": item.actual_range.to_dict(),
-                    "status": item.status.value,
-                }
-                for item in coverage.rest_windows
-            ],
+            "rest": [_rest_coverage_payload(item) for item in coverage.rest_windows],
         },
         "budget": budget.to_dict(),
         "obligations": [
@@ -832,7 +880,7 @@ def _plan_payload(
                         "source_kind": step.source_kind.value,
                         "reason": step.reason,
                         "archive": (
-                            step.archive_plan.request.to_dict()
+                            _archive_plan_payload(step.archive_plan)
                             if step.archive_plan is not None
                             else None
                         ),
@@ -844,6 +892,11 @@ def _plan_payload(
                         "rest": (
                             step.rest_request.to_dict()
                             if step.rest_request is not None
+                            else None
+                        ),
+                        "rest_coverage": (
+                            _rest_coverage_payload(step.rest_coverage)
+                            if step.rest_coverage is not None
                             else None
                         ),
                     }
@@ -1012,6 +1065,13 @@ class BinancePublicHistoryAcquisition:
             raise TypeError("coverage must be a BinancePublicHistoryCoverage")
         if not isinstance(budget, BinancePublicHistoryAcquisitionBudget):
             raise TypeError("budget must be a BinancePublicHistoryAcquisitionBudget")
+        source_window_count = sum(
+            _backfill_obligation_count(request, coverage) for request in frozen_requests
+        )
+        if source_window_count > budget.maximum_archive_objects:
+            raise ValueError(
+                "planned backfill source windows exceed maximum_archive_objects"
+            )
         obligations = tuple(
             obligation
             for index, request in enumerate(frozen_requests)
@@ -1065,41 +1125,12 @@ class BinancePublicHistoryAcquisition:
     def _validate_plan(self, plan: BinancePublicHistoryAcquisitionPlan) -> None:
         if not isinstance(plan, BinancePublicHistoryAcquisitionPlan):
             raise TypeError("plan must be a BinancePublicHistoryAcquisitionPlan")
-        expected = _plan_id(
-            _plan_payload(plan.requests, plan.coverage, plan.budget, plan.obligations)
-        )
-        if plan.plan_id != expected:
+        expected = self.plan(plan.requests, plan.coverage, plan.budget)
+        if plan != expected:
             raise ValueError(
-                "plan identity does not match its requests, evidence, and budget"
+                "plan does not match the controlled plan derived from its requests, "
+                "evidence, and budget"
             )
-        archive_count = sum(
-            1
-            for obligation in plan.obligations
-            for step in obligation.candidates[:1]
-            if step.archive_plan is not None
-        )
-        rest_actions = sum(
-            1
-            for obligation in plan.obligations
-            for step in obligation.candidates
-            if step.rest_request is not None
-        )
-        rest_upper = plan.budget.maximum_rest_pages if rest_actions else 0
-        http_upper = min(
-            plan.budget.maximum_http_requests,
-            archive_count * 2 * plan.budget.maximum_attempts_per_object
-            + (
-                plan.budget.maximum_rest_pages * plan.budget.maximum_attempts_per_page
-                if rest_actions
-                else 0
-            ),
-        )
-        if (
-            plan.archive_objects_planned != archive_count
-            or plan.rest_page_upper_bound != rest_upper
-            or plan.http_request_upper_bound != http_upper
-        ):
-            raise ValueError("plan summary does not match its bounded source steps")
 
     def _archive_transport(self, shared: _SharedBudget) -> ArchiveHttpGet:
         def get(url: str, timeout: float) -> ArchiveHttpResponse:
@@ -1313,6 +1344,7 @@ class BinancePublicHistoryAcquisition:
             attempts_used=result.attempts_used,
             pages_used=result.pages_used,
             actual_record_range=result.actual_record_range,
+            rest_pages=result.pages,
         )
 
     @staticmethod
@@ -1345,8 +1377,6 @@ class BinancePublicHistoryAcquisition:
         ]
         for left_index, (left_ref, left_rows) in enumerate(loaded):
             for right_ref, right_rows in loaded[left_index + 1 :]:
-                if left_ref.source_kind is right_ref.source_kind:
-                    continue
                 for key in sorted(left_rows.keys() & right_rows.keys()):
                     if left_rows[key] == right_rows[key]:
                         duplicates += 1

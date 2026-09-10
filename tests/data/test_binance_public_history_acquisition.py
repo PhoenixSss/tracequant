@@ -6,13 +6,18 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
+import tracequant.data.binance_public_history_acquisition as history_module
 from tracequant.data import (
     ArchiveHttpResponse,
     BinanceArchiveEvidenceStatus,
     BinanceArchiveObjectBoundary,
+    BinanceFundingRateRestCoverage,
     BinanceKlineRestCoverage,
     BinanceKlineRestCoverageStatus,
     BinanceKlineRestHttpResponse,
+    BinanceKlineRestStatus,
     BinancePriceIndexId,
     BinancePublicHistoryAcquisition,
     BinancePublicHistoryAcquisitionBudget,
@@ -35,6 +40,8 @@ EVIDENCE_REFERENCE = (
     "docs/research/binance-usdm-feature11-rest-window-follow-up-probes.json"
 )
 EVIDENCE_SHA256 = "30682f83b887514ef2a0e20ec21203cff70529ac1518fb538277ae0881920b45"
+FUNDING_START_MS = 1_788_393_600_000
+FUNDING_END_MS = 1_788_397_200_000
 
 
 def _contract_row(open_time: int, value: str = "100.0") -> list[object]:
@@ -107,6 +114,177 @@ def _rest_coverage() -> BinanceKlineRestCoverage:
         ),
         actual_range=observed_range,
     )
+
+
+def _family_rest_coverage(
+    data_type: BinancePublicHistoryDataType,
+    request_range: TimeRange,
+    purpose: BinancePublicHistoryPurpose,
+) -> BinanceKlineRestCoverage:
+    endpoint = {
+        BinancePublicHistoryDataType.CONTRACT_KLINE: BinanceRestEndpoint.CONTRACT_KLINES,
+        BinancePublicHistoryDataType.MARK_PRICE_KLINE: (
+            BinanceRestEndpoint.MARK_PRICE_KLINES
+        ),
+        BinancePublicHistoryDataType.INDEX_PRICE_KLINE: (
+            BinanceRestEndpoint.INDEX_PRICE_KLINES
+        ),
+        BinancePublicHistoryDataType.SETTLED_FUNDING_RATE: (
+            BinanceRestEndpoint.FUNDING_RATE_HISTORY
+        ),
+    }[data_type]
+    subject = (
+        BinancePriceIndexId("BTCUSDT")
+        if data_type is BinancePublicHistoryDataType.INDEX_PRICE_KLINE
+        else InstrumentId("BTCUSDT")
+    )
+    if data_type is BinancePublicHistoryDataType.SETTLED_FUNDING_RATE:
+        recent = purpose is BinancePublicHistoryPurpose.RECENT
+        return BinanceFundingRateRestCoverage(
+            status=BinanceKlineRestCoverageStatus.SUPPORTED,
+            endpoint=endpoint,
+            subject=subject,
+            allowed_range=request_range,
+            evidence_version=EVIDENCE_VERSION,
+            evidence_reference=EVIDENCE_REFERENCE,
+            evidence_sha256=EVIDENCE_SHA256,
+            observed_at=(
+                datetime(2026, 9, 9, 18, 33, 33, 964227, tzinfo=UTC)
+                if recent
+                else datetime(2026, 9, 9, 18, 33, 39, 998536, tzinfo=UTC)
+            ),
+            normalized_params=(
+                {
+                    "symbol": "BTCUSDT",
+                    "startTime": 1_788_374_012_658,
+                    "endTime": 1_788_978_812_657,
+                    "limit": 1000,
+                }
+                if recent
+                else {
+                    "symbol": "BTCUSDT",
+                    "startTime": FUNDING_START_MS,
+                    "endTime": FUNDING_END_MS - 1,
+                    "limit": 100,
+                }
+            ),
+            response_sha256=(
+                "2bd472efeb5b2d6336fda340914d77770151589cb3a14ff419e1ed149ef41f71"
+                if recent
+                else "39ac0b55d6acae3de0e0be633edbfabdc37a227fa913027fe2e63c547abda401"
+            ),
+            actual_range=(
+                TimeRange(
+                    start=datetime.fromtimestamp(FUNDING_START_MS / 1000, tz=UTC),
+                    end=datetime.fromtimestamp(1_788_969_600_003 / 1000, tz=UTC),
+                )
+                if recent
+                else TimeRange(
+                    start=datetime.fromtimestamp(FUNDING_START_MS / 1000, tz=UTC),
+                    end=datetime.fromtimestamp((FUNDING_START_MS + 1) / 1000, tz=UTC),
+                )
+            ),
+        )
+
+    observed = {
+        BinancePublicHistoryDataType.CONTRACT_KLINE: (
+            datetime(2026, 9, 9, 18, 33, 31, 368694, tzinfo=UTC),
+            "a253a934a1badc71edda32c22ab9204e8aee257109f7dc9473662b1c55a0c976",
+        ),
+        BinancePublicHistoryDataType.MARK_PRICE_KLINE: (
+            datetime(2026, 9, 9, 18, 33, 32, 207139, tzinfo=UTC),
+            "32c27367498032aa538e19bb06d90812c2a15a3766c935f2ceb9d61858f6957c",
+        ),
+        BinancePublicHistoryDataType.INDEX_PRICE_KLINE: (
+            datetime(2026, 9, 9, 18, 33, 32, 805179, tzinfo=UTC),
+            "e66727e9d38c6959847fe5efb1dd602d4aa31262c95df041a09117e7ff5a1515",
+        ),
+    }[data_type]
+    observed_range = TimeRange(
+        start=REST_START, end=datetime(2026, 9, 9, 18, 33, tzinfo=UTC)
+    )
+    subject_parameter = (
+        "pair"
+        if data_type is BinancePublicHistoryDataType.INDEX_PRICE_KLINE
+        else "symbol"
+    )
+    return BinanceKlineRestCoverage(
+        status=BinanceKlineRestCoverageStatus.SUPPORTED,
+        endpoint=endpoint,
+        subject=subject,
+        allowed_range=request_range,
+        evidence_version=EVIDENCE_VERSION,
+        evidence_reference=EVIDENCE_REFERENCE,
+        evidence_sha256=EVIDENCE_SHA256,
+        observed_at=observed[0],
+        normalized_params={
+            subject_parameter: "BTCUSDT",
+            "interval": "1m",
+            "startTime": 1_788_975_180_000,
+            "endTime": 1_788_978_779_999,
+            "limit": 60,
+        },
+        response_sha256=observed[1],
+        actual_range=observed_range,
+    )
+
+
+def _family_rest_body(data_type: BinancePublicHistoryDataType) -> bytes:
+    if data_type is BinancePublicHistoryDataType.SETTLED_FUNDING_RATE:
+        return json.dumps(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "fundingTime": FUNDING_START_MS,
+                    "fundingRate": "0.00010000",
+                    "markPrice": "70000.00000000",
+                    "rateType": "Regular",
+                }
+            ]
+        ).encode()
+    start_ms = int(REST_START.timestamp() * 1000)
+    return json.dumps(
+        [_contract_row(start_ms), _contract_row(start_ms + 60_000)]
+    ).encode()
+
+
+def _archive_fixture(
+    data_type: BinancePublicHistoryDataType,
+    boundary: BinanceArchiveObjectBoundary,
+) -> tuple[bytes, TimeRange, TimeRange]:
+    start = datetime.combine(boundary.period_start, datetime.min.time(), tzinfo=UTC)
+    if data_type is BinancePublicHistoryDataType.SETTLED_FUNDING_RATE:
+        end = datetime(2026, 8, 1, tzinfo=UTC)
+        rows = ["calc_time,funding_interval_hours,last_funding_rate"]
+        cursor = start
+        while cursor < end:
+            rows.append(f"{int(cursor.timestamp() * 1000)},8,0.00010000")
+            cursor += timedelta(hours=8)
+        member = "BTCUSDT-fundingRate-2026-07.csv"
+        actual_range = TimeRange(
+            start=start, end=cursor - timedelta(hours=8) + timedelta(milliseconds=1)
+        )
+    else:
+        end = start + timedelta(days=1)
+        rows = [
+            "open_time,open,high,low,close,volume,close_time,quote_volume,count,"
+            "taker_buy_volume,taker_buy_quote_volume,ignore"
+        ]
+        for minute in range(24 * 60):
+            rows.append(
+                ",".join(
+                    str(value)
+                    for value in _contract_row(
+                        int((start + timedelta(minutes=minute)).timestamp() * 1000)
+                    )
+                )
+            )
+        member = "BTCUSDT-1m-2026-08-29.csv"
+        actual_range = TimeRange(start=start, end=end)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(member, "\n".join(rows) + "\n")
+    return buffer.getvalue(), TimeRange(start=start, end=end), actual_range
 
 
 def _budget() -> BinancePublicHistoryAcquisitionBudget:
@@ -548,3 +726,740 @@ def test_rest_retries_cannot_reset_the_shared_http_budget(tmp_path: Path) -> Non
     assert result.http_requests_used == 1
     assert calls == 1
     assert result.requests[0].raw_references == ()
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("object_key", "data/futures/um/daily/klines/ETHUSDT/1m/other.zip"),
+        ("url", "https://example.invalid/other.zip"),
+        ("checksum_url", "https://example.invalid/other.zip.CHECKSUM"),
+        ("member_name", "other.csv"),
+    ],
+)
+def test_run_rejects_tampered_archive_locator_or_framing_before_io(
+    tmp_path: Path, field: str, replacement: str
+) -> None:
+    calls = 0
+
+    def forbidden_archive(url: str, timeout: float) -> ArchiveHttpResponse:
+        nonlocal calls
+        calls += 1
+        raise AssertionError((url, timeout))
+
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(
+            start=datetime(2026, 8, 29, tzinfo=UTC),
+            end=datetime(2026, 8, 30, tzinfo=UTC),
+        ),
+        purpose=BinancePublicHistoryPurpose.BACKFILL,
+        output_root=tmp_path / "tampered",
+    )
+    evidence = BinancePublicHistoryArchiveEvidence(
+        data_type=request.data_type,
+        subject=request.subject,
+        boundary=BinanceArchiveObjectBoundary.day(date(2026, 8, 29)),
+        status=BinanceArchiveEvidenceStatus.SUPPORTED,
+        evidence_version="exact-day",
+        evidence_reference="docs/research/exact-day.json",
+        evidence_sha256="a" * 64,
+        observed_at=NOW,
+        object_sha256="b" * 64,
+        actual_range=request.request_range,
+    )
+    acquisition = BinancePublicHistoryAcquisition(archive_http_get=forbidden_archive)
+    plan = acquisition.plan(
+        (request,), BinancePublicHistoryCoverage(archive_objects=(evidence,)), _budget()
+    )
+    step = plan.obligations[0].candidates[0]
+    assert step.archive_plan is not None
+    if field == "object_key":
+        archive_plan = replace(step.archive_plan, object_key=replacement)
+    elif field == "url":
+        archive_plan = replace(step.archive_plan, url=replacement)
+    elif field == "checksum_url":
+        archive_plan = replace(step.archive_plan, checksum_url=replacement)
+    else:
+        assert field == "member_name"
+        archive_plan = replace(step.archive_plan, member_name=replacement)
+    obligation = replace(
+        plan.obligations[0], candidates=(replace(step, archive_plan=archive_plan),)
+    )
+
+    with pytest.raises(ValueError, match="controlled plan"):
+        acquisition.run(replace(plan, obligations=(obligation,)))
+
+    assert calls == 0
+    assert not request.output_root.exists()
+
+
+def test_run_rejects_tampered_step_coverage_before_io(tmp_path: Path) -> None:
+    calls = 0
+
+    def forbidden_rest(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        nonlocal calls
+        calls += 1
+        raise AssertionError((url, timeout, maximum_response_bytes))
+
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=tmp_path / "tampered-rest",
+    )
+    acquisition = BinancePublicHistoryAcquisition(rest_http_get=forbidden_rest)
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(rest_windows=(_rest_coverage(),)),
+        _budget(),
+    )
+    step = plan.obligations[0].candidates[0]
+    assert step.rest_coverage is not None
+    obligation = replace(
+        plan.obligations[0],
+        candidates=(
+            replace(
+                step,
+                rest_coverage=replace(
+                    step.rest_coverage, evidence_version="different-evidence"
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="controlled plan"):
+        acquisition.run(replace(plan, obligations=(obligation,)))
+
+    assert calls == 0
+    assert not request.output_root.exists()
+
+
+def test_large_backfill_is_rejected_before_source_windows_are_expanded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(
+            start=datetime(2000, 1, 1, tzinfo=UTC),
+            end=datetime(9999, 1, 1, tzinfo=UTC),
+        ),
+        purpose=BinancePublicHistoryPurpose.BACKFILL,
+        output_root=tmp_path / "bounded-plan",
+    )
+
+    def forbidden_expansion(*args: object, **kwargs: object) -> object:
+        raise AssertionError((args, kwargs))
+
+    monkeypatch.setattr(history_module, "_plan_request", forbidden_expansion)
+
+    with pytest.raises(ValueError, match="source windows"):
+        BinancePublicHistoryAcquisition().plan(
+            (request,),
+            BinancePublicHistoryCoverage(),
+            replace(_budget(), maximum_archive_objects=1),
+        )
+
+
+def test_same_source_revisions_are_compared_and_conflicts_preserve_both_raws(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def changing_rest(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        nonlocal calls
+        calls += 1
+        value = "100.0" if calls == 1 else "999.0"
+        start_ms = int(REST_START.timestamp() * 1000)
+        return BinanceKlineRestHttpResponse(
+            status=200,
+            body=json.dumps(
+                [_contract_row(start_ms, value), _contract_row(start_ms + 60_000)]
+            ).encode(),
+            headers={},
+        )
+
+    root = tmp_path / "same-source-conflict"
+    recent = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=root,
+    )
+    gap = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=recent.request_range,
+        purpose=BinancePublicHistoryPurpose.GAP,
+        gap_reason="explicit overlapping revision check",
+        output_root=root,
+    )
+    acquisition = BinancePublicHistoryAcquisition(
+        rest_http_get=changing_rest,
+        clock=lambda: NOW,
+        wait=lambda _seconds: None,
+    )
+    plan = acquisition.plan(
+        (recent, gap),
+        BinancePublicHistoryCoverage(rest_windows=(_rest_coverage(),)),
+        _budget(),
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.status is BinancePublicHistoryRunStatus.CONFLICT
+    assert len(result.requests[0].conflicts) == 1
+    conflict = result.requests[0].conflicts[0]
+    assert conflict.left.source_kind is conflict.right.source_kind
+    assert conflict.left.revision != conflict.right.revision
+    assert conflict.left.artifact_path.exists()
+    assert conflict.right.artifact_path.exists()
+
+
+@pytest.mark.parametrize(
+    "data_type",
+    [
+        BinancePublicHistoryDataType.CONTRACT_KLINE,
+        BinancePublicHistoryDataType.MARK_PRICE_KLINE,
+        BinancePublicHistoryDataType.INDEX_PRICE_KLINE,
+        BinancePublicHistoryDataType.SETTLED_FUNDING_RATE,
+    ],
+)
+def test_all_four_families_execute_backfill_through_real_archive_adapters(
+    tmp_path: Path, data_type: BinancePublicHistoryDataType
+) -> None:
+    funding = data_type is BinancePublicHistoryDataType.SETTLED_FUNDING_RATE
+    boundary = (
+        BinanceArchiveObjectBoundary.month(2026, 7)
+        if funding
+        else BinanceArchiveObjectBoundary.day(date(2026, 8, 29))
+    )
+    archive_payload, request_range, actual_range = _archive_fixture(data_type, boundary)
+    subject = (
+        BinancePriceIndexId("BTCUSDT")
+        if data_type is BinancePublicHistoryDataType.INDEX_PRICE_KLINE
+        else InstrumentId("BTCUSDT")
+    )
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=subject,
+        data_type=data_type,
+        request_range=request_range,
+        purpose=BinancePublicHistoryPurpose.BACKFILL,
+        output_root=tmp_path / data_type.value,
+    )
+    evidence = BinancePublicHistoryArchiveEvidence(
+        data_type=data_type,
+        subject=subject,
+        boundary=boundary,
+        status=BinanceArchiveEvidenceStatus.SUPPORTED,
+        evidence_version="four-family-archive-fixture",
+        evidence_reference="tests/data/four-family-archive-fixture",
+        evidence_sha256="a" * 64,
+        observed_at=NOW,
+        object_sha256=hashlib.sha256(archive_payload).hexdigest(),
+        actual_range=actual_range,
+    )
+
+    def archive_get(url: str, timeout: float) -> ArchiveHttpResponse:
+        filename = url.removesuffix(".CHECKSUM").rsplit("/", 1)[-1]
+        checksum = f"{hashlib.sha256(archive_payload).hexdigest()}  {filename}\n"
+        return ArchiveHttpResponse(
+            status=200,
+            body=checksum.encode() if url.endswith(".CHECKSUM") else archive_payload,
+            headers={},
+        )
+
+    acquisition = BinancePublicHistoryAcquisition(
+        archive_http_get=archive_get, clock=lambda: NOW
+    )
+    plan = acquisition.plan(
+        (request,), BinancePublicHistoryCoverage(archive_objects=(evidence,)), _budget()
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.completed
+    reference = result.requests[0].raw_references[0]
+    assert reference.data_type is data_type
+    assert reference.actual_record_range == actual_range
+    assert (
+        RawStore(request.output_root)
+        .read_revision(reference.object_identity, reference.revision)
+        .path
+        == reference.artifact_path
+    )
+
+
+@pytest.mark.parametrize(
+    ("data_type", "purpose"),
+    [
+        (data_type, purpose)
+        for data_type in (
+            BinancePublicHistoryDataType.CONTRACT_KLINE,
+            BinancePublicHistoryDataType.MARK_PRICE_KLINE,
+            BinancePublicHistoryDataType.INDEX_PRICE_KLINE,
+            BinancePublicHistoryDataType.SETTLED_FUNDING_RATE,
+        )
+        for purpose in (
+            BinancePublicHistoryPurpose.RECENT,
+            BinancePublicHistoryPurpose.GAP,
+        )
+    ],
+)
+def test_all_four_families_execute_recent_and_explicit_gap_through_rest(
+    tmp_path: Path,
+    data_type: BinancePublicHistoryDataType,
+    purpose: BinancePublicHistoryPurpose,
+) -> None:
+    funding = data_type is BinancePublicHistoryDataType.SETTLED_FUNDING_RATE
+    request_range = (
+        TimeRange(
+            start=datetime.fromtimestamp(FUNDING_START_MS / 1000, tz=UTC),
+            end=datetime.fromtimestamp(FUNDING_END_MS / 1000, tz=UTC),
+        )
+        if funding
+        else TimeRange(start=REST_START, end=REST_END)
+    )
+    subject = (
+        BinancePriceIndexId("BTCUSDT")
+        if data_type is BinancePublicHistoryDataType.INDEX_PRICE_KLINE
+        else InstrumentId("BTCUSDT")
+    )
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=subject,
+        data_type=data_type,
+        request_range=request_range,
+        purpose=purpose,
+        gap_reason=(
+            "explicit family gap"
+            if purpose is BinancePublicHistoryPurpose.GAP
+            else None
+        ),
+        output_root=tmp_path / f"{data_type.value}-{purpose.value}",
+    )
+
+    def rest_get(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        return BinanceKlineRestHttpResponse(
+            status=200, body=_family_rest_body(data_type), headers={}
+        )
+
+    coverage = _family_rest_coverage(data_type, request_range, purpose)
+    acquisition = BinancePublicHistoryAcquisition(
+        rest_http_get=rest_get,
+        clock=lambda: NOW,
+        monotonic_clock=lambda: 0.0,
+    )
+    plan = acquisition.plan(
+        (request,), BinancePublicHistoryCoverage(rest_windows=(coverage,)), _budget()
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.completed
+    source = result.requests[0].obligations[0].sources[0]
+    assert source.status == BinanceKlineRestStatus.COMPLETE.value
+    assert len(source.rest_pages) == 1
+    assert source.rest_pages[0].revision == source.raw_references[0].revision
+    assert source.rest_pages[0].observed_at is not None
+    assert purpose.value in source.step.reason
+
+
+def test_partial_multi_page_rest_failure_keeps_every_page_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_rest_step = history_module._rest_step
+
+    def one_record_pages(
+        request: BinancePublicHistoryAcquisitionRequest,
+        required: TimeRange,
+        evidence: BinanceKlineRestCoverage,
+        *,
+        reason: str,
+    ) -> history_module.BinancePublicHistorySourceStep:
+        step = original_rest_step(request, required, evidence, reason=reason)
+        assert step.rest_request is not None
+        return replace(step, rest_request=replace(step.rest_request, limit=1))
+
+    monkeypatch.setattr(history_module, "_rest_step", one_record_pages)
+    calls = 0
+
+    def second_page_is_malformed(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return BinanceKlineRestHttpResponse(
+                status=200,
+                body=json.dumps(
+                    [_contract_row(int(REST_START.timestamp() * 1000))]
+                ).encode(),
+                headers={},
+            )
+        return BinanceKlineRestHttpResponse(
+            status=200, body=b"{malformed-json", headers={}
+        )
+
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=tmp_path / "partial-pages",
+    )
+    acquisition = BinancePublicHistoryAcquisition(
+        rest_http_get=second_page_is_malformed,
+        clock=lambda: NOW,
+        monotonic_clock=lambda: 0.0,
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(rest_windows=(_rest_coverage(),)),
+        _budget(),
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.status is BinancePublicHistoryRunStatus.PARTIAL
+    source = result.requests[0].obligations[0].sources[0]
+    assert source.status == BinanceKlineRestStatus.INVALID_RESPONSE.value
+    assert source.pages_used == 2
+    assert len(source.rest_pages) == 2
+    assert [page.status for page in source.rest_pages] == [
+        BinanceKlineRestStatus.COMPLETE,
+        BinanceKlineRestStatus.INVALID_RESPONSE,
+    ]
+    assert source.rest_pages[0].revision == source.raw_references[0].revision
+    assert source.rest_pages[1].revision is None
+    assert (
+        source.rest_pages[1].response_sha256
+        == hashlib.sha256(b"{malformed-json").hexdigest()
+    )
+    assert source.rest_pages[1].attempts[0].outcome == "received"
+    assert "JSON" in source.rest_pages[1].detail
+
+
+def test_plan_selection_is_bounded_by_month_edges_partial_and_exact_rest_cell(
+    tmp_path: Path,
+) -> None:
+    subject = InstrumentId("BTCUSDT")
+    july = BinanceArchiveObjectBoundary.month(2026, 7)
+    full_month = TimeRange(
+        start=datetime(2026, 7, 1, tzinfo=UTC),
+        end=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    monthly = BinancePublicHistoryArchiveEvidence(
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        subject=subject,
+        boundary=july,
+        status=BinanceArchiveEvidenceStatus.SUPPORTED,
+        evidence_version="closed-month",
+        evidence_reference="docs/research/closed-month.json",
+        evidence_sha256="a" * 64,
+        observed_at=NOW,
+        object_sha256="b" * 64,
+        actual_range=full_month,
+    )
+    acquisition = BinancePublicHistoryAcquisition()
+    full_request = BinancePublicHistoryAcquisitionRequest(
+        subject=subject,
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=full_month,
+        purpose=BinancePublicHistoryPurpose.BACKFILL,
+        output_root=tmp_path / "full-month",
+    )
+    full_plan = acquisition.plan(
+        (full_request,),
+        BinancePublicHistoryCoverage(archive_objects=(monthly,)),
+        _budget(),
+    )
+    assert len(full_plan.obligations) == 1
+    assert full_plan.obligations[0].candidates[0].source_kind.value == "archive_monthly"
+
+    edge_request = replace(
+        full_request,
+        request_range=TimeRange(
+            start=datetime(2026, 7, 15, tzinfo=UTC),
+            end=datetime(2026, 8, 2, tzinfo=UTC),
+        ),
+        output_root=tmp_path / "month-edges",
+    )
+    edge_daily = BinancePublicHistoryArchiveEvidence(
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        subject=subject,
+        boundary=BinanceArchiveObjectBoundary.day(date(2026, 7, 15)),
+        status=BinanceArchiveEvidenceStatus.SUPPORTED,
+        evidence_version="closed-day-edge",
+        evidence_reference="docs/research/closed-day-edge.json",
+        evidence_sha256="d" * 64,
+        observed_at=NOW,
+        object_sha256="e" * 64,
+    )
+    edge_plan = acquisition.plan(
+        (edge_request,),
+        BinancePublicHistoryCoverage(archive_objects=(monthly, edge_daily)),
+        replace(_budget(), maximum_archive_objects=20),
+    )
+    assert len(edge_plan.obligations) == 18
+    assert edge_plan.obligations[0].candidates[0].source_kind.value == "archive_daily"
+    assert all(
+        step.source_kind.value != "archive_monthly"
+        for obligation in edge_plan.obligations
+        for step in obligation.candidates
+    )
+
+    partial = BinancePublicHistoryArchiveEvidence(
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        subject=subject,
+        boundary=BinanceArchiveObjectBoundary.day(date(2026, 9, 9)),
+        status=BinanceArchiveEvidenceStatus.PARTIAL,
+        evidence_version="partial-day",
+        evidence_reference="docs/research/partial-day.json",
+        evidence_sha256="c" * 64,
+        observed_at=NOW,
+    )
+    recent_range = TimeRange(start=REST_START, end=REST_END)
+    backfill = replace(
+        full_request,
+        request_range=recent_range,
+        output_root=tmp_path / "partial",
+    )
+    partial_plan = acquisition.plan(
+        (backfill,),
+        BinancePublicHistoryCoverage(
+            archive_objects=(partial,), rest_windows=(_rest_coverage(),)
+        ),
+        _budget(),
+    )
+    assert [
+        step.source_kind.value for step in partial_plan.obligations[0].candidates
+    ] == ["rest"]
+
+    mark_request = replace(
+        backfill,
+        data_type=BinancePublicHistoryDataType.MARK_PRICE_KLINE,
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=tmp_path / "wrong-rest-cell",
+    )
+    wrong_cell_plan = acquisition.plan(
+        (mark_request,),
+        BinancePublicHistoryCoverage(rest_windows=(_rest_coverage(),)),
+        _budget(),
+    )
+    assert wrong_cell_plan.obligations[0].candidates == ()
+    assert wrong_cell_plan.obligations[0].initial_unmet_reason == (
+        "rest_boundary_unknown"
+    )
+
+
+@pytest.mark.parametrize("failure", ["checksum", "schema"])
+def test_archive_integrity_failure_does_not_use_planned_rest_fallback(
+    tmp_path: Path, failure: str
+) -> None:
+    day = date(2026, 9, 9)
+    archive_payload, checksum_payload = _daily_archive(day)
+    if failure == "checksum":
+        checksum_payload = f"{'0' * 64}  BTCUSDT-1m-{day.isoformat()}.zip\n".encode()
+    else:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(
+                f"BTCUSDT-1m-{day.isoformat()}.csv", "open_time\nnot-an-integer\n"
+            )
+        archive_payload = buffer.getvalue()
+        checksum_payload = (
+            f"{hashlib.sha256(archive_payload).hexdigest()}  "
+            f"BTCUSDT-1m-{day.isoformat()}.zip\n"
+        ).encode()
+
+    def archive_get(url: str, timeout: float) -> ArchiveHttpResponse:
+        return ArchiveHttpResponse(
+            status=200,
+            body=checksum_payload if url.endswith(".CHECKSUM") else archive_payload,
+            headers={},
+        )
+
+    rest_calls = 0
+
+    def forbidden_fallback(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        nonlocal rest_calls
+        rest_calls += 1
+        raise AssertionError((url, timeout, maximum_response_bytes))
+
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.BACKFILL,
+        output_root=tmp_path / failure,
+    )
+    evidence = BinancePublicHistoryArchiveEvidence(
+        data_type=request.data_type,
+        subject=request.subject,
+        boundary=BinanceArchiveObjectBoundary.day(day),
+        status=BinanceArchiveEvidenceStatus.SUPPORTED,
+        evidence_version="integrity-fixture",
+        evidence_reference="tests/data/integrity-fixture",
+        evidence_sha256="d" * 64,
+        observed_at=NOW,
+        object_sha256=hashlib.sha256(archive_payload).hexdigest(),
+    )
+    acquisition = BinancePublicHistoryAcquisition(
+        archive_http_get=archive_get,
+        rest_http_get=forbidden_fallback,
+        clock=lambda: NOW,
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(
+            archive_objects=(evidence,), rest_windows=(_rest_coverage(),)
+        ),
+        _budget(),
+    )
+
+    result = acquisition.run(plan)
+
+    source = result.requests[0].obligations[0].sources
+    assert result.status is BinancePublicHistoryRunStatus.FAILED
+    assert [item.status for item in source] == ["invalid_content"]
+    assert rest_calls == 0
+
+
+def test_existing_local_corruption_fails_without_overwrite(tmp_path: Path) -> None:
+    day = date(2026, 8, 29)
+    archive_payload, checksum_payload = _daily_archive(day)
+
+    def archive_get(url: str, timeout: float) -> ArchiveHttpResponse:
+        return ArchiveHttpResponse(
+            status=200,
+            body=checksum_payload if url.endswith(".CHECKSUM") else archive_payload,
+            headers={},
+        )
+
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(
+            start=datetime(2026, 8, 29, tzinfo=UTC),
+            end=datetime(2026, 8, 30, tzinfo=UTC),
+        ),
+        purpose=BinancePublicHistoryPurpose.BACKFILL,
+        output_root=tmp_path / "local-corruption",
+    )
+    evidence = BinancePublicHistoryArchiveEvidence(
+        data_type=request.data_type,
+        subject=request.subject,
+        boundary=BinanceArchiveObjectBoundary.day(day),
+        status=BinanceArchiveEvidenceStatus.SUPPORTED,
+        evidence_version="local-corruption-fixture",
+        evidence_reference="tests/data/local-corruption-fixture",
+        evidence_sha256="e" * 64,
+        observed_at=NOW,
+        object_sha256=hashlib.sha256(archive_payload).hexdigest(),
+        actual_range=request.request_range,
+    )
+    acquisition = BinancePublicHistoryAcquisition(
+        archive_http_get=archive_get, clock=lambda: NOW
+    )
+    plan = acquisition.plan(
+        (request,), BinancePublicHistoryCoverage(archive_objects=(evidence,)), _budget()
+    )
+    first = acquisition.run(plan)
+    artifact_path = first.requests[0].raw_references[0].artifact_path
+    data_path = artifact_path / "data.parquet"
+    data_path.write_bytes(b"locally-corrupted")
+
+    repeated = acquisition.run(plan)
+
+    assert repeated.status is BinancePublicHistoryRunStatus.FAILED
+    assert repeated.requests[0].obligations[0].sources[0].status == "local_failure"
+    assert data_path.read_bytes() == b"locally-corrupted"
+
+
+def test_rest_timeout_exhaustion_preserves_bounded_page_attempts(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def timeout(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        nonlocal calls
+        calls += 1
+        raise TimeoutError("bounded fixture timeout")
+
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=tmp_path / "timeout",
+    )
+    acquisition = BinancePublicHistoryAcquisition(
+        rest_http_get=timeout,
+        clock=lambda: NOW,
+        wait=lambda _seconds: None,
+        monotonic_clock=lambda: 0.0,
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(rest_windows=(_rest_coverage(),)),
+        replace(_budget(), maximum_attempts_per_page=2),
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.status is BinancePublicHistoryRunStatus.FAILED
+    source = result.requests[0].obligations[0].sources[0]
+    assert source.status == BinanceKlineRestStatus.RETRY_EXHAUSTED.value
+    assert calls == 2
+    assert len(source.rest_pages) == 1
+    assert [attempt.outcome for attempt in source.rest_pages[0].attempts] == [
+        "transport_error",
+        "transport_error",
+    ]
+    assert source.rest_pages[0].revision is None
+
+
+def test_rest_empty_remains_distinct_from_completed_coverage(tmp_path: Path) -> None:
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.GAP,
+        gap_reason="verify explicit empty semantics",
+        output_root=tmp_path / "empty",
+    )
+    acquisition = BinancePublicHistoryAcquisition(
+        rest_http_get=lambda _url, _timeout, _maximum: BinanceKlineRestHttpResponse(
+            status=200, body=b"[]", headers={}
+        ),
+        clock=lambda: NOW,
+        monotonic_clock=lambda: 0.0,
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(rest_windows=(_rest_coverage(),)),
+        _budget(),
+    )
+
+    result = acquisition.run(plan)
+
+    source = result.requests[0].obligations[0].sources[0]
+    assert result.status is BinancePublicHistoryRunStatus.FAILED
+    assert source.status == BinanceKlineRestStatus.LEGAL_EMPTY.value
+    assert source.rest_pages[0].status is BinanceKlineRestStatus.LEGAL_EMPTY
+    assert result.requests[0].satisfied_ranges == ()
+    assert result.requests[0].unmet_ranges == (request.request_range,)
