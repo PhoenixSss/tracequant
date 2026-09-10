@@ -158,19 +158,25 @@ The currently implemented public package is `tracequant` under `src/`:
   bounded public HTTP downloads, checksum and ZIP/CSV validation, and Raw
   persistence. A separate, coverage-gated public REST entry point acquires
   bounded BTCUSDT/ETHUSDT 1m contract, mark-price, and index-price Kline pages
-  into response-digest Raw revisions. Importing the module performs no I/O.
+  plus settled funding-rate pages into response-digest Raw revisions. A unified
+  finite acquisition planner composes these archive and REST consumers for
+  explicit backfill, recent, and gap requests under shared budgets, preserving
+  exact revisions and reporting cross-source conflicts. Importing the module
+  performs no I/O.
 
 The [Binance Kline REST acquisition guide](docs/guides/binance-kline-rest-acquisition.md)
 documents its required coverage evidence, finite budget, results, persistence,
 and limitations.
+[The unified public-history acquisition guide](docs/guides/binance-public-history-acquisition.md)
+documents the finite request, evidence, source-selection, shared-budget, and
+result contracts used by the library orchestration entry point.
 
 The `apps/`, `packages/`, and `deploy/` directories currently establish future
 boundaries through small README files. They are not implemented product
-packages. The implemented ingestion path is limited to Binance's public USDⓈ-M
-1m contract-Kline, mark-price-Kline, and index-price-Kline archives and settled
-funding-rate monthly archives; there is no private or trading exchange client,
-general source-selection orchestration, canonical quality or repair layer, REST
-funding adapter, CLI, database, feature or label pipeline, backtester, strategy,
+packages. The implemented ingestion path is limited to the Binance public
+USDⓈ-M archive/REST data families and explicit finite orchestration described
+above; there is no private or trading exchange client, canonical quality or
+repair layer, CLI, database, feature or label pipeline, backtester, strategy,
 machine-learning model, order or account service, risk engine, live runtime, or
 multi-exchange implementation.
 

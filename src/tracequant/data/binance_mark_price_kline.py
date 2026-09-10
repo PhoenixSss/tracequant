@@ -471,6 +471,16 @@ class BinanceMarkPriceKlineBackfill:
             request_range=request_range, objects=results
         )
 
+    def run_plan(
+        self, plan: BinanceArchiveObjectPlan
+    ) -> BinanceMarkPriceKlineObjectResult:
+        """Execute one caller-supplied, explicitly evidenced archive object."""
+        if not isinstance(plan, BinanceArchiveObjectPlan):
+            raise TypeError("plan must be a BinanceArchiveObjectPlan")
+        if plan.request.data_type is not BinancePublicHistoryDataType.MARK_PRICE_KLINE:
+            raise ValueError("plan must identify mark-price-Kline data")
+        return self._process(plan)
+
     def _process(
         self, plan: BinanceMarkPriceKlinePlan
     ) -> BinanceMarkPriceKlineObjectResult:

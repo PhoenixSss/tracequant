@@ -447,6 +447,19 @@ class BinanceFundingRateBackfill:
             objects=results,
         )
 
+    def run_plan(
+        self, plan: BinanceArchiveObjectPlan
+    ) -> BinanceFundingRateObjectResult:
+        """Execute one caller-supplied, explicitly evidenced monthly object."""
+        if not isinstance(plan, BinanceArchiveObjectPlan):
+            raise TypeError("plan must be a BinanceArchiveObjectPlan")
+        if (
+            plan.request.data_type
+            is not BinancePublicHistoryDataType.SETTLED_FUNDING_RATE
+        ):
+            raise ValueError("plan must identify settled funding-rate data")
+        return self._process(plan)
+
     def _process(self, plan: BinanceFundingRatePlan) -> BinanceFundingRateObjectResult:
         if isinstance(plan, BinanceFundingRateCoverageGapPlan):
             outcome = self._acquisition.record_failure(
