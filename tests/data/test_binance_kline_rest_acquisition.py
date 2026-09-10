@@ -1,6 +1,8 @@
 import hashlib
 import http.client
 import json
+import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -882,6 +884,104 @@ def test_http_attempt_that_exceeds_total_elapsed_budget_is_not_published(
     identity = RawObjectIdentity.from_rest_page_request(request)
     assert store.list_verified_revisions(identity) == ()
     assert len(store.list_acquisition_manifests(identity)) == 1
+
+
+def test_default_http_transport_terminates_a_trickling_response_at_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _request(minutes=1, limit=1)
+    closed = threading.Event()
+
+    class TricklingResponse:
+        status = 200
+        headers: Mapping[str, str] = {"Content-Type": "application/json"}
+
+        def __enter__(self) -> "TricklingResponse":
+            return self
+
+        def __exit__(self, *unused: object) -> None:
+            self.close()
+
+        def close(self) -> None:
+            closed.set()
+
+        def read(self, unused_limit: int) -> bytes:
+            closed.wait(5.0)
+            raise TimeoutError("response was closed at the absolute deadline")
+
+    class TricklingOpener:
+        def open(self, unused_request: object, *, timeout: float) -> TricklingResponse:
+            return TricklingResponse()
+
+    monkeypatch.setattr(
+        "tracequant.data.binance_kline_rest.urllib.request.build_opener",
+        lambda *unused: TricklingOpener(),
+    )
+    store = RawStore(tmp_path, clock=lambda: NOW)
+    acquisition = BinanceKlineRestAcquisition(store, clock=lambda: NOW)
+
+    started = time.monotonic()
+    result = acquisition.run(
+        request,
+        _coverage(request),
+        replace(
+            _budget(attempts=1), timeout_seconds=0.05, maximum_elapsed_seconds=0.05
+        ),
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.status is BinanceKlineRestStatus.BUDGET_EXHAUSTED
+    assert result.attempts_used == 1
+    assert elapsed < 0.5
+    assert closed.wait(0.5)
+    identity = RawObjectIdentity.from_rest_page_request(request)
+    assert store.list_verified_revisions(identity) == ()
+
+
+def test_deep_json_parser_failure_is_quarantined_with_received_bytes(
+    tmp_path: Path,
+) -> None:
+    request = _request(minutes=1, limit=1)
+    body = b"[" * 16_000 + b"]" * 16_000
+    store, acquisition = _acquisition(
+        tmp_path, _QueueTransport([BinanceKlineRestHttpResponse(200, body, {})])
+    )
+
+    result = acquisition.run(request, _coverage(request), _budget())
+
+    assert result.status is BinanceKlineRestStatus.INVALID_RESPONSE
+    assert "strict UTF-8 JSON" in result.termination_reason
+    identity = RawObjectIdentity.from_rest_page_request(request)
+    record = store.list_acquisition_manifests(identity)[0]
+    evidence_path = store.acquisition_path_for(identity) / record.record_id
+    assert record.source_body_sha256 == hashlib.sha256(body).hexdigest()
+    assert (evidence_path / "response.json").read_bytes() == body
+    assert store.list_verified_revisions(identity) == ()
+
+
+def test_long_retry_after_delta_exhausts_budget_without_retrying_early(
+    tmp_path: Path,
+) -> None:
+    request = _request(minutes=1, limit=1)
+    transport = _QueueTransport(
+        [BinanceKlineRestHttpResponse(429, b"busy", {"Retry-After": "99999999999"})]
+    )
+    waits: list[float] = []
+    _, acquisition = _acquisition(
+        tmp_path,
+        transport,
+        wait=waits.append,
+        monotonic_clock=lambda: 0.0,
+    )
+
+    result = acquisition.run(
+        request, _coverage(request), _budget(attempts=2, elapsed=5.0)
+    )
+
+    assert result.status is BinanceKlineRestStatus.BUDGET_EXHAUSTED
+    assert result.attempts_used == 1
+    assert len(transport.calls) == 1
+    assert waits == []
 
 
 def test_nonretryable_http_and_response_size_limit_are_observable(

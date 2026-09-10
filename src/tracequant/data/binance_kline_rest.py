@@ -11,6 +11,7 @@ import hashlib
 import http.client
 import json
 import math
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -175,35 +176,74 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 def _default_http_get(
     url: str, timeout: float, maximum_response_bytes: int
 ) -> BinanceKlineRestHttpResponse:
-    request = urllib.request.Request(url, headers={"User-Agent": _PRODUCER_VERSION})
-    opener = urllib.request.build_opener(_NoRedirectHandler())
-    try:
-        with opener.open(request, timeout=timeout) as response:
-            try:
-                body = response.read(maximum_response_bytes + 1)
-                complete = True
-            except http.client.IncompleteRead as error:
-                body = bytes(error.partial)
-                complete = False
-            return BinanceKlineRestHttpResponse(
-                status=response.status,
-                body=body,
-                headers=dict(response.headers.items()),
-                complete=complete,
-            )
-    except urllib.error.HTTPError as error:
+    """Read one response within an absolute wall-clock attempt deadline."""
+    result: list[BinanceKlineRestHttpResponse] = []
+    failure: list[BaseException] = []
+    active_response: list[object] = []
+    finished = threading.Event()
+
+    def fetch() -> None:
+        request = urllib.request.Request(url, headers={"User-Agent": _PRODUCER_VERSION})
+        opener = urllib.request.build_opener(_NoRedirectHandler())
         try:
-            body = error.read(maximum_response_bytes + 1)
-            complete = True
-        except http.client.IncompleteRead as incomplete:
-            body = bytes(incomplete.partial)
-            complete = False
-        return BinanceKlineRestHttpResponse(
-            status=error.code,
-            body=body,
-            headers=dict(error.headers.items()) if error.headers is not None else {},
-            complete=complete,
-        )
+            response = opener.open(request, timeout=timeout)
+            active_response.append(response)
+            with response:
+                try:
+                    body = response.read(maximum_response_bytes + 1)
+                    complete = True
+                except http.client.IncompleteRead as error:
+                    body = bytes(error.partial)
+                    complete = False
+                result.append(
+                    BinanceKlineRestHttpResponse(
+                        status=response.status,
+                        body=body,
+                        headers=dict(response.headers.items()),
+                        complete=complete,
+                    )
+                )
+        except urllib.error.HTTPError as error:
+            active_response.append(error)
+            try:
+                try:
+                    body = error.read(maximum_response_bytes + 1)
+                    complete = True
+                except http.client.IncompleteRead as incomplete:
+                    body = bytes(incomplete.partial)
+                    complete = False
+                result.append(
+                    BinanceKlineRestHttpResponse(
+                        status=error.code,
+                        body=body,
+                        headers=(
+                            dict(error.headers.items())
+                            if error.headers is not None
+                            else {}
+                        ),
+                        complete=complete,
+                    )
+                )
+            finally:
+                error.close()
+        except BaseException as error:
+            failure.append(error)
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=fetch, name="binance-rest-http", daemon=True)
+    worker.start()
+    if not finished.wait(timeout):
+        if active_response:
+            close = getattr(active_response[0], "close", None)
+            if callable(close):
+                close()
+        raise TimeoutError("HTTP attempt exceeded its absolute elapsed-time deadline")
+    if failure:
+        raise failure[0]
+    if not result:
+        raise RuntimeError("HTTP transport finished without a response or failure")
+    return result[0]
 
 
 class BinanceKlineRestCoverageStatus(StrEnum):
@@ -474,7 +514,12 @@ def _parse_kline_page(
                 ValueError(f"invalid JSON constant {value}")
             ),
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        ValueError,
+    ) as error:
         raise BinanceRestPageParseError(
             "response body is not strict UTF-8 JSON"
         ) from error
@@ -581,20 +626,23 @@ def _parse_kline_page(
     return frame, actual_range, seen
 
 
-def _retry_after_seconds(value: str | None, *, now: datetime) -> float | None:
+def _retry_after_seconds(value: str | None, *, now: datetime) -> float | int | None:
     if value is None:
         return None
     stripped = value.strip()
-    if stripped.isascii() and stripped.isdigit() and len(stripped) <= 10:
-        seconds = float(int(stripped))
-    else:
-        try:
-            target = parsedate_to_datetime(stripped)
-            if target.tzinfo is None:
-                return None
-            seconds = (to_utc(target) - to_utc(now)).total_seconds()
-        except (TypeError, ValueError, OverflowError):
+    if stripped.isascii() and stripped.isdigit():
+        # Delta-seconds has no RFC digit-count ceiling.  Preserve representable
+        # values as integers, and map larger values to an explicit over-budget
+        # sentinel instead of falling back to the short local retry delay.
+        normalized = stripped.lstrip("0") or "0"
+        return math.inf if len(normalized) > 308 else int(normalized)
+    try:
+        target = parsedate_to_datetime(stripped)
+        if target.tzinfo is None:
             return None
+        seconds = (to_utc(target) - to_utc(now)).total_seconds()
+    except (TypeError, ValueError, OverflowError):
+        return None
     if not math.isfinite(seconds) or seconds < 0:
         return None
     return seconds
@@ -1236,7 +1284,14 @@ class BinanceRestPageAcquisition:
                                 reason=f"failed to persist HTTP evidence: {store_error}",
                             )
                         retry_delay = _retry_after_seconds(
-                            _sanitize_headers(response.headers).get("retry-after"),
+                            next(
+                                (
+                                    value
+                                    for name, value in response.headers.items()
+                                    if name.strip().lower() == "retry-after"
+                                ),
+                                None,
+                            ),
                             now=self._now(),
                         )
                         if retry_delay is None:
@@ -1315,12 +1370,22 @@ class BinanceRestPageAcquisition:
                     break
 
             if response is None:
-                detail = "per-page retry budget exhausted"
+                elapsed_budget_exhausted = tracker.remaining <= 0
+                status = (
+                    BinanceKlineRestStatus.BUDGET_EXHAUSTED
+                    if elapsed_budget_exhausted
+                    else BinanceKlineRestStatus.RETRY_EXHAUSTED
+                )
+                detail = (
+                    "total elapsed-time budget exhausted during HTTP attempt"
+                    if elapsed_budget_exhausted
+                    else "per-page retry budget exhausted"
+                )
                 pages.append(
                     BinanceKlineRestPageResult(
                         request=current,
                         attempts=tuple(attempts),
-                        status=BinanceKlineRestStatus.RETRY_EXHAUSTED,
+                        status=status,
                         short_page=False,
                         record_count=0,
                         actual_record_range=None,
@@ -1331,7 +1396,7 @@ class BinanceRestPageAcquisition:
                     )
                 )
                 return self._finish(
-                    status=BinanceKlineRestStatus.RETRY_EXHAUSTED,
+                    status=status,
                     request=request,
                     pages=pages,
                     tracker=tracker,
