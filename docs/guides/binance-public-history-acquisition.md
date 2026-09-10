@@ -21,8 +21,12 @@ manifest 还提供 BTCUSDT/ETHUSDT 三类 Kline 在 2026-08-30 的实测 404，�
 在 2019-12-23 的首日 partial。匹配字段包括数据族、typed subject、日/月 boundary、证据
 版本/reference/manifest digest、观测时间、状态、object digest 和实际范围；复制旧证据元数据到
 另一个 boundary 不会获得网络访问授权。报告绑定的 `not_found`/`partial` 会保留为明确的
-未满足或仅使用已证实 REST fallback 的来源决策，不会因对象名存在而变成成功。REST 直接复用 `BinanceKlineRestCoverage` 或
-`BinanceFundingRateRestCoverage` 的逐 endpoint/subject/window 合同。`unknown`、`partial`、
+未满足或仅使用已证实 REST fallback 的来源决策，不会因对象名存在而变成成功；partial
+archive 会作为不执行 I/O 的来源结果与实际 REST replacement 一同返回。REST 直接复用
+`BinanceKlineRestCoverage` 或 `BinanceFundingRateRestCoverage` 的逐 endpoint/subject/window
+合同；funding endpoint 必须使用 funding 专用 coverage 类型。同 endpoint、typed subject
+且时间重叠、结论冲突的 REST cells 会在计划前被拒绝；结论相同的重叠 cells 以稳定的完整
+evidence payload 排序选择，避免来源决策按输入顺序生效。`unknown`、`partial`、
 错 endpoint/subject 或超出观测窗口的证据不会授权远程访问。旧 probe 截止也不会按今天的
 日期自动延长。
 
@@ -62,8 +66,9 @@ result = acquisition.run(plan)
 Archive 下载、REST 内部 retry/backoff、page 发布和 revision 判断仍由既有消费者的内部受控
 执行 seam 负责；调用者不能向单个适配器提交自造 object key/URL plan。
 统一层只分配共享剩余预算、按计划调用它们并聚合结果；不会在上层叠加 REST 尝试次数或重置
-总耗时。取消、无进展、预算耗尽和局部失败只停止受影响的剩余 obligations，已经发布的不可变
-Raw 仍可精确读取。
+总耗时。总耗时门禁也覆盖 HTTP 返回后的解析、Raw 发布、revision 枚举与跨源比较；超时后
+不会启动后续 obligation 或把尚未完成审计的请求标为 completed。取消、无进展、预算耗尽和
+局部失败只停止受影响的剩余 obligations，已经发布的不可变 Raw 仍可精确读取。
 
 ## 结果、重叠与精确读取
 

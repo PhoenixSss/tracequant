@@ -29,6 +29,7 @@ from tracequant.data.binance_contract_kline import BinanceContractKlineBackfill
 from tracequant.data.binance_funding_rate import BinanceFundingRateBackfill
 from tracequant.data.binance_funding_rate_rest import (
     BinanceFundingRateRestAcquisition,
+    BinanceFundingRateRestCoverage,
 )
 from tracequant.data.binance_index_price_kline import BinanceIndexPriceKlineBackfill
 from tracequant.data.binance_kline_rest import (
@@ -630,6 +631,14 @@ class BinancePublicHistoryCoverage:
             raise TypeError("archive_objects must contain archive evidence")
         if any(not isinstance(item, BinanceKlineRestCoverage) for item in rest_windows):
             raise TypeError("rest_windows must contain REST coverage evidence")
+        if any(
+            item.endpoint is BinanceRestEndpoint.FUNDING_RATE_HISTORY
+            and not isinstance(item, BinanceFundingRateRestCoverage)
+            for item in rest_windows
+        ):
+            raise TypeError(
+                "funding-rate REST windows require BinanceFundingRateRestCoverage"
+            )
         unapproved = [
             item
             for item in archive_objects
@@ -645,6 +654,19 @@ class BinancePublicHistoryCoverage:
         ]
         if len(set(archive_keys)) != len(archive_keys):
             raise ValueError("archive coverage contains duplicate source cells")
+        for index, left in enumerate(rest_windows):
+            for right in rest_windows[index + 1 :]:
+                if (
+                    left.endpoint is right.endpoint
+                    and left.subject == right.subject
+                    and left.allowed_range.start < right.allowed_range.end
+                    and right.allowed_range.start < left.allowed_range.end
+                    and left.status is not right.status
+                ):
+                    raise ValueError(
+                        "REST coverage contains conflicting overlapping source cells "
+                        "for the same endpoint and typed subject"
+                    )
         object.__setattr__(self, "archive_objects", archive_objects)
         object.__setattr__(self, "rest_windows", rest_windows)
 
@@ -934,7 +956,19 @@ def _rest_evidence(
         and item.allowed_range.start <= required.start
         and item.allowed_range.end >= required.end
     ]
-    return matches[0] if matches else None
+    return (
+        min(
+            matches,
+            key=lambda item: json.dumps(
+                _rest_coverage_payload(item),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ),
+        )
+        if matches
+        else None
+    )
 
 
 def _rest_step(
@@ -983,6 +1017,14 @@ def _archive_step(
     )
 
 
+def _source_step_requires_io(step: BinancePublicHistorySourceStep) -> bool:
+    return not (
+        step.archive_plan is not None
+        and step.archive_evidence is not None
+        and step.archive_evidence.status is BinanceArchiveEvidenceStatus.PARTIAL
+    )
+
+
 def _plan_archive_obligation(
     request_index: int,
     request: BinancePublicHistoryAcquisitionRequest,
@@ -1008,6 +1050,32 @@ def _plan_archive_obligation(
                     required,
                     rest,
                     reason="proven bounded REST fallback after archive unavailable/partial",
+                )
+            )
+    elif (
+        evidence is not None and evidence.status is BinanceArchiveEvidenceStatus.PARTIAL
+    ):
+        candidates.append(
+            _archive_step(
+                request,
+                boundary,
+                evidence,
+                reason=(
+                    "explicit partial archive evidence is retained as a "
+                    "non-executable source decision"
+                ),
+            )
+        )
+        if rest is not None:
+            candidates.append(
+                _rest_step(
+                    request,
+                    required,
+                    rest,
+                    reason=(
+                        "proven bounded REST replacement for the explicit partial "
+                        "archive source"
+                    ),
                 )
             )
     elif rest is not None:
@@ -1299,6 +1367,14 @@ class _SharedBudget:
     def remaining_seconds(self) -> float:
         return max(0.0, self.budget.maximum_elapsed_seconds - self.elapsed)
 
+    def enforce_elapsed_limit(self) -> bool:
+        """Record elapsed exhaustion after local adapter or audit work."""
+        if self.remaining_seconds > 0:
+            return False
+        if self.exhaustion_reason is None:
+            self.exhaustion_reason = "maximum_elapsed_seconds exhausted"
+        return self.exhaustion_reason == "maximum_elapsed_seconds exhausted"
+
     def before_http(self) -> None:
         if self.exhaustion_reason is not None:
             raise _SharedBudgetExceeded(self.exhaustion_reason)
@@ -1446,7 +1522,7 @@ class BinancePublicHistoryAcquisition:
             (obligation.request_index, step.archive_plan.object_key)
             for obligation in obligations
             for step in obligation.candidates
-            if step.archive_plan is not None
+            if step.archive_plan is not None and _source_step_requires_io(step)
         }
         archive_count = len(archive_keys)
         if archive_count > budget.maximum_archive_objects:
@@ -1457,17 +1533,29 @@ class BinancePublicHistoryAcquisition:
             for step in obligation.candidates
             if step.rest_request is not None
         )
-        preferred_archive_keys = {
-            (obligation.request_index, obligation.candidates[0].archive_plan.object_key)
+        preferred_steps = tuple(
+            (
+                obligation.request_index,
+                next(
+                    (
+                        step
+                        for step in obligation.candidates
+                        if _source_step_requires_io(step)
+                    ),
+                    None,
+                ),
+            )
             for obligation in obligations
-            if obligation.candidates
-            and obligation.candidates[0].archive_plan is not None
+        )
+        preferred_archive_keys = {
+            (request_index, step.archive_plan.object_key)
+            for request_index, step in preferred_steps
+            if step is not None and step.archive_plan is not None
         }
         preferred_rest_actions = sum(
             1
-            for obligation in obligations
-            if obligation.candidates
-            and obligation.candidates[0].rest_request is not None
+            for _request_index, step in preferred_steps
+            if step is not None and step.rest_request is not None
         )
         minimum_http = len(preferred_archive_keys) * 2 + preferred_rest_actions
         if minimum_http > budget.maximum_http_requests:
@@ -1673,6 +1761,13 @@ class BinancePublicHistoryAcquisition:
                 actual_record_range = funding_outcome.actual_record_range
             if self._cancelled():
                 shared.cancelled = True
+            if shared.enforce_elapsed_limit():
+                status = BinanceArchiveAcquisitionStatus.BUDGET_EXHAUSTED
+                detail = (
+                    "maximum_elapsed_seconds exhausted after archive adapter work; "
+                    "completed Raw revisions were preserved"
+                )
+                break
             if status is not BinanceArchiveAcquisitionStatus.RETRYABLE_FAILURE:
                 break
             if (
@@ -1722,6 +1817,12 @@ class BinancePublicHistoryAcquisition:
                     "archive record range differs from the explicitly supplied evidence; "
                     "the immutable revision was preserved"
                 )
+        if shared.enforce_elapsed_limit():
+            status = BinanceArchiveAcquisitionStatus.BUDGET_EXHAUSTED
+            detail = (
+                "maximum_elapsed_seconds exhausted after archive result inspection; "
+                "completed Raw revisions were preserved"
+            )
         return BinancePublicHistorySourceResult(
             step=step,
             status=status.value,
@@ -1786,6 +1887,7 @@ class BinancePublicHistoryAcquisition:
         result: BinanceKlineRestRunResult = acquisition.run(
             step.rest_request, step.rest_coverage, rest_budget
         )
+        shared.enforce_elapsed_limit()
         shared.rest_pages += result.pages_used
         if (
             not shared.cancelled
@@ -1808,10 +1910,20 @@ class BinancePublicHistoryAcquisition:
                 RawObjectIdentity.from_rest_page_request(page.request), page.revision
             )
             references.append(_artifact_reference(store, artifact))
+        elapsed_exhausted = shared.enforce_elapsed_limit()
         return BinancePublicHistorySourceResult(
             step=step,
-            status=result.status.value,
-            detail=result.termination_reason,
+            status=(
+                BinanceKlineRestStatus.BUDGET_EXHAUSTED.value
+                if elapsed_exhausted
+                else result.status.value
+            ),
+            detail=(
+                "maximum_elapsed_seconds exhausted after REST adapter work; "
+                "completed Raw revisions were preserved"
+                if elapsed_exhausted
+                else result.termination_reason
+            ),
             raw_references=tuple(references),
             attempts_used=result.attempts_used,
             pages_used=result.pages_used,
@@ -1950,6 +2062,45 @@ class BinancePublicHistoryAcquisition:
         )
 
     @staticmethod
+    def _record_overlap_budget_exhaustion(
+        result: BinancePublicHistoryRequestResult,
+        *,
+        detail: str,
+    ) -> BinancePublicHistoryRequestResult:
+        """Fail closed when post-source work exceeds the shared deadline."""
+        obligations = tuple(
+            replace(
+                obligation,
+                sources=tuple(
+                    replace(
+                        source,
+                        status=BinanceKlineRestStatus.BUDGET_EXHAUSTED.value,
+                        detail=detail,
+                    )
+                    if source.raw_references
+                    else source
+                    for source in obligation.sources
+                ),
+                satisfied=False,
+                unmet_reason=detail,
+            )
+            for obligation in result.obligations
+        )
+        return replace(
+            result,
+            obligations=obligations,
+            satisfied_ranges=(),
+            unmet_ranges=tuple(
+                obligation.plan.required_range for obligation in obligations
+            ),
+            status=(
+                BinancePublicHistoryRunStatus.PARTIAL
+                if result.raw_references
+                else BinancePublicHistoryRunStatus.FAILED
+            ),
+        )
+
+    @staticmethod
     def _record_overlap_conflicts(
         result: BinancePublicHistoryRequestResult,
         conflicts: tuple[BinancePublicHistoryConflict, ...],
@@ -2034,16 +2185,32 @@ class BinancePublicHistoryAcquisition:
                     break
                 try:
                     if step.archive_plan is not None:
-                        cache_key = (
-                            obligation.request_index,
-                            step.archive_plan.object_key,
-                        )
-                        source = archive_cache.get(cache_key)
-                        if source is None:
-                            source = self._run_archive(
-                                request, step, stores[request.output_root], shared
+                        evidence = step.archive_evidence
+                        assert evidence is not None
+                        if evidence.status is BinanceArchiveEvidenceStatus.PARTIAL:
+                            source = BinancePublicHistorySourceResult(
+                                step=step,
+                                status=BinanceArchiveAcquisitionStatus.COVERAGE_GAP.value,
+                                detail=(
+                                    "archive evidence reports partial coverage "
+                                    f"({evidence.evidence_version}); the object was not "
+                                    "requested and remains unavailable as a complete source"
+                                ),
+                                actual_record_range=evidence.actual_range,
                             )
-                            archive_cache[cache_key] = source
+                        else:
+                            cache_key = (
+                                obligation.request_index,
+                                step.archive_plan.object_key,
+                            )
+                            cached_source = archive_cache.get(cache_key)
+                            if cached_source is None:
+                                source = self._run_archive(
+                                    request, step, stores[request.output_root], shared
+                                )
+                                archive_cache[cache_key] = source
+                            else:
+                                source = cached_source
                     else:
                         source = self._run_rest(
                             request, step, stores[request.output_root], shared
@@ -2163,7 +2330,12 @@ class BinancePublicHistoryAcquisition:
                 ),
                 [],
             ).append(index)
+        overlap_audited: set[int] = set()
+        elapsed_during_overlap = False
         for (root, _data_type, _subject), indices in comparison_groups.items():
+            if shared.enforce_elapsed_limit():
+                elapsed_during_overlap = True
+                break
             group_references: dict[
                 tuple[str, str], BinancePublicHistoryRawReference
             ] = {}
@@ -2176,6 +2348,9 @@ class BinancePublicHistoryAcquisition:
                         )
                     ] = reference
             for index in indices:
+                if shared.enforce_elapsed_limit():
+                    elapsed_during_overlap = True
+                    break
                 item = request_results[index]
                 request_range = item.request.request_range
                 unique_references = {
@@ -2190,8 +2365,14 @@ class BinancePublicHistoryAcquisition:
                 }
                 comparison_failed = False
                 for identity in touched_identities.values():
+                    if shared.enforce_elapsed_limit():
+                        elapsed_during_overlap = True
+                        break
                     try:
                         artifacts = stores[root].list_verified_revisions(identity)
+                        if shared.enforce_elapsed_limit():
+                            elapsed_during_overlap = True
+                            break
                         for artifact in artifacts:
                             reference = _artifact_reference(stores[root], artifact)
                             if (
@@ -2213,8 +2394,14 @@ class BinancePublicHistoryAcquisition:
                             identity=identity,
                         )
                         comparison_failed = True
+                if elapsed_during_overlap:
+                    break
                 if comparison_failed:
+                    overlap_audited.add(index)
                     continue
+                if shared.enforce_elapsed_limit():
+                    elapsed_during_overlap = True
+                    break
                 try:
                     duplicates, conflicts = self._compare(
                         item.request,
@@ -2228,8 +2415,13 @@ class BinancePublicHistoryAcquisition:
                         detail=detail,
                         identity=None,
                     )
+                    overlap_audited.add(index)
                     continue
+                if shared.enforce_elapsed_limit():
+                    elapsed_during_overlap = True
+                    break
                 if not duplicates and not conflicts:
+                    overlap_audited.add(index)
                     continue
                 item = request_results[index]
                 if conflicts:
@@ -2244,6 +2436,35 @@ class BinancePublicHistoryAcquisition:
                         else item.status
                     ),
                 )
+                overlap_audited.add(index)
+            if elapsed_during_overlap:
+                break
+        if shared.exhaustion_reason == "maximum_elapsed_seconds exhausted":
+            for index, item in enumerate(request_results):
+                if index not in overlap_audited:
+                    request_results[index] = self._record_overlap_budget_exhaustion(
+                        item,
+                        detail=(
+                            "maximum_elapsed_seconds exhausted before the Raw overlap "
+                            "audit completed; completed Raw revisions were preserved"
+                        ),
+                    )
+        final_elapsed = shared.elapsed
+        if (
+            not cancelled
+            and final_elapsed >= shared.budget.maximum_elapsed_seconds
+            and shared.exhaustion_reason is None
+        ):
+            shared.exhaustion_reason = "maximum_elapsed_seconds exhausted"
+            for index, item in enumerate(request_results):
+                if item.completed:
+                    request_results[index] = self._record_overlap_budget_exhaustion(
+                        item,
+                        detail=(
+                            "maximum_elapsed_seconds exhausted before run finalization; "
+                            "completed Raw revisions were preserved"
+                        ),
+                    )
         if cancelled:
             status = BinancePublicHistoryRunStatus.CANCELLED
             reason = "cancelled; completed Raw revisions were preserved"
@@ -2275,6 +2496,6 @@ class BinancePublicHistoryAcquisition:
             archive_objects_used=shared.archive_objects,
             rest_pages_used=shared.rest_pages,
             downloaded_bytes=shared.downloaded_bytes,
-            elapsed_seconds=shared.elapsed,
+            elapsed_seconds=final_elapsed,
             termination_reason=reason,
         )

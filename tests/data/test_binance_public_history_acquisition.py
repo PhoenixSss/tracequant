@@ -34,7 +34,10 @@ from tracequant.data import (
     BinancePublicHistoryPurpose,
     BinancePublicHistoryRunStatus,
     BinanceRestEndpoint,
+    RawArtifact,
     RawObjectIdentity,
+    RawRestPageSourceObject,
+    RawSourceObject,
     RawStore,
 )
 from tracequant.domain import InstrumentId, TimeRange
@@ -487,20 +490,92 @@ def test_report_backed_negative_and_partial_archive_cells_are_preserved(
 
     assert len(plan.obligations[0].candidates) == 1
     assert plan.obligations[0].candidates[0].archive_evidence is not_found
-    assert plan.obligations[1].candidates == ()
-    assert plan.obligations[1].initial_unmet_reason == (
-        "archive evidence is partial and no matching REST boundary is proven"
-    )
+    assert len(plan.obligations[1].candidates) == 1
+    assert plan.obligations[1].candidates[0].archive_evidence is partial
+    assert plan.obligations[1].initial_unmet_reason is None
 
     result = acquisition.run(plan)
 
     assert result.status is BinancePublicHistoryRunStatus.FAILED
     assert result.requests[0].unmet_ranges == (requests[0].request_range,)
     assert result.requests[1].unmet_ranges == (requests[1].request_range,)
+    partial_source = result.requests[1].obligations[0].sources[0]
+    assert partial_source.status == BinanceArchiveAcquisitionStatus.COVERAGE_GAP.value
+    assert partial_source.step.archive_evidence is partial
+    assert "partial coverage" in partial_source.detail
     assert calls == [
         "https://data.binance.vision/data/futures/um/daily/klines/BTCUSDT/1m/"
         "BTCUSDT-1m-2026-08-30.zip.CHECKSUM"
     ]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_coverage_rejects_overlapping_rest_cells_independent_of_tuple_order(
+    reverse: bool,
+) -> None:
+    supported = _rest_coverage()
+    unknown = replace(supported, status=BinanceKlineRestCoverageStatus.UNKNOWN)
+    windows = (unknown, supported) if reverse else (supported, unknown)
+
+    with pytest.raises(ValueError, match="overlapping source cells"):
+        BinancePublicHistoryCoverage(rest_windows=windows)
+
+
+def test_same_status_overlapping_rest_cells_select_evidence_deterministically(
+    tmp_path: Path,
+) -> None:
+    preferred = _rest_coverage()
+    alternative = replace(preferred, evidence_version="zz-alternative")
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=tmp_path / "deterministic-rest-evidence",
+    )
+    acquisition = BinancePublicHistoryAcquisition()
+
+    selected = tuple(
+        acquisition.plan(
+            (request,),
+            BinancePublicHistoryCoverage(rest_windows=windows),
+            _budget(),
+        )
+        .obligations[0]
+        .candidates[0]
+        .rest_coverage
+        for windows in ((preferred, alternative), (alternative, preferred))
+    )
+
+    assert selected == (preferred, preferred)
+
+
+def test_coverage_rejects_base_kline_coverage_for_funding_endpoint() -> None:
+    request_range = TimeRange(
+        start=datetime.fromtimestamp(FUNDING_START_MS / 1000, tz=UTC),
+        end=datetime.fromtimestamp(FUNDING_END_MS / 1000, tz=UTC),
+    )
+    funding = _family_rest_coverage(
+        BinancePublicHistoryDataType.SETTLED_FUNDING_RATE,
+        request_range,
+        BinancePublicHistoryPurpose.GAP,
+    )
+    mismatched = BinanceKlineRestCoverage(
+        status=funding.status,
+        endpoint=funding.endpoint,
+        subject=funding.subject,
+        allowed_range=funding.allowed_range,
+        evidence_version=funding.evidence_version,
+        evidence_reference=funding.evidence_reference,
+        evidence_sha256=funding.evidence_sha256,
+        observed_at=funding.observed_at,
+        normalized_params=funding.normalized_params,
+        response_sha256=funding.response_sha256,
+        actual_range=funding.actual_range,
+    )
+
+    with pytest.raises(TypeError, match="BinanceFundingRateRestCoverage"):
+        BinancePublicHistoryCoverage(rest_windows=(mismatched,))
 
 
 def test_archive_adapters_do_not_expose_caller_supplied_plan_execution() -> None:
@@ -1088,6 +1163,81 @@ def test_archive_404_uses_only_the_planned_proven_rest_fallback(
     assert len(archive_calls) == 1
     assert len(rest_calls) == 1
     assert obligation.sources[1].raw_references[0].source_kind.value == "rest"
+
+
+def test_partial_archive_decision_is_retained_with_successful_rest_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive_calls: list[str] = []
+
+    def forbidden_archive(url: str, timeout: float) -> ArchiveHttpResponse:
+        del timeout
+        archive_calls.append(url)
+        pytest.fail("partial archive evidence must not authorize archive I/O")
+
+    def rest_get(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        del url, timeout, maximum_response_bytes
+        start_ms = int(REST_START.timestamp() * 1000)
+        return BinanceKlineRestHttpResponse(
+            status=200,
+            body=json.dumps(
+                [_contract_row(start_ms), _contract_row(start_ms + 60_000)]
+            ).encode(),
+            headers={},
+        )
+
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.BACKFILL,
+        output_root=tmp_path / "partial-rest-replacement",
+    )
+    partial = BinancePublicHistoryArchiveEvidence(
+        data_type=request.data_type,
+        subject=request.subject,
+        boundary=BinanceArchiveObjectBoundary.day(date(2026, 9, 9)),
+        status=BinanceArchiveEvidenceStatus.PARTIAL,
+        evidence_version="partial-rest-replacement-fixture",
+        evidence_reference="tests/data/partial-rest-replacement-fixture",
+        evidence_sha256="c" * 64,
+        observed_at=NOW,
+        actual_range=TimeRange(start=REST_START, end=REST_START + timedelta(minutes=1)),
+    )
+    _approve_archive_evidence(monkeypatch, partial)
+    acquisition = BinancePublicHistoryAcquisition(
+        archive_http_get=forbidden_archive,
+        rest_http_get=rest_get,
+        clock=lambda: NOW,
+        wait=lambda _seconds: None,
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(
+            archive_objects=(partial,), rest_windows=(_rest_coverage(),)
+        ),
+        _budget(),
+    )
+
+    result = acquisition.run(plan)
+
+    assert [step.source_kind.value for step in plan.obligations[0].candidates] == [
+        "archive_daily",
+        "rest",
+    ]
+    assert result.completed
+    sources = result.requests[0].obligations[0].sources
+    assert [source.status for source in sources] == ["coverage_gap", "complete"]
+    assert sources[0].step.archive_evidence is partial
+    assert sources[0].actual_record_range == partial.actual_range
+    assert "partial coverage" in sources[0].detail
+    assert sources[1].step.reason == (
+        "proven bounded REST replacement for the explicit partial archive source"
+    )
+    assert sources[1].raw_references[0].source_kind.value == "rest"
+    assert archive_calls == []
 
 
 def test_missing_monthly_archive_uses_all_proven_daily_fallbacks(
@@ -2235,7 +2385,8 @@ def test_plan_selection_is_bounded_by_month_edges_partial_and_exact_rest_cell(
     )
     assert [
         step.source_kind.value for step in partial_plan.obligations[0].candidates
-    ] == ["rest"]
+    ] == ["archive_daily", "rest"]
+    assert partial_plan.archive_objects_planned == 0
 
     mark_request = replace(
         backfill,
@@ -2994,6 +3145,145 @@ def test_archive_final_response_cannot_publish_after_elapsed_budget(
     assert result.status is BinancePublicHistoryRunStatus.BUDGET_EXHAUSTED
     assert result.termination_reason == "maximum_elapsed_seconds exhausted"
     assert result.requests[0].raw_references == ()
+
+
+def test_rest_persistence_cannot_complete_after_shared_elapsed_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock_value = 0.0
+    calls = 0
+    original_write = RawStore.write
+
+    def valid_rest(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        del url, timeout, maximum_response_bytes
+        nonlocal calls
+        calls += 1
+        start_ms = int(REST_START.timestamp() * 1000)
+        return BinanceKlineRestHttpResponse(
+            status=200,
+            body=json.dumps(
+                [_contract_row(start_ms), _contract_row(start_ms + 60_000)]
+            ).encode(),
+            headers={},
+        )
+
+    def late_write(
+        self: RawStore, source: RawSourceObject | RawRestPageSourceObject
+    ) -> RawArtifact:
+        nonlocal clock_value
+        artifact = original_write(self, source)
+        clock_value = 6.0
+        return artifact
+
+    def forbidden_overlap(
+        self: RawStore, identity: RawObjectIdentity
+    ) -> tuple[RawArtifact, ...]:
+        del self, identity
+        pytest.fail("elapsed budget must stop before Raw overlap inspection")
+
+    requests = tuple(
+        BinancePublicHistoryAcquisitionRequest(
+            subject=InstrumentId("BTCUSDT"),
+            data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+            request_range=TimeRange(start=REST_START, end=REST_END),
+            purpose=BinancePublicHistoryPurpose.RECENT,
+            output_root=tmp_path / f"post-rest-budget-{index}",
+        )
+        for index in range(2)
+    )
+    monkeypatch.setattr(RawStore, "write", late_write)
+    monkeypatch.setattr(RawStore, "list_verified_revisions", forbidden_overlap)
+    acquisition = BinancePublicHistoryAcquisition(
+        rest_http_get=valid_rest,
+        clock=lambda: NOW,
+        monotonic_clock=lambda: clock_value,
+        wait=lambda _seconds: None,
+    )
+    plan = acquisition.plan(
+        requests,
+        BinancePublicHistoryCoverage(rest_windows=(_rest_coverage(),)),
+        replace(_budget(), maximum_elapsed_seconds=5),
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.status is BinancePublicHistoryRunStatus.BUDGET_EXHAUSTED
+    assert result.termination_reason == "maximum_elapsed_seconds exhausted"
+    assert result.elapsed_seconds == 6
+    assert calls == 1
+    first = result.requests[0]
+    assert first.status is BinancePublicHistoryRunStatus.PARTIAL
+    assert len(first.raw_references) == 1
+    assert first.obligations[0].sources[0].status == "budget_exhausted"
+    assert not result.requests[1].completed
+
+
+def test_overlap_inspection_cannot_complete_after_shared_elapsed_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock_value = 0.0
+    original_list = RawStore.list_verified_revisions
+
+    def valid_rest(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        del url, timeout, maximum_response_bytes
+        start_ms = int(REST_START.timestamp() * 1000)
+        return BinanceKlineRestHttpResponse(
+            status=200,
+            body=json.dumps(
+                [_contract_row(start_ms), _contract_row(start_ms + 60_000)]
+            ).encode(),
+            headers={},
+        )
+
+    def late_list(
+        self: RawStore, identity: RawObjectIdentity
+    ) -> tuple[RawArtifact, ...]:
+        nonlocal clock_value
+        artifacts = original_list(self, identity)
+        clock_value = 6.0
+        return artifacts
+
+    def forbidden_compare(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        pytest.fail("elapsed budget must stop before semantic overlap comparison")
+
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=tmp_path / "overlap-elapsed-budget",
+    )
+    monkeypatch.setattr(RawStore, "list_verified_revisions", late_list)
+    monkeypatch.setattr(BinancePublicHistoryAcquisition, "_compare", forbidden_compare)
+    acquisition = BinancePublicHistoryAcquisition(
+        rest_http_get=valid_rest,
+        clock=lambda: NOW,
+        monotonic_clock=lambda: clock_value,
+        wait=lambda _seconds: None,
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(rest_windows=(_rest_coverage(),)),
+        replace(_budget(), maximum_elapsed_seconds=5),
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.status is BinancePublicHistoryRunStatus.BUDGET_EXHAUSTED
+    assert result.termination_reason == "maximum_elapsed_seconds exhausted"
+    request_result = result.requests[0]
+    assert request_result.status is BinancePublicHistoryRunStatus.PARTIAL
+    assert len(request_result.raw_references) == 1
+    assert request_result.satisfied_ranges == ()
+    assert request_result.unmet_ranges == (request.request_range,)
+    source = request_result.obligations[0].sources[0]
+    assert source.status == "budget_exhausted"
+    assert "overlap audit" in source.detail
 
 
 def test_rest_timeout_exhaustion_preserves_bounded_page_attempts(
