@@ -49,6 +49,7 @@ __all__ = [
     "RawObjectIdentity",
     "RawRevisionEvidenceKind",
     "RawRevisionIdentity",
+    "RawRestPageSourceObject",
     "RawSourceProvenance",
     "RawSourceObject",
     "RawStore",
@@ -59,10 +60,12 @@ _LAYOUT_VERSION: Final = "v1"
 _LEGACY_MANIFEST_VERSION: Final = 1
 _LEGACY_CURRENT_MANIFEST_VERSION: Final = 3
 _MANIFEST_VERSION: Final = 4
+_REST_MANIFEST_VERSION: Final = 5
 _DATA_FILENAME: Final = "data.parquet"
 _MANIFEST_FILENAME: Final = "manifest.json"
 _ARCHIVE_FILENAME: Final = "source.zip"
 _CHECKSUM_FILENAME: Final = "source.CHECKSUM"
+_REST_RESPONSE_FILENAME: Final = "response.json"
 _ACQUISITION_DIRNAME: Final = "acquisition"
 _ACQUISITION_MANIFEST_VERSION: Final = 1
 
@@ -755,6 +758,56 @@ class RawSourceObject:
         return RawRevisionIdentity.from_source_object(self)
 
 
+@dataclass(frozen=True, slots=True)
+class RawRestPageSourceObject:
+    """One verified REST page and the exact response bytes that produced it."""
+
+    request: BinanceRestPageRequest
+    rows: pl.DataFrame
+    actual_record_range: TimeRange
+    raw_schema_identifier: str
+    producer_version: str
+    provenance: BinanceRestPageProvenance
+    response_body: bytes
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request, BinanceRestPageRequest):
+            raise TypeError("request must be a BinanceRestPageRequest")
+        if not isinstance(self.rows, pl.DataFrame):
+            raise TypeError("rows must be a polars DataFrame")
+        if not isinstance(self.actual_record_range, TimeRange):
+            raise TypeError("actual_record_range must be a TimeRange")
+        for field in ("raw_schema_identifier", "producer_version"):
+            value = getattr(self, field)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{field} must be a non-empty string")
+        if not isinstance(self.provenance, BinanceRestPageProvenance):
+            raise TypeError("provenance must be a BinanceRestPageProvenance")
+        if self.provenance.request != self.request:
+            raise ValueError("REST provenance request does not match page request")
+        if not self.provenance.is_successful_response:
+            raise ValueError("REST Raw pages require a successful HTTP response")
+        if self.rows.is_empty():
+            raise ValueError("empty REST responses must not publish a Raw page")
+        if self.provenance.record_count != self.rows.height:
+            raise ValueError("REST provenance record_count does not match rows")
+        if not isinstance(self.response_body, bytes):
+            raise TypeError("response_body must be bytes")
+        if (
+            hashlib.sha256(self.response_body).hexdigest()
+            != self.provenance.response_sha256
+        ):
+            raise ValueError("response_body does not match REST provenance digest")
+
+    @property
+    def identity(self) -> RawObjectIdentity:
+        return RawObjectIdentity.from_rest_page_request(self.request)
+
+    @property
+    def revision_identity(self) -> RawRevisionIdentity:
+        return RawRevisionIdentity.from_rest_page_provenance(self.provenance)
+
+
 class RawRevisionEvidenceKind(StrEnum):
     """Kinds of upstream evidence that can identify an immutable revision."""
 
@@ -910,6 +963,7 @@ class RawManifest:
     producer_version: str
     created_at: datetime
     provenance: RawSourceProvenance | None = None
+    rest_provenance: BinanceRestPageProvenance | None = None
     logical_object_id: str | None = None
     revision_id: str | None = None
     revision_evidence_kind: RawRevisionEvidenceKind | None = None
@@ -935,11 +989,22 @@ class RawManifest:
         if self.manifest_schema_version in {
             _LEGACY_CURRENT_MANIFEST_VERSION,
             _MANIFEST_VERSION,
+            _REST_MANIFEST_VERSION,
         }:
-            payload["provenance"] = (
-                self.provenance.to_dict() if self.provenance is not None else None
+            selected_provenance = (
+                self.rest_provenance
+                if self.manifest_schema_version == _REST_MANIFEST_VERSION
+                else self.provenance
             )
-            if self.manifest_schema_version == _MANIFEST_VERSION:
+            payload["provenance"] = (
+                selected_provenance.to_dict()
+                if selected_provenance is not None
+                else None
+            )
+            if self.manifest_schema_version in {
+                _MANIFEST_VERSION,
+                _REST_MANIFEST_VERSION,
+            }:
                 payload.update(
                     {
                         "logical_object_id": self.logical_object_id,
@@ -953,6 +1018,8 @@ class RawManifest:
                         "verified_upstream_revision": self.verified_upstream_revision,
                     }
                 )
+                if self.manifest_schema_version == _REST_MANIFEST_VERSION:
+                    payload["provenance_kind"] = "rest_response"
         return payload
 
     @property
@@ -1006,6 +1073,7 @@ class RawManifest:
             _LEGACY_MANIFEST_VERSION,
             _LEGACY_CURRENT_MANIFEST_VERSION,
             _MANIFEST_VERSION,
+            _REST_MANIFEST_VERSION,
         }:
             raise RawArtifactValidationError(
                 f"unsupported manifest schema version {version!r}"
@@ -1024,9 +1092,11 @@ class RawManifest:
                     "verified_upstream_revision",
                 }
             )
-            if version == _MANIFEST_VERSION
+            if version in {_MANIFEST_VERSION, _REST_MANIFEST_VERSION}
             else common_names
         )
+        if version == _REST_MANIFEST_VERSION:
+            names |= {"provenance_kind"}
         fields = _exact_mapping(value, fields=names, model="RawManifest")
         if fields["completed"] is not True:
             raise RawArtifactValidationError("manifest is not completed")
@@ -1068,11 +1138,24 @@ class RawManifest:
             caller_request_range = TimeRange.from_dict(fields["caller_request_range"])
             actual_record_range = TimeRange.from_dict(fields["actual_record_range"])
             provenance_value = fields.get("provenance")
-            provenance = (
-                None
-                if provenance_value is None
-                else RawSourceProvenance.from_dict(provenance_value)
-            )
+            if version == _REST_MANIFEST_VERSION:
+                if fields["provenance_kind"] != "rest_response":
+                    raise RawArtifactValidationError(
+                        "REST manifest provenance_kind must be 'rest_response'"
+                    )
+                if provenance_value is None:
+                    raise RawArtifactValidationError(
+                        "REST manifest requires response provenance"
+                    )
+                provenance = None
+                rest_provenance = BinanceRestPageProvenance.from_dict(provenance_value)
+            else:
+                provenance = (
+                    None
+                    if provenance_value is None
+                    else RawSourceProvenance.from_dict(provenance_value)
+                )
+                rest_provenance = None
         except (TypeError, ValueError) as error:
             raise RawArtifactValidationError(
                 "manifest contains invalid typed identity or UTC range fields"
@@ -1096,8 +1179,9 @@ class RawManifest:
             ),
             created_at=created_at,
             provenance=provenance,
+            rest_provenance=rest_provenance,
         )
-        if version == _MANIFEST_VERSION:
+        if version in {_MANIFEST_VERSION, _REST_MANIFEST_VERSION}:
             logical_object_id = _require_string(
                 fields["logical_object_id"], field="logical_object_id"
             )
@@ -1131,6 +1215,13 @@ class RawManifest:
                 raise RawArtifactValidationError(
                     "manifest contains invalid revision identity evidence"
                 ) from error
+            if (
+                version == _REST_MANIFEST_VERSION
+                and evidence_kind is not RawRevisionEvidenceKind.RESPONSE_SHA256
+            ):
+                raise RawArtifactValidationError(
+                    "REST manifest revision evidence must be response_sha256"
+                )
             if revision_id != revision_identity.revision_id:
                 raise RawArtifactValidationError(
                     "manifest revision id does not match revision evidence"
@@ -1143,12 +1234,22 @@ class RawManifest:
                 raise RawArtifactValidationError(
                     "manifest upstream revision does not match revision evidence"
                 )
-            if manifest.provenance is not None and (
-                f"sha256:{manifest.provenance.archive_sha256}" != verified_checksum
-            ):
-                raise RawArtifactValidationError(
-                    "manifest provenance checksum does not match revision evidence"
-                )
+            if isinstance(manifest.provenance, RawSourceProvenance):
+                if f"sha256:{manifest.provenance.archive_sha256}" != verified_checksum:
+                    raise RawArtifactValidationError(
+                        "manifest provenance checksum does not match revision evidence"
+                    )
+            elif manifest.rest_provenance is not None:
+                if (
+                    not manifest.rest_provenance.is_successful_response
+                    or manifest.rest_provenance.request.identity
+                    != object_identity.rest_page_identity
+                    or manifest.rest_provenance.revision_checksum != verified_checksum
+                    or manifest.rest_provenance.record_count != manifest.record_count
+                ):
+                    raise RawArtifactValidationError(
+                        "REST manifest provenance does not match page revision"
+                    )
             return replace(
                 manifest,
                 logical_object_id=logical_object_id,
@@ -1205,6 +1306,11 @@ class RawArtifact:
     def checksum_response_path(self) -> Path:
         """Return the persisted upstream checksum response body."""
         return self.path / _CHECKSUM_FILENAME
+
+    @property
+    def response_path(self) -> Path:
+        """Return the exact persisted REST response body."""
+        return self.path / _REST_RESPONSE_FILENAME
 
     @property
     def logical_object_id(self) -> str:
@@ -1348,9 +1454,14 @@ class RawStore:
         temporary_path = Path(
             tempfile.mkdtemp(prefix=f".{manifest.record_id}.tmp-", dir=parent_path)
         )
+        source_filename = (
+            _REST_RESPONSE_FILENAME
+            if manifest.object_identity.rest_page_identity is not None
+            else _ARCHIVE_FILENAME
+        )
         try:
             if source_response is not None and source_response.body is not None:
-                (temporary_path / _ARCHIVE_FILENAME).write_bytes(source_response.body)
+                (temporary_path / source_filename).write_bytes(source_response.body)
             if checksum_response is not None and checksum_response.body is not None:
                 (temporary_path / _CHECKSUM_FILENAME).write_bytes(
                     checksum_response.body
@@ -1360,7 +1471,7 @@ class RawStore:
                 _canonical_json(manifest.to_dict()) + "\n", encoding="utf-8"
             )
             if source_response is not None and source_response.body is not None:
-                self._sync_file(temporary_path / _ARCHIVE_FILENAME)
+                self._sync_file(temporary_path / source_filename)
             if checksum_response is not None and checksum_response.body is not None:
                 self._sync_file(temporary_path / _CHECKSUM_FILENAME)
             self._sync_file(manifest_path)
@@ -1406,12 +1517,36 @@ class RawStore:
             )
         return tuple(records)
 
-    def write(self, source_object: RawSourceObject) -> RawArtifact:
+    def write(
+        self, source_object: RawSourceObject | RawRestPageSourceObject
+    ) -> RawArtifact:
         """Atomically publish or idempotently return one verified Raw object."""
-        if not isinstance(source_object, RawSourceObject):
-            raise TypeError("source_object must be a RawSourceObject")
+        if not isinstance(source_object, (RawSourceObject, RawRestPageSourceObject)):
+            raise TypeError(
+                "source_object must be a RawSourceObject or RawRestPageSourceObject"
+            )
+        is_rest_page = isinstance(source_object, RawRestPageSourceObject)
         identity = source_object.identity
         revision_identity = source_object.revision_identity
+        upstream_checksum: str | None
+        upstream_revision: str | None
+        if isinstance(source_object, RawRestPageSourceObject):
+            assert revision_identity is not None
+            caller_request_range = source_object.request.caller_range
+            upstream_checksum = revision_identity.verified_upstream_checksum
+            upstream_revision = revision_identity.verified_upstream_revision
+        else:
+            caller_request_range = source_object.request.request_range
+            upstream_checksum = (
+                revision_identity.verified_upstream_checksum
+                if revision_identity is not None
+                else source_object.upstream_checksum
+            )
+            upstream_revision = (
+                revision_identity.verified_upstream_revision
+                if revision_identity is not None
+                else source_object.upstream_revision
+            )
         final_path = (
             self.revision_path_for(identity, revision_identity)
             if revision_identity is not None
@@ -1427,7 +1562,10 @@ class RawStore:
             data_path = temporary_path / _DATA_FILENAME
             source_object.rows.write_parquet(data_path)
             checksum = _sha256(data_path)
-            if source_object.provenance is not None:
+            if isinstance(source_object, RawRestPageSourceObject):
+                response_path = temporary_path / _REST_RESPONSE_FILENAME
+                response_path.write_bytes(source_object.response_body)
+            elif source_object.provenance is not None:
                 archive_path = temporary_path / _ARCHIVE_FILENAME
                 checksum_response_path = temporary_path / _CHECKSUM_FILENAME
                 assert isinstance(source_object.archive_payload, bytes)
@@ -1437,31 +1575,34 @@ class RawStore:
             created_at = to_utc(self._clock())
             manifest = RawManifest(
                 manifest_schema_version=(
-                    _MANIFEST_VERSION
+                    _REST_MANIFEST_VERSION
+                    if is_rest_page
+                    else _MANIFEST_VERSION
                     if revision_identity is not None
                     else _LEGACY_CURRENT_MANIFEST_VERSION
                 ),
                 completed=True,
                 object_identity=identity,
-                caller_request_range=source_object.request.request_range,
+                caller_request_range=caller_request_range,
                 actual_record_range=source_object.actual_record_range,
                 record_count=source_object.rows.height,
                 parquet_file_size=data_path.stat().st_size,
                 project_sha256=checksum,
-                upstream_checksum=(
-                    revision_identity.verified_upstream_checksum
-                    if revision_identity is not None
-                    else source_object.upstream_checksum
-                ),
-                upstream_revision=(
-                    revision_identity.verified_upstream_revision
-                    if revision_identity is not None
-                    else source_object.upstream_revision
-                ),
+                upstream_checksum=upstream_checksum,
+                upstream_revision=upstream_revision,
                 raw_schema_identifier=source_object.raw_schema_identifier,
                 producer_version=source_object.producer_version,
                 created_at=created_at,
-                provenance=source_object.provenance,
+                provenance=(
+                    None
+                    if isinstance(source_object, RawRestPageSourceObject)
+                    else source_object.provenance
+                ),
+                rest_provenance=(
+                    source_object.provenance
+                    if isinstance(source_object, RawRestPageSourceObject)
+                    else None
+                ),
                 logical_object_id=(
                     revision_identity.logical_object_id
                     if revision_identity is not None
@@ -1493,7 +1634,9 @@ class RawStore:
                 _canonical_json(manifest.to_dict()) + "\n", encoding="utf-8"
             )
             self._sync_file(data_path)
-            if source_object.provenance is not None:
+            if isinstance(source_object, RawRestPageSourceObject):
+                self._sync_file(response_path)
+            elif source_object.provenance is not None:
                 self._sync_file(archive_path)
                 self._sync_file(checksum_response_path)
             self._sync_file(manifest_path)
@@ -1739,8 +1882,13 @@ class RawStore:
             raise RawArtifactValidationError(
                 "acquisition manifest object identity does not match path"
             )
+        source_filename = (
+            _REST_RESPONSE_FILENAME
+            if manifest.object_identity.rest_page_identity is not None
+            else _ARCHIVE_FILENAME
+        )
         for filename, digest in (
-            (_ARCHIVE_FILENAME, manifest.source_body_sha256),
+            (source_filename, manifest.source_body_sha256),
             (_CHECKSUM_FILENAME, manifest.checksum_response_sha256),
         ):
             body_path = path / filename
@@ -1808,7 +1956,18 @@ class RawStore:
             provenance_matches = existing_provenance.matches_except_acquired_at(
                 candidate_provenance
             )
-        if not provenance_matches:
+        existing_rest = existing.manifest.rest_provenance
+        candidate_rest = candidate_manifest.rest_provenance
+        if existing_rest is None or candidate_rest is None:
+            rest_provenance_matches = existing_rest is candidate_rest
+        else:
+            rest_provenance_matches = (
+                existing_rest.request.identity == candidate_rest.request.identity
+                and existing_rest.response_sha256 == candidate_rest.response_sha256
+                and existing_rest.http_status == candidate_rest.http_status
+                and existing_rest.record_count == candidate_rest.record_count
+            )
+        if not provenance_matches or not rest_provenance_matches:
             raise RawArtifactConflictError(
                 f"Raw identity {candidate_manifest.object_identity.object_id} "
                 "already exists with different content or provenance"
@@ -1854,7 +2013,7 @@ class RawStore:
             raise RawArtifactValidationError(
                 "revision artifact requires an exact revision path"
             )
-        if manifest.provenance is not None:
+        if isinstance(manifest.provenance, RawSourceProvenance):
             archive_path = path / _ARCHIVE_FILENAME
             checksum_response_path = path / _CHECKSUM_FILENAME
             if not archive_path.is_file() or not checksum_response_path.is_file():
@@ -1872,6 +2031,16 @@ class RawStore:
             ):
                 raise RawArtifactValidationError(
                     "checksum response digest does not match provenance"
+                )
+        elif manifest.rest_provenance is not None:
+            response_path = path / _REST_RESPONSE_FILENAME
+            if not response_path.is_file():
+                raise RawArtifactIncompleteError(
+                    "REST Raw artifact requires response.json"
+                )
+            if _sha256(response_path) != manifest.rest_provenance.response_sha256:
+                raise RawArtifactValidationError(
+                    "REST response checksum does not match provenance"
                 )
         size = data_path.stat().st_size
         if size != manifest.parquet_file_size:

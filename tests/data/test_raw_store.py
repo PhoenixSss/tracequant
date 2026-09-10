@@ -334,7 +334,7 @@ def test_reader_rejects_corrupt_or_unsupported_artifact(
         if mutation == "checksum":
             payload["project_sha256"] = "0" * 64
         elif mutation == "version":
-            payload["manifest_schema_version"] = 5
+            payload["manifest_schema_version"] = 6
         else:
             payload["completed"] = False
         artifact.manifest_path.write_text(json.dumps(payload), encoding="utf-8")
