@@ -1661,10 +1661,18 @@ class BinancePublicHistoryAcquisition:
             )
             bounded_timeout = min(timeout, shared.remaining_seconds)
             if self._uses_default_archive_http_get:
+
+                def cancelled() -> bool:
+                    if not self._cancelled():
+                        return False
+                    shared.cancelled = True
+                    return True
+
                 response = _default_archive_http_get(
                     url,
                     bounded_timeout,
                     maximum_response_bytes=response_limit,
+                    cancelled=cancelled,
                 )
             else:
                 response = self._archive_http_get(url, bounded_timeout)
@@ -2151,6 +2159,16 @@ class BinancePublicHistoryAcquisition:
                         detail if obligation_affected else obligation.unmet_reason
                     ),
                 )
+            )
+        if not affected and identity is not None:
+            # The failed identity may have been contributed by another request
+            # in the same overlap group.  It was selected because it intersects
+            # this request, so an unreadable sibling revision still invalidates
+            # this request's comparison rather than silently completing it.
+            return BinancePublicHistoryAcquisition._record_overlap_local_failure(
+                result,
+                detail=detail,
+                identity=None,
             )
         if not affected:
             return result

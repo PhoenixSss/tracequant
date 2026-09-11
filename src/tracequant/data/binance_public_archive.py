@@ -12,8 +12,13 @@ import csv
 import hashlib
 import http.client
 import io
+import json
 import math
 import re
+import subprocess
+import sys
+import tempfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -230,7 +235,7 @@ class _DownloadNotFoundError(FileNotFoundError):
         self.response = response
 
 
-def _default_http_get(
+def _urllib_http_get(
     url: str,
     timeout: float,
     *,
@@ -288,6 +293,97 @@ def _default_http_get(
         )
     except (TimeoutError, urllib.error.URLError):
         raise
+
+
+def _terminate_http_worker(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        process.kill()
+    process.wait()
+
+
+def _default_http_get(
+    url: str,
+    timeout: float,
+    *,
+    maximum_response_bytes: int | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> ArchiveHttpResponse:
+    """Read one archive response behind an absolute, cancellable boundary."""
+    with tempfile.TemporaryDirectory(prefix="tracequant-archive-http-") as directory:
+        root = Path(directory)
+        body_path = root / "body.bin"
+        result_path = root / "result.json"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "tracequant.data._binance_archive_http_worker",
+                url,
+                repr(timeout),
+                (
+                    "none"
+                    if maximum_response_bytes is None
+                    else str(maximum_response_bytes)
+                ),
+                str(body_path),
+                str(result_path),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        deadline = time.monotonic() + timeout
+        while process.poll() is None:
+            if cancelled is not None and cancelled():
+                _terminate_http_worker(process)
+                raise InterruptedError("archive HTTP attempt was cancelled")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_http_worker(process)
+                raise TimeoutError(
+                    "archive HTTP attempt exceeded its absolute elapsed-time deadline"
+                )
+            try:
+                process.wait(timeout=min(0.05, remaining))
+            except subprocess.TimeoutExpired:
+                continue
+        if process.returncode != 0 or not result_path.is_file():
+            raise OSError("archive HTTP worker exited without a valid result")
+        try:
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise OSError("archive HTTP worker returned an invalid result") from error
+        if result.get("kind") == "failure":
+            detail = str(result.get("detail", "archive HTTP worker failed"))
+            if result.get("error_type") == "_InvalidContentError":
+                raise _InvalidContentError(detail)
+            raise OSError(detail)
+        try:
+            status = result["status"]
+            headers = result["headers"]
+            complete = result["complete"]
+        except KeyError as error:
+            raise OSError("archive HTTP worker returned an invalid result") from error
+        if (
+            type(status) is not int
+            or not isinstance(headers, dict)
+            or not isinstance(complete, bool)
+            or any(
+                not isinstance(name, str) or not isinstance(value, str)
+                for name, value in headers.items()
+            )
+        ):
+            raise OSError("archive HTTP worker returned an invalid result")
+        try:
+            body = body_path.read_bytes()
+        except OSError as error:
+            raise OSError("archive HTTP worker omitted its response body") from error
+        if maximum_response_bytes is None and len(body) > _MAX_ARCHIVE_BYTES:
+            raise _InvalidContentError("archive response exceeds the size limit")
+        if maximum_response_bytes is not None and len(body) > min(
+            maximum_response_bytes, _MAX_ARCHIVE_BYTES
+        ):
+            raise OSError("archive HTTP worker exceeded its bounded response size")
+        return ArchiveHttpResponse(status, body, headers, complete=complete)
 
 
 def _download(

@@ -2,9 +2,12 @@ import hashlib
 import inspect
 import io
 import json
+import threading
+import time
 import zipfile
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -1949,6 +1952,88 @@ def test_corrupt_old_revision_returns_local_failure_with_current_reference(
     assert old_data_path.read_bytes() == b"corrupt historical revision"
 
 
+def test_sibling_overlap_inspection_failure_marks_current_request_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    second_start = REST_START + timedelta(minutes=1)
+    second_end = REST_END + timedelta(minutes=1)
+
+    def ranged_rest(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        del timeout, maximum_response_bytes
+        start_ms = int(
+            (
+                second_start
+                if f"startTime={int(second_start.timestamp() * 1_000)}" in url
+                else REST_START
+            ).timestamp()
+            * 1_000
+        )
+        return BinanceKlineRestHttpResponse(
+            status=200,
+            body=json.dumps(
+                [_contract_row(start_ms), _contract_row(start_ms + 60_000)]
+            ).encode(),
+            headers={},
+        )
+
+    root = tmp_path / "sibling-overlap-local-failure"
+    first = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        start=REST_START,
+        end=REST_END,
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=root,
+    )
+    second = replace(first, start=second_start, end=second_end)
+    acquisition = BinancePublicHistoryAcquisition(
+        rest_http_get=ranged_rest,
+        clock=lambda: NOW,
+        wait=lambda _seconds: None,
+    )
+    plan = acquisition.plan(
+        (first, second),
+        BinancePublicHistoryCoverage(rest_windows=(_rest_coverage(),)),
+        _budget(),
+    )
+    seed = acquisition.run(plan)
+    assert seed.completed
+    first_identity = seed.requests[0].raw_references[0].object_identity
+    sibling_identity = seed.requests[1].raw_references[0].object_identity
+    assert first_identity != sibling_identity
+    original_list = RawStore.list_verified_revisions
+
+    def fail_sibling_during_overlap(
+        self: RawStore, identity: RawObjectIdentity
+    ) -> tuple[RawArtifact, ...]:
+        caller = inspect.currentframe()
+        assert caller is not None and caller.f_back is not None
+        if (
+            caller.f_back.f_code.co_filename == history_module.__file__
+            and identity == sibling_identity
+        ):
+            raise OSError("injected unreadable sibling revision")
+        return original_list(self, identity)
+
+    monkeypatch.setattr(
+        RawStore, "list_verified_revisions", fail_sibling_during_overlap
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.status is BinancePublicHistoryRunStatus.PARTIAL
+    current = result.requests[0]
+    assert current.status is BinancePublicHistoryRunStatus.PARTIAL
+    assert current.satisfied_ranges == ()
+    assert current.unmet_ranges == (first.request_range,)
+    assert len(current.raw_references) == 1
+    source = current.obligations[0].sources[0]
+    assert source.status == "local_failure"
+    assert "injected unreadable sibling revision" in source.detail
+
+
 def test_archive_reference_materialization_failure_returns_local_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3628,7 +3713,7 @@ def test_default_archive_transport_caps_the_stream_while_reading(
         lambda request, timeout: Response(),
     )
 
-    response = archive_module._default_http_get(
+    response = archive_module._urllib_http_get(
         "https://example.invalid/archive.zip",
         5.0,
         maximum_response_bytes=5,
@@ -3637,6 +3722,127 @@ def test_default_archive_transport_caps_the_stream_while_reading(
     assert read_limits == [5]
     assert response.body == b"12345"
     assert not response.complete
+
+
+@pytest.mark.parametrize("blocked_stage", ["open", "body"])
+def test_default_archive_transport_terminates_worker_at_absolute_deadline(
+    blocked_stage: str,
+) -> None:
+    reached_block = threading.Event()
+
+    class BlockingHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            reached_block.set()
+            if blocked_stage == "open":
+                time.sleep(5.0)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", "10")
+            self.end_headers()
+            self.wfile.write(b"x")
+            self.wfile.flush()
+            time.sleep(5.0)
+
+        def log_message(self, unused_format: str, *unused_args: object) -> None:
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), BlockingHandler)
+    server.daemon_threads = True
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError, match="absolute elapsed-time deadline"):
+            archive_module._default_http_get(
+                f"http://127.0.0.1:{server.server_port}/archive.zip",
+                2.0,
+                maximum_response_bytes=10,
+            )
+        elapsed = time.monotonic() - started
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join()
+
+    assert reached_block.is_set()
+    assert elapsed < 3.0
+
+
+def test_inflight_default_archive_transport_cancellation_stops_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reached_body = threading.Event()
+    cancellation_requested = threading.Event()
+
+    class BlockingHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Length", "100")
+            self.end_headers()
+            self.wfile.write(b"x")
+            self.wfile.flush()
+            reached_body.set()
+            cancellation_requested.set()
+            time.sleep(5.0)
+
+        def log_message(self, unused_format: str, *unused_args: object) -> None:
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), BlockingHandler)
+    server.daemon_threads = True
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    monkeypatch.setattr(
+        history_module,
+        "_ARCHIVE_ROOT",
+        f"http://127.0.0.1:{server.server_port}",
+    )
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        start=datetime(2026, 8, 29, tzinfo=UTC),
+        end=datetime(2026, 8, 30, tzinfo=UTC),
+        purpose=BinancePublicHistoryPurpose.BACKFILL,
+        output_root=tmp_path / "inflight-archive-cancellation",
+    )
+    evidence = BinancePublicHistoryArchiveEvidence(
+        data_type=request.data_type,
+        subject=request.subject,
+        boundary=BinanceArchiveObjectBoundary.day(date(2026, 8, 29)),
+        status=BinanceArchiveEvidenceStatus.SUPPORTED,
+        evidence_version="inflight-cancellation-fixture",
+        evidence_reference="tests/data/inflight-cancellation-fixture",
+        evidence_sha256="a" * 64,
+        observed_at=NOW,
+        object_sha256="b" * 64,
+        actual_range=request.request_range,
+    )
+    _approve_archive_evidence(monkeypatch, evidence)
+    acquisition = BinancePublicHistoryAcquisition(
+        clock=lambda: NOW,
+        cancelled=cancellation_requested.is_set,
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(archive_objects=(evidence,)),
+        replace(_budget(), timeout_seconds=5, maximum_elapsed_seconds=5),
+    )
+    started = time.monotonic()
+    try:
+        result = acquisition.run(plan)
+        elapsed = time.monotonic() - started
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join()
+
+    assert reached_body.is_set()
+    assert elapsed < 2.0
+    assert result.status is BinancePublicHistoryRunStatus.CANCELLED
+    assert result.termination_reason == (
+        "cancelled; completed Raw revisions were preserved"
+    )
+    assert result.requests[0].raw_references == ()
 
 
 def test_archive_cumulative_budget_caps_each_production_response(
@@ -3667,8 +3873,13 @@ def test_archive_cumulative_budget_caps_each_production_response(
     response_limits: list[int] = []
 
     def bounded_default(
-        url: str, timeout: float, *, maximum_response_bytes: int | None = None
+        url: str,
+        timeout: float,
+        *,
+        maximum_response_bytes: int | None = None,
+        cancelled: object = None,
     ) -> ArchiveHttpResponse:
+        del cancelled
         assert maximum_response_bytes is not None
         response_limits.append(maximum_response_bytes)
         body = checksum if url.endswith(".CHECKSUM") else payload
