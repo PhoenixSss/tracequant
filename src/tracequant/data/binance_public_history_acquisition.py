@@ -112,6 +112,7 @@ _KLINE_TYPES: Final = frozenset(
 )
 _ARCHIVE_ROOT: Final = "https://data.binance.vision"
 _ONE_MINUTE_MS: Final = 60_000
+_HTTP_STATUS_BAD_REQUEST: Final = 400
 _APPROVED_ARCHIVE_EVIDENCE_VERSION: Final = (
     "issue-279-probe-run-2026-09-09T10:58:43.717234Z"
 )
@@ -810,6 +811,14 @@ class BinancePublicHistoryRawReference:
 
 @dataclass(frozen=True, slots=True)
 class BinancePublicHistorySourceResult:
+    """One executed source attempt.
+
+    ``window_exhausted`` is only meaningful for REST sources: it records whether
+    the bounded acquisition reached the end of the requested window, which is the
+    evidence a funding event series can offer for obligation satisfaction.  It
+    stays ``None`` for archive sources.
+    """
+
     step: BinancePublicHistorySourceStep
     status: str
     detail: str
@@ -818,6 +827,7 @@ class BinancePublicHistorySourceResult:
     pages_used: int = 0
     actual_record_range: TimeRange | None = None
     rest_pages: tuple[BinanceKlineRestPageResult, ...] = ()
+    window_exhausted: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1071,7 +1081,8 @@ def _plan_archive_obligation(
     preferred: tuple[BinancePublicHistorySourceStep, ...] = (),
 ) -> BinancePublicHistoryObligationPlan:
     required = _intersection(request.request_range, _boundary_range(boundary))
-    assert required is not None
+    if required is None:
+        raise ValueError("archive boundary does not intersect the request range")
     evidence = _archive_evidence(coverage, request, boundary)
     rest = _rest_evidence(coverage, request, required)
     candidates: list[BinancePublicHistorySourceStep] = list(preferred)
@@ -1664,7 +1675,15 @@ class BinancePublicHistoryAcquisition:
                     complete=False,
                 )
             shared.after_http(response.body)
-            if not response.complete and shared.exhaustion_reason is None:
+            # An error response body is bounded evidence rather than object
+            # content, so its `complete` flag carries no budget meaning: a large
+            # 404 body must still reach the adapter as NOT_FOUND and leave the
+            # planned REST fallback available.
+            if (
+                response.status < _HTTP_STATUS_BAD_REQUEST
+                and not response.complete
+                and shared.exhaustion_reason is None
+            ):
                 shared.exhaustion_reason = (
                     "maximum_response_bytes exceeded"
                     if shared.budget.maximum_response_bytes <= remaining_download
@@ -1825,7 +1844,6 @@ class BinancePublicHistoryAcquisition:
                 break
         if status is None:
             status = BinanceArchiveAcquisitionStatus.RETRYABLE_FAILURE
-        assert status is not None
         references: tuple[BinancePublicHistoryRawReference, ...] = ()
         if artifact_path is not None:
             try:
@@ -1840,7 +1858,10 @@ class BinancePublicHistoryAcquisition:
             else:
                 references = (reference,)
                 evidence = step.archive_evidence
-                assert evidence is not None
+                if evidence is None:
+                    raise ValueError(
+                        "archive execution requires bound archive evidence"
+                    )
                 observed_sha256 = (
                     reference.revision.verified_upstream_checksum.removeprefix(
                         "sha256:"
@@ -1888,7 +1909,10 @@ class BinancePublicHistoryAcquisition:
         store: RawStore,
         shared: _SharedBudget,
     ) -> BinancePublicHistorySourceResult:
-        assert step.rest_request is not None and step.rest_coverage is not None
+        if step.rest_request is None or step.rest_coverage is None:
+            raise ValueError(
+                "REST execution requires a bound REST request and coverage"
+            )
         remaining_pages = shared.budget.maximum_rest_pages - shared.rest_pages
         remaining_http = shared.budget.maximum_http_requests - shared.http_requests
         if remaining_pages <= 0 or remaining_http <= 0 or shared.remaining_seconds <= 0:
@@ -1989,12 +2013,19 @@ class BinancePublicHistoryAcquisition:
             pages_used=result.pages_used,
             actual_record_range=result.actual_record_range,
             rest_pages=result.pages,
+            # The adapter reports the part of the requested window its bounded
+            # pagination did not reach.  A local failure or an elapsed-time stop
+            # leaves the window unexhausted even when the pages themselves ended.
+            window_exhausted=(
+                result.unmet_range is None
+                and materialization_error is None
+                and not elapsed_exhausted
+            ),
         )
 
     @staticmethod
     def _source_satisfied(
         request: BinancePublicHistoryAcquisitionRequest,
-        required_range: TimeRange,
         result: BinancePublicHistorySourceResult,
     ) -> bool:
         satisfied = result.status in {
@@ -2007,13 +2038,36 @@ class BinancePublicHistoryAcquisition:
             and request.data_type is BinancePublicHistoryDataType.SETTLED_FUNDING_RATE
             and result.step.rest_request is not None
         ):
-            actual = result.actual_record_range
-            return (
-                actual is not None
-                and actual.start <= required_range.start
-                and actual.end >= required_range.end
-            )
+            # Settled funding is an event series rather than a continuous grid:
+            # the observed point range only ever covers the events the window
+            # happens to contain, so it cannot tile the requested calendar window
+            # and must not be required to span it.  The obligation is bound to the
+            # bounded acquisition exhausting the requested window instead, while
+            # the point range stays reported as the observed record range.
+            return result.window_exhausted is True
         return satisfied
+
+    @staticmethod
+    def _unmet_detail(
+        request: BinancePublicHistoryAcquisitionRequest,
+        source: BinancePublicHistorySourceResult,
+    ) -> str:
+        """Return the reason a source leaves its obligation unmet."""
+        if (
+            request.data_type is BinancePublicHistoryDataType.SETTLED_FUNDING_RATE
+            and source.step.rest_request is not None
+            and source.status == BinanceKlineRestStatus.COMPLETE.value
+            and source.window_exhausted is not True
+        ):
+            # The guard is unreachable while the shared executor only reports
+            # COMPLETE after exhausting the requested window, but a funding
+            # success text must never become the reason an obligation is unmet.
+            return (
+                "bounded funding REST acquisition completed its pages without "
+                "exhausting the requested window; the observed point range does "
+                "not cover the remaining calendar window"
+            )
+        return source.detail
 
     def _compare(
         self,
@@ -2299,7 +2353,10 @@ class BinancePublicHistoryAcquisition:
                 try:
                     if step.archive_plan is not None:
                         evidence = step.archive_evidence
-                        assert evidence is not None
+                        if evidence is None:
+                            raise ValueError(
+                                "archive execution requires bound archive evidence"
+                            )
                         if evidence.status is BinanceArchiveEvidenceStatus.PARTIAL:
                             source = BinancePublicHistorySourceResult(
                                 step=step,
@@ -2347,7 +2404,7 @@ class BinancePublicHistoryAcquisition:
                     unmet = source.detail
                     break
                 sources.append(source)
-                if self._source_satisfied(request, obligation.required_range, source):
+                if self._source_satisfied(request, source):
                     satisfied = True
                     break
                 fallback_allowed = source.status in {
@@ -2356,7 +2413,7 @@ class BinancePublicHistoryAcquisition:
                     BinanceArchiveAcquisitionStatus.COVERAGE_GAP.value,
                 }
                 if not fallback_allowed or step_index + 1 >= len(obligation.candidates):
-                    unmet = source.detail
+                    unmet = self._unmet_detail(request, source)
                     break
             by_request[obligation.request_index].append(
                 BinancePublicHistoryObligationResult(

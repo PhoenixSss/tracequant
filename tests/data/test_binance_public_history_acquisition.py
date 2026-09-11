@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import io
 import json
 import zipfile
@@ -577,13 +578,23 @@ def test_coverage_rejects_base_kline_coverage_for_funding_endpoint() -> None:
 
 
 def test_archive_adapters_do_not_expose_caller_supplied_plan_execution() -> None:
-    for adapter in (
-        BinanceContractKlineBackfill,
-        BinanceMarkPriceKlineBackfill,
-        BinanceIndexPriceKlineBackfill,
-        BinanceFundingRateBackfill,
+    for adapter, subject_parameter in (
+        (BinanceContractKlineBackfill, "instrument"),
+        (BinanceMarkPriceKlineBackfill, "instrument"),
+        (BinanceIndexPriceKlineBackfill, "pair"),
+        (BinanceFundingRateBackfill, "instrument"),
     ):
         assert not hasattr(adapter, "run_plan")
+        parameters = inspect.signature(adapter.run).parameters
+        # The guarantee is the public entry point shape: a typed subject plus a
+        # range, with no plan, object key, or URL that a caller could forge.  The
+        # defence that matters for a forged plan is the orchestrator's plan
+        # re-derivation, which the run-level tests above exercise.
+        assert [name for name in parameters if name != "self"] == [
+            subject_parameter,
+            "request_range",
+        ]
+        assert not any("plan" in name or "url" in name for name in parameters)
 
 
 def test_history_plan_and_run_produce_traceable_mixed_source_result(
@@ -693,9 +704,12 @@ def test_history_plan_and_run_produce_traceable_mixed_source_result(
         )
         for data_type, subject, boundary in family_inputs
     )
+    # The consumed #295/#283 funding evidence describes calendar windows whose
+    # records are point events, so the Critical Outcome uses the canonical
+    # one-hour window instead of a synthetic 1 ms point window.
     funding_range = TimeRange(
         start=datetime.fromtimestamp(FUNDING_START_MS / 1000, tz=UTC),
-        end=datetime.fromtimestamp((FUNDING_START_MS + 1) / 1000, tz=UTC),
+        end=datetime.fromtimestamp(FUNDING_END_MS / 1000, tz=UTC),
     )
     rest_requests = tuple(
         BinancePublicHistoryAcquisitionRequest(
@@ -1202,6 +1216,78 @@ def test_archive_404_uses_only_the_planned_proven_rest_fallback(
     assert len(archive_calls) == 1
     assert len(rest_calls) == 1
     assert obligation.sources[1].raw_references[0].source_kind.value == "rest"
+
+
+def test_incomplete_archive_error_body_keeps_the_planned_rest_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive_calls: list[str] = []
+    rest_calls: list[str] = []
+
+    def missing_archive(url: str, timeout: float) -> ArchiveHttpResponse:
+        archive_calls.append(url)
+        # A large 404 body read without a Content-Length header arrives exactly as
+        # the default transport reports it.  An error body is bounded evidence
+        # rather than object content, so it must not become budget exhaustion.
+        return ArchiveHttpResponse(
+            status=404, body=b"x" * 4096, headers={}, complete=False
+        )
+
+    def rest_get(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        rest_calls.append(url)
+        start_ms = int(REST_START.timestamp() * 1000)
+        return BinanceKlineRestHttpResponse(
+            status=200,
+            body=json.dumps(
+                [_contract_row(start_ms), _contract_row(start_ms + 60_000)]
+            ).encode(),
+            headers={},
+        )
+
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        start=REST_START,
+        end=REST_END,
+        purpose=BinancePublicHistoryPurpose.BACKFILL,
+        output_root=tmp_path / "incomplete-error-body",
+    )
+    unavailable = BinancePublicHistoryArchiveEvidence(
+        data_type=request.data_type,
+        subject=request.subject,
+        boundary=BinanceArchiveObjectBoundary.day(date(2026, 9, 9)),
+        status=BinanceArchiveEvidenceStatus.NOT_FOUND,
+        evidence_version="observed-missing-object",
+        evidence_reference="docs/research/missing.json",
+        evidence_sha256="d" * 64,
+        observed_at=NOW,
+    )
+    acquisition = BinancePublicHistoryAcquisition(
+        archive_http_get=missing_archive,
+        rest_http_get=rest_get,
+        clock=lambda: NOW,
+        wait=lambda _seconds: None,
+    )
+    _approve_archive_evidence(monkeypatch, unavailable)
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(
+            archive_objects=(unavailable,), rest_windows=(_rest_coverage(),)
+        ),
+        _budget(),
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.completed
+    obligation = result.requests[0].obligations[0]
+    assert [source.status for source in obligation.sources] == [
+        "checksum_not_found",
+        "complete",
+    ]
+    assert len(rest_calls) == 1
 
 
 def test_partial_archive_decision_is_retained_with_successful_rest_replacement(
@@ -2247,19 +2333,127 @@ def test_all_four_families_execute_recent_and_explicit_gap_through_rest(
 
     result = acquisition.run(plan)
 
-    if funding:
-        assert result.status is BinancePublicHistoryRunStatus.PARTIAL
-        assert not result.completed
-        assert result.requests[0].satisfied_ranges == ()
-        assert result.requests[0].unmet_ranges == (request_range,)
-    else:
-        assert result.completed
+    assert result.completed
+    assert result.requests[0].satisfied_ranges == (request_range,)
+    assert result.requests[0].unmet_ranges == ()
     source = result.requests[0].obligations[0].sources[0]
     assert source.status == BinanceKlineRestStatus.COMPLETE.value
+    assert source.window_exhausted is True
     assert len(source.rest_pages) == 1
     assert source.rest_pages[0].revision == source.raw_references[0].revision
     assert source.rest_pages[0].observed_at is not None
     assert purpose.value in source.step.reason
+    if funding:
+        # A canonical funding window (seven-day recent or one-hour gap) is a
+        # calendar range whose events are points: the obligation is satisfied by
+        # the bounded acquisition exhausting that window, while the reported
+        # record range stays the observed event points.
+        point_range = TimeRange(
+            start=datetime.fromtimestamp(FUNDING_START_MS / 1000, tz=UTC),
+            end=datetime.fromtimestamp((FUNDING_START_MS + 1) / 1000, tz=UTC),
+        )
+        assert source.actual_record_range == point_range
+        assert source.actual_record_range != request_range
+        assert result.requests[0].obligations[0].unmet_reason is None
+
+
+def test_unmet_funding_rest_obligation_keeps_a_truthful_reason(
+    tmp_path: Path,
+) -> None:
+    request_range = TimeRange(
+        start=datetime.fromtimestamp(FUNDING_START_MS / 1000, tz=UTC),
+        end=datetime.fromtimestamp(FUNDING_END_MS / 1000, tz=UTC),
+    )
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.SETTLED_FUNDING_RATE,
+        start=request_range.start,
+        end=request_range.end,
+        purpose=BinancePublicHistoryPurpose.GAP,
+        gap_reason="explicit funding gap over the frozen evidence window",
+        output_root=tmp_path / "funding-unmet",
+    )
+
+    def failing_rest(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        return BinanceKlineRestHttpResponse(status=500, body=b"{}", headers={})
+
+    acquisition = BinancePublicHistoryAcquisition(
+        rest_http_get=failing_rest,
+        clock=lambda: NOW,
+        monotonic_clock=lambda: 0.0,
+        wait=lambda _seconds: None,
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(
+            rest_windows=(
+                _family_rest_coverage(
+                    request.data_type, request_range, request.purpose
+                ),
+            )
+        ),
+        _budget(),
+    )
+
+    result = acquisition.run(plan)
+
+    obligation = result.requests[0].obligations[0]
+    assert not obligation.satisfied
+    assert result.status is not BinancePublicHistoryRunStatus.COMPLETED
+    assert obligation.unmet_reason is not None
+    # The adapter's completion text describes a point range, so it must never be
+    # reported as the reason a funding obligation stayed unmet.
+    assert "point-event range complete" not in obligation.unmet_reason
+    source = obligation.sources[0]
+    assert source.status != BinanceKlineRestStatus.COMPLETE.value
+    assert source.window_exhausted is False
+
+
+def test_funding_completion_without_window_exhaustion_names_the_rule(
+    tmp_path: Path,
+) -> None:
+    request_range = TimeRange(
+        start=datetime.fromtimestamp(FUNDING_START_MS / 1000, tz=UTC),
+        end=datetime.fromtimestamp(FUNDING_END_MS / 1000, tz=UTC),
+    )
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.SETTLED_FUNDING_RATE,
+        start=request_range.start,
+        end=request_range.end,
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=tmp_path / "funding-guard",
+    )
+    step = history_module._rest_step(
+        request,
+        request_range,
+        _family_rest_coverage(request.data_type, request_range, request.purpose),
+        reason="frozen funding REST cell",
+    )
+    # The shared executor only reports COMPLETE after exhausting the requested
+    # window, so this pair is a guard for that invariant rather than a reachable
+    # acquisition outcome.
+    source = history_module.BinancePublicHistorySourceResult(
+        step=step,
+        status=BinanceKlineRestStatus.COMPLETE.value,
+        detail="adapter declared the point-event range complete",
+        actual_record_range=TimeRange(
+            start=datetime.fromtimestamp(FUNDING_START_MS / 1000, tz=UTC),
+            end=datetime.fromtimestamp((FUNDING_START_MS + 1) / 1000, tz=UTC),
+        ),
+        window_exhausted=False,
+    )
+
+    assert not history_module.BinancePublicHistoryAcquisition._source_satisfied(
+        request, source
+    )
+    reason = history_module.BinancePublicHistoryAcquisition._unmet_detail(
+        request, source
+    )
+    assert "does not cover the remaining calendar window" in reason
+    assert "point-event range complete" not in reason
 
 
 def test_partial_multi_page_rest_failure_keeps_every_page_outcome(

@@ -414,6 +414,10 @@ def _parse_archive(
         end=datetime.fromtimestamp((last_open + _ONE_MINUTE_MS) / 1000, tz=UTC),
     )
     if has_missing_minute:
+        # Every member is validated before the deferred gap is raised, so a
+        # member that is both incomplete and malformed reports its content error
+        # while a purely incomplete member keeps this exact gap.  Both paths fail
+        # closed without publishing Raw and the observed range stays attached.
         raise _coverage_gap(
             "archive rows contain a missing 1m timestamp",
             actual_record_range=actual_range,

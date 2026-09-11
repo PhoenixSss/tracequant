@@ -19,6 +19,12 @@ backfill、REST page acquisition 和不可变 Raw/revision；它不扫描数据�
   决定本地相对路径；
 - `preserve_and_report` 冲突策略；gap 还必须包含非空的来源原因。
 
+四族使用同一份 `[start, end)` 契约，但 settled funding 是事件序列而不是连续网格：其 REST
+请求窗口仍是调用者给出的日历窗口（例如 #283 已核定的七日 recent 或一小时 gap），而
+`actual_record_range` 只记录实际观测到的 `fundingTime` 事件点范围。因此 funding 的 REST
+义务以**有界获取穷尽请求窗口**为成立条件，而不是要求事件点范围铺满日历窗口；点范围也永远
+不会被扩大成连续日历覆盖。调用者不需要、也不应预先算出精确的资金结算时刻来构造请求。
+
 `BinancePublicHistoryCoverage` 将可用来源限制为调用者提交的证据。Archive 证据必须逐字段匹配
 已核定来源报告的 exact cell：#279 manifest 提供 14 个固定成功对象，原始 source-contract
 manifest 还提供 BTCUSDT/ETHUSDT 三类 Kline 在 2026-08-30 的实测 404，以及 mark/index
@@ -57,7 +63,10 @@ plan = acquisition.plan(requests, coverage, budget)
   cells；这些 daily objects 在计划时计入共享 object/HTTP 上限。Funding 只允许 monthly，
   绝不构造 `daily/fundingRate`。
 - `recent` 和显式 `gap` 只在匹配的 frozen REST coverage 内生成请求；未知边界形成初始
-  unmet obligation。
+  unmet obligation。Funding 的 REST 义务只有在该次有界获取穷尽请求窗口（
+  `BinancePublicHistorySourceResult.window_exhausted` 为真，即适配器报告无未达范围）时才
+  成立；未穷尽时保持 unmet，理由由统一层给出并说明点范围不覆盖剩余日历窗口，不会复用适配器
+  的完成文案。
 - 计划内 archive 404/checksum 404 或完整性 gap 可以进入已预先绑定、仍在预算内的 REST
   fallback，并同时保留原 archive 状态与实际替代来源。
 - Checksum mismatch、非法 ZIP/schema、Raw 本地损坏或内容冲突不会通过切换来源变成成功，
@@ -68,7 +77,10 @@ result = acquisition.run(plan)
 ```
 
 Archive 下载、REST 内部 retry/backoff、page 发布和 revision 判断仍由既有消费者的内部受控
-执行 seam 负责；调用者不能向单个适配器提交自造 object key/URL plan。
+执行 seam 负责。四个 family 适配器的公开入口只接收 typed instrument/pair 与范围，调用者
+无法经公开 API 提交自造 object key/URL plan；统一层使用的执行 seam 是适配器私有成员，且
+`run()` 会在任何 I/O 前从原请求、证据与预算重新派生计划并做结构化比较，替换执行定位或
+framing 的计划会被拒绝。
 统一层只分配共享剩余预算、按计划调用它们并聚合结果；不会在上层叠加 REST 尝试次数或重置
 总耗时。总耗时门禁也覆盖 HTTP 返回后的解析、Raw 发布、revision 枚举与跨源比较；超时后
 不会启动后续 obligation 或把尚未完成审计的请求标为 completed。取消、无进展、预算耗尽和
@@ -105,7 +117,8 @@ count/taker 字段；mark/index 只比较价格语义，不把 placeholder/schem
 
 只有全部显式请求义务成立且不存在 gap、failure 或 conflict 时，整体状态才是 `completed`。
 合法 REST empty、未知 coverage、funding point 实际范围和正常 endpoint 终止始终保持各自语义，
-不会被扩大为连续日历覆盖或“全历史完整”。
+不会被扩大为连续日历覆盖或“全历史完整”。Funding 义务成立时，结果同时保留请求的日历窗口与
+实际观测点范围，并把该次获取是否穷尽窗口记录在来源结果的 `window_exhausted` 中。
 
 ## 限制
 
