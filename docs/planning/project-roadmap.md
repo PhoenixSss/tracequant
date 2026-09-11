@@ -1,6 +1,6 @@
 # TraceQuant 项目路线图
 
-- **最后核验日期：** 2026-07-22
+- **最后核验日期：** 2026-09-11
 - **核验来源：** GitHub Issue 正文与评论、Sub-issue / Blocked by Relationships、ProjectV2 字段
 - **适用仓库：** `PhoenixSss/tracequant`
 
@@ -130,11 +130,77 @@
 
 所有 Post-MVP Feature 都不得绕过 Live MVP 已建立的生产安全链：#30 execution / write authorization、#31 truth ledger、#32 risk / Kill Switch、#33 PnL / cost、#34 release approval、#35 production audit、#36 recovery gate。
 
-## 7. 当前实施状态与下一入口
+## 7. Research MVP 范围收敛与当前入口
 
-截至 2026-07-22，Feature [#2](https://github.com/PhoenixSss/tracequant/issues/2) 已完成 Task [#3](https://github.com/PhoenixSss/tracequant/issues/3)、[#5](https://github.com/PhoenixSss/tracequant/issues/5)、[#7](https://github.com/PhoenixSss/tracequant/issues/7) 和 [#9](https://github.com/PhoenixSss/tracequant/issues/9)。[#45](https://github.com/PhoenixSss/tracequant/issues/45) 是当前文档迁移 Task。
+2026-09-11 合并的[产品重新校准基线](product-recalibration-v1.md)取代了“继续扩建公共数据下载平台”的规划方向。
+本节记录 #308 执行时的快照和批准的范围决定；它不改写已关闭 Issue 的历史，也不表示未完成能力已经实现。
 
-#45 完成后，实施入口回到 Feature #2，只滚动细化其近期基础 Task；不直接开始 #42 或 Epic #14，也不在本文创建或承诺全部剩余 Task。
+### 7.1 执行前 live-state 快照
+
+快照采集时间为 2026-09-11，基线 `main` 为 `a1fb5d4b87c12a0e2bd1fada12e6d4c46076d3b1`。
+`Blocked by` 只列 GitHub 原生直接关系；状态和标签是当时值。
+
+| 对象 | Live state / Project Status | Parent；Blocked by | 标签或 PR 事实 | 快照时 `updatedAt` |
+|---|---|---|---|---|
+| #1 | Open / Specifying | 无；无 | `type:epic`, `codex:needs-spec` | `2026-09-08T15:27:57Z` |
+| #11 | Open / Specifying | #1；#2（Closed） | `type:feature`, `area:data`, `risk:data-integrity`, `codex:needs-spec` | `2026-09-11T08:01:52Z` |
+| #15 | Open / Specifying | #1；#11 | `type:feature`, `area:data`, `risk:data-integrity`, `codex:needs-spec` | `2026-09-08T15:30:35Z` |
+| #16 | Open / Specifying | #1；#15 | `type:feature`, `area:features`, `area:labels`, `risk:data-integrity`, `risk:lookahead`, `codex:needs-spec` | `2026-09-08T15:30:41Z` |
+| #17 | Open / Specifying | #1；#16 | `type:feature`, `area:backtest`, `risk:lookahead`, `codex:needs-spec` | `2026-09-08T15:30:48Z` |
+| #18 | Open / Specifying | #1；#17 | `type:feature`, `area:backtest`, `area:execution`, `risk:order-state`, `codex:needs-spec` | `2026-09-08T15:30:54Z` |
+| #19 | Open / Specifying | #1；#16 | `type:feature`, `area:strategy`, `area:ml`, `risk:lookahead`, `codex:needs-spec` | `2026-09-08T15:31:05Z` |
+| #20 | Open / Specifying | #1；#2（Closed） | `type:feature`, `area:ml`, `risk:data-integrity`, `codex:needs-spec` | `2026-09-08T15:31:14Z` |
+| #285 | Open / Blocked | #11；#304 | `type:task`, `area:data`, `risk:data-integrity`, `codex:blocked` | `2026-09-11T08:01:55Z` |
+| #302 | Open / Review | #11；无 | `type:task`, `area:data`, `risk:data-integrity`, `codex:ready` | `2026-09-11T07:55:18Z` |
+| #303 | Open / Ready | #11；无 | 同 #302 | `2026-09-11T07:55:20Z` |
+| #304 | Open / Blocked | #11；#305 | `type:task`, `area:data`, `risk:data-integrity`, `codex:blocked` | `2026-09-11T07:55:21Z` |
+| #305 | Open / Blocked | #11；#302、#303 | 同 #304 | `2026-09-11T07:55:27Z` |
+| PR #306 | Open、未合并、非 Draft | base `main`；head `task/302-binance@2b3b3ec` | CI `quality=SUCCESS`；10 files，+2510/-77 | `2026-09-11T10:08:29Z` |
+
+PR #306 的变更集中在共享执行上下文、跨适配器预算/取消和 transport 子进程 hard-kill；这些正是重新校准基线从
+Research-grade acquisition 中移除的机制。它没有独立于该被取消范围、需要另行保留的产品成果。
+
+### 7.2 `Must now / Deferred / Rejected` 决策表
+
+| 决定 | 当前边界 | 规划归属 / 处置 |
+|---|---|---|
+| Must now | 显式 archive/REST 获取；UTC、来源、checksum/response digest、manifest/content hash；Raw 不可变、原子发布、幂等重跑、有限重试和精确重开 | #11；现有代码由 #309 收敛，薄 `fetch`/`verify` 命令由 #285 交付 |
+| Must now | 研究来源选择规则、archive/REST 重叠比较、缺口/重复/乱序/schema drift/冲突判定、canonical 发布和批准周期聚合 | #15；不得塞回 #11 采集层 |
+| Must now | Point-in-time 特征/标签、chronological split、训练期拟合和版本化 Research Dataset | #16 |
+| Must now | 统一成本与样本外协议下的快速向量筛选 | #17 |
+| Must now | 规则、线性、LightGBM、XGBoost 的有限候选研究与冻结候选包 | #19 |
+| Must now | NautilusTrader 事件级成交/成本验真及与向量结果的差异报告 | #18 |
+| Must now | 轻量实验身份、可复核 Research Evidence Bundle 和“进入 Shadow/继续研究/停止”建议 | #20 |
+| Deferred | 公共来源自动选择/回退、REST funding 作为默认研究来源、实时公共流与持续 gap 修复 | 分别等待 #15 的显式研究政策或 Shadow 阶段证据；当前不预建采集平台 |
+| Deferred | 私有 API、Demo/Live 订单、运行时风险/对账、生产模型发布、长期运维、辅助数据、多交易所与 HA/DR | 仅在对应 Shadow、Live 或 Post-MVP Feature 的门禁成立后规划 |
+| Rejected | 在公共历史采集层建设共享精确执行账本、evidence-bound plan、obligation protocol、transport hard-kill 平台、自动冲突裁决或跨根目录冲突审计 | 不属于 Research-grade acquisition；#302–#305 不再计划，PR #306 不合并 |
+| Rejected | 默认/自动 Live、测试真实下单、取款、绕过风险裁决、静默填零/改写 Raw、final-test 调参，以及无批准架构 Issue 的平台复杂度 | 持续由仓库安全与数据不变式禁止 |
+
+### 7.3 依赖顺序与下一入口
+
+当前最小闭环按最近直接 blocker 表达为：
+
+```text
+#308（本次规划收敛） → #309（采集实现收敛） → #285（薄 fetch/verify 命令）
+#11 → #15 → #16 → #17 → #19 → #18 → #20
+```
+
+Feature 关系表示最终可观察结果的依赖；叶 Task 仍只在规格完整、`codex:ready` 且其直接 blocker 已解除后进入 Delivery。
+#302–#305 与 PR #306 只保留为取消历史，不再作为当前实现入口。
+
+### 7.4 执行后核对与漂移
+
+2026-09-11 执行后重新读取 live state，结果如下：
+
+- #11、#15–#20 保持 Open / Specifying 和 #1 Parent；正文已按上表重写，直接依赖为
+  `#11 → #15 → #16 → #17 → #19 → #18 → #20`。
+- #285 已改为“Research-grade Raw 获取与校验命令入口”，保持 #11 Parent、Blocked 状态，并只由 #309 直接阻塞；
+  #309 仍只由 #308 阻塞。
+- #302–#305 均为 Closed / `NOT_PLANNED` / Done，已移除 `codex:ready` 或 `codex:blocked`，直接 blocker 已清空；
+  每项均有指向本次基线收敛的关闭评论，历史正文未改写。
+- PR #306 为 Closed、未合并，关闭时 head 仍为 `2b3b3ec0c11cbddebd09d2377e4161d6d812feba`；关闭评论记录了不保留独立成果的判断。
+- 初始快照到写入前复核之间未发现目标对象或 PR head 的外部变化；上述 `updatedAt`、状态、正文和关系变化均来自 #308 的授权写入，
+  未发现无法解释的执行期漂移。
 
 ## 8. Project 字段与标签体系
 
@@ -144,7 +210,7 @@
 |---|---|
 | Phase | `Foundation`, `Data`, `Research`, `Backtest`, `Shadow`, `Live` |
 | Target | `Research MVP`, `Shadow MVP`, `Live MVP`, `Post MVP` |
-| 类型标签 | `type:epic`, `type:feature`, `type:task`, `type:bug`, `type:research`, `type:docs` |
+| 类型标签 | `type:epic`, `type:feature`, `type:task`, `type:bug`, `type:research`, `type:documentation` |
 | Area | `area:foundation`, `area:data`, `area:features`, `area:labels`, `area:backtest`, `area:strategy`, `area:ml`, `area:risk`, `area:exchange`, `area:execution`, `area:monitoring`, `area:infra` |
 | Risk | `risk:data-integrity`, `risk:lookahead`, `risk:live-trading`, `risk:credentials`, `risk:order-state` |
 | Codex | `codex:needs-spec`, `codex:ready`, `codex:blocked` |
