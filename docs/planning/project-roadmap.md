@@ -14,7 +14,7 @@
 1. **GitHub Issue** 是当前规划结构、职责、父子关系和依赖的主要事实来源。
 2. **ADR 与已合并 PR** 对已经实施的架构决策和行为事实具有权威性；它们并非简单从属于尚未实施的规划描述。
 3. [技术基线](../architecture/technical-baseline.md) 记录当前技术选型和架构边界。
-4. [产品重新校准基线](product-recalibration-v1.md) 从产品最终目的固定 Research / Shadow / Live 分级和当前复杂度准入规则。
+4. [产品重新校准基线](product-recalibration-v1.md) 从产品最终目的固定 Research / Shadow / Live 分级和当前复杂度准入规则；LCK 与仓库工程工作流明确豁免。
 5. 本文记录阶段与 Issue 导航，不复制技术基线、产品重新校准基线或 Issue 正文。
 6. [研究源契约](../research/binance-usdm-public-history-source-contract.md) 记录当前公共数据输入边界，不替代 Issue、ADR 或已合并 PR。
 
