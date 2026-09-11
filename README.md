@@ -453,6 +453,9 @@ backfilled or replayed typed lifecycle receipts.
 
 - [LCK overview](docs/guides/LCK-overview.md): public explanation of the LCK
   engineering capability, lifecycle, responsibilities, and reuse boundaries.
+- [Product recalibration baseline](docs/planning/product-recalibration-v1.md):
+  Research MVP scope, Research/Shadow/Live implementation levels, and rules
+  for retaining, deferring, or rejecting complexity.
 - [Technical baseline](docs/architecture/technical-baseline.md): current
   implementation facts and explicitly deferred research/trading architecture.
 - [Repository structure](docs/architecture/repository-structure.md): current
