@@ -37,6 +37,7 @@ from tracequant.data import (
     RawArtifact,
     RawObjectIdentity,
     RawRestPageSourceObject,
+    RawRevisionIdentity,
     RawSourceObject,
     RawStore,
 )
@@ -1821,6 +1822,139 @@ def test_corrupt_old_revision_returns_local_failure_with_current_reference(
     assert old_data_path.read_bytes() == b"corrupt historical revision"
 
 
+def test_archive_reference_materialization_failure_returns_local_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    day = date(2026, 8, 29)
+    archive_payload, checksum_payload = _daily_archive(day)
+
+    def archive_get(url: str, timeout: float) -> ArchiveHttpResponse:
+        del timeout
+        return ArchiveHttpResponse(
+            status=200,
+            body=checksum_payload if url.endswith(".CHECKSUM") else archive_payload,
+            headers={},
+        )
+
+    def fail_reference_materialization(
+        store: RawStore, identity: RawObjectIdentity, path: Path
+    ) -> history_module.BinancePublicHistoryRawReference:
+        del store, identity, path
+        raise OSError("injected archive reference read failure")
+
+    root = tmp_path / "archive-reference-failure"
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(
+            start=datetime(2026, 8, 29, tzinfo=UTC),
+            end=datetime(2026, 8, 30, tzinfo=UTC),
+        ),
+        purpose=BinancePublicHistoryPurpose.BACKFILL,
+        output_root=root,
+    )
+    evidence = BinancePublicHistoryArchiveEvidence(
+        data_type=request.data_type,
+        subject=request.subject,
+        boundary=BinanceArchiveObjectBoundary.day(day),
+        status=BinanceArchiveEvidenceStatus.SUPPORTED,
+        evidence_version="archive-reference-failure-fixture",
+        evidence_reference="tests/data/archive-reference-failure-fixture",
+        evidence_sha256="f" * 64,
+        observed_at=NOW,
+        object_sha256=hashlib.sha256(archive_payload).hexdigest(),
+        actual_range=request.request_range,
+    )
+    acquisition = BinancePublicHistoryAcquisition(
+        archive_http_get=archive_get, clock=lambda: NOW
+    )
+    _approve_archive_evidence(monkeypatch, evidence)
+    plan = acquisition.plan(
+        (request,), BinancePublicHistoryCoverage(archive_objects=(evidence,)), _budget()
+    )
+    monkeypatch.setattr(
+        history_module, "_reference_for_path", fail_reference_materialization
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.status is BinancePublicHistoryRunStatus.FAILED
+    source = result.requests[0].obligations[0].sources[0]
+    assert source.status == BinanceArchiveAcquisitionStatus.LOCAL_FAILURE.value
+    assert source.raw_references == ()
+    assert "archive Raw reference materialization failed" in source.detail
+    assert source.step.archive_plan is not None
+    identity = RawObjectIdentity.from_request(source.step.archive_plan.request)
+    assert len(RawStore(root).list_verified_revisions(identity)) == 1
+
+
+def test_rest_reference_materialization_failure_returns_local_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_read_revision = RawStore.read_revision
+    read_calls = 0
+
+    def fail_post_success_read(
+        store: RawStore,
+        identity: RawObjectIdentity,
+        revision: RawRevisionIdentity | str,
+    ) -> RawArtifact:
+        nonlocal read_calls
+        read_calls += 1
+        if read_calls == 2:
+            raise OSError("injected REST reference read failure")
+        return original_read_revision(store, identity, revision)
+
+    start_ms = int(REST_START.timestamp() * 1000)
+
+    def rest_get(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        del url, timeout, maximum_response_bytes
+        return BinanceKlineRestHttpResponse(
+            status=200,
+            body=json.dumps(
+                [_contract_row(start_ms), _contract_row(start_ms + 60_000)]
+            ).encode(),
+            headers={},
+        )
+
+    root = tmp_path / "rest-reference-failure"
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=root,
+    )
+    acquisition = BinancePublicHistoryAcquisition(
+        rest_http_get=rest_get,
+        clock=lambda: NOW,
+        wait=lambda _seconds: None,
+        monotonic_clock=lambda: 0.0,
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(rest_windows=(_rest_coverage(),)),
+        _budget(),
+    )
+    monkeypatch.setattr(RawStore, "read_revision", fail_post_success_read)
+
+    result = acquisition.run(plan)
+
+    assert read_calls == 2
+    assert result.status is BinancePublicHistoryRunStatus.FAILED
+    source = result.requests[0].obligations[0].sources[0]
+    assert source.status == BinanceArchiveAcquisitionStatus.LOCAL_FAILURE.value
+    assert source.raw_references == ()
+    assert "REST Raw reference materialization failed" in source.detail
+    assert len(source.rest_pages) == 1
+    page = source.rest_pages[0]
+    assert page.revision is not None
+    identity = RawObjectIdentity.from_rest_page_request(page.request)
+    assert len(RawStore(root).list_verified_revisions(identity)) == 1
+
+
 @pytest.mark.parametrize(
     "data_type",
     [
@@ -2664,6 +2798,64 @@ def test_complete_rest_response_may_exactly_consume_shared_download_budget(
     assert result.status is BinancePublicHistoryRunStatus.COMPLETED
     assert result.downloaded_bytes == len(body)
     assert len(result.requests[0].raw_references) == 1
+
+
+def test_cancellation_during_terminal_rest_page_returns_cancelled(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+    cancellation_requested = False
+
+    def terminal_page_then_cancel(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        del url, timeout, maximum_response_bytes
+        nonlocal calls, cancellation_requested
+        calls += 1
+        cancellation_requested = True
+        start_ms = int(REST_START.timestamp() * 1000)
+        return BinanceKlineRestHttpResponse(
+            status=200,
+            body=json.dumps(
+                [_contract_row(start_ms), _contract_row(start_ms + 60_000)]
+            ).encode(),
+            headers={},
+        )
+
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(start=REST_START, end=REST_END),
+        purpose=BinancePublicHistoryPurpose.RECENT,
+        output_root=tmp_path / "cancelled-terminal-rest",
+    )
+    acquisition = BinancePublicHistoryAcquisition(
+        rest_http_get=terminal_page_then_cancel,
+        cancelled=lambda: cancellation_requested,
+        clock=lambda: NOW,
+        wait=lambda _seconds: None,
+        monotonic_clock=lambda: 0.0,
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(rest_windows=(_rest_coverage(),)),
+        _budget(),
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.status is BinancePublicHistoryRunStatus.CANCELLED
+    assert calls == 1
+    source = result.requests[0].obligations[0].sources[0]
+    assert source.status == BinancePublicHistoryRunStatus.CANCELLED.value
+    assert len(source.raw_references) == 1
+    reference = source.raw_references[0]
+    assert (
+        RawStore(request.output_root)
+        .read_revision(reference.object_identity, reference.revision)
+        .path
+        == reference.artifact_path
+    )
 
 
 def test_cancellation_between_rest_pages_preserves_completed_page(

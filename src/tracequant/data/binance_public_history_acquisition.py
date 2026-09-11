@@ -1788,35 +1788,42 @@ class BinancePublicHistoryAcquisition:
         assert status is not None
         references: tuple[BinancePublicHistoryRawReference, ...] = ()
         if artifact_path is not None:
-            reference = _reference_for_path(
-                store,
-                RawObjectIdentity.from_request(step.archive_plan.request),
-                artifact_path,
-            )
-            references = (reference,)
-            evidence = step.archive_evidence
-            assert evidence is not None
-            observed_sha256 = (
-                reference.revision.verified_upstream_checksum.removeprefix("sha256:")
-            )
-            if (
-                evidence.object_sha256 is not None
-                and observed_sha256 != evidence.object_sha256
-            ):
-                status = BinanceArchiveAcquisitionStatus.CONFLICT
-                detail = (
-                    "archive revision differs from the explicitly supplied object digest; "
-                    "the new immutable revision was preserved"
+            try:
+                reference = _reference_for_path(
+                    store,
+                    RawObjectIdentity.from_request(step.archive_plan.request),
+                    artifact_path,
                 )
-            elif (
-                evidence.actual_range is not None
-                and reference.actual_record_range != evidence.actual_range
-            ):
-                status = BinanceArchiveAcquisitionStatus.CONFLICT
-                detail = (
-                    "archive record range differs from the explicitly supplied evidence; "
-                    "the immutable revision was preserved"
+            except (RawStoreError, OSError) as error:
+                status = BinanceArchiveAcquisitionStatus.LOCAL_FAILURE
+                detail = f"archive Raw reference materialization failed: {error}"
+            else:
+                references = (reference,)
+                evidence = step.archive_evidence
+                assert evidence is not None
+                observed_sha256 = (
+                    reference.revision.verified_upstream_checksum.removeprefix(
+                        "sha256:"
+                    )
                 )
+                if (
+                    evidence.object_sha256 is not None
+                    and observed_sha256 != evidence.object_sha256
+                ):
+                    status = BinanceArchiveAcquisitionStatus.CONFLICT
+                    detail = (
+                        "archive revision differs from the explicitly supplied object "
+                        "digest; the new immutable revision was preserved"
+                    )
+                elif (
+                    evidence.actual_range is not None
+                    and reference.actual_record_range != evidence.actual_range
+                ):
+                    status = BinanceArchiveAcquisitionStatus.CONFLICT
+                    detail = (
+                        "archive record range differs from the explicitly supplied "
+                        "evidence; the immutable revision was preserved"
+                    )
         if shared.enforce_elapsed_limit():
             status = BinanceArchiveAcquisitionStatus.BUDGET_EXHAUSTED
             detail = (
@@ -1887,6 +1894,8 @@ class BinancePublicHistoryAcquisition:
         result: BinanceKlineRestRunResult = acquisition.run(
             step.rest_request, step.rest_coverage, rest_budget
         )
+        if self._cancelled():
+            shared.cancelled = True
         shared.enforce_elapsed_limit()
         shared.rest_pages += result.pages_used
         if (
@@ -1903,27 +1912,38 @@ class BinancePublicHistoryAcquisition:
         ):
             shared.exhaustion_reason = "maximum_http_requests exhausted"
         references: list[BinancePublicHistoryRawReference] = []
+        materialization_error: RawStoreError | OSError | None = None
         for page in result.pages:
             if page.revision is None or page.artifact_path is None:
                 continue
-            artifact = store.read_revision(
-                RawObjectIdentity.from_rest_page_request(page.request), page.revision
-            )
-            references.append(_artifact_reference(store, artifact))
+            try:
+                artifact = store.read_revision(
+                    RawObjectIdentity.from_rest_page_request(page.request),
+                    page.revision,
+                )
+                references.append(_artifact_reference(store, artifact))
+            except (RawStoreError, OSError) as error:
+                materialization_error = error
+                break
         elapsed_exhausted = shared.enforce_elapsed_limit()
-        return BinancePublicHistorySourceResult(
-            step=step,
-            status=(
-                BinanceKlineRestStatus.BUDGET_EXHAUSTED.value
-                if elapsed_exhausted
-                else result.status.value
-            ),
-            detail=(
+        if materialization_error is not None:
+            status = BinanceArchiveAcquisitionStatus.LOCAL_FAILURE.value
+            detail = (
+                f"REST Raw reference materialization failed: {materialization_error}"
+            )
+        elif elapsed_exhausted:
+            status = BinanceKlineRestStatus.BUDGET_EXHAUSTED.value
+            detail = (
                 "maximum_elapsed_seconds exhausted after REST adapter work; "
                 "completed Raw revisions were preserved"
-                if elapsed_exhausted
-                else result.termination_reason
-            ),
+            )
+        else:
+            status = result.status.value
+            detail = result.termination_reason
+        return BinancePublicHistorySourceResult(
+            step=step,
+            status=status,
+            detail=detail,
             raw_references=tuple(references),
             attempts_used=result.attempts_used,
             pages_used=result.pages_used,
