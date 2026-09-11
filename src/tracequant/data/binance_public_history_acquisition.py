@@ -1601,7 +1601,10 @@ class BinancePublicHistoryAcquisition:
                 raise ConnectionError(
                     "acquisition cancelled before archive HTTP request"
                 )
-            shared.before_http()
+            try:
+                shared.before_http()
+            except _SharedBudgetExceeded as error:
+                raise ArchiveHttpBudgetExceeded(str(error)) from error
             remaining_download = (
                 shared.budget.maximum_download_bytes - shared.downloaded_bytes
             )

@@ -80,9 +80,11 @@ class ArchiveHttpGet(Protocol):
 
 
 class ArchiveHttpBudgetExceeded(RuntimeError):
-    """A received archive response exhausted an enclosing shared budget."""
+    """An archive request exhausted an enclosing shared HTTP budget."""
 
-    def __init__(self, message: str, *, response: ArchiveHttpResponse) -> None:
+    def __init__(
+        self, message: str, *, response: ArchiveHttpResponse | None = None
+    ) -> None:
         super().__init__(message)
         self.response = response
 
@@ -201,7 +203,7 @@ class _BudgetExhaustedDownloadError(RuntimeError):
         message: str,
         *,
         resource: str,
-        response: ArchiveHttpResponse,
+        response: ArchiveHttpResponse | None = None,
     ) -> None:
         super().__init__(message)
         self.resource = resource

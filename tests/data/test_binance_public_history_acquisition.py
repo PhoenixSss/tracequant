@@ -3188,6 +3188,79 @@ def test_archive_retry_wait_exhaustion_preserves_the_attempted_source(
     assert "retry wait exceeds remaining elapsed budget" in source.detail
 
 
+def test_archive_http_exhaustion_preserves_checksum_and_attempted_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload, checksum = _daily_archive(date(2026, 8, 29))
+    calls: list[str] = []
+
+    def retry_then_checksum(url: str, timeout: float) -> ArchiveHttpResponse:
+        calls.append(url)
+        if len(calls) == 1:
+            raise TimeoutError("bounded checksum timeout")
+        assert url.endswith(".CHECKSUM")
+        return ArchiveHttpResponse(status=200, body=checksum, headers={})
+
+    request = BinancePublicHistoryAcquisitionRequest(
+        subject=InstrumentId("BTCUSDT"),
+        data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+        request_range=TimeRange(
+            start=datetime(2026, 8, 29, tzinfo=UTC),
+            end=datetime(2026, 8, 30, tzinfo=UTC),
+        ),
+        purpose=BinancePublicHistoryPurpose.BACKFILL,
+        output_root=tmp_path / "archive-http-budget",
+    )
+    evidence = BinancePublicHistoryArchiveEvidence(
+        data_type=request.data_type,
+        subject=request.subject,
+        boundary=BinanceArchiveObjectBoundary.day(date(2026, 8, 29)),
+        status=BinanceArchiveEvidenceStatus.SUPPORTED,
+        evidence_version="archive-http-budget-fixture",
+        evidence_reference="tests/data/archive-http-budget-fixture",
+        evidence_sha256="a" * 64,
+        observed_at=NOW,
+        object_sha256=hashlib.sha256(payload).hexdigest(),
+        actual_range=request.request_range,
+    )
+    _approve_archive_evidence(monkeypatch, evidence)
+    acquisition = BinancePublicHistoryAcquisition(
+        archive_http_get=retry_then_checksum,
+        clock=lambda: NOW,
+        wait=lambda _seconds: None,
+        monotonic_clock=lambda: 0.0,
+    )
+    plan = acquisition.plan(
+        (request,),
+        BinancePublicHistoryCoverage(archive_objects=(evidence,)),
+        replace(_budget(), maximum_http_requests=2),
+    )
+
+    result = acquisition.run(plan)
+
+    assert result.status is BinancePublicHistoryRunStatus.BUDGET_EXHAUSTED
+    assert result.termination_reason == "maximum_http_requests exhausted"
+    assert result.http_requests_used == 2
+    assert len(calls) == 2
+    source = result.requests[0].obligations[0].sources[0]
+    assert source.status == BinanceArchiveAcquisitionStatus.BUDGET_EXHAUSTED.value
+    assert source.attempts_used == 2
+    assert source.detail == "maximum_http_requests exhausted"
+    identity = source.step.archive_plan
+    assert identity is not None
+    manifests = RawStore(request.output_root).list_acquisition_manifests(
+        RawObjectIdentity.from_request(identity.request)
+    )
+    assert [manifest.status for manifest in manifests] == [
+        BinanceArchiveAcquisitionStatus.RETRYABLE_FAILURE.value,
+        BinanceArchiveAcquisitionStatus.BUDGET_EXHAUSTED.value,
+    ]
+    assert manifests[0].detail == "bounded checksum timeout"
+    assert manifests[1].source_http_status is None
+    assert manifests[1].checksum_http_status == 200
+    assert manifests[1].checksum_response_sha256 == hashlib.sha256(checksum).hexdigest()
+
+
 def test_default_archive_transport_caps_the_stream_while_reading(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
