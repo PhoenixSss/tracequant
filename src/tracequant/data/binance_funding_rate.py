@@ -31,6 +31,9 @@ from tracequant.data.binance_public_archive import (
     _coverage_gap,
     _invalid_content,
 )
+from tracequant.data.binance_public_history_execution import (
+    BinancePublicHistoryExecutionContext,
+)
 from tracequant.data.public_history import (
     BinanceArchiveObjectBoundary,
     BinancePublicHistoryDataType,
@@ -438,16 +441,23 @@ class BinanceFundingRateBackfill:
         )
 
     def run(
-        self, instrument: InstrumentId, request_range: TimeRange
+        self,
+        instrument: InstrumentId,
+        request_range: TimeRange,
+        execution_context: BinancePublicHistoryExecutionContext | None = None,
     ) -> BinanceFundingRateRunResult:
         plans = plan_binance_funding_rate_archives(instrument, request_range)
-        results = tuple(self._process(plan) for plan in plans)
+        results = tuple(self._process(plan, execution_context) for plan in plans)
         return BinanceFundingRateRunResult(
             request_range=request_range,
             objects=results,
         )
 
-    def _process(self, plan: BinanceFundingRatePlan) -> BinanceFundingRateObjectResult:
+    def _process(
+        self,
+        plan: BinanceFundingRatePlan,
+        execution_context: BinancePublicHistoryExecutionContext | None = None,
+    ) -> BinanceFundingRateObjectResult:
         if isinstance(plan, BinanceFundingRateCoverageGapPlan):
             outcome = self._acquisition.record_failure(
                 plan.request,
@@ -455,7 +465,12 @@ class BinanceFundingRateBackfill:
                 plan.detail,
             )
         else:
-            outcome = self._acquisition.acquire(plan, _FundingRateArchiveAdapter())
+            adapter = _FundingRateArchiveAdapter()
+            outcome = (
+                self._acquisition.acquire(plan, adapter)
+                if execution_context is None
+                else self._acquisition.acquire(plan, adapter, execution_context)
+            )
         return BinanceFundingRateObjectResult(
             plan=plan,
             status=outcome.status,

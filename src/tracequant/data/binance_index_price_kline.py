@@ -27,6 +27,9 @@ from tracequant.data.binance_public_archive import (
     _coverage_gap,
     _invalid_content,
 )
+from tracequant.data.binance_public_history_execution import (
+    BinancePublicHistoryExecutionContext,
+)
 from tracequant.data.public_history import (
     BinanceArchiveObjectBoundary,
     BinanceKlineInterval,
@@ -459,16 +462,21 @@ class BinanceIndexPriceKlineBackfill:
         )
 
     def run(
-        self, pair: BinancePriceIndexId, request_range: TimeRange
+        self,
+        pair: BinancePriceIndexId,
+        request_range: TimeRange,
+        execution_context: BinancePublicHistoryExecutionContext | None = None,
     ) -> BinanceIndexPriceKlineRunResult:
         plans = plan_binance_index_price_kline_archives(pair, request_range)
-        results = tuple(self._process(plan) for plan in plans)
+        results = tuple(self._process(plan, execution_context) for plan in plans)
         return BinanceIndexPriceKlineRunResult(
             request_range=request_range, objects=results
         )
 
     def _process(
-        self, plan: BinanceIndexPriceKlinePlan
+        self,
+        plan: BinanceIndexPriceKlinePlan,
+        execution_context: BinancePublicHistoryExecutionContext | None = None,
     ) -> BinanceIndexPriceKlineObjectResult:
         if isinstance(plan, BinanceIndexPriceKlineCoverageGapPlan):
             outcome = self._acquisition.record_failure(
@@ -477,7 +485,12 @@ class BinanceIndexPriceKlineBackfill:
                 plan.detail,
             )
         else:
-            outcome = self._acquisition.acquire(plan, _IndexPriceKlineArchiveAdapter())
+            adapter = _IndexPriceKlineArchiveAdapter()
+            outcome = (
+                self._acquisition.acquire(plan, adapter)
+                if execution_context is None
+                else self._acquisition.acquire(plan, adapter, execution_context)
+            )
         return BinanceIndexPriceKlineObjectResult(
             plan,
             outcome.status,

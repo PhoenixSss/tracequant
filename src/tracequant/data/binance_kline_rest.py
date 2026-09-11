@@ -14,6 +14,7 @@ import json
 import math
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -31,6 +32,12 @@ from typing import Final, Protocol
 import polars as pl
 
 from tracequant.core.time import to_utc
+from tracequant.data.binance_public_history_execution import (
+    BinancePublicHistoryExecutionContext,
+    BinancePublicHistoryExecutionSnapshot,
+    BinancePublicHistoryExecutionStopped,
+    BinancePublicHistoryExecutionStopReason,
+)
 from tracequant.data.public_history import (
     BinanceKlineInterval,
     BinancePriceIndexId,
@@ -264,6 +271,17 @@ class BinanceKlineRestHttpGet(Protocol):
     ) -> BinanceKlineRestHttpResponse: ...
 
 
+class _RestTransportInterrupted(InterruptedError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        response: BinanceKlineRestHttpResponse | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.response = response
+
+
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(
         self,
@@ -425,11 +443,15 @@ def _worker_http_response(
 
 
 def _default_http_get(
-    url: str, timeout: float, maximum_response_bytes: int
+    url: str,
+    timeout: float,
+    maximum_response_bytes: int,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> BinanceKlineRestHttpResponse:
     """Read one response in a worker that cannot outlive the attempt deadline."""
-    try:
-        completed = subprocess.run(
+    with tempfile.TemporaryFile() as output:
+        process = subprocess.Popen(
             [
                 sys.executable,
                 "-m",
@@ -438,30 +460,58 @@ def _default_http_get(
                 repr(timeout),
                 str(maximum_response_bytes),
             ],
-            check=False,
-            capture_output=True,
-            timeout=timeout,
+            stdout=output,
+            stderr=subprocess.DEVNULL,
         )
-    except subprocess.TimeoutExpired as error:
-        partial_output = error.stdout if isinstance(error.stdout, bytes) else b""
+        deadline = time.monotonic() + timeout
+        interruption: str | None = None
         try:
+            while process.poll() is None:
+                if cancelled is not None and cancelled():
+                    interruption = "REST HTTP attempt was cancelled"
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    interruption = (
+                        "HTTP attempt exceeded its absolute elapsed-time deadline"
+                    )
+                    break
+                try:
+                    process.wait(timeout=min(0.05, remaining))
+                except subprocess.TimeoutExpired:
+                    continue
+        except BaseException:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            raise
+        if interruption is not None:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+        output.seek(0)
+        worker_output = output.read()
+        if interruption is None:
+            if process.returncode != 0:
+                raise OSError("HTTP worker exited without a valid result")
             return _worker_http_response(
-                partial_output,
+                worker_output,
+                maximum_response_bytes,
+                allow_incomplete_stream=False,
+            )
+        try:
+            response = _worker_http_response(
+                worker_output,
                 maximum_response_bytes,
                 allow_incomplete_stream=True,
             )
         except OSError:
-            pass
-        raise TimeoutError(
-            "HTTP attempt exceeded its absolute elapsed-time deadline"
-        ) from error
-    if completed.returncode != 0:
-        raise OSError("HTTP worker exited without a valid result")
-    return _worker_http_response(
-        completed.stdout,
-        maximum_response_bytes,
-        allow_incomplete_stream=False,
-    )
+            response = None
+        if interruption == "REST HTTP attempt was cancelled":
+            raise _RestTransportInterrupted(interruption, response=response)
+        if response is not None:
+            return response
+        raise TimeoutError(interruption)
 
 
 class BinanceKlineRestCoverageStatus(StrEnum):
@@ -593,6 +643,7 @@ class BinanceKlineRestStatus(StrEnum):
     RETRYABLE_FAILURE = "retryable_failure"
     RETRY_EXHAUSTED = "retry_exhausted"
     BUDGET_EXHAUSTED = "budget_exhausted"
+    CANCELLED = "cancelled"
     LOCAL_FAILURE = "local_failure"
     CONFLICT = "conflict"
 
@@ -641,6 +692,7 @@ class BinanceKlineRestRunResult:
     attempts_used: int
     pages_used: int
     elapsed_seconds: float
+    execution: BinancePublicHistoryExecutionSnapshot | None = None
 
     @property
     def complete(self) -> bool:
@@ -653,6 +705,7 @@ class _BudgetTracker:
     coverage: object | None
     monotonic_clock: Callable[[], float]
     started_at: float
+    execution: BinancePublicHistoryExecutionContext | None = None
     transport_seconds: float = 0.0
     waited_seconds: float = 0.0
     attempts: int = 0
@@ -1107,6 +1160,7 @@ class BinanceRestPageAcquisition:
         self._adapter = adapter
         self._store = store
         self._http_get = http_get or _default_http_get
+        self._uses_default_http_get = http_get is None
         self._clock = clock or (lambda: datetime.now(UTC))
         self._wait = wait or time.sleep
         self._monotonic_clock = monotonic_clock or time.monotonic
@@ -1214,6 +1268,89 @@ class BinanceRestPageAcquisition:
             attempts_used=tracker.attempts,
             pages_used=tracker.pages,
             elapsed_seconds=tracker.elapsed,
+            execution=(
+                tracker.execution.snapshot() if tracker.execution is not None else None
+            ),
+        )
+
+    @staticmethod
+    def _execution_status(
+        stopped: BinancePublicHistoryExecutionStopped,
+    ) -> BinanceKlineRestStatus:
+        if stopped.reason is BinancePublicHistoryExecutionStopReason.CANCELLED:
+            return BinanceKlineRestStatus.CANCELLED
+        return BinanceKlineRestStatus.BUDGET_EXHAUSTED
+
+    def _wait_for_retry(
+        self,
+        seconds: float,
+        execution_context: BinancePublicHistoryExecutionContext | None,
+    ) -> None:
+        if execution_context is None:
+            self._wait(seconds)
+        else:
+            execution_context.wait_for_retry(seconds)
+
+    def _finish_execution_stop(
+        self,
+        *,
+        stopped: BinancePublicHistoryExecutionStopped,
+        request: BinanceRestPageRequest,
+        current: BinanceRestPageRequest,
+        pages: list[BinanceKlineRestPageResult],
+        attempts: list[BinanceKlineRestAttemptResult],
+        tracker: _BudgetTracker,
+        cursor_ms: int,
+        response: BinanceKlineRestHttpResponse | None = None,
+        http_started: bool = False,
+    ) -> BinanceKlineRestRunResult:
+        status = self._execution_status(stopped)
+        detail = str(stopped)
+        digest = _response_digest(response.body) if response is not None else None
+        if http_started:
+            attempts.append(
+                BinanceKlineRestAttemptResult(
+                    attempt_number=tracker.attempts,
+                    page_attempt_number=max(1, len(attempts) + 1),
+                    outcome=status.value,
+                    http_status=response.status if response is not None else None,
+                    response_sha256=digest,
+                    detail=detail,
+                )
+            )
+        if response is not None:
+            try:
+                self._record_attempt(
+                    current,
+                    status=status,
+                    detail=detail,
+                    source_url=self._request_url(current),
+                    response=response,
+                )
+            except (RawStoreError, OSError, ValueError) as store_error:
+                status = BinanceKlineRestStatus.LOCAL_FAILURE
+                detail = f"failed to persist bounded response evidence: {store_error}"
+        pages.append(
+            BinanceKlineRestPageResult(
+                request=current,
+                attempts=tuple(attempts),
+                status=status,
+                short_page=False,
+                record_count=0,
+                actual_record_range=None,
+                response_sha256=digest,
+                revision=None,
+                artifact_path=None,
+                detail=detail,
+            )
+        )
+        return self._finish(
+            status=status,
+            request=request,
+            pages=pages,
+            tracker=tracker,
+            cursor_ms=cursor_ms,
+            reason=detail,
         )
 
     def run(
@@ -1221,21 +1358,42 @@ class BinanceRestPageAcquisition:
         request: BinanceRestPageRequest,
         coverage: object | None,
         budget: BinanceKlineRestBudget,
+        execution_context: BinancePublicHistoryExecutionContext | None = None,
     ) -> BinanceKlineRestRunResult:
         """Fetch, validate, and publish every page needed for the caller range."""
         if not isinstance(request, BinanceRestPageRequest):
             raise TypeError("request must be a BinanceRestPageRequest")
         if not isinstance(budget, BinanceKlineRestBudget):
             raise TypeError("budget must be a BinanceKlineRestBudget")
+        if execution_context is not None and not isinstance(
+            execution_context, BinancePublicHistoryExecutionContext
+        ):
+            raise TypeError(
+                "execution_context must be BinancePublicHistoryExecutionContext"
+            )
         tracker = _BudgetTracker(
             budget=budget,
             coverage=coverage,
             monotonic_clock=self._monotonic_clock,
             started_at=self._monotonic_clock(),
+            execution=execution_context,
         )
         pages: list[BinanceKlineRestPageResult] = []
         observed_rows: dict[int, tuple[object, ...]] = {}
         cursor_ms = request.caller_bounds.start_time_ms
+
+        if execution_context is not None:
+            try:
+                execution_context.check()
+            except BinancePublicHistoryExecutionStopped as stopped:
+                return self._finish(
+                    status=self._execution_status(stopped),
+                    request=request,
+                    pages=pages,
+                    tracker=tracker,
+                    cursor_ms=cursor_ms,
+                    reason=str(stopped),
+                )
 
         failure = self._adapter.request_failure(request, self._now())
         if failure is None:
@@ -1263,6 +1421,19 @@ class BinanceRestPageAcquisition:
                     cursor_ms=cursor_ms,
                     reason="page or total elapsed-time budget exhausted",
                 )
+            if execution_context is not None:
+                try:
+                    execution_context.begin_rest_page()
+                except BinancePublicHistoryExecutionStopped as stopped:
+                    return self._finish_execution_stop(
+                        stopped=stopped,
+                        request=request,
+                        current=current,
+                        pages=pages,
+                        attempts=[],
+                        tracker=tracker,
+                        cursor_ms=cursor_ms,
+                    )
             tracker.pages += 1
             attempts: list[BinanceKlineRestAttemptResult] = []
             response: BinanceKlineRestHttpResponse | None = None
@@ -1296,14 +1467,87 @@ class BinanceRestPageAcquisition:
                         cursor_ms=cursor_ms,
                         reason="total elapsed-time budget exhausted before HTTP attempt",
                     )
-                tracker.attempts += 1
-                started = self._monotonic_clock()
+                timeout_seconds = min(budget.timeout_seconds, tracker.remaining)
+                response_bytes = budget.maximum_response_bytes
                 try:
-                    response = self._http_get(
-                        url,
-                        min(budget.timeout_seconds, tracker.remaining),
-                        budget.maximum_response_bytes,
+                    if execution_context is not None:
+                        allowance = execution_context.begin_http_attempt(
+                            f"rest:{current.identity.logical_id}",
+                            timeout_seconds=timeout_seconds,
+                        )
+                        timeout_seconds = min(
+                            timeout_seconds, allowance.timeout_seconds
+                        )
+                        response_bytes = min(
+                            response_bytes, allowance.maximum_response_bytes
+                        )
+                    tracker.attempts += 1
+                    started = self._monotonic_clock()
+                    if execution_context is not None and self._uses_default_http_get:
+                        response = _default_http_get(
+                            url,
+                            timeout_seconds,
+                            response_bytes,
+                            cancelled=execution_context.cancellation_requested,
+                        )
+                    else:
+                        response = self._http_get(url, timeout_seconds, response_bytes)
+                    if execution_context is not None:
+                        execution_context.record_response_bytes(len(response.body))
+                        execution_context.check()
+                except BinancePublicHistoryExecutionStopped as stopped:
+                    return self._finish_execution_stop(
+                        stopped=stopped,
+                        request=request,
+                        current=current,
+                        pages=pages,
+                        attempts=attempts,
+                        tracker=tracker,
+                        cursor_ms=cursor_ms,
+                        response=response,
+                        http_started=response is not None,
                     )
+                except _RestTransportInterrupted as error:
+                    tracker.transport_seconds += max(
+                        0.0, self._monotonic_clock() - started
+                    )
+                    response = error.response
+                    if execution_context is None:
+                        raise AssertionError(
+                            "cancellable REST transport requires an execution context"
+                        ) from error
+                    if response is not None:
+                        try:
+                            execution_context.record_response_bytes(len(response.body))
+                        except BinancePublicHistoryExecutionStopped as stopped:
+                            return self._finish_execution_stop(
+                                stopped=stopped,
+                                request=request,
+                                current=current,
+                                pages=pages,
+                                attempts=attempts,
+                                tracker=tracker,
+                                cursor_ms=cursor_ms,
+                                response=response,
+                                http_started=True,
+                            )
+                    try:
+                        execution_context.raise_stop(
+                            BinancePublicHistoryExecutionStopReason.CANCELLED,
+                            str(error),
+                        )
+                    except BinancePublicHistoryExecutionStopped as stopped:
+                        return self._finish_execution_stop(
+                            stopped=stopped,
+                            request=request,
+                            current=current,
+                            pages=pages,
+                            attempts=attempts,
+                            tracker=tracker,
+                            cursor_ms=cursor_ms,
+                            response=response,
+                            http_started=True,
+                        )
                 except (
                     TimeoutError,
                     ConnectionError,
@@ -1314,6 +1558,20 @@ class BinanceRestPageAcquisition:
                     tracker.transport_seconds += max(
                         0.0, self._monotonic_clock() - started
                     )
+                    if execution_context is not None:
+                        try:
+                            execution_context.check()
+                        except BinancePublicHistoryExecutionStopped as stopped:
+                            return self._finish_execution_stop(
+                                stopped=stopped,
+                                request=request,
+                                current=current,
+                                pages=pages,
+                                attempts=attempts,
+                                tracker=tracker,
+                                cursor_ms=cursor_ms,
+                                http_started=True,
+                            )
                     detail = str(error).strip() or type(error).__name__
                     delay = float(min(2 ** (page_attempt - 1), 60))
                     will_retry = page_attempt < budget.maximum_attempts_per_page
@@ -1390,7 +1648,17 @@ class BinanceRestPageAcquisition:
                             reason="retry wait cannot fit in the elapsed-time budget",
                         )
                     try:
-                        self._wait(delay)
+                        self._wait_for_retry(delay, execution_context)
+                    except BinancePublicHistoryExecutionStopped as stopped:
+                        return self._finish_execution_stop(
+                            stopped=stopped,
+                            request=request,
+                            current=current,
+                            pages=pages,
+                            attempts=attempts,
+                            tracker=tracker,
+                            cursor_ms=cursor_ms,
+                        )
                     except Exception as wait_error:
                         detail = f"retry wait failed: {wait_error}"
                         pages.append(
@@ -1661,7 +1929,17 @@ class BinanceRestPageAcquisition:
                                 ),
                             )
                         try:
-                            self._wait(retry_delay)
+                            self._wait_for_retry(retry_delay, execution_context)
+                        except BinancePublicHistoryExecutionStopped as stopped:
+                            return self._finish_execution_stop(
+                                stopped=stopped,
+                                request=request,
+                                current=current,
+                                pages=pages,
+                                attempts=attempts,
+                                tracker=tracker,
+                                cursor_ms=cursor_ms,
+                            )
                         except Exception as error:
                             detail = f"retry wait failed: {error}"
                             pages.append(
@@ -1856,7 +2134,17 @@ class BinanceRestPageAcquisition:
                                 reason="retry wait cannot fit in the elapsed-time budget",
                             )
                         try:
-                            self._wait(retry_delay)
+                            self._wait_for_retry(retry_delay, execution_context)
+                        except BinancePublicHistoryExecutionStopped as stopped:
+                            return self._finish_execution_stop(
+                                stopped=stopped,
+                                request=request,
+                                current=current,
+                                pages=pages,
+                                attempts=attempts,
+                                tracker=tracker,
+                                cursor_ms=cursor_ms,
+                            )
                         except Exception as error:
                             detail = f"retry wait failed: {error}"
                             pages.append(
@@ -2018,6 +2306,21 @@ class BinanceRestPageAcquisition:
                     reason=detail,
                 )
 
+            if execution_context is not None:
+                try:
+                    execution_context.check()
+                except BinancePublicHistoryExecutionStopped as stopped:
+                    return self._finish_execution_stop(
+                        stopped=stopped,
+                        request=request,
+                        current=current,
+                        pages=pages,
+                        attempts=attempts,
+                        tracker=tracker,
+                        cursor_ms=cursor_ms,
+                        response=response,
+                    )
+
             if frame.is_empty():
                 detail = "adapter declared a terminal legal-empty page"
                 status = BinanceKlineRestStatus.LEGAL_EMPTY
@@ -2178,6 +2481,19 @@ class BinanceRestPageAcquisition:
                     reason=detail,
                 )
             observed_rows.update(page_rows)
+
+            if execution_context is not None:
+                try:
+                    execution_context.check()
+                except BinancePublicHistoryExecutionStopped as stopped:
+                    return self._finish(
+                        status=self._execution_status(stopped),
+                        request=request,
+                        pages=pages,
+                        tracker=tracker,
+                        cursor_ms=parsed.next_cursor_ms,
+                        reason=(f"{stopped}; completed REST pages were preserved"),
+                    )
 
             next_cursor = parsed.next_cursor_ms
             if next_cursor <= cursor_ms:

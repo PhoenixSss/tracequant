@@ -68,6 +68,15 @@ from tracequant.data.binance_public_archive import (
     BinanceArchiveParseResult,
     BinancePublicArchiveAcquisition,
 )
+from tracequant.data.binance_public_history_execution import (
+    BinancePublicHistoryExecutionContext,
+    BinancePublicHistoryExecutionLimits,
+    BinancePublicHistoryExecutionSnapshot,
+    BinancePublicHistoryExecutionStopped,
+    BinancePublicHistoryExecutionStopReason,
+    BinancePublicHistoryHttpAllowance,
+    BinancePublicHistoryRequestAttempts,
+)
 from tracequant.data.public_history import (
     BinanceArchiveObjectBoundary,
     BinanceArchiveObjectGranularity,
@@ -176,6 +185,13 @@ __all__ = [
     "BinancePublicHistorySourceKind",
     "BinancePublicHistorySubjectKind",
     "BinancePublicArchiveAcquisition",
+    "BinancePublicHistoryExecutionContext",
+    "BinancePublicHistoryExecutionLimits",
+    "BinancePublicHistoryExecutionSnapshot",
+    "BinancePublicHistoryExecutionStopReason",
+    "BinancePublicHistoryExecutionStopped",
+    "BinancePublicHistoryHttpAllowance",
+    "BinancePublicHistoryRequestAttempts",
     "PublicHistoryContractError",
     "RawArtifact",
     "RawArtifactAmbiguousError",

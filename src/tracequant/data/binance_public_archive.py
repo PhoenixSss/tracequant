@@ -12,8 +12,13 @@ import csv
 import hashlib
 import http.client
 import io
+import json
 import math
 import re
+import subprocess
+import sys
+import tempfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -26,6 +31,11 @@ from typing import Final, Protocol
 
 import polars as pl
 
+from tracequant.data.binance_public_history_execution import (
+    BinancePublicHistoryExecutionContext,
+    BinancePublicHistoryExecutionStopped,
+    BinancePublicHistoryExecutionStopReason,
+)
 from tracequant.data.public_history import (
     BinancePublicHistoryRequest,
     BinancePublicHistorySourceKind,
@@ -43,6 +53,7 @@ from tracequant.data.raw_store import (
     RawSourceObject,
     RawSourceProvenance,
     RawStore,
+    RawStoreError,
 )
 from tracequant.domain import TimeRange
 
@@ -71,6 +82,17 @@ class ArchiveHttpResponse:
     status: int
     body: bytes
     headers: Mapping[str, str]
+    complete: bool = True
+
+    def __post_init__(self) -> None:
+        if type(self.status) is not int or not 100 <= self.status <= 599:
+            raise ValueError("status must be an HTTP status code")
+        if not isinstance(self.body, bytes):
+            raise TypeError("body must be bytes")
+        if not isinstance(self.headers, Mapping):
+            raise TypeError("headers must be a mapping")
+        if not isinstance(self.complete, bool):
+            raise TypeError("complete must be a bool")
 
 
 class ArchiveHttpGet(Protocol):
@@ -137,6 +159,8 @@ class BinanceArchiveAcquisitionStatus(StrEnum):
     NOT_FOUND = "not_found"
     CHECKSUM_NOT_FOUND = "checksum_not_found"
     RETRYABLE_FAILURE = "retryable_failure"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    CANCELLED = "cancelled"
     INVALID_CONTENT = "invalid_content"
     LOCAL_FAILURE = "local_failure"
     CONFLICT = "conflict"
@@ -184,6 +208,34 @@ class _RetryableDownloadError(RuntimeError):
         self.response = response
 
 
+class _ExecutionDownloadError(RuntimeError):
+    def __init__(
+        self,
+        stopped: BinancePublicHistoryExecutionStopped,
+        *,
+        resource: str,
+        response: ArchiveHttpResponse | None = None,
+    ) -> None:
+        super().__init__(str(stopped))
+        self.stopped = stopped
+        self.resource = resource
+        self.response = response
+
+
+class _ArchiveTransportInterrupted(InterruptedError):
+    def __init__(
+        self, message: str, *, response: ArchiveHttpResponse | None = None
+    ) -> None:
+        super().__init__(message)
+        self.response = response
+
+
+class _RecordedLocalFailure(RuntimeError):
+    def __init__(self, outcome: BinanceArchiveAcquisitionOutcome) -> None:
+        super().__init__(outcome.detail)
+        self.outcome = outcome
+
+
 @dataclass(frozen=True, slots=True)
 class _DownloadedResponse:
     body: bytes
@@ -204,26 +256,215 @@ class _DownloadNotFoundError(FileNotFoundError):
         self.response = response
 
 
-def _default_http_get(url: str, timeout: float) -> ArchiveHttpResponse:
+def _urllib_http_get(
+    url: str,
+    timeout: float,
+    *,
+    maximum_response_bytes: int | None = None,
+    progress: Callable[[str, int, Mapping[str, str], bytes], None] | None = None,
+) -> ArchiveHttpResponse:
+    limit = (
+        _MAX_ARCHIVE_BYTES
+        if maximum_response_bytes is None
+        else min(maximum_response_bytes, _MAX_ARCHIVE_BYTES)
+    )
+
+    def consume(
+        stream: object,
+        status: int,
+        headers: Mapping[str, str],
+        *,
+        body_limit: int = limit,
+    ) -> ArchiveHttpResponse:
+        if progress is not None:
+            progress("start", status, headers, b"")
+        body = bytearray()
+        while len(body) <= body_limit:
+            amount = min(64 * 1024, body_limit + 1 - len(body))
+            if amount <= 0:
+                break
+            try:
+                read1 = getattr(stream, "read1", None)
+                chunk = (
+                    read1(amount)
+                    if callable(read1)
+                    else getattr(stream, "read")(amount)
+                )
+            except http.client.IncompleteRead as error:
+                chunk = bytes(error.partial)[:amount]
+                if chunk:
+                    body.extend(chunk)
+                    if progress is not None:
+                        progress("body", status, headers, chunk)
+                return ArchiveHttpResponse(status, bytes(body), headers, complete=False)
+            except (TimeoutError, OSError, http.client.HTTPException):
+                return ArchiveHttpResponse(status, bytes(body), headers, complete=False)
+            if not isinstance(chunk, bytes):
+                raise TypeError("HTTP response body reader must return bytes")
+            if not chunk:
+                remaining = getattr(stream, "length", None)
+                complete = not (type(remaining) is int and remaining > 0)
+                return ArchiveHttpResponse(
+                    status, bytes(body), headers, complete=complete
+                )
+            body.extend(chunk)
+            if progress is not None:
+                progress("body", status, headers, chunk)
+        return ArchiveHttpResponse(status, bytes(body), headers, complete=False)
+
     request = urllib.request.Request(url, headers={"User-Agent": _PRODUCER_VERSION})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = response.read(_MAX_ARCHIVE_BYTES + 1)
-            if len(body) > _MAX_ARCHIVE_BYTES:
-                raise _InvalidContentError("archive response exceeds the size limit")
-            return ArchiveHttpResponse(
-                status=response.status,
-                body=body,
-                headers=dict(response.headers.items()),
+            return consume(
+                response,
+                response.status,
+                dict(response.headers.items()),
             )
     except urllib.error.HTTPError as error:
-        return ArchiveHttpResponse(
-            status=error.code,
-            body=error.read(4096),
-            headers=dict(error.headers.items()) if error.headers is not None else {},
-        )
+        try:
+            return consume(
+                error,
+                error.code,
+                dict(error.headers.items()) if error.headers is not None else {},
+                body_limit=min(limit, 4096),
+            )
+        finally:
+            error.close()
     except (TimeoutError, urllib.error.URLError):
         raise
+
+
+def _terminate_http_worker(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        process.kill()
+    process.wait()
+
+
+def _archive_worker_response(
+    body_path: Path,
+    metadata_path: Path,
+    result_path: Path,
+    maximum_response_bytes: int | None,
+    *,
+    allow_partial: bool,
+) -> ArchiveHttpResponse:
+    payload_path = result_path if result_path.is_file() else metadata_path
+    if not payload_path.is_file():
+        raise OSError("archive HTTP worker exited without a valid result")
+    try:
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise OSError("archive HTTP worker returned an invalid result") from error
+    if payload.get("kind") == "failure":
+        detail = str(payload.get("detail", "archive HTTP worker failed"))
+        raise OSError(detail)
+    try:
+        status = payload["status"]
+        headers = payload["headers"]
+        complete = payload.get("complete", False)
+    except KeyError as error:
+        raise OSError("archive HTTP worker returned an invalid result") from error
+    if (
+        type(status) is not int
+        or not isinstance(headers, dict)
+        or not isinstance(complete, bool)
+        or any(
+            not isinstance(name, str) or not isinstance(value, str)
+            for name, value in headers.items()
+        )
+    ):
+        raise OSError("archive HTTP worker returned an invalid result")
+    try:
+        body = body_path.read_bytes() if body_path.is_file() else b""
+    except OSError as error:
+        raise OSError("archive HTTP worker response body is unreadable") from error
+    limit = (
+        _MAX_ARCHIVE_BYTES
+        if maximum_response_bytes is None
+        else min(maximum_response_bytes, _MAX_ARCHIVE_BYTES)
+    )
+    if len(body) > limit + 1:
+        raise OSError("archive HTTP worker exceeded its bounded response size")
+    return ArchiveHttpResponse(
+        status=status,
+        body=body,
+        headers=headers,
+        complete=complete and not allow_partial,
+    )
+
+
+def _default_http_get(
+    url: str,
+    timeout: float,
+    *,
+    maximum_response_bytes: int | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> ArchiveHttpResponse:
+    """Read one response in a process that cannot outlive its absolute timeout."""
+    with tempfile.TemporaryDirectory(prefix="tracequant-archive-http-") as directory:
+        root = Path(directory)
+        body_path = root / "body.bin"
+        metadata_path = root / "metadata.json"
+        result_path = root / "result.json"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "tracequant.data._binance_archive_http_worker",
+                url,
+                repr(timeout),
+                (
+                    "none"
+                    if maximum_response_bytes is None
+                    else str(maximum_response_bytes)
+                ),
+                str(body_path),
+                str(metadata_path),
+                str(result_path),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        deadline = time.monotonic() + timeout
+        interruption: str | None = None
+        try:
+            while process.poll() is None:
+                if cancelled is not None and cancelled():
+                    interruption = "archive HTTP attempt was cancelled"
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    interruption = "archive HTTP attempt exceeded its absolute elapsed-time deadline"
+                    break
+                try:
+                    process.wait(timeout=min(0.05, remaining))
+                except subprocess.TimeoutExpired:
+                    continue
+        except BaseException:
+            _terminate_http_worker(process)
+            raise
+        if interruption is not None:
+            _terminate_http_worker(process)
+            try:
+                response = _archive_worker_response(
+                    body_path,
+                    metadata_path,
+                    result_path,
+                    maximum_response_bytes,
+                    allow_partial=True,
+                )
+            except OSError:
+                response = None
+            raise _ArchiveTransportInterrupted(interruption, response=response)
+        if process.returncode != 0:
+            raise OSError("archive HTTP worker exited without a valid result")
+        return _archive_worker_response(
+            body_path,
+            metadata_path,
+            result_path,
+            maximum_response_bytes,
+            allow_partial=False,
+        )
 
 
 def _download(
@@ -261,6 +502,16 @@ def _download(
         )
     if not response.body:
         raise _InvalidContentError(f"empty response for {url}", response=response)
+    if not response.complete:
+        if len(response.body) > _MAX_ARCHIVE_BYTES:
+            raise _InvalidContentError(
+                "archive response exceeds the size limit", response=response
+            )
+        raise _RetryableDownloadError(
+            f"incomplete response for {url}",
+            resource=resource,
+            response=response,
+        )
     return _DownloadedResponse(
         body=response.body,
         status=response.status,
@@ -319,6 +570,7 @@ class BinancePublicArchiveAcquisition:
             raise ValueError("timeout must be finite and greater than zero")
         self._store = store
         self._http_get = http_get or _default_http_get
+        self._uses_default_http_get = http_get is None
         self._timeout = timeout
         self._clock = clock or (lambda: datetime.now(UTC))
 
@@ -376,11 +628,19 @@ class BinancePublicArchiveAcquisition:
                 checksum_response.body_sha256 if checksum_response is not None else None
             ),
         )
-        self._store.write_acquisition_manifest(
-            manifest,
-            source_response=source_response,
-            checksum_response=checksum_response,
-        )
+        try:
+            self._store.write_acquisition_manifest(
+                manifest,
+                source_response=source_response,
+                checksum_response=checksum_response,
+            )
+        except (RawStoreError, OSError, ValueError) as error:
+            return BinanceArchiveAcquisitionOutcome(
+                status=BinanceArchiveAcquisitionStatus.LOCAL_FAILURE,
+                artifact_path=artifact_path,
+                detail=f"failed to persist acquisition evidence: {error}",
+                actual_record_range=actual_record_range,
+            )
         return BinanceArchiveAcquisitionOutcome(
             status=status,
             artifact_path=artifact_path,
@@ -460,14 +720,157 @@ class BinancePublicArchiveAcquisition:
                     )
         return existing, None
 
+    @staticmethod
+    def _execution_status(
+        stopped: BinancePublicHistoryExecutionStopped,
+    ) -> BinanceArchiveAcquisitionStatus:
+        if stopped.reason is BinancePublicHistoryExecutionStopReason.CANCELLED:
+            return BinanceArchiveAcquisitionStatus.CANCELLED
+        return BinanceArchiveAcquisitionStatus.BUDGET_EXHAUSTED
+
+    def _controlled_download(
+        self,
+        plan: BinanceArchiveObjectPlan,
+        url: str,
+        *,
+        resource: str,
+        execution_context: BinancePublicHistoryExecutionContext,
+    ) -> _DownloadedResponse:
+        request_key = f"archive:{plan.object_key}:{resource}"
+        while True:
+            try:
+                allowance = execution_context.begin_http_attempt(
+                    request_key, timeout_seconds=self._timeout
+                )
+            except BinancePublicHistoryExecutionStopped as stopped:
+                raise _ExecutionDownloadError(stopped, resource=resource) from stopped
+            response: ArchiveHttpResponse | None = None
+            try:
+                if self._uses_default_http_get:
+                    response = _default_http_get(
+                        url,
+                        allowance.timeout_seconds,
+                        maximum_response_bytes=allowance.maximum_response_bytes,
+                        cancelled=execution_context.cancellation_requested,
+                    )
+                else:
+                    response = self._http_get(url, allowance.timeout_seconds)
+            except _ArchiveTransportInterrupted as error:
+                response = error.response
+                if response is not None:
+                    try:
+                        execution_context.record_response_bytes(len(response.body))
+                    except BinancePublicHistoryExecutionStopped as stopped:
+                        raise _ExecutionDownloadError(
+                            stopped, resource=resource, response=response
+                        ) from stopped
+                try:
+                    execution_context.check()
+                except BinancePublicHistoryExecutionStopped as stopped:
+                    raise _ExecutionDownloadError(
+                        stopped, resource=resource, response=response
+                    ) from stopped
+                retryable = _RetryableDownloadError(
+                    str(error), resource=resource, response=response
+                )
+            except (
+                TimeoutError,
+                ConnectionError,
+                OSError,
+                http.client.HTTPException,
+            ) as error:
+                try:
+                    execution_context.check()
+                except BinancePublicHistoryExecutionStopped as stopped:
+                    raise _ExecutionDownloadError(
+                        stopped, resource=resource
+                    ) from stopped
+                detail = str(error).strip() or type(error).__name__
+                retryable = _RetryableDownloadError(detail, resource=resource)
+            else:
+                try:
+                    execution_context.record_response_bytes(len(response.body))
+                    execution_context.check()
+                except BinancePublicHistoryExecutionStopped as stopped:
+                    raise _ExecutionDownloadError(
+                        stopped, resource=resource, response=response
+                    ) from stopped
+                try:
+                    return _download(
+                        lambda unused_url, unused_timeout: response,
+                        url,
+                        allowance.timeout_seconds,
+                        resource=resource,
+                    )
+                except _RetryableDownloadError as error:
+                    retryable = error
+
+            recorded = self.record_failure(
+                plan.request,
+                BinanceArchiveAcquisitionStatus.RETRYABLE_FAILURE,
+                str(retryable),
+                source_url=plan.url,
+                checksum_url=plan.checksum_url,
+                source_response=(
+                    self._to_raw_response(retryable.response)
+                    if resource == "archive"
+                    else None
+                ),
+                checksum_response=(
+                    self._to_raw_response(retryable.response)
+                    if resource == "checksum"
+                    else None
+                ),
+            )
+            if recorded.status is BinanceArchiveAcquisitionStatus.LOCAL_FAILURE:
+                raise _RecordedLocalFailure(recorded)
+            if (
+                allowance.request_attempt_number
+                >= execution_context.limits.maximum_attempts_per_request
+            ):
+                try:
+                    execution_context.raise_stop(
+                        BinancePublicHistoryExecutionStopReason.REQUEST_ATTEMPTS_EXHAUSTED,
+                        "maximum_attempts_per_request exhausted",
+                    )
+                except BinancePublicHistoryExecutionStopped as stopped:
+                    raise _ExecutionDownloadError(
+                        stopped, resource=resource, response=retryable.response
+                    ) from retryable
+            delay = float(min(2 ** (allowance.request_attempt_number - 1), 60))
+            try:
+                execution_context.wait_for_retry(delay)
+            except BinancePublicHistoryExecutionStopped as stopped:
+                raise _ExecutionDownloadError(
+                    stopped, resource=resource, response=retryable.response
+                ) from stopped
+
     def acquire(
         self,
         plan: BinanceArchiveObjectPlan,
         adapter: BinanceArchiveDatasetAdapter,
+        execution_context: BinancePublicHistoryExecutionContext | None = None,
     ) -> BinanceArchiveAcquisitionOutcome:
         """Download, verify, parse, and revision-aware publish one object."""
         if not isinstance(plan, BinanceArchiveObjectPlan):
             raise TypeError("plan must be a BinanceArchiveObjectPlan")
+        if execution_context is not None and not isinstance(
+            execution_context, BinancePublicHistoryExecutionContext
+        ):
+            raise TypeError(
+                "execution_context must be BinancePublicHistoryExecutionContext"
+            )
+        if execution_context is not None:
+            try:
+                execution_context.begin_archive_object()
+            except BinancePublicHistoryExecutionStopped as stopped:
+                return self.record_failure(
+                    plan.request,
+                    self._execution_status(stopped),
+                    str(stopped),
+                    source_url=plan.url,
+                    checksum_url=plan.checksum_url,
+                )
         existing, early = self._existing_artifact(plan, adapter)
         if early is not None:
             return early
@@ -478,21 +881,39 @@ class BinancePublicArchiveAcquisition:
         archive_response: RawAcquisitionResponse | None = None
         resource = "checksum"
         try:
-            checksum_payload = _download(
-                self._http_get,
-                plan.checksum_url,
-                self._timeout,
-                resource="checksum",
+            checksum_payload = (
+                _download(
+                    self._http_get,
+                    plan.checksum_url,
+                    self._timeout,
+                    resource="checksum",
+                )
+                if execution_context is None
+                else self._controlled_download(
+                    plan,
+                    plan.checksum_url,
+                    resource="checksum",
+                    execution_context=execution_context,
+                )
             )
             declared = _declared_checksum(
                 checksum_payload.body, plan.url.rsplit("/", 1)[-1]
             )
             resource = "archive"
-            archive_payload = _download(
-                self._http_get,
-                plan.url,
-                self._timeout,
-                resource="archive",
+            archive_payload = (
+                _download(
+                    self._http_get,
+                    plan.url,
+                    self._timeout,
+                    resource="archive",
+                )
+                if execution_context is None
+                else self._controlled_download(
+                    plan,
+                    plan.url,
+                    resource="archive",
+                    execution_context=execution_context,
+                )
             )
             actual = hashlib.sha256(archive_payload.body).hexdigest()
             if actual != declared:
@@ -501,6 +922,20 @@ class BinancePublicArchiveAcquisition:
                 )
             member_payload = _extract_expected_member(plan, archive_payload.body)
             parsed = adapter.parse_member(plan, member_payload)
+            if execution_context is not None:
+                try:
+                    execution_context.check()
+                except BinancePublicHistoryExecutionStopped as stopped:
+                    return self.record_failure(
+                        plan.request,
+                        self._execution_status(stopped),
+                        str(stopped),
+                        source_url=plan.url,
+                        checksum_url=plan.checksum_url,
+                        source_response=self._to_raw_response(archive_payload),
+                        checksum_response=self._to_raw_response(checksum_payload),
+                        actual_record_range=parsed.actual_record_range,
+                    )
             source = RawSourceObject(
                 request=plan.request,
                 rows=parsed.rows,
@@ -547,6 +982,21 @@ class BinancePublicArchiveAcquisition:
             else:
                 matching_existing = existing
             artifact = self._store.write(source)
+            if execution_context is not None:
+                try:
+                    execution_context.check()
+                except BinancePublicHistoryExecutionStopped as stopped:
+                    return self.record_failure(
+                        plan.request,
+                        self._execution_status(stopped),
+                        f"{stopped}; completed archive object was preserved",
+                        source_url=plan.url,
+                        checksum_url=plan.checksum_url,
+                        artifact_path=artifact.path,
+                        source_response=self._to_raw_response(archive_payload),
+                        checksum_response=self._to_raw_response(checksum_payload),
+                        actual_record_range=parsed.actual_record_range,
+                    )
         except _DownloadNotFoundError as error:
             if error.resource == "checksum":
                 checksum_response = self._to_raw_response(error.response)
@@ -575,6 +1025,24 @@ class BinancePublicArchiveAcquisition:
             return self.record_failure(
                 plan.request,
                 BinanceArchiveAcquisitionStatus.RETRYABLE_FAILURE,
+                str(error),
+                source_url=plan.url,
+                checksum_url=plan.checksum_url,
+                source_response=self._to_raw_response(archive_payload)
+                or archive_response,
+                checksum_response=self._to_raw_response(checksum_payload)
+                or checksum_response,
+            )
+        except _RecordedLocalFailure as error:
+            return error.outcome
+        except _ExecutionDownloadError as error:
+            if error.resource == "checksum":
+                checksum_response = self._to_raw_response(error.response)
+            else:
+                archive_response = self._to_raw_response(error.response)
+            return self.record_failure(
+                plan.request,
+                self._execution_status(error.stopped),
                 str(error),
                 source_url=plan.url,
                 checksum_url=plan.checksum_url,
