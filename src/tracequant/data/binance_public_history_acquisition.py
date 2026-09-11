@@ -24,7 +24,7 @@ from typing import Final
 
 import polars as pl
 
-from tracequant.core.time import format_utc, to_utc
+from tracequant.core.time import ensure_aware, format_utc, is_utc, to_utc
 from tracequant.data.binance_contract_kline import BinanceContractKlineBackfill
 from tracequant.data.binance_funding_rate import BinanceFundingRateBackfill
 from tracequant.data.binance_funding_rate_rest import (
@@ -169,6 +169,28 @@ def _coerce_enum[EnumT: StrEnum](
         raise ValueError(f"unsupported {field}") from error
 
 
+def _require_utc_bound(value: object, *, field: str) -> datetime:
+    """Validate one caller-supplied request bound before any acquisition work.
+
+    ``TimeRange`` normalizes every aware input to UTC, so a request that only
+    accepted an already-built range could no longer tell a UTC caller from one
+    passing a non-zero offset.  Bounds are therefore checked here, while the
+    caller's original offset is still observable.
+    """
+    if not isinstance(value, datetime):
+        raise TypeError(f"{field} must be a datetime")
+    try:
+        bound = ensure_aware(value)
+    except ValueError as error:
+        raise ValueError(f"{field} must be timezone-aware") from error
+    if not is_utc(bound):
+        raise ValueError(
+            f"{field} must be UTC; non-UTC request ranges are rejected before "
+            "acquisition"
+        )
+    return to_utc(bound)
+
+
 def _require_sha256(value: str, *, field: str) -> str:
     if (
         not isinstance(value, str)
@@ -196,7 +218,8 @@ class BinancePublicHistoryAcquisitionRequest:
 
     subject: BinancePublicHistorySubject
     data_type: BinancePublicHistoryDataType
-    request_range: TimeRange
+    start: datetime
+    end: datetime
     purpose: BinancePublicHistoryPurpose
     output_root: Path
     conflict_policy: BinancePublicHistoryConflictPolicy = (
@@ -204,6 +227,16 @@ class BinancePublicHistoryAcquisitionRequest:
     )
     gap_reason: str | None = None
     market: BinanceMarket = BinanceMarket.USD_M
+
+    @property
+    def request_range(self) -> TimeRange:
+        """Return the caller's half-open range once both bounds are proven UTC.
+
+        The bounds are validated as UTC before ``TimeRange`` normalization can
+        erase the caller's original offset, so an aware non-zero-offset range is
+        rejected instead of being silently shifted into UTC.
+        """
+        return TimeRange(start=self.start, end=self.end)
 
     def __post_init__(self) -> None:
         data_type = _coerce_enum(
@@ -235,11 +268,15 @@ class BinancePublicHistoryAcquisitionRequest:
                 )
         elif not isinstance(self.subject, InstrumentId):
             raise ValueError("this data family requires a typed instrument")
-        if not isinstance(self.request_range, TimeRange):
-            raise TypeError("request_range must be a TimeRange")
+        request_range = TimeRange(
+            start=_require_utc_bound(self.start, field="request start"),
+            end=_require_utc_bound(self.end, field="request end"),
+        )
+        object.__setattr__(self, "start", request_range.start)
+        object.__setattr__(self, "end", request_range.end)
         if data_type in _KLINE_TYPES:
-            start_ms = int(self.request_range.start.timestamp() * 1_000)
-            end_ms = int(self.request_range.end.timestamp() * 1_000)
+            start_ms = int(request_range.start.timestamp() * 1_000)
+            end_ms = int(request_range.end.timestamp() * 1_000)
             if start_ms % _ONE_MINUTE_MS or end_ms % _ONE_MINUTE_MS:
                 raise ValueError(
                     "Kline request ranges must align to complete UTC minutes"
@@ -2084,6 +2121,59 @@ class BinancePublicHistoryAcquisition:
             ),
         )
 
+    def _record_post_source_cancellation(self, shared: _SharedBudget) -> bool:
+        """Record an external cancellation observed after source execution.
+
+        Source execution polls cancellation through the transport hooks, but the
+        post-source Raw revision and overlap work performs its own local I/O
+        (``list_verified_revisions``, ``_artifact_reference``, ``_compare``).  A
+        cancellation requested while that work runs must still terminate the run
+        deterministically instead of being masked by the stale source-phase flag.
+        """
+        if not self._cancelled():
+            return False
+        shared.cancelled = True
+        return True
+
+    @staticmethod
+    def _record_overlap_cancellation(
+        result: BinancePublicHistoryRequestResult,
+        *,
+        detail: str,
+    ) -> BinancePublicHistoryRequestResult:
+        """Fail closed when cancellation interrupts the Raw overlap audit."""
+        obligations = tuple(
+            replace(
+                obligation,
+                sources=tuple(
+                    replace(
+                        source,
+                        status=BinancePublicHistoryRunStatus.CANCELLED.value,
+                        detail=detail,
+                    )
+                    if source.raw_references
+                    else source
+                    for source in obligation.sources
+                ),
+                satisfied=False,
+                unmet_reason=detail,
+            )
+            for obligation in result.obligations
+        )
+        return replace(
+            result,
+            obligations=obligations,
+            satisfied_ranges=(),
+            unmet_ranges=tuple(
+                obligation.plan.required_range for obligation in obligations
+            ),
+            status=(
+                BinancePublicHistoryRunStatus.PARTIAL
+                if result.raw_references
+                else BinancePublicHistoryRunStatus.FAILED
+            ),
+        )
+
     @staticmethod
     def _record_overlap_budget_exhaustion(
         result: BinancePublicHistoryRequestResult,
@@ -2355,9 +2445,13 @@ class BinancePublicHistoryAcquisition:
             ).append(index)
         overlap_audited: set[int] = set()
         elapsed_during_overlap = False
+        cancelled_during_overlap = False
         for (root, _data_type, _subject), indices in comparison_groups.items():
             if shared.enforce_elapsed_limit():
                 elapsed_during_overlap = True
+                break
+            if self._record_post_source_cancellation(shared):
+                cancelled_during_overlap = True
                 break
             group_references: dict[
                 tuple[str, str], BinancePublicHistoryRawReference
@@ -2373,6 +2467,9 @@ class BinancePublicHistoryAcquisition:
             for index in indices:
                 if shared.enforce_elapsed_limit():
                     elapsed_during_overlap = True
+                    break
+                if self._record_post_source_cancellation(shared):
+                    cancelled_during_overlap = True
                     break
                 item = request_results[index]
                 request_range = item.request.request_range
@@ -2391,10 +2488,16 @@ class BinancePublicHistoryAcquisition:
                     if shared.enforce_elapsed_limit():
                         elapsed_during_overlap = True
                         break
+                    if self._record_post_source_cancellation(shared):
+                        cancelled_during_overlap = True
+                        break
                     try:
                         artifacts = stores[root].list_verified_revisions(identity)
                         if shared.enforce_elapsed_limit():
                             elapsed_during_overlap = True
+                            break
+                        if self._record_post_source_cancellation(shared):
+                            cancelled_during_overlap = True
                             break
                         for artifact in artifacts:
                             reference = _artifact_reference(stores[root], artifact)
@@ -2417,13 +2520,16 @@ class BinancePublicHistoryAcquisition:
                             identity=identity,
                         )
                         comparison_failed = True
-                if elapsed_during_overlap:
+                if elapsed_during_overlap or cancelled_during_overlap:
                     break
                 if comparison_failed:
                     overlap_audited.add(index)
                     continue
                 if shared.enforce_elapsed_limit():
                     elapsed_during_overlap = True
+                    break
+                if self._record_post_source_cancellation(shared):
+                    cancelled_during_overlap = True
                     break
                 try:
                     duplicates, conflicts = self._compare(
@@ -2443,6 +2549,9 @@ class BinancePublicHistoryAcquisition:
                 if shared.enforce_elapsed_limit():
                     elapsed_during_overlap = True
                     break
+                if self._record_post_source_cancellation(shared):
+                    cancelled_during_overlap = True
+                    break
                 if not duplicates and not conflicts:
                     overlap_audited.add(index)
                     continue
@@ -2460,9 +2569,19 @@ class BinancePublicHistoryAcquisition:
                     ),
                 )
                 overlap_audited.add(index)
-            if elapsed_during_overlap:
+            if elapsed_during_overlap or cancelled_during_overlap:
                 break
-        if shared.exhaustion_reason == "maximum_elapsed_seconds exhausted":
+        if cancelled_during_overlap:
+            for index, item in enumerate(request_results):
+                if index not in overlap_audited:
+                    request_results[index] = self._record_overlap_cancellation(
+                        item,
+                        detail=(
+                            "cancelled before the Raw overlap audit completed; "
+                            "completed Raw revisions were preserved"
+                        ),
+                    )
+        elif shared.exhaustion_reason == "maximum_elapsed_seconds exhausted":
             for index, item in enumerate(request_results):
                 if index not in overlap_audited:
                     request_results[index] = self._record_overlap_budget_exhaustion(
@@ -2473,6 +2592,8 @@ class BinancePublicHistoryAcquisition:
                         ),
                     )
         final_elapsed = shared.elapsed
+        self._record_post_source_cancellation(shared)
+        cancelled = cancelled or shared.cancelled
         if (
             not cancelled
             and final_elapsed >= shared.budget.maximum_elapsed_seconds

@@ -10,7 +10,11 @@ backfill、REST page acquisition 和不可变 Raw/revision；它不扫描数据�
 调用者显式提供一个有限 `Sequence[BinancePublicHistoryAcquisitionRequest]`。每项包含：
 
 - typed `InstrumentId`，或仅对 index-price 使用的 `BinancePriceIndexId`；
-- 数据族、UTC 半开 `TimeRange` 和 `backfill`、`recent` 或显式 `gap` 用途；
+- 数据族、UTC 半开 `[start, end)` 边界和 `backfill`、`recent` 或显式 `gap` 用途；边界以
+  `start`/`end` 两个 datetime 提交，必须是零偏移的 UTC：naive 与 `UTC+08:00` 一类 non-UTC
+  偏移都在请求边界即被拒绝，不会进入 `plan`/`run`。`TimeRange` 会把任意 aware 偏移静默归一化
+  到 UTC，因此该校验先于 `TimeRange` 归一化发生；名字不同但偏移为零的 aware datetime 仍视为
+  UTC；
 - 本地 `output_root`；路径只由 typed source identity 生成，任何上游 URL/object key 都不能
   决定本地相对路径；
 - `preserve_and_report` 冲突策略；gap 还必须包含非空的来源原因。

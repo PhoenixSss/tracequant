@@ -3,7 +3,7 @@ import io
 import json
 import zipfile
 from dataclasses import replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -457,20 +457,16 @@ def test_report_backed_negative_and_partial_archive_cells_are_preserved(
         BinancePublicHistoryAcquisitionRequest(
             subject=not_found.subject,
             data_type=not_found.data_type,
-            request_range=TimeRange(
-                start=datetime(2026, 8, 30, tzinfo=UTC),
-                end=datetime(2026, 8, 31, tzinfo=UTC),
-            ),
+            start=datetime(2026, 8, 30, tzinfo=UTC),
+            end=datetime(2026, 8, 31, tzinfo=UTC),
             purpose=BinancePublicHistoryPurpose.BACKFILL,
             output_root=tmp_path / "negative-report-cell",
         ),
         BinancePublicHistoryAcquisitionRequest(
             subject=partial.subject,
             data_type=partial.data_type,
-            request_range=TimeRange(
-                start=datetime(2019, 12, 23, tzinfo=UTC),
-                end=datetime(2019, 12, 24, tzinfo=UTC),
-            ),
+            start=datetime(2019, 12, 23, tzinfo=UTC),
+            end=datetime(2019, 12, 24, tzinfo=UTC),
             purpose=BinancePublicHistoryPurpose.BACKFILL,
             output_root=tmp_path / "partial-report-cell",
         ),
@@ -530,7 +526,8 @@ def test_same_status_overlapping_rest_cells_select_evidence_deterministically(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=tmp_path / "deterministic-rest-evidence",
     )
@@ -689,7 +686,8 @@ def test_history_plan_and_run_produce_traceable_mixed_source_result(
         BinancePublicHistoryAcquisitionRequest(
             subject=subject,
             data_type=data_type,
-            request_range=_archive_fixture(data_type, boundary)[1],
+            start=(archive_range := _archive_fixture(data_type, boundary)[1]).start,
+            end=archive_range.end,
             purpose=BinancePublicHistoryPurpose.BACKFILL,
             output_root=root,
         )
@@ -703,11 +701,14 @@ def test_history_plan_and_run_produce_traceable_mixed_source_result(
         BinancePublicHistoryAcquisitionRequest(
             subject=subject,
             data_type=data_type,
-            request_range=(
-                funding_range
-                if data_type is BinancePublicHistoryDataType.SETTLED_FUNDING_RATE
-                else TimeRange(start=REST_START, end=REST_END)
-            ),
+            start=(
+                rest_range := (
+                    funding_range
+                    if data_type is BinancePublicHistoryDataType.SETTLED_FUNDING_RATE
+                    else TimeRange(start=REST_START, end=REST_END)
+                )
+            ).start,
+            end=rest_range.end,
             purpose=purpose,
             gap_reason=(
                 "explicitly verify a bounded missing range"
@@ -815,7 +816,8 @@ def test_history_plan_and_run_produce_traceable_mixed_source_result(
     unknown = BinancePublicHistoryAcquisitionRequest(
         subject=BinancePriceIndexId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.INDEX_PRICE_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.GAP,
         gap_reason="coverage deliberately remains unknown",
         output_root=tmp_path / "unknown-critical-outcome",
@@ -874,7 +876,8 @@ def test_plan_keeps_unknown_ranges_unmet_without_io_or_directory_creation(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=BinancePriceIndexId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.INDEX_PRICE_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.GAP,
         gap_reason="explicit missing 1m bars",
         output_root=root,
@@ -907,7 +910,8 @@ def test_unified_entry_rejects_invalid_requests_and_non_finite_budgets_before_io
     valid_request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=request_range,
+        start=request_range.start,
+        end=request_range.end,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=root,
     )
@@ -928,6 +932,36 @@ def test_unified_entry_rejects_invalid_requests_and_non_finite_budgets_before_io
         )
     with pytest.raises(ValueError, match="earlier than end"):
         TimeRange(start=REST_START, end=REST_START)
+    # naive and non-UTC bounds are rejected at the request boundary, before
+    # TimeRange normalization can erase the caller's original offset.
+    with pytest.raises(ValueError, match="request start must be timezone-aware"):
+        replace(
+            valid_request,
+            start=datetime(2026, 9, 9, 17, 33),
+        )
+    with pytest.raises(ValueError, match="request end must be timezone-aware"):
+        replace(
+            valid_request,
+            end=datetime(2026, 9, 9, 17, 35),
+        )
+    with pytest.raises(ValueError, match="request start must be UTC"):
+        replace(
+            valid_request,
+            start=datetime(2026, 9, 9, 17, 33, tzinfo=timezone(timedelta(hours=8))),
+        )
+    with pytest.raises(ValueError, match="request end must be UTC"):
+        replace(
+            valid_request,
+            end=datetime(2026, 9, 9, 17, 35, tzinfo=timezone(timedelta(hours=8))),
+        )
+    # a genuine zero offset is still UTC, whatever name its tzinfo carries.
+    zero_offset = replace(
+        valid_request,
+        start=datetime(2026, 9, 9, 17, 33, tzinfo=timezone(timedelta(0), "zero")),
+        end=datetime(2026, 9, 9, 17, 35, tzinfo=timezone(timedelta(0), "zero")),
+    )
+    assert zero_offset.request_range == request_range
+    assert zero_offset.request_range.start.tzinfo is UTC
     with pytest.raises(ValueError, match="requests must not be empty"):
         acquisition.plan((), BinancePublicHistoryCoverage(), _budget())
     with pytest.raises(ValueError, match="finite and greater than zero"):
@@ -969,7 +1003,8 @@ def test_plan_retains_matching_negative_rest_evidence_without_io(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=tmp_path / coverage_status.value,
     )
@@ -998,7 +1033,8 @@ def test_supported_rest_evidence_for_another_subject_stays_unknown(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=tmp_path / "mismatched-rest-subject",
     )
@@ -1057,7 +1093,8 @@ def test_plan_keeps_four_family_subjects_and_archive_cadence_distinct(
         BinancePublicHistoryAcquisitionRequest(
             subject=subject,
             data_type=data_type,
-            request_range=request_range,
+            start=request_range.start,
+            end=request_range.end,
             purpose=BinancePublicHistoryPurpose.BACKFILL,
             output_root=tmp_path / "four-family",
         )
@@ -1124,7 +1161,8 @@ def test_archive_404_uses_only_the_planned_proven_rest_fallback(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / "fallback",
     )
@@ -1192,7 +1230,8 @@ def test_partial_archive_decision_is_retained_with_successful_rest_replacement(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / "partial-rest-replacement",
     )
@@ -1253,7 +1292,8 @@ def test_missing_monthly_archive_uses_all_proven_daily_fallbacks(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=request_range,
+        start=request_range.start,
+        end=request_range.end,
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / "monthly-daily-fallback",
     )
@@ -1390,17 +1430,16 @@ def test_cross_source_overlap_compares_numeric_values_semantically(
     backfill = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(
-            start=datetime(2026, 9, 9, tzinfo=UTC),
-            end=datetime(2026, 9, 10, tzinfo=UTC),
-        ),
+        start=datetime(2026, 9, 9, tzinfo=UTC),
+        end=datetime(2026, 9, 10, tzinfo=UTC),
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=root,
     )
     gap = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.GAP,
         gap_reason="compare an explicitly missing range",
         output_root=root,
@@ -1473,7 +1512,8 @@ def test_rest_retries_cannot_reset_the_shared_http_budget(tmp_path: Path) -> Non
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=tmp_path / "budget",
     )
@@ -1522,10 +1562,8 @@ def test_run_rejects_tampered_archive_locator_or_framing_before_io(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(
-            start=datetime(2026, 8, 29, tzinfo=UTC),
-            end=datetime(2026, 8, 30, tzinfo=UTC),
-        ),
+        start=datetime(2026, 8, 29, tzinfo=UTC),
+        end=datetime(2026, 8, 30, tzinfo=UTC),
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / "tampered",
     )
@@ -1581,7 +1619,8 @@ def test_run_rejects_tampered_step_coverage_before_io(tmp_path: Path) -> None:
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=tmp_path / "tampered-rest",
     )
@@ -1618,10 +1657,8 @@ def test_large_backfill_is_rejected_before_source_windows_are_expanded(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(
-            start=datetime(2000, 1, 1, tzinfo=UTC),
-            end=datetime(9999, 1, 1, tzinfo=UTC),
-        ),
+        start=datetime(2000, 1, 1, tzinfo=UTC),
+        end=datetime(9999, 1, 1, tzinfo=UTC),
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / "bounded-plan",
     )
@@ -1663,7 +1700,8 @@ def test_changed_upstream_rerun_compares_all_preserved_revisions(
     recent = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=root,
     )
@@ -1723,14 +1761,16 @@ def test_disjoint_requests_only_report_conflicts_within_their_own_range(
     first = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=root,
     )
     second = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=second_start, end=second_end),
+        start=second_start,
+        end=second_end,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=root,
     )
@@ -1782,7 +1822,8 @@ def test_corrupt_old_revision_returns_local_failure_with_current_reference(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=root,
     )
@@ -1846,10 +1887,8 @@ def test_archive_reference_materialization_failure_returns_local_failure(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(
-            start=datetime(2026, 8, 29, tzinfo=UTC),
-            end=datetime(2026, 8, 30, tzinfo=UTC),
-        ),
+        start=datetime(2026, 8, 29, tzinfo=UTC),
+        end=datetime(2026, 8, 30, tzinfo=UTC),
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=root,
     )
@@ -1923,7 +1962,8 @@ def test_rest_reference_materialization_failure_returns_local_failure(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=root,
     )
@@ -1984,7 +2024,8 @@ def test_all_four_families_execute_backfill_through_real_archive_adapters(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=subject,
         data_type=data_type,
-        request_range=request_range,
+        start=request_range.start,
+        end=request_range.end,
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / data_type.value,
     )
@@ -2071,7 +2112,8 @@ def test_runtime_kline_archive_gap_preserves_range_before_rest_fallback(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=subject,
         data_type=data_type,
-        request_range=request_range,
+        start=request_range.start,
+        end=request_range.end,
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / f"runtime-gap-{data_type.value}",
     )
@@ -2175,7 +2217,8 @@ def test_all_four_families_execute_recent_and_explicit_gap_through_rest(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=subject,
         data_type=data_type,
-        request_range=request_range,
+        start=request_range.start,
+        end=request_range.end,
         purpose=purpose,
         gap_reason=(
             "explicit family gap"
@@ -2258,7 +2301,8 @@ def test_partial_multi_page_rest_failure_keeps_every_page_outcome(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=tmp_path / "partial-pages",
     )
@@ -2331,7 +2375,8 @@ def test_shared_http_exhaustion_keeps_completed_rest_pages(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=tmp_path / "shared-http-pages",
     )
@@ -2393,7 +2438,8 @@ def test_rest_page_exhaustion_propagates_to_shared_run_status(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=tmp_path / "rest-page-budget",
     )
@@ -2444,7 +2490,8 @@ def test_plan_selection_is_bounded_by_month_edges_partial_and_exact_rest_cell(
     full_request = BinancePublicHistoryAcquisitionRequest(
         subject=subject,
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=full_month,
+        start=full_month.start,
+        end=full_month.end,
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / "full-month",
     )
@@ -2462,10 +2509,8 @@ def test_plan_selection_is_bounded_by_month_edges_partial_and_exact_rest_cell(
 
     edge_request = replace(
         full_request,
-        request_range=TimeRange(
-            start=datetime(2026, 7, 15, tzinfo=UTC),
-            end=datetime(2026, 8, 2, tzinfo=UTC),
-        ),
+        start=datetime(2026, 7, 15, tzinfo=UTC),
+        end=datetime(2026, 8, 2, tzinfo=UTC),
         output_root=tmp_path / "month-edges",
     )
     edge_daily = BinancePublicHistoryArchiveEvidence(
@@ -2507,7 +2552,8 @@ def test_plan_selection_is_bounded_by_month_edges_partial_and_exact_rest_cell(
     recent_range = TimeRange(start=REST_START, end=REST_END)
     backfill = replace(
         full_request,
-        request_range=recent_range,
+        start=recent_range.start,
+        end=recent_range.end,
         output_root=tmp_path / "partial",
     )
     partial_plan = acquisition.plan(
@@ -2578,7 +2624,8 @@ def test_archive_integrity_failure_does_not_use_planned_rest_fallback(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / failure,
     )
@@ -2631,10 +2678,8 @@ def test_existing_local_corruption_fails_without_overwrite(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(
-            start=datetime(2026, 8, 29, tzinfo=UTC),
-            end=datetime(2026, 8, 30, tzinfo=UTC),
-        ),
+        start=datetime(2026, 8, 29, tzinfo=UTC),
+        end=datetime(2026, 8, 30, tzinfo=UTC),
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / "local-corruption",
     )
@@ -2714,7 +2759,8 @@ def test_shared_byte_exhaustion_preserves_response_evidence_without_retry(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=tmp_path / budget_field,
     )
@@ -2774,7 +2820,8 @@ def test_complete_rest_response_may_exactly_consume_shared_download_budget(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=tmp_path / "exact-download-budget",
     )
@@ -2825,7 +2872,8 @@ def test_cancellation_during_terminal_rest_page_returns_cancelled(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=tmp_path / "cancelled-terminal-rest",
     )
@@ -2850,6 +2898,106 @@ def test_cancellation_during_terminal_rest_page_returns_cancelled(
     assert source.status == BinancePublicHistoryRunStatus.CANCELLED.value
     assert len(source.raw_references) == 1
     reference = source.raw_references[0]
+    assert (
+        RawStore(request.output_root)
+        .read_revision(reference.object_identity, reference.revision)
+        .path
+        == reference.artifact_path
+    )
+
+
+def test_cancellation_during_post_source_raw_audit_returns_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancellation requested after sources finish must not report COMPLETED.
+
+    The source phase already polls cancellation through the transport hooks; this
+    covers the opposite boundary, where every source has returned and the run is
+    only enumerating verified revisions and comparing semantic overlap.
+    """
+    cancellation_requested = False
+
+    def terminal_page(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        del url, timeout, maximum_response_bytes
+        assert not cancellation_requested
+        start_ms = int(REST_START.timestamp() * 1000)
+        return BinanceKlineRestHttpResponse(
+            status=200,
+            body=json.dumps(
+                [_contract_row(start_ms), _contract_row(start_ms + 60_000)]
+            ).encode(),
+            headers={},
+        )
+
+    def build(
+        root: Path, *, cancellable: bool
+    ) -> tuple[BinancePublicHistoryAcquisitionRequest, BinancePublicHistoryAcquisition]:
+        request = BinancePublicHistoryAcquisitionRequest(
+            subject=InstrumentId("BTCUSDT"),
+            data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
+            start=REST_START,
+            end=REST_END,
+            purpose=BinancePublicHistoryPurpose.RECENT,
+            output_root=root,
+        )
+        acquisition = BinancePublicHistoryAcquisition(
+            rest_http_get=terminal_page,
+            cancelled=(
+                (lambda: cancellation_requested) if cancellable else (lambda: False)
+            ),
+            clock=lambda: NOW,
+            wait=lambda _seconds: None,
+            monotonic_clock=lambda: 0.0,
+        )
+        return request, acquisition
+
+    coverage = BinancePublicHistoryCoverage(rest_windows=(_rest_coverage(),))
+
+    # Control: the identical scenario without a post-source cancellation still
+    # reaches COMPLETED, so the verdict below is caused by the cancellation.
+    control_request, control = build(
+        tmp_path / "post-source-control", cancellable=False
+    )
+    control_result = control.run(control.plan((control_request,), coverage, _budget()))
+    assert control_result.status is BinancePublicHistoryRunStatus.COMPLETED
+
+    request, acquisition = build(
+        tmp_path / "post-source-cancellation", cancellable=True
+    )
+
+    original_compare = history_module.BinancePublicHistoryAcquisition._compare
+
+    def compare_then_cancel(
+        self: BinancePublicHistoryAcquisition,
+        compare_request: BinancePublicHistoryAcquisitionRequest,
+        references: tuple[history_module.BinancePublicHistoryRawReference, ...],
+        store: RawStore,
+    ) -> tuple[int, tuple[history_module.BinancePublicHistoryConflict, ...]]:
+        nonlocal cancellation_requested
+        outcome = original_compare(self, compare_request, references, store)
+        cancellation_requested = True
+        return outcome
+
+    monkeypatch.setattr(
+        history_module.BinancePublicHistoryAcquisition,
+        "_compare",
+        compare_then_cancel,
+    )
+
+    result = acquisition.run(acquisition.plan((request,), coverage, _budget()))
+
+    assert cancellation_requested
+    assert result.status is BinancePublicHistoryRunStatus.CANCELLED
+    assert (
+        result.termination_reason == "cancelled; completed Raw revisions were preserved"
+    )
+    request_result = result.requests[0]
+    assert request_result.satisfied_ranges == ()
+    assert request_result.unmet_ranges == (request.request_range,)
+    assert len(request_result.raw_references) == 1
+    reference = request_result.raw_references[0]
     assert (
         RawStore(request.output_root)
         .read_revision(reference.object_identity, reference.revision)
@@ -2896,7 +3044,8 @@ def test_cancellation_between_rest_pages_preserves_completed_page(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=tmp_path / "cancelled-rest",
     )
@@ -2946,10 +3095,8 @@ def test_cancellation_between_archive_attempts_skips_retry_wait(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(
-            start=datetime(2026, 8, 29, tzinfo=UTC),
-            end=datetime(2026, 8, 30, tzinfo=UTC),
-        ),
+        start=datetime(2026, 8, 29, tzinfo=UTC),
+        end=datetime(2026, 8, 30, tzinfo=UTC),
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / "cancelled-archive",
     )
@@ -3025,14 +3172,16 @@ def test_rest_cumulative_budget_caps_a_later_valid_page_before_publication(
         BinancePublicHistoryAcquisitionRequest(
             subject=InstrumentId("BTCUSDT"),
             data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-            request_range=TimeRange(start=REST_START, end=REST_END),
+            start=REST_START,
+            end=REST_END,
             purpose=BinancePublicHistoryPurpose.RECENT,
             output_root=tmp_path / "cumulative-rest-budget",
         ),
         BinancePublicHistoryAcquisitionRequest(
             subject=InstrumentId("BTCUSDT"),
             data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-            request_range=TimeRange(start=second_start, end=second_end),
+            start=second_start,
+            end=second_end,
             purpose=BinancePublicHistoryPurpose.RECENT,
             output_root=tmp_path / "cumulative-rest-budget",
         ),
@@ -3079,10 +3228,8 @@ def test_archive_byte_exhaustion_preserves_received_checksum_evidence(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(
-            start=datetime(2026, 8, 29, tzinfo=UTC),
-            end=datetime(2026, 8, 30, tzinfo=UTC),
-        ),
+        start=datetime(2026, 8, 29, tzinfo=UTC),
+        end=datetime(2026, 8, 30, tzinfo=UTC),
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / "archive-byte-budget",
     )
@@ -3144,10 +3291,8 @@ def test_archive_retry_wait_exhaustion_preserves_the_attempted_source(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(
-            start=datetime(2026, 8, 29, tzinfo=UTC),
-            end=datetime(2026, 8, 30, tzinfo=UTC),
-        ),
+        start=datetime(2026, 8, 29, tzinfo=UTC),
+        end=datetime(2026, 8, 30, tzinfo=UTC),
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / "archive-retry-wait-budget",
     )
@@ -3204,10 +3349,8 @@ def test_archive_http_exhaustion_preserves_checksum_and_attempted_source(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(
-            start=datetime(2026, 8, 29, tzinfo=UTC),
-            end=datetime(2026, 8, 30, tzinfo=UTC),
-        ),
+        start=datetime(2026, 8, 29, tzinfo=UTC),
+        end=datetime(2026, 8, 30, tzinfo=UTC),
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / "archive-http-budget",
     )
@@ -3251,14 +3394,20 @@ def test_archive_http_exhaustion_preserves_checksum_and_attempted_source(
     manifests = RawStore(request.output_root).list_acquisition_manifests(
         RawObjectIdentity.from_request(identity.request)
     )
-    assert [manifest.status for manifest in manifests] == [
+    # The store orders acquisition manifests by their content-hash record id, and
+    # the ZIP fixture digest depends on the wall clock, so select by outcome
+    # instead of asserting a positional order that shifts between runs.
+    by_status = {manifest.status: manifest for manifest in manifests}
+    assert set(by_status) == {
         BinanceArchiveAcquisitionStatus.RETRYABLE_FAILURE.value,
         BinanceArchiveAcquisitionStatus.BUDGET_EXHAUSTED.value,
-    ]
-    assert manifests[0].detail == "bounded checksum timeout"
-    assert manifests[1].source_http_status is None
-    assert manifests[1].checksum_http_status == 200
-    assert manifests[1].checksum_response_sha256 == hashlib.sha256(checksum).hexdigest()
+    }
+    retryable = by_status[BinanceArchiveAcquisitionStatus.RETRYABLE_FAILURE.value]
+    exhausted = by_status[BinanceArchiveAcquisitionStatus.BUDGET_EXHAUSTED.value]
+    assert retryable.detail == "bounded checksum timeout"
+    assert exhausted.source_http_status is None
+    assert exhausted.checksum_http_status == 200
+    assert exhausted.checksum_response_sha256 == hashlib.sha256(checksum).hexdigest()
 
 
 def test_default_archive_transport_caps_the_stream_while_reading(
@@ -3303,10 +3452,8 @@ def test_archive_cumulative_budget_caps_each_production_response(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(
-            start=datetime(2026, 8, 29, tzinfo=UTC),
-            end=datetime(2026, 8, 30, tzinfo=UTC),
-        ),
+        start=datetime(2026, 8, 29, tzinfo=UTC),
+        end=datetime(2026, 8, 30, tzinfo=UTC),
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / "archive-cumulative-budget",
     )
@@ -3374,10 +3521,8 @@ def test_archive_final_response_cannot_publish_after_elapsed_budget(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(
-            start=datetime(2026, 8, 29, tzinfo=UTC),
-            end=datetime(2026, 8, 30, tzinfo=UTC),
-        ),
+        start=datetime(2026, 8, 29, tzinfo=UTC),
+        end=datetime(2026, 8, 30, tzinfo=UTC),
         purpose=BinancePublicHistoryPurpose.BACKFILL,
         output_root=tmp_path / "archive-elapsed-budget",
     )
@@ -3452,7 +3597,8 @@ def test_rest_persistence_cannot_complete_after_shared_elapsed_budget(
         BinancePublicHistoryAcquisitionRequest(
             subject=InstrumentId("BTCUSDT"),
             data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-            request_range=TimeRange(start=REST_START, end=REST_END),
+            start=REST_START,
+            end=REST_END,
             purpose=BinancePublicHistoryPurpose.RECENT,
             output_root=tmp_path / f"post-rest-budget-{index}",
         )
@@ -3519,7 +3665,8 @@ def test_overlap_inspection_cannot_complete_after_shared_elapsed_budget(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=tmp_path / "overlap-elapsed-budget",
     )
@@ -3566,7 +3713,8 @@ def test_rest_timeout_exhaustion_preserves_bounded_page_attempts(
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.RECENT,
         output_root=tmp_path / "timeout",
     )
@@ -3600,7 +3748,8 @@ def test_rest_empty_remains_distinct_from_completed_coverage(tmp_path: Path) -> 
     request = BinancePublicHistoryAcquisitionRequest(
         subject=InstrumentId("BTCUSDT"),
         data_type=BinancePublicHistoryDataType.CONTRACT_KLINE,
-        request_range=TimeRange(start=REST_START, end=REST_END),
+        start=REST_START,
+        end=REST_END,
         purpose=BinancePublicHistoryPurpose.GAP,
         gap_reason="verify explicit empty semantics",
         output_root=tmp_path / "empty",
