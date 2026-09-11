@@ -145,8 +145,11 @@ class BinancePublicHistoryExecutionContext:
         self._monotonic_clock = monotonic_clock or time.monotonic
         self._sleeper = sleeper or time.sleep
         self._lock = threading.Lock()
+        self._attempt_condition = threading.Condition(self._lock)
         self._http_attempts = 0
         self._response_bytes = 0
+        self._reserved_response_bytes = 0
+        self._response_byte_reservations: dict[int, int] = {}
         self._archive_objects = 0
         self._rest_pages = 0
         self._request_attempts: dict[str, int] = {}
@@ -245,50 +248,74 @@ class BinancePublicHistoryExecutionContext:
             raise TypeError("timeout_seconds must be a number")
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be finite and greater than zero")
-        cancelled = self.cancellation_requested()
-        now = self._now()
-        with self._lock:
-            self._check_control_locked(now, cancelled)
-            if self._http_attempts >= self._limits.maximum_http_attempts:
-                raise self._stop(
-                    BinancePublicHistoryExecutionStopReason.HTTP_ATTEMPTS_EXHAUSTED,
-                    "maximum_http_attempts exhausted",
+        while True:
+            cancelled = self.cancellation_requested()
+            now = self._now()
+            with self._attempt_condition:
+                self._check_control_locked(now, cancelled)
+                if self._response_byte_reservations:
+                    self._attempt_condition.wait(
+                        timeout=min(0.05, self._limits.deadline_monotonic - now)
+                    )
+                    continue
+                if self._http_attempts >= self._limits.maximum_http_attempts:
+                    raise self._stop(
+                        BinancePublicHistoryExecutionStopReason.HTTP_ATTEMPTS_EXHAUSTED,
+                        "maximum_http_attempts exhausted",
+                    )
+                request_attempts = self._request_attempts.get(request_key, 0)
+                if request_attempts >= self._limits.maximum_attempts_per_request:
+                    raise self._stop(
+                        BinancePublicHistoryExecutionStopReason.REQUEST_ATTEMPTS_EXHAUSTED,
+                        "maximum_attempts_per_request exhausted",
+                    )
+                remaining_bytes = (
+                    self._limits.maximum_total_response_bytes
+                    - self._response_bytes
+                    - self._reserved_response_bytes
                 )
-            request_attempts = self._request_attempts.get(request_key, 0)
-            if request_attempts >= self._limits.maximum_attempts_per_request:
-                raise self._stop(
-                    BinancePublicHistoryExecutionStopReason.REQUEST_ATTEMPTS_EXHAUSTED,
-                    "maximum_attempts_per_request exhausted",
+                if remaining_bytes <= 0:
+                    raise self._stop(
+                        BinancePublicHistoryExecutionStopReason.TOTAL_RESPONSE_BYTES_EXHAUSTED,
+                        "maximum_total_response_bytes exhausted",
+                    )
+                self._http_attempts += 1
+                request_attempts += 1
+                self._request_attempts[request_key] = request_attempts
+                allowance = BinancePublicHistoryHttpAllowance(
+                    timeout_seconds=min(
+                        float(timeout_seconds), self._limits.deadline_monotonic - now
+                    ),
+                    maximum_response_bytes=min(
+                        self._limits.maximum_response_bytes, remaining_bytes
+                    ),
+                    attempt_number=self._http_attempts,
+                    request_attempt_number=request_attempts,
                 )
-            remaining_bytes = (
-                self._limits.maximum_total_response_bytes - self._response_bytes
-            )
-            if remaining_bytes <= 0:
-                raise self._stop(
-                    BinancePublicHistoryExecutionStopReason.TOTAL_RESPONSE_BYTES_EXHAUSTED,
-                    "maximum_total_response_bytes exhausted",
+                self._reserved_response_bytes += allowance.maximum_response_bytes
+                self._response_byte_reservations[allowance.attempt_number] = (
+                    allowance.maximum_response_bytes
                 )
-            self._http_attempts += 1
-            request_attempts += 1
-            self._request_attempts[request_key] = request_attempts
-            return BinancePublicHistoryHttpAllowance(
-                timeout_seconds=min(
-                    float(timeout_seconds), self._limits.deadline_monotonic - now
-                ),
-                maximum_response_bytes=min(
-                    self._limits.maximum_response_bytes, remaining_bytes
-                ),
-                attempt_number=self._http_attempts,
-                request_attempt_number=request_attempts,
-            )
+                return allowance
 
-    def record_response_bytes(self, amount: int) -> None:
-        """Charge bytes actually returned/read, including a one-byte overflow probe."""
+    def record_response_bytes(
+        self, allowance: BinancePublicHistoryHttpAllowance, amount: int
+    ) -> None:
+        """Settle one attempt's reservation with bytes actually returned/read."""
+        if not isinstance(allowance, BinancePublicHistoryHttpAllowance):
+            raise TypeError("allowance must be BinancePublicHistoryHttpAllowance")
         if type(amount) is not int:
             raise TypeError("amount must be an integer")
         if amount < 0:
             raise ValueError("amount must not be negative")
-        with self._lock:
+        with self._attempt_condition:
+            reserved = self._response_byte_reservations.pop(
+                allowance.attempt_number, None
+            )
+            if reserved is None or reserved != allowance.maximum_response_bytes:
+                raise ValueError("allowance is not an outstanding reservation")
+            self._reserved_response_bytes -= reserved
+            self._attempt_condition.notify_all()
             self._response_bytes += amount
             if amount > self._limits.maximum_response_bytes:
                 raise self._stop(

@@ -20,7 +20,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
@@ -37,6 +37,7 @@ from tracequant.data.binance_public_history_execution import (
     BinancePublicHistoryExecutionSnapshot,
     BinancePublicHistoryExecutionStopped,
     BinancePublicHistoryExecutionStopReason,
+    BinancePublicHistoryHttpAllowance,
 )
 from tracequant.data.public_history import (
     BinanceKlineInterval,
@@ -1285,11 +1286,23 @@ class BinanceRestPageAcquisition:
         self,
         seconds: float,
         execution_context: BinancePublicHistoryExecutionContext | None,
+        *,
+        attempts: list[BinanceKlineRestAttemptResult],
+        tracker: _BudgetTracker,
     ) -> None:
-        if execution_context is None:
-            self._wait(seconds)
-        else:
-            execution_context.wait_for_retry(seconds)
+        started = self._monotonic_clock()
+        try:
+            if execution_context is None:
+                self._wait(seconds)
+            else:
+                execution_context.wait_for_retry(seconds)
+        except BaseException:
+            waited = min(seconds, max(0.0, self._monotonic_clock() - started))
+            attempts[-1] = replace(attempts[-1], waited_seconds=waited)
+            tracker.waited_seconds += waited
+            raise
+        attempts[-1] = replace(attempts[-1], waited_seconds=seconds)
+        tracker.waited_seconds += seconds
 
     def _finish_execution_stop(
         self,
@@ -1469,6 +1482,7 @@ class BinanceRestPageAcquisition:
                     )
                 timeout_seconds = min(budget.timeout_seconds, tracker.remaining)
                 response_bytes = budget.maximum_response_bytes
+                allowance: BinancePublicHistoryHttpAllowance | None = None
                 try:
                     if execution_context is not None:
                         allowance = execution_context.begin_http_attempt(
@@ -1493,7 +1507,15 @@ class BinanceRestPageAcquisition:
                     else:
                         response = self._http_get(url, timeout_seconds, response_bytes)
                     if execution_context is not None:
-                        execution_context.record_response_bytes(len(response.body))
+                        settled_allowance = allowance
+                        if settled_allowance is None:
+                            raise AssertionError(
+                                "HTTP attempt allowance was not reserved"
+                            )
+                        execution_context.record_response_bytes(
+                            settled_allowance, len(response.body)
+                        )
+                        allowance = None
                         execution_context.check()
                 except BinancePublicHistoryExecutionStopped as stopped:
                     return self._finish_execution_stop(
@@ -1516,21 +1538,27 @@ class BinanceRestPageAcquisition:
                         raise AssertionError(
                             "cancellable REST transport requires an execution context"
                         ) from error
-                    if response is not None:
-                        try:
-                            execution_context.record_response_bytes(len(response.body))
-                        except BinancePublicHistoryExecutionStopped as stopped:
-                            return self._finish_execution_stop(
-                                stopped=stopped,
-                                request=request,
-                                current=current,
-                                pages=pages,
-                                attempts=attempts,
-                                tracker=tracker,
-                                cursor_ms=cursor_ms,
-                                response=response,
-                                http_started=True,
-                            )
+                    settled_allowance = allowance
+                    allowance = None
+                    if settled_allowance is None:
+                        raise AssertionError("HTTP attempt allowance was not reserved")
+                    try:
+                        execution_context.record_response_bytes(
+                            settled_allowance,
+                            len(response.body) if response is not None else 0,
+                        )
+                    except BinancePublicHistoryExecutionStopped as stopped:
+                        return self._finish_execution_stop(
+                            stopped=stopped,
+                            request=request,
+                            current=current,
+                            pages=pages,
+                            attempts=attempts,
+                            tracker=tracker,
+                            cursor_ms=cursor_ms,
+                            response=response,
+                            http_started=True,
+                        )
                     try:
                         execution_context.raise_stop(
                             BinancePublicHistoryExecutionStopReason.CANCELLED,
@@ -1559,6 +1587,13 @@ class BinanceRestPageAcquisition:
                         0.0, self._monotonic_clock() - started
                     )
                     if execution_context is not None:
+                        settled_allowance = allowance
+                        allowance = None
+                        if settled_allowance is None:
+                            raise AssertionError(
+                                "HTTP attempt allowance was not reserved"
+                            )
+                        execution_context.record_response_bytes(settled_allowance, 0)
                         try:
                             execution_context.check()
                         except BinancePublicHistoryExecutionStopped as stopped:
@@ -1648,7 +1683,12 @@ class BinanceRestPageAcquisition:
                             reason="retry wait cannot fit in the elapsed-time budget",
                         )
                     try:
-                        self._wait_for_retry(delay, execution_context)
+                        self._wait_for_retry(
+                            delay,
+                            execution_context,
+                            attempts=attempts,
+                            tracker=tracker,
+                        )
                     except BinancePublicHistoryExecutionStopped as stopped:
                         return self._finish_execution_stop(
                             stopped=stopped,
@@ -1683,8 +1723,11 @@ class BinanceRestPageAcquisition:
                             cursor_ms=cursor_ms,
                             reason=detail,
                         )
-                    tracker.waited_seconds += delay
                     continue
+                except BaseException:
+                    if execution_context is not None and allowance is not None:
+                        execution_context.record_response_bytes(allowance, 0)
+                    raise
                 else:
                     tracker.transport_seconds += max(
                         0.0, self._monotonic_clock() - started
@@ -1929,7 +1972,12 @@ class BinanceRestPageAcquisition:
                                 ),
                             )
                         try:
-                            self._wait_for_retry(retry_delay, execution_context)
+                            self._wait_for_retry(
+                                retry_delay,
+                                execution_context,
+                                attempts=attempts,
+                                tracker=tracker,
+                            )
                         except BinancePublicHistoryExecutionStopped as stopped:
                             return self._finish_execution_stop(
                                 stopped=stopped,
@@ -1964,7 +2012,6 @@ class BinanceRestPageAcquisition:
                                 cursor_ms=cursor_ms,
                                 reason=detail,
                             )
-                        tracker.waited_seconds += retry_delay
                         continue
 
                     if tracker.remaining <= 0:
@@ -2134,7 +2181,12 @@ class BinanceRestPageAcquisition:
                                 reason="retry wait cannot fit in the elapsed-time budget",
                             )
                         try:
-                            self._wait_for_retry(retry_delay, execution_context)
+                            self._wait_for_retry(
+                                retry_delay,
+                                execution_context,
+                                attempts=attempts,
+                                tracker=tracker,
+                            )
                         except BinancePublicHistoryExecutionStopped as stopped:
                             return self._finish_execution_stop(
                                 stopped=stopped,
@@ -2169,7 +2221,6 @@ class BinanceRestPageAcquisition:
                                 cursor_ms=cursor_ms,
                                 reason=detail,
                             )
-                        tracker.waited_seconds += retry_delay
                         response = None
                         continue
                     break

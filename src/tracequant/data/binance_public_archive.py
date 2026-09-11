@@ -757,13 +757,14 @@ class BinancePublicArchiveAcquisition:
                     response = self._http_get(url, allowance.timeout_seconds)
             except _ArchiveTransportInterrupted as error:
                 response = error.response
-                if response is not None:
-                    try:
-                        execution_context.record_response_bytes(len(response.body))
-                    except BinancePublicHistoryExecutionStopped as stopped:
-                        raise _ExecutionDownloadError(
-                            stopped, resource=resource, response=response
-                        ) from stopped
+                try:
+                    execution_context.record_response_bytes(
+                        allowance, len(response.body) if response is not None else 0
+                    )
+                except BinancePublicHistoryExecutionStopped as stopped:
+                    raise _ExecutionDownloadError(
+                        stopped, resource=resource, response=response
+                    ) from stopped
                 try:
                     execution_context.check()
                 except BinancePublicHistoryExecutionStopped as stopped:
@@ -779,6 +780,7 @@ class BinancePublicArchiveAcquisition:
                 OSError,
                 http.client.HTTPException,
             ) as error:
+                execution_context.record_response_bytes(allowance, 0)
                 try:
                     execution_context.check()
                 except BinancePublicHistoryExecutionStopped as stopped:
@@ -787,9 +789,14 @@ class BinancePublicArchiveAcquisition:
                     ) from stopped
                 detail = str(error).strip() or type(error).__name__
                 retryable = _RetryableDownloadError(detail, resource=resource)
+            except BaseException:
+                execution_context.record_response_bytes(allowance, 0)
+                raise
             else:
                 try:
-                    execution_context.record_response_bytes(len(response.body))
+                    execution_context.record_response_bytes(
+                        allowance, len(response.body)
+                    )
                     execution_context.check()
                 except BinancePublicHistoryExecutionStopped as stopped:
                     raise _ExecutionDownloadError(

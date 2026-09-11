@@ -29,6 +29,7 @@ from tracequant.data import (
     BinancePublicHistoryExecutionContext,
     BinancePublicHistoryExecutionLimits,
     BinancePublicHistoryExecutionStopReason,
+    BinancePublicHistoryHttpAllowance,
     BinanceRestEndpoint,
     BinanceRestPageRequest,
     RawObjectIdentity,
@@ -226,6 +227,40 @@ def test_shared_execution_context_bounds_archive_and_rest_attempts(
     assert [attempt.attempts for attempt in snapshot.request_attempts] == [1, 1, 1]
 
 
+def test_shared_context_serializes_total_byte_allowances() -> None:
+    second_started = threading.Event()
+
+    def cancelled() -> bool:
+        if threading.current_thread().name == "second-attempt":
+            second_started.set()
+        return False
+
+    context = BinancePublicHistoryExecutionContext(
+        replace(_context(total_bytes=10, http_attempts=2).limits),
+        cancelled=cancelled,
+        monotonic_clock=lambda: 0,
+    )
+    first = context.begin_http_attempt("archive:first", timeout_seconds=5)
+    second: list[BinancePublicHistoryHttpAllowance] = []
+
+    def begin_second() -> None:
+        second.append(context.begin_http_attempt("rest:second", timeout_seconds=5))
+
+    thread = threading.Thread(target=begin_second, name="second-attempt", daemon=True)
+    thread.start()
+    assert second_started.wait(1)
+    context.record_response_bytes(first, 4)
+    thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert len(second) == 1
+    assert second[0].maximum_response_bytes == 6
+    context.record_response_bytes(second[0], 6)
+    snapshot = context.snapshot()
+    assert snapshot.http_attempts == 2
+    assert snapshot.response_bytes == 10
+
+
 def test_no_io_conclusion_and_pre_request_exhaustion_do_not_charge_http(
     tmp_path: Path,
 ) -> None:
@@ -328,6 +363,8 @@ def test_rest_retry_wait_cancellation_is_terminal_and_keeps_attempt(
     assert [attempt.outcome for attempt in result.pages[0].attempts] == [
         "retryable_http"
     ]
+    assert result.pages[0].attempts[0].waited_seconds == 0
+    assert result.elapsed_seconds == 0
     snapshot = context.snapshot()
     assert snapshot.http_attempts == 1
     assert snapshot.response_bytes == len(b"retry")
