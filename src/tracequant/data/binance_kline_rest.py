@@ -38,6 +38,8 @@ from tracequant.data.binance_public_history_execution import (
     BinancePublicHistoryExecutionStopped,
     BinancePublicHistoryExecutionStopReason,
     BinancePublicHistoryHttpAllowance,
+    _ControlledTransportInterrupted,
+    _run_controlled_transport,
 )
 from tracequant.data.public_history import (
     BinanceKlineInterval,
@@ -452,6 +454,7 @@ def _default_http_get(
 ) -> BinanceKlineRestHttpResponse:
     """Read one response in a worker that cannot outlive the attempt deadline."""
     with tempfile.TemporaryFile() as output:
+        deadline = time.monotonic() + timeout
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -464,7 +467,6 @@ def _default_http_get(
             stdout=output,
             stderr=subprocess.DEVNULL,
         )
-        deadline = time.monotonic() + timeout
         interruption: str | None = None
         try:
             while process.poll() is None:
@@ -1504,6 +1506,21 @@ class BinanceRestPageAcquisition:
                             response_bytes,
                             cancelled=execution_context.cancellation_requested,
                         )
+                    elif execution_context is not None:
+                        controlled = _run_controlled_transport(
+                            self._http_get,
+                            (url, timeout_seconds, response_bytes),
+                            timeout_seconds=timeout_seconds,
+                            maximum_response_bytes=response_bytes,
+                            cancelled=execution_context.cancellation_requested,
+                            label="REST",
+                        )
+                        response = BinanceKlineRestHttpResponse(
+                            controlled.status,
+                            controlled.body,
+                            controlled.headers,
+                            complete=controlled.complete,
+                        )
                     else:
                         response = self._http_get(url, timeout_seconds, response_bytes)
                     if execution_context is not None:
@@ -1529,7 +1546,10 @@ class BinanceRestPageAcquisition:
                         response=response,
                         http_started=response is not None,
                     )
-                except _RestTransportInterrupted as error:
+                except (
+                    _RestTransportInterrupted,
+                    _ControlledTransportInterrupted,
+                ) as error:
                     tracker.transport_seconds += max(
                         0.0, self._monotonic_clock() - started
                     )

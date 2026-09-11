@@ -7,12 +7,20 @@ or orchestrating fallback between them.
 
 from __future__ import annotations
 
+import json
 import math
+import multiprocessing
+import os
+import signal
+import tempfile
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from multiprocessing.process import BaseProcess
+from pathlib import Path
+from types import MappingProxyType
 from typing import Never
 
 __all__ = [
@@ -24,6 +32,204 @@ __all__ = [
     "BinancePublicHistoryHttpAllowance",
     "BinancePublicHistoryRequestAttempts",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class _ControlledHttpResponse:
+    status: int
+    body: bytes
+    headers: MappingProxyType[str, str]
+    complete: bool
+
+
+class _ControlledTransportInterrupted(InterruptedError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.response: None = None
+
+
+def _controlled_transport_worker(
+    ready_path: Path,
+    body_path: Path,
+    result_path: Path,
+    transport: Callable[..., object],
+    arguments: tuple[object, ...],
+    maximum_response_bytes: int,
+) -> None:
+    """Run an injected transport in an independently terminable process."""
+    try:
+        os.setsid()
+        ready_path.touch()
+        response = transport(*arguments)
+        status = getattr(response, "status")
+        body = getattr(response, "body")
+        headers = getattr(response, "headers")
+        complete = getattr(response, "complete")
+        if type(status) is not int or not 100 <= status <= 599:
+            raise ValueError("status must be an HTTP status code")
+        if not isinstance(body, bytes):
+            raise TypeError("body must be bytes")
+        if not isinstance(headers, dict) and not hasattr(headers, "items"):
+            raise TypeError("headers must be a mapping")
+        normalized_headers = dict(headers.items())
+        if any(
+            not isinstance(name, str) or not isinstance(value, str)
+            for name, value in normalized_headers.items()
+        ):
+            raise TypeError("HTTP header names and values must be strings")
+        if not isinstance(complete, bool):
+            raise TypeError("complete must be a bool")
+        bounded_body = body[: maximum_response_bytes + 1]
+        body_path.write_bytes(bounded_body)
+        result_path.write_text(
+            json.dumps(
+                {
+                    "kind": "response",
+                    "status": status,
+                    "headers": normalized_headers,
+                    "complete": complete and len(body) <= maximum_response_bytes,
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+    except BaseException as error:
+        try:
+            result_path.write_text(
+                json.dumps(
+                    {
+                        "kind": "failure",
+                        "error_type": type(error).__name__,
+                        "detail": str(error).strip() or type(error).__name__,
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+        except BaseException:
+            return
+
+
+def _terminate_controlled_transport(
+    process: BaseProcess, *, session_ready: bool
+) -> None:
+    if process.is_alive():
+        if session_ready:
+            process_id = process.pid
+            if process_id is None:
+                raise RuntimeError("started controlled transport has no process id")
+            try:
+                os.killpg(process_id, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            process.kill()
+    process.join()
+
+
+def _run_controlled_transport(
+    transport: Callable[..., object],
+    arguments: tuple[object, ...],
+    *,
+    timeout_seconds: float,
+    maximum_response_bytes: int,
+    cancelled: Callable[[], bool],
+    label: str,
+) -> _ControlledHttpResponse:
+    """Enforce cancellation, elapsed time, and response bytes around injection."""
+    try:
+        process_context = multiprocessing.get_context("fork")
+    except ValueError as error:
+        raise OSError("controlled HTTP injection requires fork support") from error
+    hard_deadline = time.monotonic() + timeout_seconds
+    with tempfile.TemporaryDirectory(prefix="tracequant-http-injection-") as directory:
+        root = Path(directory)
+        ready_path = root / "ready"
+        body_path = root / "body.bin"
+        result_path = root / "result.json"
+        process = process_context.Process(
+            target=_controlled_transport_worker,
+            args=(
+                ready_path,
+                body_path,
+                result_path,
+                transport,
+                arguments,
+                maximum_response_bytes,
+            ),
+        )
+        process.start()
+        interruption: str | None = None
+        try:
+            while process.is_alive():
+                if cancelled():
+                    interruption = f"{label} HTTP attempt was cancelled"
+                    break
+                remaining = hard_deadline - time.monotonic()
+                if remaining <= 0:
+                    interruption = (
+                        f"{label} HTTP attempt exceeded its absolute elapsed-time "
+                        "deadline"
+                    )
+                    break
+                process.join(timeout=min(0.05, remaining))
+        except BaseException:
+            _terminate_controlled_transport(process, session_ready=ready_path.is_file())
+            raise
+        if interruption is not None:
+            _terminate_controlled_transport(process, session_ready=ready_path.is_file())
+            if interruption == f"{label} HTTP attempt was cancelled":
+                raise _ControlledTransportInterrupted(interruption)
+            raise TimeoutError(interruption)
+        process.join()
+        if process.exitcode != 0 or not result_path.is_file():
+            raise OSError(f"{label} injected HTTP transport exited without a result")
+        try:
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise OSError(
+                f"{label} injected HTTP transport returned an invalid result"
+            ) from error
+        if result.get("kind") == "failure":
+            detail = str(result.get("detail", "injected HTTP transport failed"))
+            error_type = result.get("error_type")
+            if error_type == "TimeoutError":
+                raise TimeoutError(detail)
+            if error_type == "ConnectionError":
+                raise ConnectionError(detail)
+            raise OSError(detail)
+        try:
+            status = result["status"]
+            headers = result["headers"]
+            complete = result["complete"]
+        except KeyError as error:
+            raise OSError(
+                f"{label} injected HTTP transport returned an invalid result"
+            ) from error
+        if (
+            type(status) is not int
+            or not isinstance(headers, dict)
+            or not isinstance(complete, bool)
+            or any(
+                not isinstance(name, str) or not isinstance(value, str)
+                for name, value in headers.items()
+            )
+        ):
+            raise OSError(f"{label} injected HTTP transport returned an invalid result")
+        try:
+            body = body_path.read_bytes()
+        except OSError as error:
+            raise OSError(
+                f"{label} injected HTTP transport response body is unreadable"
+            ) from error
+        if len(body) > maximum_response_bytes + 1:
+            raise OSError(f"{label} injected HTTP transport exceeded its byte bound")
+        return _ControlledHttpResponse(
+            status=status,
+            body=body,
+            headers=MappingProxyType(dict(headers)),
+            complete=complete,
+        )
 
 
 class BinancePublicHistoryExecutionStopReason(StrEnum):

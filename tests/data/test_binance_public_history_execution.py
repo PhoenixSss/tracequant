@@ -1,6 +1,8 @@
 import hashlib
 import io
 import json
+import multiprocessing
+import subprocess
 import threading
 import time
 import zipfile
@@ -8,7 +10,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -36,6 +38,7 @@ from tracequant.data import (
     RawStore,
     plan_binance_contract_kline_archives,
 )
+from tracequant.data import binance_kline_rest as rest_module
 from tracequant.data import binance_public_archive as archive_module
 from tracequant.domain import InstrumentId, TimeRange
 
@@ -167,23 +170,25 @@ def test_shared_execution_context_bounds_archive_and_rest_attempts(
     checksum = (
         f"{hashlib.sha256(archive).hexdigest()}  {plan.url.rsplit('/', 1)[-1]}\n"
     ).encode()
-    archive_calls: list[str] = []
+    archive_calls_path = tmp_path.parent / f"{tmp_path.name}-archive-calls"
 
     def archive_get(url: str, timeout: float) -> ArchiveHttpResponse:
         assert 0 < timeout <= 5
-        archive_calls.append(url)
+        with archive_calls_path.open("a", encoding="utf-8") as calls:
+            calls.write(f"{url}\n")
         body = checksum if url == plan.checksum_url else archive
         return ArchiveHttpResponse(200, body, {})
 
     rest_body = _rest_body()
-    rest_calls: list[str] = []
+    rest_calls_path = tmp_path.parent / f"{tmp_path.name}-rest-calls"
 
     def rest_get(
         url: str, timeout: float, maximum_response_bytes: int
     ) -> BinanceKlineRestHttpResponse:
         assert 0 < timeout <= 5
         assert maximum_response_bytes == len(rest_body)
-        rest_calls.append(url)
+        with rest_calls_path.open("a", encoding="utf-8") as calls:
+            calls.write(f"{url}\n")
         return BinanceKlineRestHttpResponse(200, rest_body, {}, complete=True)
 
     context = _context(
@@ -214,8 +219,11 @@ def test_shared_execution_context_bounds_archive_and_rest_attempts(
     assert len(rest_result.pages) == 1
     assert exhausted.status is BinanceKlineRestStatus.BUDGET_EXHAUSTED
     assert exhausted.pages[0].attempts == ()
-    assert archive_calls == [plan.checksum_url, plan.url]
-    assert len(rest_calls) == 1
+    assert archive_calls_path.read_text(encoding="utf-8").splitlines() == [
+        plan.checksum_url,
+        plan.url,
+    ]
+    assert len(rest_calls_path.read_text(encoding="utf-8").splitlines()) == 1
     snapshot = context.snapshot()
     assert snapshot.http_attempts == 3
     assert snapshot.response_bytes == len(checksum) + len(archive) + len(rest_body)
@@ -296,11 +304,11 @@ def test_archive_http_exhaustion_preserves_received_checksum(
         plan_binance_contract_kline_archives(InstrumentId("BTCUSDT"), request_range)[0],
     )
     checksum = f"{'0' * 64}  {plan.url.rsplit('/', 1)[-1]}\n".encode()
-    calls: list[str] = []
+    calls_path = tmp_path.parent / f"{tmp_path.name}-calls"
 
     def checksum_only(url: str, timeout: float) -> ArchiveHttpResponse:
         del timeout
-        calls.append(url)
+        calls_path.write_text(url, encoding="utf-8")
         return ArchiveHttpResponse(200, checksum, {})
 
     context = _context(total_bytes=1_000, http_attempts=1)
@@ -310,7 +318,7 @@ def test_archive_http_exhaustion_preserves_received_checksum(
     ).run(InstrumentId("BTCUSDT"), request_range, context)
 
     assert result.objects[0].status is BinanceArchiveAcquisitionStatus.BUDGET_EXHAUSTED
-    assert calls == [plan.checksum_url]
+    assert calls_path.read_text(encoding="utf-8") == plan.checksum_url
     assert context.snapshot().http_attempts == 1
     assert context.snapshot().response_bytes == len(checksum)
     manifests = store.list_acquisition_manifests(
@@ -326,14 +334,13 @@ def test_rest_retry_wait_cancellation_is_terminal_and_keeps_attempt(
 ) -> None:
     request = _rest_request()
     cancellation = threading.Event()
-    calls = 0
+    calls_path = tmp_path.parent / f"{tmp_path.name}-calls"
 
     def unavailable(
         url: str, timeout: float, maximum_response_bytes: int
     ) -> BinanceKlineRestHttpResponse:
         del url, timeout, maximum_response_bytes
-        nonlocal calls
-        calls += 1
+        calls_path.write_text("called", encoding="utf-8")
         return BinanceKlineRestHttpResponse(503, b"retry", {})
 
     context = BinancePublicHistoryExecutionContext(
@@ -358,7 +365,7 @@ def test_rest_retry_wait_cancellation_is_terminal_and_keeps_attempt(
     ).run(request, _rest_coverage(request), _rest_budget(), context)
 
     assert result.status is BinanceKlineRestStatus.CANCELLED
-    assert calls == 1
+    assert calls_path.read_text(encoding="utf-8") == "called"
     assert len(result.pages) == 1
     assert [attempt.outcome for attempt in result.pages[0].attempts] == [
         "retryable_http"
@@ -377,19 +384,19 @@ def test_final_rest_response_stops_before_publication_and_keeps_evidence(
     stop: str,
 ) -> None:
     request = _rest_request()
-    cancellation = threading.Event()
-    monotonic = 0.0
+    process_context = multiprocessing.get_context("fork")
+    cancellation = process_context.Event()
+    monotonic = process_context.Value("d", 0.0)
     body = _rest_body()
 
     def final_response(
         url: str, timeout: float, maximum_response_bytes: int
     ) -> BinanceKlineRestHttpResponse:
         del url, timeout, maximum_response_bytes
-        nonlocal monotonic
         if stop == "cancelled":
             cancellation.set()
         else:
-            monotonic = 101
+            monotonic.value = 101
         return BinanceKlineRestHttpResponse(200, body, {})
 
     context = BinancePublicHistoryExecutionContext(
@@ -403,14 +410,14 @@ def test_final_rest_response_stops_before_publication_and_keeps_evidence(
             maximum_attempts_per_request=1,
         ),
         cancelled=cancellation.is_set,
-        monotonic_clock=lambda: monotonic,
+        monotonic_clock=lambda: monotonic.value,
     )
     store = RawStore(tmp_path, clock=lambda: _NOW)
     result = BinanceKlineRestAcquisition(
         store,
         http_get=final_response,
         clock=lambda: _NOW,
-        monotonic_clock=lambda: monotonic,
+        monotonic_clock=lambda: monotonic.value,
     ).run(request, _rest_coverage(request), _rest_budget(), context)
 
     expected = (
@@ -582,6 +589,182 @@ def test_inflight_default_archive_cancellation_terminates_worker_and_maps_result
     assert reached_request.is_set()
     assert context.snapshot().http_attempts == 1
     assert elapsed < 2
+
+
+def test_inflight_injected_archive_cancellation_terminates_transport(
+    tmp_path: Path,
+) -> None:
+    cancellation = threading.Event()
+
+    def blocking_transport(url: str, timeout: float) -> ArchiveHttpResponse:
+        del url, timeout
+        time.sleep(5)
+        return ArchiveHttpResponse(200, b"late", {})
+
+    context = BinancePublicHistoryExecutionContext(
+        BinancePublicHistoryExecutionLimits(
+            deadline_monotonic=time.monotonic() + 5,
+            maximum_http_attempts=1,
+            maximum_total_response_bytes=100,
+            maximum_response_bytes=100,
+            maximum_archive_objects=1,
+            maximum_rest_pages=1,
+            maximum_attempts_per_request=1,
+        ),
+        cancelled=cancellation.is_set,
+    )
+    timer = threading.Timer(0.1, cancellation.set)
+    children_before = {child.pid for child in multiprocessing.active_children()}
+    timer.start()
+    started = time.monotonic()
+    try:
+        result = BinanceContractKlineBackfill(
+            RawStore(tmp_path), http_get=blocking_transport, clock=lambda: _NOW
+        ).run(
+            InstrumentId("BTCUSDT"),
+            TimeRange(
+                start=datetime(2024, 2, 29, tzinfo=UTC),
+                end=datetime(2024, 2, 29, 0, 1, tzinfo=UTC),
+            ),
+            context,
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        timer.cancel()
+        timer.join()
+
+    assert result.objects[0].status is BinanceArchiveAcquisitionStatus.CANCELLED
+    assert context.snapshot().http_attempts == 1
+    assert elapsed < 1
+    assert {child.pid for child in multiprocessing.active_children()} == children_before
+
+
+def test_inflight_injected_rest_deadline_terminates_transport(tmp_path: Path) -> None:
+    def blocking_transport(
+        url: str, timeout: float, maximum_response_bytes: int
+    ) -> BinanceKlineRestHttpResponse:
+        del url, timeout, maximum_response_bytes
+        time.sleep(5)
+        return BinanceKlineRestHttpResponse(200, _rest_body(), {})
+
+    context = BinancePublicHistoryExecutionContext(
+        BinancePublicHistoryExecutionLimits(
+            deadline_monotonic=time.monotonic() + 0.15,
+            maximum_http_attempts=1,
+            maximum_total_response_bytes=1_000,
+            maximum_response_bytes=1_000,
+            maximum_archive_objects=1,
+            maximum_rest_pages=1,
+            maximum_attempts_per_request=1,
+        )
+    )
+    children_before = {child.pid for child in multiprocessing.active_children()}
+    started = time.monotonic()
+    result = BinanceKlineRestAcquisition(
+        RawStore(tmp_path), http_get=blocking_transport, clock=lambda: _NOW
+    ).run(_rest_request(), _rest_coverage(_rest_request()), _rest_budget(), context)
+    elapsed = time.monotonic() - started
+
+    assert result.status is BinanceKlineRestStatus.BUDGET_EXHAUSTED
+    assert context.snapshot().http_attempts == 1
+    assert elapsed < 1
+    assert {child.pid for child in multiprocessing.active_children()} == children_before
+
+
+def test_injected_archive_response_is_capped_before_parent_receives_it(
+    tmp_path: Path,
+) -> None:
+    def oversized_transport(url: str, timeout: float) -> ArchiveHttpResponse:
+        del url, timeout
+        return ArchiveHttpResponse(200, b"x" * 1_000_000, {})
+
+    context = BinancePublicHistoryExecutionContext(
+        BinancePublicHistoryExecutionLimits(
+            deadline_monotonic=time.monotonic() + 5,
+            maximum_http_attempts=1,
+            maximum_total_response_bytes=10,
+            maximum_response_bytes=10,
+            maximum_archive_objects=1,
+            maximum_rest_pages=1,
+            maximum_attempts_per_request=1,
+        )
+    )
+    result = BinanceContractKlineBackfill(
+        RawStore(tmp_path), http_get=oversized_transport, clock=lambda: _NOW
+    ).run(
+        InstrumentId("BTCUSDT"),
+        TimeRange(
+            start=datetime(2024, 2, 29, tzinfo=UTC),
+            end=datetime(2024, 2, 29, 0, 1, tzinfo=UTC),
+        ),
+        context,
+    )
+
+    assert result.objects[0].status is BinanceArchiveAcquisitionStatus.BUDGET_EXHAUSTED
+    snapshot = context.snapshot()
+    assert snapshot.http_attempts == 1
+    assert snapshot.response_bytes == 11
+    assert snapshot.stop_reason is (
+        BinancePublicHistoryExecutionStopReason.RESPONSE_BYTES_EXHAUSTED
+    )
+
+
+def test_default_workers_do_not_rebase_timeout_after_process_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ProgressingHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Length", "10000")
+            self.end_headers()
+            try:
+                for _ in range(1000):
+                    self.wfile.write(b"x")
+                    self.wfile.flush()
+                    time.sleep(0.01)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
+        def log_message(self, unused_format: str, *unused_args: object) -> None:
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ProgressingHandler)
+    server.daemon_threads = True
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    real_popen = subprocess.Popen
+    launched: list[subprocess.Popen[bytes]] = []
+
+    def delayed_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        time.sleep(0.15)
+        process = cast("subprocess.Popen[bytes]", real_popen(*args, **kwargs))
+        launched.append(process)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", delayed_popen)
+    url = f"http://127.0.0.1:{server.server_port}/progress"
+    elapsed: list[float] = []
+    try:
+        for get in (
+            lambda: archive_module._default_http_get(
+                url, 0.2, maximum_response_bytes=1000
+            ),
+            lambda: rest_module._default_http_get(url, 0.2, 1000),
+        ):
+            started = time.monotonic()
+            try:
+                get()
+            except (TimeoutError, InterruptedError):
+                pass
+            elapsed.append(time.monotonic() - started)
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join()
+
+    assert len(launched) == 2
+    assert all(process.poll() is not None for process in launched)
+    assert all(duration < 0.3 for duration in elapsed)
 
 
 @pytest.mark.parametrize("declared_length", [False, True])

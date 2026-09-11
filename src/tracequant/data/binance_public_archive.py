@@ -35,6 +35,8 @@ from tracequant.data.binance_public_history_execution import (
     BinancePublicHistoryExecutionContext,
     BinancePublicHistoryExecutionStopped,
     BinancePublicHistoryExecutionStopReason,
+    _ControlledTransportInterrupted,
+    _run_controlled_transport,
 )
 from tracequant.data.public_history import (
     BinancePublicHistoryRequest,
@@ -406,6 +408,7 @@ def _default_http_get(
         body_path = root / "body.bin"
         metadata_path = root / "metadata.json"
         result_path = root / "result.json"
+        deadline = time.monotonic() + timeout
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -425,7 +428,6 @@ def _default_http_get(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        deadline = time.monotonic() + timeout
         interruption: str | None = None
         try:
             while process.poll() is None:
@@ -754,8 +756,24 @@ class BinancePublicArchiveAcquisition:
                         cancelled=execution_context.cancellation_requested,
                     )
                 else:
-                    response = self._http_get(url, allowance.timeout_seconds)
-            except _ArchiveTransportInterrupted as error:
+                    controlled = _run_controlled_transport(
+                        self._http_get,
+                        (url, allowance.timeout_seconds),
+                        timeout_seconds=allowance.timeout_seconds,
+                        maximum_response_bytes=allowance.maximum_response_bytes,
+                        cancelled=execution_context.cancellation_requested,
+                        label="archive",
+                    )
+                    response = ArchiveHttpResponse(
+                        controlled.status,
+                        controlled.body,
+                        controlled.headers,
+                        complete=controlled.complete,
+                    )
+            except (
+                _ArchiveTransportInterrupted,
+                _ControlledTransportInterrupted,
+            ) as error:
                 response = error.response
                 try:
                     execution_context.record_response_bytes(
