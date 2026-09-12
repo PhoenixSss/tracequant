@@ -285,7 +285,7 @@ not permission to read environment variables on import.
 | `raw_root` | `raw-contract/<contract_version>/<source>/<dataset_identity>/<revision>/` | Immutable response bytes/Parquet, checksums, provenance, and completion manifests; TraceQuant data owner | External/versioned |
 | `catalog_root` | `nautilus/<package_version>+<source_commit>/<catalog_schema_id>/<environment>/` | Nautilus-compatible catalog generated from verified raw revisions; Nautilus runtime owns catalog semantics, TraceQuant records conversion provenance | External/versioned |
 | `cache_root` | `nautilus/<package_version>+<source_commit>/<cache_schema_id>/<environment>/<instance_id>/` | Nautilus cache/restart/reconciliation state; Nautilus runtime owner | External/versioned |
-| `run_root` | `<environment>/<code_version>/<environment_lock_digest>/<mode>/<run_id>/` | Logs, reports, temporary run artifacts, and an immutable run manifest; TraceQuant orchestration owner | External/versioned |
+| `run_root` | `<environment>/<code_version>/nautilus/<package_version>+<source_commit>/<environment_lock_digest>/<mode>/<run_id>/` | Logs, reports, temporary run artifacts, and an immutable run manifest; TraceQuant orchestration owner | External/versioned |
 | `evidence_root` | `<environment>/<evidence_schema_version>/<subject_identity>/<revision>/` | Research, backtest, Demo, and acceptance evidence with digests; producing capability owner | External/versioned |
 | `audit_root` | `<environment>/<audit_schema_version>/<account_or_system_identity>/<date_partition>/` | Append-only operational decisions/events with retention and access control; TraceQuant operations owner | External/versioned |
 | `environment_root` | `<environment_lock_digest>/` | Reproducible environment exports, wheel/source caches if retained, SBOMs, and license material; dependency owner | External/versioned |
@@ -298,14 +298,16 @@ Secrets live in a secret manager or injected process boundary, never in any of
 these roots' manifests.
 
 The exact Nautilus runtime identity is at least the normalized package version
-plus the locked source commit when available. Catalog/cache creation records
-that identity and the applicable schema identifier in both the path and a
-manifest. On open, TraceQuant compares configured identity, manifest identity,
-and imported NautilusTrader identity. A missing value or mismatch is a hard
-error: it must not open, migrate, copy, or silently reuse the state. An upgrade
-gets a new partition and an explicit, separately validated migration or
-rebuild. This prevents persistent runtime data from crossing NautilusTrader
-version identities silently.
+plus the locked source commit when available. Catalog, cache, and run creation
+records that identity and the applicable schema or environment-lock identifier
+in both the path and a manifest. On open, TraceQuant compares configured
+identity, manifest identity, and imported NautilusTrader identity. A missing
+value or mismatch is a hard error: it must not open, migrate, copy, or silently
+reuse the state. An upgrade gets a new partition and an explicit, separately
+validated migration or rebuild. This prevents persistent runtime data from
+crossing NautilusTrader version identities silently. The complete acquisition,
+upgrade, promotion, and rollback rules are defined by the
+[NautilusTrader import and update policy](../guides/nautilustrader-import-and-update-policy.md).
 
 Raw data is versioned by its TraceQuant source contract rather than by a
 Nautilus version so that upstream evidence remains immutable and runtime
