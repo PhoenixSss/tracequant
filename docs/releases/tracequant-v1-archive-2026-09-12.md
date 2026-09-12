@@ -93,6 +93,15 @@ environments, caches, local workflow state, and any Secret material remain
 outside Git and GitHub Release artifacts under the recovery owner's access
 controls.
 
+## Planning-state retirement
+
+The post-publication
+[v1 planning-state retirement record](tracequant-v1-planning-retirement-2026-09-12.md)
+maps every affected live v1 Issue, Pull Request, and Project item to its
+terminal state and reason. It preserves `NOT_PLANNED` as distinct from
+completed work, records PR #311's unmerged closure, and leaves the independent
+`V1_RETIREMENT_COMPLETE` verdict to Issue #314.
+
 ## Recovery
 
 Fetch the exact annotated tag, verify that it peels to the commit above, and
