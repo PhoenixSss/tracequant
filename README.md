@@ -476,7 +476,8 @@ backfilled or replayed typed lifecycle receipts.
   fixed source identities, evidence levels, completed runtime results,
   limitations, and later Demo/restart/soak gates.
 - [Repository structure](docs/architecture/repository-structure.md): current
-  tree, dependency direction, and future boundary rules.
+  tree plus the approved v2 tracked layout, Ownership, external-state, import,
+  and bootstrap boundaries.
 - [Initial public domain models](docs/architecture/domain-models.md): model
   invariants, serialization, and test-factory boundary.
 - [Project roadmap](docs/planning/project-roadmap.md): planning and Issue
