@@ -18,15 +18,22 @@ The historical, non-production TraceQuant v1 archive was published once at
 | GitHub classification | Published, non-draft, non-prerelease historical archive |
 
 The remote tag ref resolves to the annotated tag object above and peels to the
-same commit as the Release target. The tag, Release body, target, and asset set
-must not be rewritten or reused. GitHub's generated source archives are views
-of this tagged tracked tree; no separately prepared archive was uploaded.
+same commit as the Release target. The tag name, annotated tag object, peeled
+commit, source tree, Release target, and custom asset set are the fixed recovery
+identity and must not be moved, rewritten, or reused. GitHub's generated source
+archives are views of this tagged tracked tree; no separately prepared archive
+was uploaded. The Release title, notes, and latest/prerelease metadata are not
+part of that fixed identity and may be corrected only under the bounded,
+recorded exception in the release policy.
 
-Creation and post-publication correction both requested `make_latest=false`.
-At the recorded verification time, GitHub's `releases/latest` convenience
-endpoint nevertheless resolved this archive because it was the repository's
-only published non-prerelease Release. That floating endpoint is not release
-identity or a recovery source; consumers must use the exact tag and URL above.
+Creation and a bounded post-publication correction both requested
+`make_latest=false`; that correction addressed only the requested floating
+latest classification and preserved every fixed recovery-identity value listed
+above. At the recorded verification time, GitHub's `releases/latest`
+convenience endpoint nevertheless resolved this archive because it was the
+repository's only published non-prerelease Release. That floating endpoint is
+not release identity or a recovery source; consumers must use the exact tag and
+URL above.
 
 ## Validated tracked snapshot
 

@@ -248,10 +248,12 @@ The safe publication order is:
    digests, against the locally validated set.
 5. Publish the draft once, changing only its publication state.
 6. After publication, perform only read-only Release/tag/asset verification
-   and tracked documentation synchronization.
+   and tracked documentation synchronization unless a named, documented
+   archive-specific metadata exception in Section 9 applies.
 
 Post-publication asset replacement, deletion, tag reuse, and `--clobber` are
-prohibited. A correction requires a new immutable preview or patch identity.
+prohibited. Except for an archive-specific metadata exception in Section 9, a
+correction requires a new immutable preview or patch identity.
 
 Archive generation must be deterministic: use a stable normalized path order
 (with `/` separators), normalized archive metadata such as fixed UTC
@@ -381,16 +383,20 @@ preview/stable status are independent decisions.
 ## 9. Continuity, corrections, and withdrawal
 
 Release history is part of the artifact's audit trail. Each published release
-keeps its tag, source SHA, manifest, digest, notes, and status visible in the
-Git history or GitHub Release record. A later release must point to the
-identity it supersedes; "latest" is a convenience label, never an identity.
+keeps its tag, source SHA, manifest, digest, and an auditable record of its
+notes and status visible in the Git history or GitHub Release record. Published
+notes or status may change in place only under a named exception below that
+preserves the release's fixed recovery identity and records the correction. A
+later release must point to the identity it supersedes; "latest" is a
+convenience label, never an identity.
 
 The continuity rules are:
 
 - published tags and archive identities are immutable;
 - preview versions and later stable versions are monotonically identifiable;
 - every release remains traceable to one exact source commit and manifest;
-- a correction uses a new patch or preview identity and explains the defect,
+- unless a named archive-specific metadata exception below applies, a
+  correction uses a new patch or preview identity and explains the defect,
   impact, and relationship to the earlier release;
 - a changed archive digest, included path, or source commit is a new release,
   even when the human-readable version would otherwise look convenient; and
@@ -400,6 +406,18 @@ The continuity rules are:
   removing an asset or tag, the withdrawal record must preserve the former
   identity, date, reason, and replacement relationship as far as the hosting
   service permits.
+
+The only current archive-specific exception is the historical
+`tracequant-v1-archive-2026-09-12` Release. Its title, notes, or
+latest/prerelease metadata may receive a bounded in-place correction when the
+tag name, annotated tag object, peeled commit, source tree, Release target, and
+custom asset set are verified unchanged before and after the correction. The
+publication record must state what was corrected and preserve those fixed
+identity values. This exception never permits moving, deleting, or reusing the
+tag; changing the Release target; or adding, replacing, or deleting a custom
+asset. If a fixed value changes or cannot be verified, fail closed and use a
+new release identity. The exception does not apply to LCK previews or other
+TraceQuant releases.
 
 The policy does not require a floating compatibility promise. Adopters must
 select a named release, verify its digest, read its compatibility notes, and
