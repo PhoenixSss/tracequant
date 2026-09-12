@@ -11,7 +11,7 @@
 ## Context
 
 The TraceQuant v1 retirement gate reached
-[`V1_RETIREMENT_COMPLETE`](../research/tracequant-v1-retirement-gate-2026-09-12.md).
+[`V1_RETIREMENT_COMPLETE`](https://github.com/PhoenixSss/tracequant/issues/314).
 The completed foundation-selection work compared trading runtimes and then
 reviewed the selected NautilusTrader version through fixed-source inspection,
 official tests, and an official synthetic backtest. Issue #316 registers that
@@ -38,11 +38,11 @@ BINANCE_DEMO_OBSERVATION_REQUIRED
 LIVE_NOT_APPROVED
 ```
 
-This is an architecture selection, not a claim that NautilusTrader is already
-integrated into this repository. The current implementation baseline remains
-authoritative for installed and callable TraceQuant capabilities. Adding the
-dependency, integrating it, or crossing an Offline, Shadow, Demo, or Live
-boundary requires separately scoped Issues and validation.
+The v2 bootstrap installs the selected distribution and exposes only an
+identity boundary. This architecture decision is not a claim that a trading
+runtime is configured or callable through TraceQuant. Adding data conversion,
+strategy behavior, persistent state, or crossing an Offline, Shadow, Demo, or
+Live boundary requires separately scoped Issues and validation.
 
 ## Ownership boundary
 

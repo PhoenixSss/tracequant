@@ -1,64 +1,14 @@
-﻿# Python
-__pycache__/
-*.py[cod]
-*.pyd
-*.so
-*.egg-info/
-build/
-dist/
-
-# Virtual environments
 .venv/
-venv/
-
-# Test, lint, and type-check caches
+.cache/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
-
-# Environment variables and secrets
+build/
+dist/
+*.egg-info/
+__pycache__/
 .env
-.env.*
-!.env.example
-secrets/
-*.pem
-*.key
-
-# IDE
-.vscode/*
-!.vscode/settings.json
-!.vscode/extensions.json
-.idea/
-
-# Runtime output
-logs/
-tmp/
-*.log
-
-# Local databases and large research data
-data/raw/
-data/normalized/
-data/features/
-data/reports/
-artifacts/
-models/
-*.parquet
-*.duckdb
-*.db
-*.sqlite
-*.sqlite3
-
-# Operating system files
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# Local agent execution routing
-.agents/execution-profile.local.toml
-
-# Local workflow evidence and validation output
-.agents/evidence.local/
-.agents/validation.local/
-.workflow.local/
+.env.*.local
+*.local.toml

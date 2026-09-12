@@ -1,6 +1,6 @@
 # NautilusTrader import and update policy
 
-- **Policy status:** approved for future NautilusTrader integration work
+- **Policy status:** active for the TraceQuant v2 bootstrap and later integration work
 - **Initial approved identity:** `nautilus-trader==2.0.0rc4`
 - **Initial Python baseline:** CPython `3.13` (`>=3.13,<3.14`)
 - **Import namespace:** `nautilus_trader`
@@ -16,11 +16,13 @@ This policy freezes how TraceQuant acquires, identifies, imports, upgrades, and
 rolls back NautilusTrader. It also keeps upstream source and version-sensitive
 persistent state separate from TraceQuant-owned code.
 
-This document does not install NautilusTrader or claim that the runtime is
-integrated. The current implementation facts remain in the
-[technical baseline](../architecture/technical-baseline.md). Adding the
-dependency, integration code, persistent roots, or an environment beyond
-Offline requires separately scoped implementation and acceptance work.
+The v2 bootstrap installs the initial approved wheel and exposes only an
+explicit distribution/import identity seam. It does not claim that a trading
+runtime, strategy, catalog, exchange connection, Demo mode, or Live mode is
+available. Current implementation facts remain in the
+[technical baseline](../architecture/technical-baseline.md). Persistent roots
+and any environment beyond this non-production bootstrap require separately
+scoped implementation and acceptance work.
 
 The keywords **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative.
 
@@ -48,8 +50,8 @@ no-build-package = ["nautilus-trader"]
 ```
 
 The v2 `uv.toml` is repository policy, not machine-local state. It MUST NOT
-carry forward the v1/LCK `.workflow.local/uv-cache` location or introduce any
-other repository-local package, source, or audit cache.
+carry forward a retired repository-local workflow cache location or introduce
+any other repository-local package, source, or audit cache.
 
 The lock entry MUST resolve `nautilus-trader` from the standard PyPI registry,
 not from a Git URL, direct URL, local directory, editable install, workspace,

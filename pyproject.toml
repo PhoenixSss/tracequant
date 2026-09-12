@@ -5,19 +5,18 @@ build-backend = "uv_build"
 [project]
 name = "tracequant"
 version = "0.1.0"
-description = "An auditable research-to-live quantitative trading system for cryptocurrency perpetual futures."
+description = "Auditable quantitative research and trading, bootstrapped on NautilusTrader."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    "polars>=1.0,<2.0",
+    "nautilus-trader==2.0.0rc4",
 ]
 
 [dependency-groups]
 dev = [
     "mypy",
-    "pyyaml",
     "pytest",
     "ruff",
 ]

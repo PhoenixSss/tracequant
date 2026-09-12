@@ -5,7 +5,7 @@
 - **Conclusion:** `NAUTILUS_PRIMARY`, `LIVE_NOT_APPROVED`
 - **Decision:** [ADR-0001](../architecture/adr-0001-nautilustrader-primary-runtime.md)
 - **Prerequisite:**
-  [`V1_RETIREMENT_COMPLETE`](tracequant-v1-retirement-gate-2026-09-12.md)
+  [`V1_RETIREMENT_COMPLETE`](https://github.com/PhoenixSss/tracequant/issues/314)
 
 ## Purpose and claim boundary
 
