@@ -1,0 +1,231 @@
+{
+  "schema_version": 1,
+  "issue": 319,
+  "research_outcome": "IMPLEMENT",
+  "observed_at_utc": "2026-09-12T07:43:46Z",
+  "scope": "current TraceQuant repository root only",
+  "baseline": {
+    "head_sha": "a1fb5d4b87c12a0e2bd1fada12e6d4c46076d3b1",
+    "tree_sha": "5a9dce8f97592e95d5b2ef33525defa9a80e12fa",
+    "worktree_was_clean": true,
+    "tracked": {
+      "entries": 179,
+      "regular_files": 179,
+      "executable_files": 5,
+      "logical_bytes": 2826029
+    },
+    "ordinary_untracked_entries": 0,
+    "ignored": {
+      "entries": 16372,
+      "regular_files": 16199,
+      "symlinks": 173,
+      "logical_regular_file_bytes": 922800026
+    }
+  },
+  "candidate_delta": {
+    "paths": [
+      "docs/research/tracequant-v1-asset-inventory.json",
+      "docs/research/tracequant-v1-asset-inventory.md"
+    ],
+    "classification": "Research artifacts that become part of the tracked snapshot when LCK commits the validated candidate",
+    "included_in_baseline_counts": false
+  },
+  "classes": [
+    {
+      "id": "git-tracked-snapshot",
+      "paths": ["all paths returned by git ls-files"],
+      "git_state": "tracked",
+      "entries": 179,
+      "regular_files": 179,
+      "symlinks": 0,
+      "logical_bytes": 2826029,
+      "owner": "Git repository / TraceQuant maintainers",
+      "classification": "tracked snapshot",
+      "disposition": "retain in the immutable v1 tag and GitHub Release; do not duplicate in the external retained-asset archive",
+      "recoverability": "recoverable from the exact tagged commit and its tree"
+    },
+    {
+      "id": "legacy-evidence",
+      "paths": [".agents/evidence.local/**"],
+      "git_state": "ignored",
+      "entries": 2687,
+      "regular_files": 2687,
+      "symlinks": 0,
+      "logical_bytes": 103915023,
+      "owner": "historical Evidence workflows",
+      "classification": "retained data/research/evidence; protected-until-screened",
+      "disposition": "copy to the external retained-asset archive only after secret and privacy screening; preserve relative paths and checksums",
+      "recoverability": "not assumed reproducible; includes historical acquisition, review, planning and probe evidence"
+    },
+    {
+      "id": "validation-evidence",
+      "paths": [".agents/validation.local/**"],
+      "git_state": "ignored",
+      "entries": 2938,
+      "regular_files": 2938,
+      "symlinks": 0,
+      "logical_bytes": 7523101,
+      "owner": "Validation Runner and historical validation producers",
+      "classification": "retained evidence; protected-until-screened",
+      "disposition": "copy to the external retained-asset archive after quiescence and screening; do not treat rerunnability as permission to discard historical receipts",
+      "recoverability": "some logs are rerunnable, but historical execution identity and diagnostics are not guaranteed reproducible"
+    },
+    {
+      "id": "lck-evidence-and-state",
+      "paths": [".workflow.local/lck/**"],
+      "git_state": "ignored",
+      "entries": 2507,
+      "regular_files": 2507,
+      "symlinks": 0,
+      "logical_bytes": 63499739,
+      "owner": "LCK lifecycle controller",
+      "classification": "retained evidence and local workflow state; protected-until-screened",
+      "disposition": "do not move during an active LCK operation; after workflow quiescence, copy the complete root to the external retained-asset archive with checksums",
+      "recoverability": "audit receipts, review evidence and findings are not assumed reproducible; transient markers are retained with the root to avoid unsafe selective deletion"
+    },
+    {
+      "id": "task-86-freeze-package",
+      "paths": ["artifacts/task-86-global-freeze-20260813/**"],
+      "git_state": "ignored",
+      "entries": 14,
+      "regular_files": 14,
+      "symlinks": 0,
+      "logical_bytes": 153465,
+      "owner": "Task #86 global-freeze evidence producer",
+      "classification": "retained research/evidence; protected-until-screened",
+      "disposition": "copy intact to the external retained-asset archive and verify the 14 per-file SHA-256 values recorded in the companion report",
+      "recoverability": "run-locked historical output; not assumed reproducible"
+    },
+    {
+      "id": "uv-cache",
+      "paths": [".workflow.local/uv-cache/**"],
+      "git_state": "ignored",
+      "entries": 5354,
+      "regular_files": 5185,
+      "symlinks": 169,
+      "logical_bytes": 405157547,
+      "owner": "uv package manager",
+      "classification": "reproducible environment/build/cache",
+      "disposition": "exclude from both archives; eligible for deletion only by a later authorized cleanup after retained-asset verification",
+      "recoverability": "recreated by uv from pyproject.toml, uv.lock and configured indexes"
+    },
+    {
+      "id": "python-virtual-environment",
+      "paths": [".venv/**"],
+      "git_state": "ignored",
+      "entries": 2699,
+      "regular_files": 2695,
+      "symlinks": 4,
+      "logical_bytes": 324768467,
+      "owner": "local Python/uv environment",
+      "classification": "reproducible environment/build/cache",
+      "disposition": "exclude from both archives; eligible for deletion only by a later authorized cleanup",
+      "recoverability": "recreated from .python-version, pyproject.toml and uv.lock; absolute interpreter symlink makes it machine-specific"
+    },
+    {
+      "id": "tool-caches",
+      "paths": [".mypy_cache/**", ".pytest_cache/**", ".ruff_cache/**"],
+      "git_state": "ignored",
+      "entries": 35,
+      "regular_files": 35,
+      "symlinks": 0,
+      "logical_bytes": 12183622,
+      "owner": "mypy, pytest and Ruff",
+      "classification": "reproducible environment/build/cache",
+      "disposition": "exclude from both archives; eligible for deletion only by a later authorized cleanup",
+      "recoverability": "regenerated by the corresponding validation commands"
+    },
+    {
+      "id": "python-bytecode",
+      "paths": ["src/**/__pycache__/**", "tests/**/__pycache__/**", "tools/**/__pycache__/**"],
+      "git_state": "ignored",
+      "entries": 135,
+      "regular_files": 135,
+      "symlinks": 0,
+      "logical_bytes": 5582799,
+      "owner": "Python interpreter",
+      "classification": "reproducible environment/build/cache",
+      "disposition": "exclude from both archives; eligible for deletion only by a later authorized cleanup",
+      "recoverability": "regenerated from tracked Python source"
+    },
+    {
+      "id": "distribution-builds",
+      "paths": ["dist/.gitignore", "dist/quant_system-0.1.0-py3-none-any.whl", "dist/quant_system-0.1.0.tar.gz"],
+      "git_state": "ignored",
+      "entries": 3,
+      "regular_files": 3,
+      "symlinks": 0,
+      "logical_bytes": 16263,
+      "owner": "Python build tooling",
+      "classification": "reproducible environment/build/cache",
+      "disposition": "exclude from both archives; eligible for deletion only by a later authorized cleanup",
+      "recoverability": "rebuildable from the tracked source and locked build configuration"
+    },
+    {
+      "id": "empty-runtime-directory",
+      "paths": ["tmp/"],
+      "git_state": "ignored empty directory",
+      "entries": 0,
+      "regular_files": 0,
+      "symlinks": 0,
+      "logical_bytes": 0,
+      "owner": "local runtime",
+      "classification": "reproducible environment/build/cache",
+      "disposition": "exclude from both archives; no content exists to migrate",
+      "recoverability": "directory can be recreated when required"
+    },
+    {
+      "id": "git-administration",
+      "paths": [".git/**"],
+      "git_state": "Git internal metadata",
+      "entries": null,
+      "regular_files": null,
+      "symlinks": null,
+      "logical_bytes": 20144464,
+      "owner": "local Git clone",
+      "classification": "VCS administration; protected local metadata",
+      "disposition": "never include in the Release or ordinary retained-asset archive; preserve the remote/tag as authority and do not remove this active clone during Phase 0",
+      "recoverability": "tracked history is recoverable from the remote, but local config, reflogs and unpublished state are machine-local and may be sensitive"
+    }
+  ],
+  "retained_external_archive_totals": {
+    "roots": [
+      ".agents/evidence.local/**",
+      ".agents/validation.local/**",
+      ".workflow.local/lck/**",
+      "artifacts/task-86-global-freeze-20260813/**"
+    ],
+    "regular_files": 8146,
+    "symlinks": 0,
+    "logical_bytes": 175091328
+  },
+  "disposable_totals": {
+    "regular_files": 8053,
+    "symlinks": 173,
+    "logical_bytes": 747708698
+  },
+  "secret_handling": {
+    "path_name_scan_matches": [".env.example"],
+    "actual_secret_path_candidates": [],
+    "interpretation": ".env.example is tracked configuration documentation, not a credential store; absence of path-name candidates is not content clearance",
+    "protected_classes": [
+      ".agents/evidence.local/**",
+      ".agents/validation.local/**",
+      ".workflow.local/lck/**",
+      "artifacts/task-86-global-freeze-20260813/**",
+      ".git/**"
+    ],
+    "disposition": "screen without printing values; any detected secret must be excluded from the ordinary archive and placed in separately access-controlled Secret storage"
+  },
+  "transfer_preconditions": [
+    "obtain explicit authorization in the externalization leaf item",
+    "quiesce LCK and validation writers before final enumeration",
+    "repeat git-native tracked, untracked and ignored inventories at transfer time",
+    "fail closed if a new or reclassified path appears",
+    "screen retained roots for secrets and private data without emitting values",
+    "reject symlinks and special files from the retained archive",
+    "copy without mutating sources, preserving relative paths and file modes",
+    "produce a sorted per-file SHA-256 manifest plus archive SHA-256",
+    "verify destination counts, logical bytes and checksums before any cleanup"
+  ]
+}
