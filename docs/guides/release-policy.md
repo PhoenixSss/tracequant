@@ -1,9 +1,10 @@
 # TraceQuant and LCK release policy
 
-> **Status:** Current release policy and published LCK preview record
+> **Status:** Current release policy, published v1 archive, and LCK preview record
+> **Published TraceQuant archive:** `tracequant-v1-archive-2026-09-12`
 > **Published LCK previews:** `lck-v0.1.0-preview.1`, `lck-v0.1.0-preview.2`
 > **Current corrected preview:** `lck-v0.1.0-preview.2` (GitHub pre-release)
-> **Last repository-state check:** 2026-09-03
+> **Last repository-state check:** 2026-09-12
 
 This policy defines how releases of the TraceQuant project and previews of the
 Local Control Kernel (LCK) are identified, checked, documented, and kept
@@ -36,6 +37,16 @@ other track's stability claim.
 | TraceQuant project | A reviewed TraceQuant repository state and, when applicable, its project package | `tracequant-v<MAJOR>.<MINOR>.<PATCH>`; the package version remains the value in `pyproject.toml` | A project release. It must not imply that planned quantitative or trading capabilities are implemented. |
 | LCK component preview | A deliberately scoped, manifest-backed LCK source archive, if one is published | `lck-v<MAJOR>.<MINOR>.<PATCH>-preview.<N>` | A versioned LCK snapshot for manual evaluation and adaptation inside TraceQuant's project context. |
 
+The retirement-specific
+[`tracequant-v1-archive-2026-09-12`](https://github.com/PhoenixSss/tracequant/releases/tag/tracequant-v1-archive-2026-09-12)
+identity is a deliberately named historical recovery archive, not a new
+semantic package version or production release. It binds the complete v1
+tracked tree, including business code and LCK, to commit
+`27a9fdd877533f933cde4818eba9c186d286c529`. Its
+[post-publication record](../releases/tracequant-v1-archive-2026-09-12.md)
+preserves the exact scope, validation, retained-asset boundary, and recovery
+facts without changing the archived commit.
+
 The first LCK preview, [`lck-v0.1.0-preview.1`](https://github.com/PhoenixSss/tracequant/releases/tag/lck-v0.1.0-preview.1),
 was published and remains an immutable historical release. The corrected
 [`lck-v0.1.0-preview.2`](https://github.com/PhoenixSss/tracequant/releases/tag/lck-v0.1.0-preview.2)
@@ -53,12 +64,15 @@ preview.
 
 ## 2. Current availability and source-of-truth boundaries
 
-At the state check recorded above, both previews are published GitHub
-pre-releases. `preview.1` is historical and superseded; `preview.2` is the
-current corrected pre-release and the supported versioned path for manual
-evaluation and repository-specific adaptation. The repository-copy path also
-remains available. A GitHub-generated source archive for an arbitrary commit,
-branch, or tag is not by itself an LCK release archive.
+At the state check recorded above, the TraceQuant v1 historical archive and
+both LCK previews are published. The v1 archive is non-production and preserves
+the complete tracked repository tree at its exact tag; it does not supersede
+the independently scoped LCK preview track. `preview.1` is historical and
+superseded; `preview.2` is the current corrected pre-release and the supported
+versioned path for manual LCK evaluation and repository-specific adaptation.
+The repository-copy path also remains available. A GitHub-generated source
+archive for an arbitrary commit, branch, or tag is not by itself an LCK release
+archive.
 
 The live [`preview.2` Release record](https://github.com/PhoenixSss/tracequant/releases/tag/lck-v0.1.0-preview.2)
 is authoritative for the exact current identity: it is not a draft, has
@@ -234,10 +248,12 @@ The safe publication order is:
    digests, against the locally validated set.
 5. Publish the draft once, changing only its publication state.
 6. After publication, perform only read-only Release/tag/asset verification
-   and tracked documentation synchronization.
+   and tracked documentation synchronization unless a named, documented
+   archive-specific metadata exception in Section 9 applies.
 
 Post-publication asset replacement, deletion, tag reuse, and `--clobber` are
-prohibited. A correction requires a new immutable preview or patch identity.
+prohibited. Except for an archive-specific metadata exception in Section 9, a
+correction requires a new immutable preview or patch identity.
 
 Archive generation must be deterministic: use a stable normalized path order
 (with `/` separators), normalized archive metadata such as fixed UTC
@@ -367,16 +383,20 @@ preview/stable status are independent decisions.
 ## 9. Continuity, corrections, and withdrawal
 
 Release history is part of the artifact's audit trail. Each published release
-keeps its tag, source SHA, manifest, digest, notes, and status visible in the
-Git history or GitHub Release record. A later release must point to the
-identity it supersedes; "latest" is a convenience label, never an identity.
+keeps its tag, source SHA, manifest, digest, and an auditable record of its
+notes and status visible in the Git history or GitHub Release record. Published
+notes or status may change in place only under a named exception below that
+preserves the release's fixed recovery identity and records the correction. A
+later release must point to the identity it supersedes; "latest" is a
+convenience label, never an identity.
 
 The continuity rules are:
 
 - published tags and archive identities are immutable;
 - preview versions and later stable versions are monotonically identifiable;
 - every release remains traceable to one exact source commit and manifest;
-- a correction uses a new patch or preview identity and explains the defect,
+- unless a named archive-specific metadata exception below applies, a
+  correction uses a new patch or preview identity and explains the defect,
   impact, and relationship to the earlier release;
 - a changed archive digest, included path, or source commit is a new release,
   even when the human-readable version would otherwise look convenient; and
@@ -386,6 +406,18 @@ The continuity rules are:
   removing an asset or tag, the withdrawal record must preserve the former
   identity, date, reason, and replacement relationship as far as the hosting
   service permits.
+
+The only current archive-specific exception is the historical
+`tracequant-v1-archive-2026-09-12` Release. Its title, notes, or
+latest/prerelease metadata may receive a bounded in-place correction when the
+tag name, annotated tag object, peeled commit, source tree, Release target, and
+custom asset set are verified unchanged before and after the correction. The
+publication record must state what was corrected and preserve those fixed
+identity values. This exception never permits moving, deleting, or reusing the
+tag; changing the Release target; or adding, replacing, or deleting a custom
+asset. If a fixed value changes or cannot be verified, fail closed and use a
+new release identity. The exception does not apply to LCK previews or other
+TraceQuant releases.
 
 The policy does not require a floating compatibility promise. Adopters must
 select a named release, verify its digest, read its compatibility notes, and
