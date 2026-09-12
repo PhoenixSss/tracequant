@@ -472,6 +472,9 @@ backfilled or replayed typed lifecycle receipts.
 - [NautilusTrader primary-runtime ADR](docs/architecture/adr-0001-nautilustrader-primary-runtime.md):
   accepted v2 trading-runtime selection, ownership boundary, and closed Live
   gate.
+- [NautilusTrader import and update policy](docs/guides/nautilustrader-import-and-update-policy.md):
+  exact package/import identity, wheel-only acquisition, integration boundary,
+  versioned persistent roots, upgrade gates, promotion, and rollback.
 - [NautilusTrader capability validation baseline](docs/research/nautilustrader-capability-validation-2026-09-12.md):
   fixed source identities, evidence levels, completed runtime results,
   limitations, and later Demo/restart/soak gates.

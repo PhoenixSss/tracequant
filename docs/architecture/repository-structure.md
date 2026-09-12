@@ -141,11 +141,16 @@ independent Console deployment creates sustained operational value.
 
 ## Approved v2 target structure
 
-The v2 bootstrap must create only the tracked skeleton described here. It must
-not copy v1 modules into that skeleton, install dependencies, initialize
-runtime data, or imply that Offline, Shadow, Demo, or Live operation is
-available. Empty directories are represented by a short `README.md` only when
-the bootstrap needs to preserve a boundary in Git.
+The v2 bootstrap must create only the tracked skeleton described here. As part
+of that skeleton it establishes the declared Python baseline, the exact
+official NautilusTrader wheel dependency, the uv source-build policy, the
+committed lock, and the minimal integration seam needed to prove package and
+import ownership. It may resolve and install the locked wheel into a generated,
+disposable project environment solely for bootstrap acceptance. It must not
+copy v1 modules into that skeleton, initialize persistent runtime data,
+implement a trading workflow, or imply that Offline, Shadow, Demo, or Live
+operation is available. Empty directories are represented by a short
+`README.md` only when the bootstrap needs to preserve a boundary in Git.
 
 ### Classification vocabulary
 
@@ -179,92 +184,105 @@ invent another top-level product-code root.
 | `tests/` | Product tests mirroring `src/tracequant`; test support is not a production import source | TraceQuant engineering | Tracked |
 | `.env.example` | Names and safe placeholders for supported environment variables; never values or automatic dotenv loading | TraceQuant configuration owner | Tracked |
 | `.gitignore` | Exhaustive checkout-local generated-path exclusions and secret-shaped local files | Maintainers | Tracked |
-| `.python-version` | Project Python toolchain selection | Maintainers | Tracked |
+| `.python-version` | Exact initial v2 interpreter selection: CPython `3.13` | Maintainers | Tracked |
 | `LICENSE` | TraceQuant source license | Maintainers | Tracked |
 | `README.md` | Project entry point, safety status, and links to current documentation | Maintainers | Tracked |
-| `pyproject.toml` | Build metadata, the `tracequant` package declaration, dependency groups, tool configuration, and console entry-point declarations | Maintainers | Tracked |
+| `pyproject.toml` | Build metadata, the `tracequant` package declaration, `requires-python = ">=3.13,<3.14"`, dependency groups, tool configuration, and any explicitly scoped console entry points | Maintainers | Tracked |
+| `uv.toml` | uv installation policy, including the NautilusTrader wheel-only constraint; never a machine-specific or LCK cache location | Maintainers | Tracked |
 | `uv.lock` | Reproducible Python dependency resolution | Maintainers | Tracked |
 
 There is no top-level `apps/`, `packages/`, `scripts/`, `runtime/`, `data/`,
 `artifacts/`, or `vendor/` product root in v2. Operational Python entry points
-are declared in `pyproject.toml` and resolve to `tracequant.entrypoints.*`.
-Non-Python deployment material is added only by a later scoped Issue; it does
-not justify a second Python source tree.
+are declared in `pyproject.toml` only when a scoped capability needs them and
+resolve to a function in the owning boundary; they do not justify a generic
+entrypoint or orchestration framework. Non-Python deployment material is added
+only by a later scoped Issue; it does not justify a second Python source tree.
 
 ### `src/tracequant` layout and ownership
 
 All importable, self-developed production Python belongs below the single
-`tracequant` namespace. The following directories are ownership boundaries,
-not permission to pre-create implementations:
+`tracequant` namespace. The bootstrap creates only the dependency boundary
+needed to prove that separation:
 
 ```text
 src/tracequant/
   __init__.py
-  entrypoints/                 explicit CLI/process composition roots
-  orchestration/               lifecycle and mode coordination
-  strategies/                  alpha and portfolio intent
-  risk/                        final allow/reduce/reject policy
-  data/
-    contracts/                 source, dataset, and point-in-time schemas
-    acquisition/               raw-source acquisition policies
-    research/                  read-only derived research views
   integrations/
-    nautilus/                  thin approved NautilusTrader boundary only
-  config/                      typed configuration parsing and validation
-  observability/               project metrics, alerts, and audit emission
+    __init__.py
+    nautilus/
+      __init__.py              external distribution identity and import seam
+```
+
+Later scoped Issues may add only the following product boundaries when their
+capability is actually implemented. They are not bootstrap scaffolding and do
+not authorize framework-like abstractions:
+
+```text
+src/tracequant/
+  source_data/                 raw provenance, acquisition, checksum, coverage
+  research/                    views, features, labels, models, artifacts
+  integrations/
+    nautilus/
+      strategies/             concrete Nautilus Strategy/Actor implementations
+      configuration/          Nautilus backtest/node/venue/risk configuration
+  operations/                  admission, external observation, alerts, release
 ```
 
 | Boundary | Owns | Must not own |
 | --- | --- | --- |
-| `tracequant.entrypoints` | Argument parsing and explicit construction of an Offline, Shadow, Demo, or eventually approved Live process | Business logic, credentials, mutable global clients, or import-time startup |
-| `tracequant.orchestration` | Run lifecycle, mode gates, sequencing of strategy intent -> risk decision -> runtime action, and stop/reconciliation coordination | Alpha rules, duplicate order/account state, or bypasses around risk |
-| `tracequant.strategies` | Features consumed by a strategy, model inference, portfolio intent, and project-owned immutable `OrderIntent`-like requests | Exchange clients, Nautilus adapter imports, order submission/cancel/modify calls, or final risk decisions |
-| `tracequant.risk` | Project thresholds and the final `ALLOW`, `REDUCE`, or `REJECT` decision before any action reaches the runtime boundary | Alpha generation, exchange transport, or a parallel Nautilus `RiskEngine`, account, portfolio, or order ledger |
-| `tracequant.data.contracts` | Raw-source provenance, immutable dataset identities, coverage/quality outcomes, and point-in-time research schemas | Nautilus trading-domain types, network transport, mutable runtime state, or implicit missing-value repair |
-| `tracequant.data.acquisition` | Explicit raw acquisition use cases and source validation | Strategy, order, account, or execution behavior |
-| `tracequant.data.research` | Read-only transformations from verified raw identities into causal research inputs | Raw mutation, runtime catalog ownership, or future-observation access |
-| `tracequant.integrations.nautilus` | The smallest composition and translation layer needed to invoke the pinned upstream runtime and expose project-approved ports | A copied upstream package tree, parallel trading-domain models/state machines, alpha logic, or independent venue semantics already owned upstream |
-| `tracequant.config` | Typed, explicit configuration parsing and fail-closed mode/runtime identity validation | Secret storage, implicit environment reads on import, or Live defaults |
-| `tracequant.observability` | TraceQuant-specific metrics, alerts, structured audit events, and redaction policy | A second trading/account truth or credential values |
-| NautilusTrader in environment `site-packages` | Trading data/instrument types, Strategy/Actor runtime, orders, positions, account/portfolio state, core pre-trade risk, fills/accounting, Binance adapter, cache, restart, and reconciliation | TraceQuant alpha, project risk thresholds, source provenance, environment admission, or operator approval |
+| `tracequant.source_data` | Source URL/version, immutable raw bytes, checksums, acquisition policy, gap/coverage QA, and missing-data acquisition | A Binance exchange adapter, canonical trading-data schema, Nautilus catalog implementation, or trading-domain types |
+| `tracequant.research` | Read-only research views, feature/label semantics, causal lineage, training/evaluation, and model artifacts | Mutable trading state, Order/Position/Portfolio types, a trading engine, or writes back into the Nautilus catalog |
+| `tracequant.integrations.nautilus` | Direct use of the pinned public Nautilus APIs, source-to-Nautilus conversion, concrete Nautilus-native Strategy/Actor implementations, model loading/inference inside those implementations, and Nautilus configuration | A generic Strategy Adapter, model-to-runtime middleware, project Order/Position DTOs, a copied upstream package tree, or parallel trading state machines |
+| `tracequant.operations` | Demo/Live admission, external black-box observation, alerts, redaction, release/rollback policy, and later deployment assets | Trading-state correction, a reconciliation engine, credential values, or a second account/order truth |
+| Dedicated tests below `tests/` | Public-API compatibility, research/runtime parity, backtest and Demo acceptance, restart/reconciliation observation, and architecture enforcement | Production runtime code, shadow ledgers, or corrective trading behavior |
+| NautilusTrader in environment `site-packages` | Trading data/instrument types, `ParquetDataCatalog`, runtime Bar aggregation and indicators, Strategy/Actor lifecycle, orders, positions, account/portfolio state, core pre-trade risk, fills/accounting/reports, Binance adapter, cache, restart, and reconciliation | TraceQuant research semantics, source provenance, model artifacts, project-specific policy thresholds, environment admission, or operator approval |
 
 `tracequant.integrations.nautilus` is a boundary, not a vendor fork. It should
-contain a few use-case-shaped adapters or composition objects, not directories
-named after NautilusTrader's internal packages. Upstream modules, generated
-bindings, examples, fixtures, and tests stay in the installed distribution in
-the environment's `site-packages`; none may appear under `src/`, `tests/`, or
-`vendor/`.
+contain concrete, small Nautilus-native implementations and configuration, not
+a generic adapter/port framework or directories named after NautilusTrader's
+internal packages. Upstream modules, generated bindings, examples, fixtures,
+and tests stay in the installed distribution in the environment's
+`site-packages`; none may appear under `src/`, `tests/`, or `vendor/`.
 
 ### Dependency and order-authority direction
 
 The allowed product flow is:
 
 ```text
-tracequant.entrypoints
-  -> tracequant.orchestration
-       -> tracequant.strategies -> tracequant.data.contracts
-       -> tracequant.risk       -> project-owned intent/context contracts
-       -> tracequant.integrations.nautilus -> installed nautilus_trader
-  -> tracequant.config
-  -> tracequant.observability
+source_data -> tracequant.integrations.nautilus data conversion
+                                      |
+                                      v
+                 installed nautilus_trader typed objects / ParquetDataCatalog
+                                      |
+                                      v
+                           read-only research views
+                                      |
+                                      v
+                           model/feature artifacts
+                                      |
+                                      v
+tracequant.integrations.nautilus.strategies -> Nautilus backtest / Demo / Live
+
+tracequant.operations -----------------------> observe, gate, alert, release
 ```
 
-Data acquisition and research may depend inward on `data.contracts`; they do
-not depend on strategy, risk, orchestration, entrypoint, or integration code.
-Strategy and risk code are peers: neither imports the other. Orchestration
-passes immutable strategy intent and current risk context to risk, and only an
-`ALLOW` or `REDUCE` result may be translated at the Nautilus boundary. A
-`REJECT`, missing/unknown decision, stale data, local/exchange disagreement, or
-unreconciled order state produces no opening order. Reduction may only reduce
-the requested exposure. NautilusTrader's core pre-trade risk remains an
-independent downstream veto: neither layer may turn the other's rejection into
-an approval.
+Production strategy/model behavior is implemented directly as a thin public
+Nautilus `Strategy` or `Actor` below
+`tracequant.integrations.nautilus.strategies`. Model loading and inference stay
+with the concrete strategy that consumes them; there is no generic
+model-to-runtime middleware, parallel strategy runtime, or project-owned Order,
+Position, Portfolio, or Account DTO layer. Orders are created and submitted
+only through Nautilus `OrderFactory` and Strategy APIs, never through a
+TraceQuant exchange client.
 
-Strategies therefore never submit exchange orders directly. The upstream
-runtime may host the outer Strategy/Actor lifecycle, but the concrete host and
-order API calls live at the integration boundary; project alpha code only
-produces intent. Risk remains the final project authority and cannot be skipped
-by an entry point, strategy, adapter, retry, or recovery path.
+Nautilus `RiskEngine` owns core pre-trade validation, throttles, notional
+limits, and trading state. TraceQuant supplies reviewed thresholds and only
+small, confirmed-missing strategy/portfolio policies such as daily loss, total
+exposure, or stale-data stops. Such a policy may reject or reduce a proposed
+action before it reaches Nautilus but must not become a generic second
+RiskEngine. Neither the project policy nor Nautilus may turn the other's veto
+into approval. Missing/unknown policy state, stale data, local/exchange
+disagreement, or unreconciled order state produces no opening order.
 
 Live is absent or disabled by default in every tracked example. Adding a Live
 entry point requires a separate Issue, explicit configuration, the admission
@@ -283,9 +301,9 @@ not permission to read environment variables on import.
 | Logical root | Required version/identity partition | Contents and owner | Classification |
 | --- | --- | --- | --- |
 | `raw_root` | `raw-contract/<contract_version>/<source>/<dataset_identity>/<revision>/` | Immutable response bytes/Parquet, checksums, provenance, and completion manifests; TraceQuant data owner | External/versioned |
-| `catalog_root` | `nautilus/<package_version>+<source_commit>/<catalog_schema_id>/<environment>/` | Nautilus-compatible catalog generated from verified raw revisions; Nautilus runtime owns catalog semantics, TraceQuant records conversion provenance | External/versioned |
-| `cache_root` | `nautilus/<package_version>+<source_commit>/<cache_schema_id>/<environment>/<instance_id>/` | Nautilus cache/restart/reconciliation state; Nautilus runtime owner | External/versioned |
-| `run_root` | `<environment>/<code_version>/<environment_lock_digest>/<mode>/<run_id>/` | Logs, reports, temporary run artifacts, and an immutable run manifest; TraceQuant orchestration owner | External/versioned |
+| `catalog_root` | `nautilus/<package_version>+<upstream_release_or_commit>/<catalog_schema_id>/<environment>/` | Nautilus-compatible catalog generated from verified raw revisions; Nautilus runtime owns catalog semantics, TraceQuant records conversion provenance | External/versioned |
+| `cache_root` | `nautilus/<package_version>+<upstream_release_or_commit>/<cache_schema_id>/<environment>/<instance_id>/` | Nautilus cache/restart/reconciliation state; Nautilus runtime owner | External/versioned |
+| `run_root` | `<environment>/<code_version>/nautilus/<package_version>+<upstream_release_or_commit>/<environment_lock_digest>/<mode>/<run_id>/` | Logs, reports, temporary run artifacts, and an immutable run manifest; TraceQuant operations owner | External/versioned |
 | `evidence_root` | `<environment>/<evidence_schema_version>/<subject_identity>/<revision>/` | Research, backtest, Demo, and acceptance evidence with digests; producing capability owner | External/versioned |
 | `audit_root` | `<environment>/<audit_schema_version>/<account_or_system_identity>/<date_partition>/` | Append-only operational decisions/events with retention and access control; TraceQuant operations owner | External/versioned |
 | `environment_root` | `<environment_lock_digest>/` | Reproducible environment exports, wheel/source caches if retained, SBOMs, and license material; dependency owner | External/versioned |
@@ -297,15 +315,19 @@ digests are immutable identifiers, not mutable aliases such as `latest`.
 Secrets live in a secret manager or injected process boundary, never in any of
 these roots' manifests.
 
-The exact Nautilus runtime identity is at least the normalized package version
-plus the locked source commit when available. Catalog/cache creation records
-that identity and the applicable schema identifier in both the path and a
-manifest. On open, TraceQuant compares configured identity, manifest identity,
-and imported NautilusTrader identity. A missing value or mismatch is a hard
-error: it must not open, migrate, copy, or silently reuse the state. An upgrade
-gets a new partition and an explicit, separately validated migration or
-rebuild. This prevents persistent runtime data from crossing NautilusTrader
-version identities silently.
+The exact Nautilus runtime identity is the normalized package version plus the
+reviewed upstream release identity or exact source commit, using the canonical
+form defined by the NautilusTrader import and update policy. Catalog, cache, and
+run creation records that identity and the applicable schema or
+environment-lock identifier in both the path and a manifest. On open,
+TraceQuant compares configured identity, manifest identity, and imported
+NautilusTrader identity. A missing value or mismatch is a hard error: it must
+not open, migrate, copy, or silently reuse the state. An upgrade gets a new
+partition and an explicit, separately validated migration or rebuild. This
+prevents persistent runtime data from crossing NautilusTrader version
+identities silently. The complete acquisition, upgrade, promotion, and rollback
+rules are defined by the
+[NautilusTrader import and update policy](../guides/nautilustrader-import-and-update-policy.md).
 
 Raw data is versioned by its TraceQuant source contract rather than by a
 Nautilus version so that upstream evidence remains immutable and runtime
@@ -380,30 +402,42 @@ review convention:
 2. Python outside `src/tracequant` is test code below `tests/` only. Tests may
    import `tracequant` public/test-support APIs; production code never imports
    `tests`.
-3. Only `tracequant.integrations.nautilus` directly imports
-   `nautilus_trader`. Strategy, risk, data-contract, configuration, and
-   observability modules cannot import that distribution or the integration
-   package.
-4. Import-graph checks enforce the dependency direction above, including no
-   strategy -> risk/integration, risk -> strategy/integration, or
-   data -> strategy/risk/orchestration/entrypoint/integration edge.
-5. AST/static checks reject order submit/cancel/modify API calls and exchange
-   client construction below `tracequant.strategies`; behavior tests prove a
-   rejected, unknown, stale, divergent, or unreconciled decision cannot reach
-   the integration submit port, and a reduction cannot increase exposure.
-6. Tree-policy checks reject all LCK paths/dependencies listed above, a copied
+3. `pyproject.toml` pins the exact approved official `nautilus-trader` wheel,
+   the new v2 `uv.toml` rejects a NautilusTrader source build and contains no
+   v1/LCK cache location, and `uv.lock` resolves the distribution from standard
+   PyPI without a Git, path, editable, workspace, or source override. A clean,
+   disposable environment can sync the committed lock and verify the installed
+   distribution and module origin without an upstream source checkout.
+4. Only `tracequant.integrations.nautilus` directly imports
+   `nautilus_trader`; dedicated acceptance tests may also import the public
+   symbols they verify. Source-data, research, and operations code cannot
+   directly import that distribution. Any concrete catalog conversion,
+   Nautilus-native strategy, or runtime configuration that needs the public
+   upstream API belongs inside the integration boundary.
+5. Tree and import checks reject a separate `tracequant.strategies`,
+   `tracequant.risk`, or generic orchestration/adapter/port framework, along
+   with project-owned trading-domain DTOs, exchange clients, RiskEngine,
+   portfolio/account ledger, backtest engine, or reconciliation state machine.
+6. The bootstrap contains no strategy, order, or exchange behavior. When a
+   later scoped Issue adds a concrete strategy, static and behavior checks must
+   confine it to the Nautilus integration boundary, require public Nautilus
+   Strategy/OrderFactory APIs, reject exchange-client construction and risk
+   bypasses, and prove rejected, unknown, stale, divergent, or unreconciled
+   state cannot open a position.
+7. Tree-policy checks reject all LCK paths/dependencies listed above, a copied
    NautilusTrader source/test layout, secret files, and repository-local
    persistent-root fallbacks.
-7. Configuration tests require absolute external roots, explicit environment
+8. Configuration tests require absolute external roots, explicit environment
    and mode, and exact Nautilus package/source/schema identity for catalog and
    cache opens. Missing/mismatched identity fails closed and never selects a
    legacy or `latest` directory.
-8. Import-safety tests prove package imports perform no I/O, environment reads,
+9. Import-safety tests prove package imports perform no I/O, environment reads,
    directory creation, client construction, background startup, or singleton
    caching. Live remains unavailable or explicitly disabled without all later
    admission gates.
 
-Bootstrap completion establishes only the repository skeleton and these
-guards. It does not authorize dependency installation, data migration,
-NautilusTrader integration, exchange connectivity, order submission, or Live
-trading.
+Bootstrap completion establishes only the repository skeleton, a verified clean
+installation of the exact wheel-only NautilusTrader dependency and lock, the
+minimal integration seam, and these guards. It does not authorize
+persistent-data migration, strategy or backtest implementation, exchange
+connectivity, order submission, Demo, or Live trading.
