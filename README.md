@@ -469,6 +469,12 @@ backfilled or replayed typed lifecycle receipts.
   engineering workflows are explicitly exempt.
 - [Technical baseline](docs/architecture/technical-baseline.md): current
   implementation facts and explicitly deferred research/trading architecture.
+- [NautilusTrader primary-runtime ADR](docs/architecture/adr-0001-nautilustrader-primary-runtime.md):
+  accepted v2 trading-runtime selection, ownership boundary, and closed Live
+  gate.
+- [NautilusTrader capability validation baseline](docs/research/nautilustrader-capability-validation-2026-09-12.md):
+  fixed source identities, evidence levels, completed runtime results,
+  limitations, and later Demo/restart/soak gates.
 - [Repository structure](docs/architecture/repository-structure.md): current
   tree, dependency direction, and future boundary rules.
 - [Initial public domain models](docs/architecture/domain-models.md): model
