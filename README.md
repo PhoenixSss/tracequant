@@ -6,6 +6,16 @@ perpetual futures. The current repository is the Research MVP foundation: it
 contains a small, validated Python package and the engineering documentation
 around it. It does not contain a trading system or an executable strategy yet.
 
+The final validated v1 tracked snapshot is preserved by the immutable
+[`tracequant-v1-archive-2026-09-12`](https://github.com/PhoenixSss/tracequant/releases/tag/tracequant-v1-archive-2026-09-12)
+tag and GitHub Release at commit
+`27a9fdd877533f933cde4818eba9c186d286c529`. This is a historical,
+non-production recovery archive containing both the v1 business code and LCK;
+it is not a production-readiness or v2-completion claim. See the
+[post-publication record](docs/releases/tracequant-v1-archive-2026-09-12.md)
+for the exact identity, validation, scope, retained-asset boundary, and
+recovery notes.
+
 ## LCK: an engineering capability within TraceQuant
 
 While building and maintaining TraceQuant, the project is developing the Local
