@@ -2,6 +2,7 @@
 
 - **Policy status:** approved for future NautilusTrader integration work
 - **Initial approved identity:** `nautilus-trader==2.0.0rc4`
+- **Initial Python baseline:** CPython `3.13` (`>=3.13,<3.14`)
 - **Import namespace:** `nautilus_trader`
 - **Upstream release identity:** tag `v2.0.0rc4`, commit
   `a0400251110653b6d8ae6a9b5b89c4543fa85a2d`
@@ -39,12 +40,16 @@ hyphen and import names use an underscore; code and verification MUST NOT treat
 them as interchangeable strings.
 
 The integration change that adds this dependency MUST also commit the resulting
-`uv.lock`. It MUST configure uv to reject a NautilusTrader source build:
+`uv.lock` and a tracked v2 `uv.toml`. That `uv.toml` MUST configure uv to reject
+a NautilusTrader source build:
 
 ```toml
-[tool.uv]
 no-build-package = ["nautilus-trader"]
 ```
+
+The v2 `uv.toml` is repository policy, not machine-local state. It MUST NOT
+carry forward the v1/LCK `.workflow.local/uv-cache` location or introduce any
+other repository-local package, source, or audit cache.
 
 The lock entry MUST resolve `nautilus-trader` from the standard PyPI registry,
 not from a Git URL, direct URL, local directory, editable install, workspace,
@@ -120,29 +125,36 @@ production imports of `nautilus_trader` are confined to
 MAY import the public upstream symbols they verify. A static import-boundary
 test MUST reject direct or dynamic upstream imports elsewhere.
 
-Strategy behavior is project-owned, but it reaches NautilusTrader only through
-explicit strategy contracts and the thin integration boundary:
+TraceQuant production strategy/model behavior is implemented as concrete,
+Nautilus-native Strategy/Actor code inside that boundary:
 
 ```text
-tracequant.strategies -> project-owned intent/ports
-                     -> tracequant.integrations.nautilus
-                     -> installed nautilus_trader distribution
+TraceQuant research artifact
+  -> tracequant.integrations.nautilus.strategies
+       -> public Nautilus Strategy/Actor, OrderFactory, and runtime APIs
+            -> installed nautilus_trader distribution
 ```
 
-Strategy code MUST NOT construct an exchange client or submit, cancel, or
-modify an order. Integration code MUST remain use-case-shaped and MUST NOT
-mirror upstream package directories. Acceptance code MUST verify public API
-compatibility, import ownership, risk vetoes, order behavior, persistence, and
-reconciliation without becoming production code.
+Model loading and inference MUST live with the concrete strategy that consumes
+them. The repository MUST NOT introduce a generic Strategy Adapter,
+model-to-runtime middleware, project Order/Position DTOs, or a parallel strategy
+runtime. Concrete strategy code MAY create, submit, cancel, or modify orders
+only through public Nautilus Strategy and OrderFactory APIs; it MUST NOT
+construct an exchange client, bypass Nautilus risk/execution, or mutate upstream
+internals. Integration code MUST remain use-case-shaped and MUST NOT mirror
+upstream package directories. Acceptance code MUST verify public API
+compatibility, import ownership, policy and Nautilus risk vetoes, order
+behavior, persistence, and reconciliation without becoming production code.
 
 NautilusTrader owns its trading data/instrument types, Strategy/Actor runtime,
 orders, positions, account/portfolio state, core risk, fills/accounting,
 Binance adapter, cache, restart, and reconciliation semantics. TraceQuant owns
-raw-source provenance, causal research data, features and labels, model and
-strategy intent, project risk thresholds and final project risk decisions,
-environment admission, acceptance evidence, and operator approval. TraceQuant
-MUST NOT copy or wrap upstream domain objects into a parallel mutable trading
-domain.
+raw-source provenance, causal research data, features and labels, model
+artifacts and alpha, project risk thresholds and confirmed-missing policy
+extensions, environment admission, acceptance evidence, and operator approval.
+TraceQuant MUST NOT copy or wrap upstream domain objects into a parallel mutable
+trading domain or place a generic adapter layer between a concrete
+TraceQuant-owned Nautilus Strategy/Actor and the public upstream runtime.
 
 ## Persistent identity and migration
 
@@ -242,8 +254,8 @@ record MUST contain:
 - candidate package version and prior active version;
 - upstream tag/release and exact commit when available;
 - PyPI project URL, wheel filename, Python/platform tag, and wheel SHA-256;
-- `pyproject.toml` pin, `uv.lock` digest, TraceQuant commit, and environment
-  lock digest;
+- `pyproject.toml` pin, `uv.toml` source-build policy and digest, `uv.lock`
+  digest, TraceQuant commit, and environment lock digest;
 - release, migration, security, license/packaging, and Binance review results;
 - each compatibility command or test target, result artifact/digest, and
   explicit last-known-good comparison;
@@ -265,9 +277,9 @@ promoted.
 Rollback has two independent parts:
 
 1. **Code and environment:** revert to the recorded last-known-good Git point,
-   which restores both `pyproject.toml` and `uv.lock`; create/sync a clean
-   environment from that lock with NautilusTrader source builds disabled; and
-   verify the recorded distribution/import identity.
+   which restores `pyproject.toml`, `uv.toml`, and `uv.lock`; create/sync a
+   clean environment from that lock with NautilusTrader source builds disabled;
+   and verify the recorded distribution/import identity.
 2. **Persistent state:** select the recorded last-known-good fully qualified
    catalog/cache/run identities. Never down-migrate, rewrite, or copy candidate
    state over those partitions.
@@ -281,8 +293,8 @@ Live or bypasses risk authority.
 
 Develop/nightly wheels are permitted only for upstream investigation in a
 disposable external environment. They MUST NOT modify `pyproject.toml`,
-`uv.lock`, the project environment, accepted evidence, or any catalog/cache/run
-root. Results are exploratory and cannot promote a version.
+`uv.toml`, `uv.lock`, the project environment, accepted evidence, or any
+catalog/cache/run root. Results are exploratory and cannot promote a version.
 
 A fork requires a separate accepted architecture decision before any fork
 artifact is used. That decision MUST name the defect or requirement, why an
@@ -295,7 +307,7 @@ plan back to upstream. Without all of those items, the fork remains prohibited.
 
 | Required outcome | Mechanical or review evidence |
 | --- | --- |
-| Official exact wheel resolves without a source checkout | Exact direct pin and committed lock; clean `--no-cache --no-build-package` install; PyPI wheel provenance receipt |
+| Official exact wheel resolves without a source checkout | Exact direct pin, tracked `uv.toml` wheel-only policy, and committed lock; clean `--no-cache --no-build-package` install; PyPI wheel provenance receipt |
 | Source and import ownership are unambiguous | Distribution/import identity test, module-origin assertion, static import-boundary and tree-policy tests |
 | Unrelated updates cannot introduce a new version | Exact direct pin; no source override; candidate-only lock diff; prohibition on automatic/broad upgrade promotion |
 | Candidate cannot overwrite last-known-good roots | Fully qualified identity partitions, new candidate roots, immutable prior manifests, mismatch/failure tests |
