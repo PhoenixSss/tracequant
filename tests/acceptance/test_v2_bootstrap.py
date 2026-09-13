@@ -98,6 +98,22 @@ def _nautilus_lock_entry() -> dict[str, Any]:
     return matches[0]
 
 
+def _is_name_main_guard(node: ast.AST) -> bool:
+    if not isinstance(node, ast.If):
+        return False
+    test = node.test
+    if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+        return False
+    if not isinstance(test.ops[0], ast.Eq):
+        return False
+    if not isinstance(test.left, ast.Name) or test.left.id != "__name__":
+        return False
+    if len(test.comparators) != 1:
+        return False
+    comparator = test.comparators[0]
+    return isinstance(comparator, ast.Constant) and comparator.value == "__main__"
+
+
 def _contains_forbidden_nautilus_reference(tree: ast.AST) -> bool:
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -192,7 +208,10 @@ def test_candidate_tree_matches_the_approved_product_and_lck_layout() -> None:
         Path("src/tracequant/__init__.py"),
         Path("src/tracequant/integrations/__init__.py"),
         Path("src/tracequant/integrations/nautilus/__init__.py"),
+        Path("src/tracequant/integrations/nautilus/stage1_backtest.py"),
         Path("src/tracequant/integrations/nautilus/stage1_btcusdt.py"),
+        Path("src/tracequant/integrations/nautilus/strategies/__init__.py"),
+        Path("src/tracequant/integrations/nautilus/strategies/stage1_ma_cross.py"),
         Path("src/tracequant/source_data/__init__.py"),
         Path("src/tracequant/source_data/stage1_btcusdt.py"),
     }
@@ -229,6 +248,7 @@ def test_import_and_generated_path_guards_fail_closed() -> None:
                     ast.ImportFrom,
                 ),
             )
+            and not _is_name_main_guard(node)
         ]
         assert not any(
             isinstance(descendant, ast.Call)

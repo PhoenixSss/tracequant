@@ -8,9 +8,10 @@ The repository also includes the approved Local Control Kernel (LCK) engineering
 tooling under `tools/lck/`; LCK is not part of the TraceQuant product runtime.
 
 Stage 1 currently implements one selected BTCUSDT 1h historical Bar path into
-Nautilus `ParquetDataCatalog`. There is no strategy, backtest workflow, order
-submission, Demo mode, or Live mode in this tree. Live trading is not approved
-and cannot be enabled by configuration.
+Nautilus `ParquetDataCatalog` and one Nautilus-native SMA crossover offline
+backtest. There is no Demo mode or Live mode in this tree. The project is
+`OFFLINE_BACKTEST_ONLY` and `LIVE_NOT_APPROVED`; live trading cannot be enabled
+by configuration.
 
 ## Bootstrap environment
 
@@ -30,6 +31,25 @@ uv run --frozen pytest
 uv run --frozen ruff check .
 uv run --frozen ruff format --check .
 uv run --frozen mypy src tools/lck tests
+```
+
+## Stage 1 offline backtest
+
+`OFFLINE_BACKTEST_ONLY`. `LIVE_NOT_APPROVED`.
+
+Prepare the Task #339 catalog into an absolute external `catalog_root`, then run
+the backtest into an absolute external `run_root`:
+
+```bash
+uv run --frozen python -m tracequant.integrations.nautilus.stage1_backtest \
+  --catalog-root /absolute/catalog-root \
+  --run-root /absolute/run-root
+```
+
+Run the stage 1 backtest acceptance test:
+
+```bash
+uv run --frozen pytest tests/acceptance/test_stage1_backtest.py::test_stage1_native_strategy_completes_offline_backtest
 ```
 
 ## LCK: an engineering capability within TraceQuant
