@@ -163,17 +163,30 @@ Until all applicable gates pass, missing or contradictory evidence preserves
 
 ## External report register
 
-The four completed reports remain outside the repository. Their filenames and
-SHA-256 digests preserve exact source identity without committing audit source
-checkouts, virtual environments, dependency caches, or machine-specific paths.
+The four completed reports are tracked as a bounded set under
+[`docs/research/foundation-selection/`](foundation-selection/). Filenames and
+SHA-256 digests preserve exact source identity. Audit source checkouts, virtual
+environments, dependency caches, and machine-specific paths remain uncommitted.
+Importing these reports does not reopen the completed runtime selection.
 
-| External report | SHA-256 |
+These files are supporting source reports for the already completed foundation
+selection and phased design. They are not a higher authority than later approved
+change. Document authority is layered as follows:
+
+| Layer | Canonical owner | Role |
+| --- | --- | --- |
+| Supporting source reports | [`docs/research/foundation-selection/`](foundation-selection/) | Completed selection and phased-design evidence only |
+| Approved decision | [ADR-0001](../architecture/adr-0001-nautilustrader-primary-runtime.md) | Accepted NautilusTrader primary-runtime decision |
+| Stable architecture | [repository-structure.md](../architecture/repository-structure.md) | Current ownership and layout contract |
+| Current execution scope | Current GitHub Issues | The only in-force implementation boundary |
+
+| Source report | SHA-256 |
 | --- | --- |
-| `TraceQuant 开源技术栈与自研边界深度研究.md` | `5fc90e347c8115301c673f4f98dde6070555332062f40fb5c55451b72ee9b88a` |
-| `TraceQuant Trading Runtime Read-Only Review.md` | `93f607c0adef9f6f27e96f4a835c4e258902ce546c62d433bc4d0a8d74d26179` |
-| `TraceQuant Nautilus 技术栈与自研边界复审.md` | `954edd7b2f7439b261225d0c46266e68fa6bba7ce33ab8feacf50779b8dea89e` |
-| `TraceQuant 分阶段推进计划.md` | `6710bb0505d19971ea46959cf0644cef97720a8a348326e826929d841dd76001` |
+| [`TraceQuant 开源技术栈与自研边界深度研究.md`](<foundation-selection/TraceQuant 开源技术栈与自研边界深度研究.md>) | `5fc90e347c8115301c673f4f98dde6070555332062f40fb5c55451b72ee9b88a` |
+| [`TraceQuant Trading Runtime Read-Only Review.md`](<foundation-selection/TraceQuant Trading Runtime Read-Only Review.md>) | `93f607c0adef9f6f27e96f4a835c4e258902ce546c62d433bc4d0a8d74d26179` |
+| [`TraceQuant Nautilus 技术栈与自研边界复审.md`](<foundation-selection/TraceQuant Nautilus 技术栈与自研边界复审.md>) | `954edd7b2f7439b261225d0c46266e68fa6bba7ce33ab8feacf50779b8dea89e` |
+| [`TraceQuant 分阶段推进计划.md`](<foundation-selection/TraceQuant 分阶段推进计划.md>) | `6710bb0505d19971ea46959cf0644cef97720a8a348326e826929d841dd76001` |
 
-This register identifies the completed inputs; those external files are not
+This register identifies the completed inputs. The tracked reports are not
 runtime dependencies and do not have to be reacquired or rerun for ordinary v2
 design work.
