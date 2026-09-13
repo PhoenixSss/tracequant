@@ -192,6 +192,9 @@ def test_candidate_tree_matches_the_approved_product_and_lck_layout() -> None:
         Path("src/tracequant/__init__.py"),
         Path("src/tracequant/integrations/__init__.py"),
         Path("src/tracequant/integrations/nautilus/__init__.py"),
+        Path("src/tracequant/integrations/nautilus/stage1_btcusdt.py"),
+        Path("src/tracequant/source_data/__init__.py"),
+        Path("src/tracequant/source_data/stage1_btcusdt.py"),
     }
     assert all(
         path.is_relative_to(Path("src/tracequant"))

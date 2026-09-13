@@ -7,9 +7,10 @@ establishes package ownership, and provides mechanical guards for that boundary.
 The repository also includes the approved Local Control Kernel (LCK) engineering
 tooling under `tools/lck/`; LCK is not part of the TraceQuant product runtime.
 
-There is no strategy, data ingestion, backtest workflow, exchange connectivity,
-order submission, Demo mode, or Live mode in this tree. Live trading is not
-approved and cannot be enabled by configuration.
+Stage 1 currently implements one selected BTCUSDT 1h historical Bar path into
+Nautilus `ParquetDataCatalog`. There is no strategy, backtest workflow, order
+submission, Demo mode, or Live mode in this tree. Live trading is not approved
+and cannot be enabled by configuration.
 
 ## Bootstrap environment
 
@@ -184,8 +185,9 @@ the external `nautilus_trader` package are confined to
 environment and is never vendored into this repository.
 
 Persistent raw data, catalogs, caches, runs, evidence, audit data, model
-artifacts, and credentials must use explicit external roots. The bootstrap does
-not implement those roots or silently fall back to paths inside the checkout.
+artifacts, and credentials must use explicit external roots. Stage 1 catalog
+writes require an absolute external `catalog_root` and an identity partition;
+they do not fall back to paths inside the checkout.
 See the [repository structure](docs/architecture/repository-structure.md),
 [runtime decision](docs/architecture/adr-0001-nautilustrader-primary-runtime.md),
 and [dependency policy](docs/guides/nautilustrader-import-and-update-policy.md).
