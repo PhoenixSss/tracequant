@@ -1,21 +1,14 @@
-# ruff: noqa: E402
-
 from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-AGENT_WORKFLOW = str(Path(__file__).parents[3] / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck import (
     cli as lck_cli,
 )
 from tools.lck import (
@@ -37,7 +30,7 @@ from tools.lck import (
     state as lck_state,
 )
 from tools.lck import validation_gates as lck_validation
-from tools.lck.common import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck.common import (
     CommandResult,
     CommandRunner,
     sha256_json,
@@ -348,7 +341,9 @@ def test_ensure_remote_branch_uses_local_exact_remote_oid_without_fetch(
     (repo / "task.txt").write_text("two\n", encoding="utf-8")
     _git(repo, "commit", "-am", "two")
     runner = RecordingGitRunner(repo)
-    resolver = lck_state.LiveStateResolver(repo, runner=runner, repository="owner/repo")
+    resolver = lck_state.LiveStateResolver(
+        repo, runner=cast(Any, runner), repository="owner/repo"
+    )
 
     receipt = lck_effects.EnsureRemoteBranchEffect(resolver).execute(branch)
 
@@ -376,7 +371,9 @@ def test_ensure_remote_branch_fetches_only_when_exact_remote_oid_is_missing(
     _git(other, "push", "-u", "origin", branch)
 
     runner = RecordingGitRunner(repo, force_missing_object=True)
-    resolver = lck_state.LiveStateResolver(repo, runner=runner, repository="owner/repo")
+    resolver = lck_state.LiveStateResolver(
+        repo, runner=cast(Any, runner), repository="owner/repo"
+    )
     receipt = lck_effects.EnsureRemoteBranchEffect(resolver).execute(branch)
 
     assert receipt.action == "fast-forwarded"
@@ -403,7 +400,9 @@ def test_ensure_remote_branch_fetch_failure_has_bounded_classified_diagnostic(
     _git(other, "push", "-u", "origin", branch)
 
     runner = RecordingGitRunner(repo, fail_fetch=True, force_missing_object=True)
-    resolver = lck_state.LiveStateResolver(repo, runner=runner, repository="owner/repo")
+    resolver = lck_state.LiveStateResolver(
+        repo, runner=cast(Any, runner), repository="owner/repo"
+    )
     with pytest.raises(
         lck_models.LckStopError, match="REMOTE_HEAD_FETCH_FAILED"
     ) as error:
@@ -1139,7 +1138,7 @@ def test_delivery_complete_revalidates_clean_committed_head_and_stops_at_review_
         open_pr=final_pr,
         remote_oid=head,
     )
-    remote = _live_state(
+    remote_state = _live_state(
         head=head,
         clean=True,
         project_status="In Progress",
@@ -1157,10 +1156,10 @@ def test_delivery_complete_revalidates_clean_committed_head_and_stops_at_review_
     resolver = SequenceResolver(
         tmp_path,
         runner,
-        [pre, pre, remote, with_pr, with_pr, final],
+        [pre, pre, remote_state, with_pr, with_pr, final],
     )
     commit = StubCommit(dirty=False)
-    remote = StubEffect("ensure_remote_branch", "created")
+    remote_effect = StubEffect("ensure_remote_branch", "created")
     pr = StubEffect("ensure_open_pr", "created")
     status = StubEffect("set_review_status", "updated")
 
@@ -1168,7 +1167,7 @@ def test_delivery_complete_revalidates_clean_committed_head_and_stops_at_review_
         cast(Any, resolver),
         formal_validation=cast(Any, StubValidation()),
         commit_effect=cast(Any, commit),
-        remote_effect=cast(Any, remote),
+        remote_effect=cast(Any, remote_effect),
         pr_effect=cast(Any, pr),
         status_effect=cast(Any, status),
         checks_gate=cast(Any, StubChecks()),
@@ -1184,7 +1183,7 @@ def test_delivery_complete_revalidates_clean_committed_head_and_stops_at_review_
         == "Independent Review must be started separately"
     )
     assert commit.calls == ["current_head_tree", "verify_tree_unchanged"]
-    assert remote.calls == pr.calls == status.calls == 1
+    assert remote_effect.calls == pr.calls == status.calls == 1
     assert not any(
         "review" in " ".join(command).casefold() for command in runner.commands
     )
@@ -1823,7 +1822,9 @@ def test_delivery_failure_receipt_preserves_failed_formal_validation_payload(
     resolver = SequenceResolver(tmp_path, runner, [state])
     handler = lck_delivery.DeliveryCompleter(
         cast(Any, resolver),
-        formal_validation=cast(Any, lck_validation.FormalValidationGate(resolver)),
+        formal_validation=cast(
+            Any, lck_validation.FormalValidationGate(cast(Any, resolver))
+        ),
         commit_effect=cast(Any, StubCommit(dirty=True)),
         remote_effect=cast(Any, StubEffect("ensure_remote_branch", "created")),
         pr_effect=cast(Any, StubEffect("ensure_open_pr", "created")),
@@ -1972,6 +1973,7 @@ def test_delivery_complete_freezes_authority_for_the_operation(tmp_path: Path) -
     )
 
     assert result.status == "READY_FOR_REVIEW"
+    assert result.operation_snapshot.state.issue is not None
     assert result.operation_snapshot.state.issue["body_sha256"] == "e" * 64
     assert result.operation_snapshot.state.git["remote_main_sha"] == SHA
     assert resolver.calls == 1

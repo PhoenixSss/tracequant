@@ -1,25 +1,18 @@
-# ruff: noqa: E402
-
 """Tests for the profile-neutral Issue Form contract parser."""
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).parents[3]
-AGENT_WORKFLOW = str(ROOT / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck.issue_forms import (  # type: ignore[import-not-found]
+from tools.lck.issue_forms import (
     IssueFormTemplateError,
     issue_form_contract_snapshot,
     load_issue_form_template,
 )
 
+ROOT = Path(__file__).parents[3]
 TEMPLATE = """\
 name: Synthetic form
 body:

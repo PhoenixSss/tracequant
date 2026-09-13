@@ -1,15 +1,10 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
-AGENT_WORKFLOW = str(Path(__file__).parents[3] / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck.critical_outcome import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck.critical_outcome import (
     CriticalOutcomeError,
     critical_outcome_snapshot,
     parse_critical_outcome,

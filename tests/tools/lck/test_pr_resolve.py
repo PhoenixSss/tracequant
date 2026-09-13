@@ -1,5 +1,3 @@
-# ruff: noqa: E402, I001
-
 from __future__ import annotations
 
 import json
@@ -10,12 +8,8 @@ from typing import Any
 
 import pytest
 
-AGENT_WORKFLOW = str(Path(__file__).parents[3] / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck.github_prs import PrResolveError, resolve_or_create_pr  # type: ignore[import-not-found]  # noqa: E402
-from tools.lck.common import CommandRunner  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck.common import CommandRunner
+from tools.lck.github_prs import PrResolveError, resolve_or_create_pr
 
 PYTHON = sys.executable
 REPO = "PhoenixSss/tracequant"

@@ -1,36 +1,41 @@
-# ruff: noqa: E402, I001
-
 """Acceptance tests for the implementation-bearing Bug LCK profile."""
 
 from __future__ import annotations
 
 import json
-import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-ROOT = Path(__file__).parents[3]
-AGENT_WORKFLOW = str(ROOT / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck.bug_policy import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck import (
+    closeout as lck_closeout,
+)
+from tools.lck import (
+    eligibility as lck_eligibility,
+)
+from tools.lck import (
+    issue_profiles as lck_profiles,
+)
+from tools.lck import (
+    models as lck_models,
+)
+from tools.lck import (
+    review_workspace as lck_review_workspace,
+)
+from tools.lck.bug_policy import (
     BugPolicyStatus,
     bug_contract_snapshot,
     bug_template_contract,
     is_valid_bug_contract,
 )
-from tools.lck import (  # type: ignore[import-not-found]  # noqa: E402
-    closeout as lck_closeout,
-    eligibility as lck_eligibility,
-    issue_profiles as lck_profiles,
-    models as lck_models,
-    review_workspace as lck_review_workspace,
+from tools.lck.common import CommandResult
+from tools.lck.feature_audit import (
+    _issue_view_with_contract,
 )
-from .support import (  # noqa: E402
+
+from .support import (
     FakeRunner,
     StaticResolver,
     _install_facts,
@@ -40,12 +45,8 @@ from .support import (  # noqa: E402
     _review_identity_value,
     _review_state,
 )
-from tools.lck.common import CommandResult  # type: ignore[import-not-found]  # noqa: E402
-from tools.lck.feature_audit import (  # type: ignore[import-not-found]  # noqa: E402
-    _issue_view_with_contract,
-)
 
-
+ROOT = Path(__file__).parents[3]
 BUG_BODY = """### Observed
 
 The Bug profile is rejected before an implementation workspace can be prepared.
@@ -137,7 +138,7 @@ def test_live_issue_view_carries_the_bug_form_contract() -> None:
 
     warnings: list[dict[str, Any]] = []
     issue, contract = _issue_view_with_contract(
-        Runner(),
+        cast(Any, Runner()),
         "owner/repo",
         159,
         warnings,
@@ -275,7 +276,7 @@ def test_bug_review_stales_when_candidate_head_changes() -> None:
     reviewed = _review_identity_value()
     state = _review_state()
     bug_contract = bug_contract_snapshot(BUG_BODY)
-    issue = dict(state.issue)
+    issue = dict(cast(dict[str, Any], state.issue))
     issue.update(
         {
             "labels": {"items": ["type:bug", "codex:ready"]},
@@ -285,7 +286,7 @@ def test_bug_review_stales_when_candidate_head_changes() -> None:
         }
     )
     assert state.task_contract is not None
-    task_contract = dict(state.task_contract)
+    task_contract = dict(cast(dict[str, Any], state.leaf_contract))
     task_contract.update(
         {
             "body": BUG_BODY,
@@ -303,7 +304,7 @@ def test_bug_review_stales_when_candidate_head_changes() -> None:
     bug_state = replace(
         state,
         issue=issue,
-        task_contract=task_contract,
+        leaf_contract=task_contract,
         target_branch="bug/159-enable-implementation-bearing-bug-workflow",
         open_pr=pr,
     )
@@ -336,7 +337,7 @@ def test_bug_closeout_uses_shared_path_for_merged_bug_branch() -> None:
     state = _review_state()
     bug_branch = "bug/159-enable-implementation-bearing-bug-workflow"
     bug_contract = bug_contract_snapshot(BUG_BODY)
-    issue = dict(state.issue)
+    issue = dict(cast(dict[str, Any], state.issue))
     issue.update(
         {
             "state": "CLOSED",
@@ -364,7 +365,7 @@ def test_bug_closeout_uses_shared_path_for_merged_bug_branch() -> None:
         "mergedAt": "2026-08-23T00:00:00Z",
         "closingIssuesReferences": [{"number": 159}],
     }
-    task_contract = dict(cast(dict[str, Any], state.task_contract))
+    task_contract = dict(cast(dict[str, Any], state.leaf_contract))
     task_contract.update(
         {"body": BUG_BODY, "bug_contract": bug_contract, "critical_outcome": None}
     )
@@ -373,15 +374,15 @@ def test_bug_closeout_uses_shared_path_for_merged_bug_branch() -> None:
         issue=issue,
         relationships=_relationships(issue_type="Bug"),
         target_branch=bug_branch,
-        local_task_branch=bug_branch,
-        local_task_head="a" * 40,
-        remote_task_branch=bug_branch,
-        remote_task_oid="a" * 40,
+        local_issue_branch=bug_branch,
+        local_issue_head="a" * 40,
+        remote_issue_branch=bug_branch,
+        remote_issue_oid="a" * 40,
         open_pr=None,
         merged_pr_numbers=(200,),
         merged=True,
         merged_pr=merged_pr,
-        task_contract=task_contract,
+        leaf_contract=task_contract,
     )
 
     class FixedEffect:
@@ -416,11 +417,13 @@ def test_bug_closeout_uses_shared_path_for_merged_bug_branch() -> None:
             }
 
     result = lck_closeout.CloseoutCompleter(
-        StaticResolver(Path.cwd(), bug_state),
-        main_effect=FixedEffect("synchronize_main", "synchronized"),
-        metadata_effect=FixedEffect("converge_task_metadata", "already-converged"),
-        cleanup_effect=FixedEffect("cleanup_task_refs", "already-clean"),
-        review_store=ReviewStore(),
+        cast(Any, StaticResolver(Path.cwd(), bug_state)),
+        main_effect=cast(Any, FixedEffect("synchronize_main", "synchronized")),
+        metadata_effect=cast(
+            Any, FixedEffect("converge_task_metadata", "already-converged")
+        ),
+        cleanup_effect=cast(Any, FixedEffect("cleanup_task_refs", "already-clean")),
+        review_store=cast(Any, ReviewStore()),
     ).complete(159)
 
     assert result.business_delivery == "COMPLETE"

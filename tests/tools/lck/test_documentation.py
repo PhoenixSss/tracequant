@@ -1,51 +1,49 @@
-# ruff: noqa: E402, I001
-
 """Acceptance tests for the enabled Documentation LCK profile."""
 
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-ROOT = Path(__file__).parents[3]
-AGENT_WORKFLOW = str(ROOT / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck.documentation_policy import (  # type: ignore[import-not-found]  # noqa: E402
-    DocumentationPolicyStatus,
-    DocumentationTemplateError,
-    documentation_template_contract,
-    documentation_contract_snapshot,
-    evaluate_documentation_changes,
-)
-from tools.lck import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck import (
     delivery as lck_delivery,
+)
+from tools.lck import (
+    eligibility as lck_eligibility,
+)
+from tools.lck import (
     issue_profiles as lck_profiles,
 )
-from tools.lck.models import Phase  # type: ignore[import-not-found]  # noqa: E402
-from tools.lck.profile_policies import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck.common import CommandRunner
+from tools.lck.documentation_policy import (
+    DocumentationPolicyStatus,
+    DocumentationTemplateError,
+    documentation_contract_snapshot,
+    documentation_template_contract,
+    evaluate_documentation_changes,
+)
+from tools.lck.feature_audit import (
+    _formal_blockers_gate,
+    _relationship_snapshot,
+)
+from tools.lck.models import Phase
+from tools.lck.profile_policies import (
     DocumentationReclassificationRequired,
     DocumentationValidationGate,
 )
-from .support import (  # noqa: E402
+
+from .support import (
     FakeRunner,
     _install_facts,
     _issue,
     _relationships,
     _resolver,
 )
-from tools.lck.feature_audit import (  # type: ignore[import-not-found]  # noqa: E402
-    _formal_blockers_gate,
-    _relationship_snapshot,
-)
-from tools.lck.common import CommandRunner  # type: ignore[import-not-found]  # noqa: E402
 
-
+ROOT = Path(__file__).parents[3]
 DOCUMENTATION_BODY = """### Documentation Goal
 
 Explain the supported contract.
@@ -96,7 +94,7 @@ def test_documentation_profile_uses_shared_lifecycle_without_critical_outcome(
     # The profile resolver and eligibility are the same shared controller
     # entrypoints used by Task; only the profile-specific gate is different.
     state = _resolver(fake).resolve(159)
-    decision = lck_delivery.PhaseEligibilityResolver().resolve(
+    decision = lck_eligibility.PhaseEligibilityResolver().resolve(
         state, Phase.DELIVERY_PREPARE
     )
     assert decision.eligible
@@ -213,7 +211,7 @@ def test_live_relationship_normalization_preserves_documentation_blocker_contrac
                 },
             )()
 
-    relationships = _relationship_snapshot(Runner(), "owner/repo", 300, [])
+    relationships = _relationship_snapshot(cast(Any, Runner()), "owner/repo", 300, [])
     blocker = relationships["blocked_by"]["items"][0]
 
     assert blocker["documentation_contract"] == documentation_contract_snapshot(

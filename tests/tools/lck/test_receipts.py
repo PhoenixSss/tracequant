@@ -1,9 +1,6 @@
-# ruff: noqa: E402, I001
-
 from __future__ import annotations
 
 import json
-import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import (
@@ -13,26 +10,39 @@ from typing import (
 
 import pytest
 
-AGENT_WORKFLOW = str(Path(__file__).parents[3] / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck import (
     cli as lck_cli,
+)
+from tools.lck import (
     closeout as lck_closeout,
+)
+from tools.lck import (
     delivery as lck_delivery,
+)
+from tools.lck import (
     eligibility as lck_eligibility,
+)
+from tools.lck import (
     models as lck_models,
+)
+from tools.lck import (
     receipts as lck_receipts,
+)
+from tools.lck import (
     remediation as lck_remediation,
+)
+from tools.lck import (
     review as lck_review,
+)
+from tools.lck import (
     review_workspace as lck_review_workspace,
 )
-from .support import (  # noqa: E402
+
+from .support import (
+    SHA,
     FakeReviewChecks,
     FakeReviewWorkspace,
     StaticResolver,
-    SHA,
     _review_guard,
     _review_identity_value,
     _review_state,
@@ -41,6 +51,7 @@ from .support import (  # noqa: E402
 
 def test_closeout_failure_receipt_preserves_completed_effects(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = replace(
         _review_state(),
@@ -79,8 +90,10 @@ def test_closeout_failure_receipt_preserves_completed_effects(
         main_effect=cast(Any, Main()),
         metadata_effect=cast(Any, FailingMetadata()),
     )
-    handler._validate_merged_identity = lambda _state: (SHA, "b" * 40)
-    handler._validate_reviewed_identity = lambda _state, _pr: {}
+    monkeypatch.setattr(
+        handler, "_validate_merged_identity", lambda _state: (SHA, "b" * 40)
+    )
+    monkeypatch.setattr(handler, "_validate_reviewed_identity", lambda _state, _pr: {})
 
     with pytest.raises(lck_models.LckStopError, match="metadata convergence failed"):
         handler.complete(159)

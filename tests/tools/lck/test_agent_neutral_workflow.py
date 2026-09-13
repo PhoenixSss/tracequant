@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
 from tools.lck.skill_audit import SKILLS, audit
 
@@ -48,8 +49,8 @@ def test_skill_audit_accepts_the_current_layout() -> None:
     result, returncode = audit(ROOT)
     assert returncode == 0, result["violations"]
     assert result["status"] == "pass"
-    assert set(result["canonical_skills"]) == set(SKILLS)
-    assert set(result["adapters"]) == set(SKILLS)
+    assert set(cast(list[Any], result["canonical_skills"])) == set(SKILLS)
+    assert set(cast(list[Any], result["adapters"])) == set(SKILLS)
 
 
 def test_agent_skills_guide_is_navigation_not_product_documentation() -> None:

@@ -1,39 +1,34 @@
-# ruff: noqa: E402, I001
-
 """Regression coverage for the formal typed-profile LCK architecture."""
 
 from __future__ import annotations
 
 import ast
-import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
-ROOT = Path(__file__).parents[3]
-AGENT_WORKFLOW = str(ROOT / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck import issue_forms as issue_form_contract  # type: ignore[import-not-found]  # noqa: E402
-from tools.lck.bug_policy import bug_contract_snapshot  # type: ignore[import-not-found]  # noqa: E402
-from tools.lck.documentation_policy import (  # type: ignore[import-not-found]  # noqa: E402
-    documentation_contract_snapshot,
-)
-from tools.lck import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck import (
     eligibility as lck_eligibility,
+)
+from tools.lck import issue_forms as issue_form_contract
+from tools.lck import (
     models as lck_models,
 )
-from tools.lck.issue_profiles import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck.bug_policy import bug_contract_snapshot
+from tools.lck.documentation_policy import (
+    documentation_contract_snapshot,
+)
+from tools.lck.issue_profiles import (
     BUG_PROFILE,
     DOCUMENTATION_PROFILE,
     TASK_PROFILE,
     LeafIssueWorkflowProfile,
 )
-from tools.lck.profile_policies import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck.markdown_sections import extract_markdown_sections
+from tools.lck.profile_policies import (
     DEFAULT_PROFILE_POLICY_REGISTRY,
     PolicyBlocker,
     PolicyContext,
@@ -46,8 +41,11 @@ from tools.lck.profile_policies import (  # type: ignore[import-not-found]  # no
     validate_profile_contract,
     validate_profile_review,
 )
-from tools.lck.research_policy import research_contract_snapshot  # type: ignore[import-not-found]  # noqa: E402
-from .support import _review_state, _task_contract  # noqa: E402
+from tools.lck.research_policy import research_contract_snapshot
+
+from .support import _review_state, _task_contract
+
+ROOT = Path(__file__).parents[3]
 
 
 def _imported_modules(tree: ast.AST) -> set[str]:
@@ -153,7 +151,7 @@ def test_typed_policies_share_one_issue_form_parser(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, ...]] = []
-    original = issue_form_contract.extract_markdown_sections
+    original = extract_markdown_sections
 
     def observe(body: str, *, canonical_names: Any = None) -> Any:
         calls.append(tuple(canonical_names or ()))
@@ -330,7 +328,7 @@ def test_registry_contains_only_formal_profiles_and_preserves_extension_seam() -
     with pytest.raises(ProfilePolicyError, match="not registered"):
         DEFAULT_PROFILE_POLICY_REGISTRY.resolve("type:retired")
     with pytest.raises(TypeError):
-        registry.policies["other"] = extension
+        cast(Any, registry.policies)["other"] = extension
 
 
 def test_generic_kernel_models_have_no_profile_specific_fixed_slots() -> None:
@@ -367,7 +365,7 @@ def test_kernel_snapshots_are_frozen_at_the_model_boundary() -> None:
         ),
     )
     for model, snapshot, field_name, replacement in snapshots:
-        assert model.__dataclass_params__.frozen, model
+        assert cast(Any, model).__dataclass_params__.frozen, model
         with pytest.raises(FrozenInstanceError):
             setattr(snapshot, field_name, replacement)
 

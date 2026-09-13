@@ -1,30 +1,23 @@
-# ruff: noqa: E402
-
 """Regression tests for shared typed Issue Markdown section extraction."""
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).parents[3]
-AGENT_WORKFLOW = str(ROOT / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck.bug_policy import bug_contract_snapshot  # type: ignore[import-not-found]
-from tools.lck.documentation_policy import (  # type: ignore[import-not-found]
+from tools.lck.bug_policy import bug_contract_snapshot
+from tools.lck.documentation_policy import (
     documentation_contract_snapshot,
 )
-from tools.lck.markdown_sections import (  # type: ignore[import-not-found]
+from tools.lck.markdown_sections import (
     extract_markdown_sections,
 )
 from tools.lck.research_policy import (
-    research_contract_snapshot,  # type: ignore[import-not-found]
+    research_contract_snapshot,
 )
 
+ROOT = Path(__file__).parents[3]
 SECTION_BODIES = {
     "bug": (
         "Observed",

@@ -1,29 +1,24 @@
-# ruff: noqa: E402, I001
-
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-AGENT_WORKFLOW = str(Path(__file__).parents[3] / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck import (
     models as lck_models,
+)
+from tools.lck import (
     review_workspace as lck_review_workspace,
+)
+from tools.lck import (
     state as lck_state,
 )
-
-from tools.lck.common import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck.common import (
     CommandResult,
     sha256_json,
 )
-
 
 SHA = "a" * 40
 

@@ -1,8 +1,5 @@
-# ruff: noqa: E402, I001
-
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import (
     Any,
@@ -11,36 +8,39 @@ from typing import (
 
 import pytest
 
-AGENT_WORKFLOW = str(Path(__file__).parents[3] / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck import (
     delivery as lck_delivery,
+)
+from tools.lck import (
     eligibility as lck_eligibility,
+)
+from tools.lck import (
     models as lck_models,
+)
+from tools.lck import (
     state as lck_state,
 )
-from tools.lck.github_prs import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck.common import (
+    CommandResult,
+)
+from tools.lck.feature_audit import (
+    _git_snapshot as workflow_git_snapshot,
+)
+from tools.lck.github_prs import (
     PrResolveError,
     list_matching_prs,
 )
-from tools.lck.common import (  # type: ignore[import-not-found]  # noqa: E402
-    CommandResult,
-)
-from tools.lck.feature_audit import (  # type: ignore[import-not-found]  # noqa: E402
-    _git_snapshot as workflow_git_snapshot,
-)
-from .support import (  # noqa: E402
-    FakeRunner,
+
+from .support import (
     SHA,
+    FakeRunner,
     _git_snapshot,
     _install_facts,
     _issue,
     _open_pr,
     _relationships,
-    _review_state,
     _resolver,
+    _review_state,
     _task_contract,
 )
 

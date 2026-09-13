@@ -1,36 +1,54 @@
-# ruff: noqa: E402, I001
-
 """Acceptance tests for the repository-backed Research LCK profile."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-ROOT = Path(__file__).parents[3]
-AGENT_WORKFLOW = str(ROOT / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck import (
     closeout as lck_closeout,
+)
+from tools.lck import (
     delivery as lck_delivery,
-    eligibility as lck_eligibility,
+)
+from tools.lck import (
     effects as lck_effects,
+)
+from tools.lck import (
+    eligibility as lck_eligibility,
+)
+from tools.lck import (
     issue_profiles,
+)
+from tools.lck import (
     models as lck_models,
+)
+from tools.lck import (
     review as lck_review,
+)
+from tools.lck import (
     review_workspace as lck_review_workspace,
+)
+from tools.lck import (
     shared_facts as lck_shared_facts,
 )
-from .support import FakeReviewWorkspace  # noqa: E402
-from tools.lck.research_policy import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck.common import CommandResult, sha256_json
+from tools.lck.feature_audit import (
+    _formal_blockers_gate,
+    _issue_view_with_contract,
+    _relationship_snapshot,
+)
+from tools.lck.profile_policies import (
+    ProfileEffectDescriptor,
+    ResearchValidationGate,
+    validate_profile_completion,
+)
+from tools.lck.research_policy import (
     RESEARCH_POLICY_ID,
     ResearchOutcome,
     ResearchPolicyError,
@@ -39,24 +57,15 @@ from tools.lck.research_policy import (  # type: ignore[import-not-found]  # noq
     decision_contract_snapshot,
     evaluate_research_changes,
     is_valid_research_contract,
+    require_typed_research_outcome,
     research_artifact_binding,
     research_contract_snapshot,
     research_template_contract,
-    require_typed_research_outcome,
 )
-from tools.lck.profile_policies import (  # type: ignore[import-not-found]  # noqa: E402
-    ProfileEffectDescriptor,
-    ResearchValidationGate,
-    validate_profile_completion,
-)
-from tools.lck.feature_audit import (  # type: ignore[import-not-found]  # noqa: E402
-    _formal_blockers_gate,
-    _issue_view_with_contract,
-    _relationship_snapshot,
-)
-from tools.lck.common import CommandResult, sha256_json  # type: ignore[import-not-found]  # noqa: E402
 
+from .support import FakeReviewWorkspace
 
+ROOT = Path(__file__).parents[3]
 SHA = "a" * 40
 DIGEST = "b" * 64
 RESEARCH_BODY = """### Question / Decision Needed
@@ -216,7 +225,7 @@ def test_live_research_issue_contract_uses_research_form() -> None:
 
     warnings: list[dict[str, Any]] = []
     issue, contract = _issue_view_with_contract(
-        Runner(),
+        cast(Any, Runner()),
         "owner/repo",
         199,
         warnings,
@@ -318,7 +327,7 @@ def test_root_projectv2_graphql_error_is_incomplete() -> None:
 
     warnings: list[dict[str, Any]] = []
     project_items = lck_shared_facts._issue_project_items_snapshot(
-        Runner(), "owner/repo", 199, warnings
+        cast(Any, Runner()), "owner/repo", 199, warnings
     )
 
     assert project_items["complete"] is False
@@ -611,6 +620,7 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
         ),
     )
     assert delivery_result.status == "READY_FOR_REVIEW"
+    assert delivery_result.research_artifact is not None
     assert delivery_result.research_artifact["status"] == "pass"
 
     binding = research_artifact_binding(
@@ -709,8 +719,12 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
         cleanup_effect=cast(Any, FixedEffect("cleanup_task_refs", "already-clean")),
         review_store=review_store,
     )
-    closeout._validate_merged_identity = lambda _state: (head_sha, merge_sha)
-    closeout._validate_reviewed_identity = lambda _state, _pr: review_record
+    monkeypatch.setattr(
+        closeout, "_validate_merged_identity", lambda _state: (head_sha, merge_sha)
+    )
+    monkeypatch.setattr(
+        closeout, "_validate_reviewed_identity", lambda _state, _pr: review_record
+    )
     closeout_result = closeout.complete(199)
     assert closeout_result.status == "BUSINESS_DELIVERY_COMPLETE"
     assert closeout_result.business_delivery == "COMPLETE"
@@ -824,6 +838,7 @@ def test_research_completion_accepts_typed_outcomes_and_rejects_artifact_diverge
 
 def test_closeout_rejects_missing_review_artifact_before_any_effect(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     body_sha = sha256_json({"body": RESEARCH_BODY})
     issue = {
@@ -881,16 +896,22 @@ def test_closeout_rejects_missing_review_artifact_before_any_effect(
         eligibility=cast(Any, Eligible()),
         main_effect=cast(Any, ForbiddenEffect()),
     )
-    handler._validate_merged_identity = lambda _state: ("2" * 40, "3" * 40)
-    handler._validate_reviewed_identity = lambda _state, _pr: {
-        "identity": {
-            "task_number": 199,
-            "pr_number": 299,
-            "base_sha": "1" * 40,
-            "head_sha": "2" * 40,
-            "task_body_sha256": body_sha,
-        }
-    }
+    monkeypatch.setattr(
+        handler, "_validate_merged_identity", lambda _state: ("2" * 40, "3" * 40)
+    )
+    monkeypatch.setattr(
+        handler,
+        "_validate_reviewed_identity",
+        lambda _state, _pr: {
+            "identity": {
+                "task_number": 199,
+                "pr_number": 299,
+                "base_sha": "1" * 40,
+                "head_sha": "2" * 40,
+                "task_body_sha256": body_sha,
+            }
+        },
+    )
 
     with pytest.raises(
         lck_models.LckStopError,
@@ -1015,7 +1036,7 @@ def test_research_blocker_uses_only_the_canonical_project_outcome() -> None:
                 "",
             )
 
-    relationships = _relationship_snapshot(Runner(), "owner/repo", 300, [])
+    relationships = _relationship_snapshot(cast(Any, Runner()), "owner/repo", 300, [])
     blocker = relationships["blocked_by"]["items"][0]
 
     assert blocker["research_outcome"] == "DO NOT IMPLEMENT"
@@ -1102,7 +1123,7 @@ def test_project_field_fresh_read_rejects_incomplete_or_wrong_identity(
 
     assert (
         lck_shared_facts.query_project_single_select_field(
-            Runner(),
+            cast(Any, Runner()),
             repository="owner/repo",
             issue_number=199,
             project_number=1,
@@ -1123,7 +1144,7 @@ def test_project_field_fresh_read_rejects_graphql_partial_error() -> None:
 
     assert (
         lck_shared_facts.query_project_single_select_field(
-            Runner(),
+            cast(Any, Runner()),
             repository="owner/repo",
             issue_number=199,
             project_number=1,

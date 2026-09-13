@@ -1,9 +1,6 @@
-# ruff: noqa: E402, I001
-
 from __future__ import annotations
 
 import json
-import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,17 +8,18 @@ from typing import Any, cast
 
 import pytest
 
-AGENT_WORKFLOW = str(Path(__file__).parents[3] / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck import (
     closeout as lck_closeout,
+)
+from tools.lck import (
     models as lck_models,
+)
+from tools.lck import (
     review as lck_review,
+)
+from tools.lck import (
     state as lck_state,
 )
-
 
 SHA = "a" * 40
 MERGE_SHA = "b" * 40
@@ -458,8 +456,8 @@ def test_closeout_rejects_stale_task_contract_identity() -> None:
     state = _state()
     stale = replace(
         state,
-        task_contract={
-            **cast(dict[str, Any], state.task_contract),
+        leaf_contract={
+            **cast(dict[str, Any], state.leaf_contract),
             "body_sha256": "f" * 64,
         },
     )

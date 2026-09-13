@@ -1,11 +1,8 @@
-# ruff: noqa: E402, I001
-
 from __future__ import annotations
 
 import json
 import shutil
 import subprocess
-import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -16,33 +13,44 @@ from typing import (
 
 import pytest
 
-AGENT_WORKFLOW = str(Path(__file__).parents[3] / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck import (
     eligibility as lck_eligibility,
+)
+from tools.lck import (
     models as lck_models,
+)
+from tools.lck import (
     receipts as lck_receipts,
+)
+from tools.lck import (
     review as lck_review,
+)
+from tools.lck import (
     review_workspace as lck_review_workspace,
+)
+from tools.lck import (
     state as lck_state,
+)
+from tools.lck import (
     structured_review_instructions as lck_structured_review_instructions,
+)
+from tools.lck import (
     validation_gates as lck_validation,
 )
-from tools.lck.common import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck.common import (
     CommandResult,
     CommandRunner,
     print_json,
 )
-from .support import (  # noqa: E402
-    FakeRunner,
+
+from .support import (
+    SHA,
     FakeReviewChecks,
     FakeReviewValidation,
     FakeReviewWorkspace,
+    FakeRunner,
     FakeWorkspaceRunner,
     StaticResolver,
-    SHA,
     _install_facts,
     _issue,
     _open_pr,
@@ -166,7 +174,7 @@ def test_standard_review_path_provides_canonical_structured_review_instructions(
     def provide_instructions() -> dict[str, Any]:
         nonlocal calls
         calls += 1
-        return cast(dict[str, Any], original_provider())
+        return original_provider()
 
     monkeypatch.setattr(
         owner, "canonical_structured_review_instructions", provide_instructions
@@ -290,7 +298,7 @@ def test_review_prepare_freezes_authority_before_validation(
     class DraftingValidation(FakeReviewValidation):
         def run(self, _root: Path, _base: str, _head: str) -> dict[str, Any]:
             assert state.open_pr is not None
-            state.open_pr["isDraft"] = True
+            cast(dict[str, Any], state.open_pr)["isDraft"] = True
             return super().run(_root, _base, _head)
 
     workspace = FakeReviewWorkspace(tmp_path / "review-root")

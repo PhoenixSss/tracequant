@@ -1,26 +1,21 @@
-# ruff: noqa: E402, I001
-
 """Acceptance tests for the canonical LCK leaf Issue profile resolver."""
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-ROOT = Path(__file__).parents[3]
-AGENT_WORKFLOW = str(ROOT / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck.models import Phase  # type: ignore[import-not-found]  # noqa: E402
-from tools.lck import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck import (
     eligibility as lck_eligibility,
+)
+from tools.lck import (
     issue_profiles as lck_profiles,
 )
-from .support import (  # noqa: E402
+from tools.lck.models import Phase
+
+from .support import (
     FakeRunner,
     _install_facts,
     _issue,
@@ -28,6 +23,8 @@ from .support import (  # noqa: E402
     _resolver,
     _review_state,
 )
+
+ROOT = Path(__file__).parents[3]
 
 
 def _issue_with_labels(*labels: str, title: str = "ordinary title") -> dict[str, Any]:
@@ -112,7 +109,7 @@ The current profile resolver reports type:bug as disabled.
 
 - The Bug profile is eligible without a fabricated Critical Outcome.
 """
-    from tools.lck.bug_policy import bug_contract_snapshot  # type: ignore[import-not-found]
+    from tools.lck.bug_policy import bug_contract_snapshot
 
     issue["bug_contract"] = bug_contract_snapshot(issue["body"])
     _install_facts(

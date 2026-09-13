@@ -64,15 +64,15 @@ The former mixed `tests/tools/` suite is now isolated under `tests/tools/lck/`:
 
 - `test_state.py` — live-state, Fact Profiles, resolver query contracts.
 - `test_issue_profiles.py` — canonical leaf Issue type/profile resolution.
-- `test_lck_bug.py` — Bug defect contract and shared lifecycle boundaries.
-- `test_lck_prepare.py` — prepare/admission and eligibility behavior.
-- `test_lck_review.py` — Review workspace, Review Complete, Merge Preflight.
-- `test_lck_remediation.py` — remediation sessions and partial-effect recovery.
-- `test_lck_receipts.py` — Agent View / Audit Receipt and failure evidence.
-- `test_lck_closeout.py` plus `test_lck_closeout_additional.py` — Closeout.
-- `test_lck_delivery.py` — Delivery completion and bounded effects.
-- `test_lck_profile_architecture.py` — injectable policy and evidence envelope.
-- `test_lck_structure.py` — facade/module dependency guardrails.
+- `test_bug.py` — Bug defect contract and shared lifecycle boundaries.
+- `test_prepare.py` — prepare/admission and eligibility behavior.
+- `test_review.py` — Review workspace, Review Complete, Merge Preflight.
+- `test_remediation.py` — remediation sessions and partial-effect recovery.
+- `test_receipts.py` — Agent View / Audit Receipt and failure evidence.
+- `test_closeout.py` plus `test_closeout_additional.py` — Closeout.
+- `test_delivery.py` — Delivery completion and bounded effects.
+- `test_profile_architecture.py` — injectable policy and evidence envelope.
+- `test_structure.py` — facade/module dependency guardrails.
 
 `tests/tools/lck/test_acceptance.py` owns the current repository-layout Critical
 Outcome verification node.

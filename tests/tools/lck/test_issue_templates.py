@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
-import yaml  # type: ignore[import-untyped]  # PyYAML is an existing test dependency.
+import yaml
 
 ROOT = Path(__file__).parents[3]
 

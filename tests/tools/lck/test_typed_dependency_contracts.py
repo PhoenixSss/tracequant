@@ -1,35 +1,29 @@
-# ruff: noqa: E402, I001
-
 """Regression coverage for complete typed dependency contracts."""
 
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-ROOT = Path(__file__).parents[3]
-AGENT_WORKFLOW = str(ROOT / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck import eligibility, models, shared_facts  # type: ignore[import-not-found]  # noqa: E402
-from tools.lck.issue_profiles import resolve_leaf_issue_profile  # type: ignore[import-not-found]  # noqa: E402
-from tools.lck.profile_policies import validate_profile_contract  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck import eligibility, models, shared_facts
+from tools.lck.common import CommandResult, bounded_list, sha256_json
+from tools.lck.feature_audit import (
+    _formal_blockers_gate as audit_formal_blockers_gate,
+)
+from tools.lck.feature_audit import (
+    _relationship_snapshot as audit_relationship_snapshot,
+)
+from tools.lck.issue_profiles import resolve_leaf_issue_profile
+from tools.lck.profile_policies import validate_profile_contract
 from tools.lck.research_policy import (
     decision_contract_snapshot,
     research_contract_snapshot,
-)  # type: ignore[import-not-found]  # noqa: E402
-from tools.lck.common import CommandResult, bounded_list, sha256_json  # type: ignore[import-not-found]  # noqa: E402
-from tools.lck.feature_audit import (  # type: ignore[import-not-found]  # noqa: E402
-    _formal_blockers_gate as audit_formal_blockers_gate,
-    _relationship_snapshot as audit_relationship_snapshot,
 )
 
-
+ROOT = Path(__file__).parents[3]
 BUG_BODY = (
     """### Observed
 
@@ -455,7 +449,7 @@ def test_feature_audit_parses_complete_typed_dependency_contract(
         project_items=DEPENDENCY_PROJECT if label == "type:research" else None,
     )
     relationships = audit_relationship_snapshot(
-        _GraphQLRunner(_relationship_payload(raw)), "owner/repo", 300, []
+        cast(Any, _GraphQLRunner(_relationship_payload(raw))), "owner/repo", 300, []
     )
     dependency = relationships["blocked_by"]["items"][0]
     assert len(dependency["body"]) < len(body)

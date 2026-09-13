@@ -1,8 +1,5 @@
-# ruff: noqa: E402, I001
-
 from __future__ import annotations
 
-import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import (
@@ -12,28 +9,41 @@ from typing import (
 
 import pytest
 
-AGENT_WORKFLOW = str(Path(__file__).parents[3] / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck import (
     delivery as lck_delivery,
+)
+from tools.lck import (
     effects as lck_effects,
+)
+from tools.lck import (
     eligibility as lck_eligibility,
+)
+from tools.lck import (
     models as lck_models,
+)
+from tools.lck import (
     profile_policies as lck_profile_policies,
+)
+from tools.lck import (
     remediation as lck_remediation,
+)
+from tools.lck import (
     review as lck_review,
+)
+from tools.lck import (
     review_workspace as lck_review_workspace,
+)
+from tools.lck import (
     validation_gates as lck_validation,
 )
-from .support import (  # noqa: E402
-    FakeRunner,
+
+from .support import (
+    SHA,
     FakeReviewChecks,
     FakeReviewWorkspace,
+    FakeRunner,
     OwnedCandidateRunner,
     StaticResolver,
-    SHA,
     _install_facts,
     _issue,
     _open_pr,
@@ -743,7 +753,7 @@ def test_remediation_complete_recovers_exact_owned_partial_effect_candidate(
     partial = replace(
         initial,
         git={**initial.git, "head_sha": candidate_head},
-        local_task_head=candidate_head,
+        local_issue_head=candidate_head,
     )
     resolver = cast(Any, StaticResolver(tmp_path, partial))
     runner = OwnedCandidateRunner(head_sha=candidate_head, tree_oid=candidate_tree)
@@ -811,7 +821,7 @@ def test_real_delivery_completer_rejects_unowned_local_ahead_remediation_candida
     state = replace(
         state,
         git={**state.git, "head_sha": candidate_head},
-        local_task_head=candidate_head,
+        local_issue_head=candidate_head,
     )
     resolver = cast(Any, StaticResolver(tmp_path, state))
     snapshot = lck_models.OperationSnapshot(
@@ -846,7 +856,7 @@ def test_remediation_owned_candidate_recovery_rejects_replaced_local_head(
     state = replace(
         state,
         git={**state.git, "head_sha": replacement_head},
-        local_task_head=replacement_head,
+        local_issue_head=replacement_head,
     )
     resolver = cast(Any, StaticResolver(tmp_path, state))
     store = lck_review_workspace.ReviewInvocationStore(tmp_path)
@@ -875,8 +885,8 @@ def test_remediation_owned_candidate_recovery_rejects_moved_remote_or_pr(
     state = replace(
         original,
         git={**original.git, "head_sha": candidate_head},
-        local_task_head=candidate_head,
-        remote_task_oid=moved_head if moved == "remote" else SHA,
+        local_issue_head=candidate_head,
+        remote_issue_oid=moved_head if moved == "remote" else SHA,
         open_pr=pr,
     )
     resolver = cast(Any, StaticResolver(tmp_path, state))

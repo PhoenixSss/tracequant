@@ -1,8 +1,5 @@
-# ruff: noqa: E402, I001
-
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import (
     Any,
@@ -11,23 +8,24 @@ from typing import (
 
 import pytest
 
-AGENT_WORKFLOW = str(Path(__file__).parents[3] / "tools" / "agent_workflow")
-if AGENT_WORKFLOW not in sys.path:
-    sys.path.insert(0, AGENT_WORKFLOW)
-
-from tools.lck import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck import (
     closeout as lck_closeout,
+)
+from tools.lck import (
     eligibility as lck_eligibility,
+)
+from tools.lck import (
     models as lck_models,
 )
-from tools.lck.github_prs import list_matching_prs  # type: ignore[import-not-found]  # noqa: E402
-from tools.lck.common import (  # type: ignore[import-not-found]  # noqa: E402
+from tools.lck.common import (
     CommandResult,
 )
-from .support import (  # noqa: E402
+from tools.lck.github_prs import list_matching_prs
+
+from .support import (
+    SHA,
     FakeRunner,
     StaticResolver,
-    SHA,
     _install_facts,
     _issue,
     _open_pr,
