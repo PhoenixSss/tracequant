@@ -53,6 +53,25 @@ def _nautilus_lock_entry() -> dict[str, Any]:
     return matches[0]
 
 
+def _contains_forbidden_nautilus_reference(tree: ast.AST) -> bool:
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = (
+                [alias.name for alias in node.names]
+                if isinstance(node, ast.Import)
+                else [node.module or ""]
+            )
+            if any(name.startswith("nautilus_trader") for name in names):
+                return True
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value.startswith("nautilus_trader")
+        ):
+            return True
+    return False
+
+
 def test_clean_bootstrap_uses_pinned_external_nautilus() -> None:
     pyproject = _toml(REPOSITORY_ROOT / "pyproject.toml")
     uv_policy = _toml(REPOSITORY_ROOT / "uv.toml")
@@ -135,21 +154,7 @@ def test_import_and_generated_path_guards_fail_closed() -> None:
             continue
         tree = ast.parse((REPOSITORY_ROOT / relative_path).read_text(encoding="utf-8"))
         if not relative_path.is_relative_to(allowed_nautilus_import_root):
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.Import, ast.ImportFrom)):
-                    names = (
-                        [alias.name for alias in node.names]
-                        if isinstance(node, ast.Import)
-                        else [node.module or ""]
-                    )
-                    assert not any(name.startswith("nautilus_trader") for name in names)
-                if isinstance(node, ast.Call):
-                    assert not any(
-                        isinstance(argument, ast.Constant)
-                        and isinstance(argument.value, str)
-                        and argument.value.startswith("nautilus_trader")
-                        for argument in node.args
-                    )
+            assert not _contains_forbidden_nautilus_reference(tree)
 
         module_statements = [
             node
@@ -208,3 +213,16 @@ def test_import_and_generated_path_guards_fail_closed() -> None:
         }
         & ignore_entries
     )
+
+
+def test_import_boundary_guard_rejects_direct_and_dynamic_references() -> None:
+    prohibited_sources = (
+        "import nautilus_trader",
+        "from nautilus_trader.model import Order",
+        'import_module("nautilus_trader")',
+        'import_module(name="nautilus_trader")',
+        'UPSTREAM_PACKAGE = "nautilus_trader"\nimport_module(UPSTREAM_PACKAGE)',
+    )
+
+    for source in prohibited_sources:
+        assert _contains_forbidden_nautilus_reference(ast.parse(source))
