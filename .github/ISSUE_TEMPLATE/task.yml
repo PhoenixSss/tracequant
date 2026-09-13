@@ -11,7 +11,7 @@ body:
         Task 是主要 coding-agent execution contract，遵循 Minimum sufficient specification。
         默认目标是 1 Task ≈ 1 PR ≈ 1 main squash commit。
         Parent、blocked-by、Status、Priority、Size 使用 GitHub native metadata；不要在正文复制 repository-wide rules、标准 CI 或 Git/PR 流程。
-        Task 承接已批准的有限成果；纯拆细不新增义务，新增范围先按 issue-authoring.md 处理。只读取本项需要的合同，不全文加载上游设计。
+        Task 承接已批准的有限成果；纯拆细不新增义务，新增范围必须先经单独明确批准。只读取本项需要的合同，不全文加载上游设计。
 
   - type: textarea
     id: objective

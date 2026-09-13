@@ -11,7 +11,7 @@ body:
         Feature 负责描述 WHAT：系统应具备什么行为或能力，而不是逐文件 HOW。
         Parent 使用 GitHub Parent/Sub-issues，正式阻塞使用 blocked-by/blocking；不要在正文重复 Project metadata、标准验证或 Git/PR 流程。
         如果一个能力只有一个主要实现目标且一个 PR 即可完成，应优先直接创建 Task。
-        实施前列全已批准的有限成果及其工作分解；新增交付义务按 issue-authoring.md 处理，不能靠继续创建 Task 扩大范围。
+        实施前列全已批准的有限成果及其工作分解；新增交付义务必须先经单独明确批准，不能靠继续创建 Task 扩大范围。
 
   - type: textarea
     id: capability

@@ -1,147 +1,52 @@
-# TraceQuant technical baseline
+# TraceQuant v2 technical baseline
 
-- **Version:** 1.2
-- **Date:** 2026-09-03
-- **Repository:** `PhoenixSss/tracequant`
-- **Status:** current implementation facts plus explicitly deferred boundaries
+The current implementation is a clean, non-production bootstrap. The runtime
+surface contains only the `tracequant` namespace and a minimal explicit identity
+seam for the installed NautilusTrader distribution.
 
-This document separates what is implemented on the current `main` line from
-the architecture that later Issues may introduce. The current code and tests,
-`pyproject.toml`, `uv.lock`, `.env.example`, and CI workflow are the authority
-for implemented behavior. The [project roadmap](../planning/project-roadmap.md)
-and research reports describe plans or historical reasoning; they do not turn
-planned systems into available capabilities.
+## Environment
 
-## 1. Current implementation
+- CPython: `3.13` (`>=3.13,<3.14`)
+- uv: `0.12.1`
+- build backend: `uv_build>=0.12.1,<0.13.0`
+- runtime dependency: exact official PyPI distribution
+  `nautilus-trader==2.0.0rc4`
+- upstream release: `v2.0.0rc4`, commit
+  `a0400251110653b6d8ae6a9b5b89c4543fa85a2d`
+- source-build policy: `uv.toml` rejects builds of `nautilus-trader`
 
-The repository currently implements one dependency-light bootstrap package:
+`uv.lock`, `pyproject.toml`, `uv.toml`, `.python-version`, and CI are the
+mechanical authority for the installed environment. There is no Git, path,
+editable, workspace, private-index, nightly, fork, or source-checkout override
+for NautilusTrader.
 
-```text
-Python standard library
-├── tracequant.config
-├── tracequant.core.time
-└── tracequant.logging ──> config + core.time
+## Implemented surface
 
-tracequant.domain.models ──> tracequant.core.time
+`tracequant.integrations.nautilus` owns three explicit queries:
 
-tracequant.data.public_history ──> tracequant.domain
-tracequant.data.raw_store ──────> public_history + core.time + Polars
-tracequant.data.binance_contract_kline ──> public_history + raw_store
-                                      └──> domain + Polars + stdlib transport/archive
+- installed distribution version;
+- deferred import of the `nautilus_trader` namespace; and
+- concrete installed module origin.
+
+Importing TraceQuant performs no I/O, environment read, directory creation,
+client construction, background startup, or global singleton initialization.
+The identity functions perform their work only when called.
+
+No trading configuration, source-data contract, catalog, cache, strategy,
+backtest, exchange adapter, order, risk policy, Demo, or Live capability is
+implemented.
+
+## Quality baseline
+
+The clean installation gate is:
+
+```bash
+uv sync --locked --dev --no-build-package nautilus-trader --no-cache
 ```
 
-The public foundation consists of:
+The canonical checks are:
 
-1. explicit settings loading for `TRACEQUANT_ENV`, log level, log format, and
-   an optional log directory;
-2. explicit structured JSON logging with known-key redaction;
-3. timezone-aware UTC conversion, parsing, and formatting;
-4. immutable initial domain models for instrument identifiers, UTC ranges, and
-   OHLCV bars, including explicit JSON-compatible serialization;
-5. typed Binance public-history request, source-identity, and archive-boundary
-   contracts;
-6. an immutable filesystem Raw store that publishes and revalidates Parquet
-   plus a provenance/checksum manifest, and durably records non-completed
-   acquisition outcomes in separate manifests with optional quarantined
-   response bodies;
-7. explicit Binance USDⓈ-M public-archive backfill adapters for BTCUSDT and
-   ETHUSDT 1m contract, mark-price, and index-price Klines plus settled funding
-   monthly objects, including bounded HTTP, upstream checksum verification,
-   ZIP/CSV validation, typed price-index-pair identity, dataset-specific
-   placeholder field names, and event-specific funding coverage evidence;
-8. deterministic test-only factories for the domain models.
-
-Polars is the sole runtime third-party dependency in `pyproject.toml` and is
-used for Raw frames and Parquet I/O. Development dependencies are pytest,
-Ruff, mypy, and PyYAML. The current package does not use an exchange SDK,
-database, backtest engine, model library, or execution framework.
-
-## 2. Engineering boundaries
-
-The full current tree and import rules are in
-[Repository structure](repository-structure.md). The important boundaries are:
-
-- configuration is explicit and immutable; importing it does not read env vars,
-  load `.env`, create directories, or cache a singleton;
-- logging is explicit; importing it does not configure handlers, create
-  directories, or open files;
-- UTC conversion is centralized in `tracequant.core.time`;
-- domain models depend on UTC utilities but not on network, exchange, UI,
-  deployment, logging setup, or test fixtures;
-- data contracts remain separate from transport and persistence concerns;
-  public-history backfill adapters and `RawStore` perform network and filesystem
-  work only when explicitly called, and module imports remain side-effect free;
-- tests may use `tests/fixtures`, but fixtures are not production runtime
-  dependencies;
-- future exchange, storage, transport, and vendor behavior must terminate at
-  adapter boundaries rather than leak into domain or research logic.
-
-No module may obtain credentials, perform network I/O, create runtime state, or
-activate live trading as an import side effect. Secrets are not documented as
-values and must not be printed, logged, committed, or included in fixtures.
-
-## 3. Configuration and environment
-
-`load_settings()` accepts explicit arguments and optionally a mapping for
-deterministic tests. Its precedence is:
-
-```text
-explicit arguments > process environment (or supplied mapping) > defaults
-```
-
-The current fields are:
-
-| Field | Values and default |
-| --- | --- |
-| `TRACEQUANT_ENV` | Required: `development`, `test`, or `production`. |
-| `TRACEQUANT_LOG_LEVEL` | Optional: `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`; default `INFO`. |
-| `TRACEQUANT_LOG_FORMAT` | Optional: `text` or `json`; parser default `json`. Current logger accepts only `json`. |
-| `TRACEQUANT_LOG_DIR` | Optional path; empty or unset means no file handler. The path is created only during explicit logging setup. |
-
-`.env.example` documents these names but is not parsed automatically. The
-current config surface deliberately does not include exchange credentials,
-account settings, database URLs, trading mode, strategy parameters, or automatic
-dotenv loading. `SecretValue` protects ordinary `repr` and `str` output; it is
-not encryption, key storage, or a secret manager.
-
-## 4. Logging and observability boundary
-
-`configure_logging(settings)` installs project-owned handlers explicitly. The
-current output is one-line UTF-8 JSON with stable `timestamp`, `level`,
-`logger`, and `message` fields, plus optional `extra` and exception fields.
-Timestamps are aware UTC ISO 8601 strings. Console output uses stderr. A
-non-empty `log_dir` creates that exact directory and appends to
-`tracequant.jsonl`; an empty value leaves only the console handler.
-
-Known sensitive mapping keys are redacted case-insensitively:
-`password`, `secret`, `token`, `api_key`, `apikey`, `authorization`, and
-`cookie`. `SecretValue` and nested structured values are also handled. The
-redactor cannot guarantee detection of a secret manually concatenated into free
-text, so callers must keep credentials out of messages. There is currently no
-metrics, dashboard, alerting, audit store, or log rotation subsystem.
-
-## 5. UTC and domain boundary
-
-`ensure_aware`, `to_utc`, `parse_utc`, and `format_utc` reject naive datetimes.
-Aware values with a non-zero offset are converted to UTC, and formatted values
-use `Z`. The initial domain models are documented in
-[domain-models.md](domain-models.md). They intentionally stop at validated
-single-instrument OHLCV values and do not define venue metadata, canonical
-market-data schemas, orders, accounts, persistence, or risk policy.
-
-Finite Python `float` values are required for OHLCV fields. Non-finite values
-are rejected, volume cannot be negative, and zero or negative prices are still
-allowed. Explicit `to_dict`/`from_dict` methods support deterministic JSON
-round trips but are not an external compatibility or database contract.
-
-## 6. Current quality baseline
-
-Python `3.13` and uv `0.12.1` are fixed by the repository environment. The
-canonical development and CI commands are maintained in the root
-[README](../../README.md) and are:
-
-```text
-uv sync --locked --dev
+```bash
 uv lock --check
 uv run --frozen pytest
 uv run --frozen ruff check .
@@ -149,133 +54,18 @@ uv run --frozen ruff format --check .
 uv run --frozen mypy src tests
 ```
 
-The lock check is a CI integrity check; the other commands are the same local
-quality commands. Do not create a competing quality command set in an
-architecture document.
+CI runs the clean no-cache wheel-only sync before these checks. The acceptance
+suite verifies distribution version and origin, lock provenance, package/tree
+ownership, ignored-path policy, and the absence of unimplemented or retired
+code boundaries.
 
-## 7. Explicitly deferred system architecture
+## Change control
 
-The following are future boundaries, not current implementations. A future
-Issue must supply its own contracts, data fingerprints, tests, and safety gates
-before any of them can be described as available.
+Dependencies, source boundaries, persistent storage, configuration, and trading
+capabilities require separately scoped changes. An unavailable official wheel,
+unsupported platform, missing external identity, ambiguous ownership, or failed
+guard stops the change rather than enabling a source build or local fallback.
 
-### Data and research
-
-The intended future flow is:
-
-```text
-public exchange data
-  -> immutable raw data
-  -> canonical normalization and quality checks
-  -> features, labels, and research datasets
-  -> vectorized research and event-driven verification
-```
-
-Only the first, narrow part of this flow currently exists: callers can retrieve
-approved Binance USDⓈ-M BTCUSDT/ETHUSDT 1m contract-Kline, mark-price-Kline,
-index-price-Kline, and monthly settled-funding archives, and can acquire
-source-evidence-bound Kline or settled-funding REST pages. Valid responses are
-published as immutable Raw Parquet objects with exact response provenance and
-manifests. There is no general Binance or private API client, rolling REST
-synchronization, canonical schema, data repair, feature pipeline, label
-pipeline, or future-data-leakage check. Each Kline adapter validates missing,
-duplicate, and out-of-order minutes before publication. The preserved 12-field
-wire values are Raw source data and must not be treated as a canonical schema;
-mark/index volume, quote, count, taker, and ignore fields have explicit
-`placeholder_*` names and no contract-trade meaning. Index history is keyed by
-typed price-index pair and does not establish instrument tradability.
-
-Archive planning is bounded by the per-instrument daily and monthly coverage
-frozen in the approved Research contract. Dates outside those observed bounds
-produce explicit coverage-gap results and are not requested as speculative
-archive URLs.
-
-### Backtesting, models, and experiments
-
-There is no backtester, strategy, factor library, model training, or experiment
-tracking in the current repository. Future research must preserve chronological
-walk-forward validation, purging, embargo, point-in-time features, explicit
-fees/funding/slippage/fill assumptions, gross and net performance, and code/data
-fingerprints. A future event-driven engine may validate execution realism, but
-no such engine is installed or callable today.
-
-### Execution and risk
-
-There is no Shadow, Demo, or Live runtime; no order/account/position ledger; no
-exchange adapter; and no risk authority. Future runtime work must keep strategy,
-risk, execution, and exchange connectivity separate. The risk layer must have
-final authority to reject or reduce orders, fail closed on disagreement with
-exchange state, reconcile unknown order state before retrying, and keep live
-trading explicitly disabled by default. These are safety requirements for
-future work, not evidence of current trading capability.
-
-### Storage, deployment, and observability
-
-Polars and local Parquet/manifest storage are current, limited dependencies and
-capabilities of the Raw path. PostgreSQL, Redis/Valkey, DuckDB, Prometheus,
-Grafana, Alertmanager, NautilusTrader, MLflow, Kubernetes, and multi-exchange
-support are not current dependencies or services. Introducing one requires a
-scoped Issue that documents purpose, alternatives, license/maintenance
-considerations, version constraints, safety impact, and reproducible
-validation. Future `apps/`, `packages/`, and `deploy/` directories remain
-boundaries until such an Issue is implemented and reviewed.
-
-## 8. Research and trading scope limits
-
-The current public-data capability is limited to explicitly requested Binance
-USDⓈ-M BTCUSDT/ETHUSDT 1m contract-Kline, mark-price-Kline, index-price-Kline,
-and settled-funding archive/REST inputs plus local immutable Raw artifacts.
-REST requests remain restricted to frozen observed windows and are not a
-rolling synchronizer or a claim of continuous event coverage. None of the
-following is currently available: private Binance API access, general REST
-synchronization, USDC archive acquisition, multi-timeframe aggregation, factors,
-models, backtests, Demo orders, Live orders, private API credentials, database
-state, or multi-exchange production execution.
-
-Historical research, planning documents, and workflow documentation must retain
-their stated roles. Workflow controls such as LCK and the Validation Runner
-govern repository delivery and review; they are not business modules and must
-not be presented as trading functionality.
-
-## 9. Placeholder and stub audit
-
-The tracked repository was searched for `TODO`, `FIXME`, `NotImplementedError`,
-`pass`, `placeholder`, and `stub` (excluding `.git` and ignored local
-workflow artifacts), with matches classified by context:
-
-- `src/tracequant/` contains no matching unfinished-work marker. The current
-  production package has no undocumented code placeholder.
-- `tests/tools/` contains intentional `Stub*` test doubles, literal
-  `validation stub` input strings, and no-op `pass` branches used to exercise
-  workflow failure/cleanup behavior. They are test scaffolding, not runtime
-  capability claims.
-- `tools/agent_workflow/` contains `pass` in exception cleanup/no-op branches
-  and uses `pass` as a serialized status value. These are workflow-tool
-  implementation details, not business module stubs.
-- The active workflow Skills in `.agents/skills/` and `.claude/skills/` use
-  `pass`/`PASS` for lifecycle outcomes and review protocol language; the
-  feature-audit Skill also uses `placeholder` when describing a finding to
-  inspect. These are workflow instructions and review vocabulary, not product
-  implementation stubs.
-- `AGENTS.md`, `.agents/policies/`, and `docs/development/` use `pass`/`PASS`
-  as governance, validation, and lifecycle terminology. These matches state
-  protocol outcomes or constraints and do not identify unfinished runtime
-  work.
-- `.github/ISSUE_TEMPLATE/*.yml` uses `placeholder` as GitHub form-field UI
-  metadata. It is not application code.
-- Current workflow documentation uses `pass`/`PASS` as validation or protocol
-  status values. These are not current product capability claims.
-
-No current production data, research, execution, or risk capability is being
-hidden behind one of these matches. A future real code gap must receive its own
-scoped Issue rather than being made to look complete by documentation.
-
-## 10. Change control
-
-Any future change that adds runtime dependencies, moves bootstrap modules,
-introduces network or persistence I/O, changes UTC or serialization semantics,
-adds exchange/order/risk authority, or crosses Research/Shadow/Demo/Live
-boundaries requires a dedicated Issue and appropriate tests/documentation.
-Do not make a planned technology choice appear implemented by editing this
-baseline alone. Keep future claims explicitly marked until the corresponding
-code and validation exist.
+Live remains unavailable until its later architecture, Demo, reconciliation,
+accounting, soak, security, release, and explicit human-approval gates exist and
+pass. No current file is a Live enablement mechanism.

@@ -19,7 +19,7 @@ concurrency:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
@@ -30,16 +30,15 @@ jobs:
         with:
           version: "0.12.1"
           python-version: "3.13"
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          enable-cache: false
 
-      - name: Sync locked dependencies
-        run: uv sync --locked --dev
+      - name: Sync the locked wheel-only environment
+        run: uv sync --locked --dev --no-build-package nautilus-trader --no-cache
 
       - name: Validate lock file
         run: uv lock --check
 
-      - name: Run tests
+      - name: Run bootstrap acceptance tests
         run: uv run --frozen pytest
 
       - name: Run Ruff lint
