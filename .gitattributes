@@ -6,5 +6,6 @@
 *.yaml text eol=lf
 *.json text eol=lf
 *.md text eol=lf
+docs/research/foundation-selection/*.md -whitespace
 *.sh text eol=lf
 *.ps1 text eol=crlf

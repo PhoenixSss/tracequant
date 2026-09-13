@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.metadata
+import re
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import unquote
 
 import tracequant
 import tracequant.integrations.nautilus as nautilus
@@ -42,6 +45,25 @@ HISTORICAL_LCK_GUIDE_PATHS = {
     Path("docs/guides/LCK-overview.md"),
     Path("docs/guides/LCK-adoption.md"),
 }
+FOUNDATION_SELECTION_DIR = Path("docs/research/foundation-selection")
+CAPABILITY_VALIDATION_BASELINE = Path(
+    "docs/research/nautilustrader-capability-validation-2026-09-12.md"
+)
+REGISTERED_FOUNDATION_REPORTS = {
+    "TraceQuant 开源技术栈与自研边界深度研究.md": (
+        "5fc90e347c8115301c673f4f98dde6070555332062f40fb5c55451b72ee9b88a"
+    ),
+    "TraceQuant Trading Runtime Read-Only Review.md": (
+        "93f607c0adef9f6f27e96f4a835c4e258902ce546c62d433bc4d0a8d74d26179"
+    ),
+    "TraceQuant Nautilus 技术栈与自研边界复审.md": (
+        "954edd7b2f7439b261225d0c46266e68fa6bba7ce33ab8feacf50779b8dea89e"
+    ),
+    "TraceQuant 分阶段推进计划.md": (
+        "6710bb0505d19971ea46959cf0644cef97720a8a348326e826929d841dd76001"
+    ),
+}
+_MARKDOWN_LINK = re.compile(r"\[(?P<label>[^\]]+)\]\(\s*<?(?P<target>[^>\)]+)>?\s*\)")
 
 
 def _toml(path: Path) -> dict[str, Any]:
@@ -51,13 +73,12 @@ def _toml(path: Path) -> dict[str, Any]:
 
 def _candidate_paths() -> set[Path]:
     completed = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         cwd=REPOSITORY_ROOT,
         check=True,
         capture_output=True,
-        text=True,
     )
-    return {Path(line) for line in completed.stdout.splitlines() if line}
+    return {Path(entry.decode()) for entry in completed.stdout.split(b"\0") if entry}
 
 
 def _guide_paths_outside_approved_lck_layout(paths: set[Path]) -> set[Path]:
@@ -340,3 +361,43 @@ def test_repository_text_approves_lck_without_expanding_product_runtime() -> Non
     assert "Repository-only LCK" in baseline
     assert "engineering tooling is approved outside this runtime" in baseline
     assert "LCK is not part of the TraceQuant product runtime" in readme
+
+
+def test_v2_foundation_source_documents_are_tracked_and_registered() -> None:
+    tracked = {
+        path.name
+        for path in _candidate_paths()
+        if path.parent == FOUNDATION_SELECTION_DIR
+    }
+    assert tracked == set(REGISTERED_FOUNDATION_REPORTS)
+    attributes = (REPOSITORY_ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert "docs/research/foundation-selection/*.md -whitespace" in attributes
+
+    baseline_path = REPOSITORY_ROOT / CAPABILITY_VALIDATION_BASELINE
+    baseline = baseline_path.read_text(encoding="utf-8")
+    register = baseline.split("## External report register", 1)[1]
+    assert "remain outside the repository" not in register
+    assert "supporting source reports" in register
+    assert "adr-0001-nautilustrader-primary-runtime.md" in register
+    assert "repository-structure.md" in register
+    assert "Current GitHub Issues" in register
+    assert "does not reopen the completed runtime selection" in register
+
+    resolved_reports: set[Path] = set()
+    for match in _MARKDOWN_LINK.finditer(register):
+        target = unquote(match.group("target").strip())
+        if "://" in target:
+            continue
+        relative_target = target.split("#", 1)[0]
+        if not relative_target:
+            continue
+        resolved = (baseline_path.parent / relative_target).resolve()
+        if resolved.is_file():
+            resolved_reports.add(resolved)
+
+    for name, digest in REGISTERED_FOUNDATION_REPORTS.items():
+        report_path = REPOSITORY_ROOT / FOUNDATION_SELECTION_DIR / name
+        assert hashlib.sha256(report_path.read_bytes()).hexdigest() == digest
+        assert digest in register
+        assert name in register
+        assert report_path.resolve() in resolved_reports
