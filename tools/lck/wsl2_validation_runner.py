@@ -357,23 +357,14 @@ def _assert_output_root(repo_root: Path) -> Path:
 def _ci_run_commands(repo_root: Path, workflow: str) -> list[list[str]]:
     path = repo_root / workflow
     commands: list[list[str]] = []
-    current_step = ""
+    canonical = set(CANONICAL_CI_COMMANDS)
     for line in path.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
-        if stripped.startswith("- name: "):
-            current_step = stripped.removeprefix("- name: ").strip()
-            continue
         if not stripped.startswith("run: "):
             continue
-        command = stripped.removeprefix("run: ").strip()
-        if current_step in {
-            "Validate lock file",
-            "Run tests",
-            "Run Ruff lint",
-            "Check Ruff formatting",
-            "Run mypy",
-        }:
-            commands.append(command.split())
+        command = tuple(stripped.removeprefix("run: ").strip().split())
+        if command in canonical:
+            commands.append(list(command))
     return commands
 
 

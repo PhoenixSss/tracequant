@@ -56,10 +56,13 @@ phase; do not duplicate audit-semantic prose in this Skill.
 Audit the exact locked `origin/main` implementation and current Feature facts.
 Use the repository-defined operations:
 
-```text
-feature-audit-snapshot
-python -m tools.lck.validation_runner run --phase feature-audit --include-skill-validators --require-skill-validator
-feature-audit-recheck
+```bash
+uv run --frozen python -m tools.lck.feature_audit feature-audit-snapshot \
+  --feature <FEATURE> --expected-main-sha <SHA>
+uv run --frozen python -m tools.lck.validation_runner run \
+  --phase feature-audit --include-skill-validators --require-skill-validator
+uv run --frozen python -m tools.lck.feature_audit feature-audit-recheck \
+  --snapshot-id <SNAPSHOT_ID>
 ```
 
 Run validation against a worktree fixed at the audited main SHA. Record the
@@ -169,7 +172,7 @@ without a confirmed defect uses the evidence-insufficient verdict.
 Classify each completion gap by severity and, when useful, propose the smallest
 candidate Task boundary without creating or editing a Task.
 
-Run `feature-audit-recheck`. Recollect Feature identity/content,
+Run the documented `feature-audit-recheck` module command. Recollect Feature identity/content,
 Relationships, direct-child set, child lifecycle evidence, audited main, and
 checks. Any audited-main, material Feature, Relationship, or direct-child-set
 change invalidates the stable conclusion and requires a new independent audit.

@@ -75,10 +75,10 @@ standalone clone 内。
 SHA-256 由以下只读审计统一验证：
 
 ```bash
-tools/lck/skill_audit.py
+uv run --frozen python -m tools.lck.skill_audit
 ```
 
-审计输出只覆盖 `active_skills` 与 `claude_skills`。已退役 Legacy Skill 不再位于
+审计输出只覆盖 `canonical_skills` 与 `adapters`。已退役 Legacy Skill 不再位于
 active discovery namespace，也不再作为 current routing、失败回退或 competing
 semantic owner；其历史内容仅通过 Git 历史恢复。
 

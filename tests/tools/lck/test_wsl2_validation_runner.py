@@ -96,7 +96,7 @@ jobs:
         run: uv sync --locked --dev
       - name: Validate lock file
         run: uv lock --check
-      - name: Run tests
+      - name: Run repository boundary acceptance tests
         run: uv run --frozen pytest
       - name: Run Ruff lint
         run: uv run --frozen ruff check .

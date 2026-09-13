@@ -61,8 +61,8 @@ def audit(repo_root: Path) -> tuple[dict[str, object], int]:
         adapter = adapter_path.read_text(encoding="utf-8")
         missing = [token for token in REQUIRED[name] if token not in canonical]
         forbidden = [token for token in FORBIDDEN if token in canonical]
-        if "python -m tools.lck" not in canonical:
-            missing.append("python -m tools.lck")
+        if "uv run --frozen python -m tools.lck" not in canonical:
+            missing.append("uv run --frozen python -m tools.lck")
         if missing:
             violations.append(f"{canonical_relative}: missing {', '.join(missing)}")
         if forbidden:

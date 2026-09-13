@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Feature-audit evidence over the shared LCK fact-acquisition adapter.
 
-Task lifecycle control belongs exclusively to the stable ``python -m tools.lck``
-entrypoint. This module retains only audit-oriented Feature snapshot/recheck
+Task lifecycle control belongs exclusively to the stable
+``uv run --frozen python -m tools.lck`` entrypoint. This module retains only
+audit-oriented Feature snapshot/recheck
 behavior; authoritative profile-neutral Git/GitHub facts are owned by
 ``tools.lck.shared_facts`` and consumed here through adapters. It does not expose
 Delivery, Review, Remediation, Merge, or Closeout control commands.

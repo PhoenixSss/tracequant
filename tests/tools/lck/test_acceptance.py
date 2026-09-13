@@ -313,7 +313,9 @@ def test_agent_assets_have_one_canonical_source_and_thin_adapters() -> None:
         adapter_text = adapter.read_text(encoding="utf-8")
         assert canonical.relative_to(ROOT).as_posix() in adapter_text
         assert len(adapter_text.splitlines()) < 15
-        assert "python -m tools.lck" in canonical.read_text(encoding="utf-8")
+        assert "uv run --frozen python -m tools.lck" in canonical.read_text(
+            encoding="utf-8"
+        )
 
 
 def test_restoration_manifest_records_source_objects_and_decisions() -> None:
@@ -348,7 +350,7 @@ def test_feature_audit_names_the_stable_lck_entrypoint() -> None:
     module_text = (LCK_ROOT / "feature_audit.py").read_text(encoding="utf-8")
     module_docstring = ast.get_docstring(ast.parse(module_text))
     assert module_docstring is not None
-    assert "python -m tools.lck" in module_docstring
+    assert "uv run --frozen python -m tools.lck" in module_docstring
     assert "lck.py" not in module_docstring
 
 

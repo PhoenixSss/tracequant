@@ -43,8 +43,8 @@ Task/PR IDs, base/head SHAs, repository, output paths, or profile semantics.
 
 ## Authoritative LCK route contract
 
-The versioned execution-profile example contains one exact `uv run --frozen
-python -m tools.lck ...` rule for every supported LCK operation.
+The versioned execution-profile example contains one exact
+`uv run --frozen python -m tools.lck ...` rule for every supported LCK operation.
 The route classification is deterministic and is resolved before the command
 starts; an Agent must not probe the normal sandbox first when the matching rule
 is `elevated-first`.

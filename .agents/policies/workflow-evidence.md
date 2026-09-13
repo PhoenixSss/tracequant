@@ -20,9 +20,9 @@ snapshots and cross-phase handoffs are not lifecycle authority.
 Migrated lifecycle phases enter through LCK:
 
 ```text
-python -m tools.lck delivery prepare|complete
-python -m tools.lck review prepare|complete
-python -m tools.lck remediation prepare|no-change|complete
+uv run --frozen python -m tools.lck delivery prepare|complete
+uv run --frozen python -m tools.lck review prepare|complete
+uv run --frozen python -m tools.lck remediation prepare|no-change|complete
 ```
 
 The Validation Runner remains current for bounded deterministic validation;
@@ -30,22 +30,22 @@ historical Evidence output is audit material only and is not a Task lifecycle
 entry point:
 
 ```text
-tools/lck/wsl2_validation_runner.py
+uv run --frozen python -m tools.lck.wsl2_validation_runner <PROFILE>
 ```
 
 Their implementation CLIs are Runner/LCK internals, not alternate Skill write routes:
 
 ```text
-tools/lck/feature_audit.py
-tools/lck/validation_runner.py
+uv run --frozen python -m tools.lck.feature_audit <OPERATION> <ARGS>
+uv run --frozen python -m tools.lck.validation_runner run <ARGS>
 ```
 
 | Workflow phase | Current mechanical front door | Validation |
 | --- | --- | --- |
-| Initial Delivery | `python -m tools.lck delivery prepare|complete` | LCK runs formal Delivery validation |
-| Independent Review | `python -m tools.lck review prepare|complete` | LCK runs formal Review validation on the live-resolved head |
-| Explicit Remediation | `python -m tools.lck remediation prepare|no-change|complete` | LCK reuses migrated Delivery validation/effects; no-change closes an unchanged prepared session |
-| Closeout | `python -m tools.lck closeout <TASK>` | LCK closeout gate and effects |
+| Initial Delivery | `uv run --frozen python -m tools.lck delivery prepare\|complete` | LCK runs formal Delivery validation |
+| Independent Review | `uv run --frozen python -m tools.lck review prepare\|complete` | LCK runs formal Review validation on the live-resolved head |
+| Explicit Remediation | `uv run --frozen python -m tools.lck remediation prepare\|no-change\|complete` | LCK reuses migrated Delivery validation/effects; no-change closes an unchanged prepared session |
+| Closeout | `uv run --frozen python -m tools.lck closeout <TASK>` | LCK closeout gate and effects |
 
 Historical Evidence snapshots may locate audit material, but they must not
 select or authorize a current Task target. A targeted validation profile is not
@@ -143,8 +143,10 @@ The historical Evidence implementation may still be used for Feature audit
 evidence:
 
 ```text
-feature-audit-snapshot
-feature-audit-recheck
+uv run --frozen python -m tools.lck.feature_audit feature-audit-snapshot \
+  --feature <FEATURE> --expected-main-sha <SHA>
+uv run --frozen python -m tools.lck.feature_audit feature-audit-recheck \
+  --snapshot-id <SNAPSHOT_ID>
 ```
 
 These operations are read-only audit evidence. They are not a formal Task
@@ -212,8 +214,8 @@ executable Task Evidence Runner, profiles, and approval Rules have been removed.
 
 Historical remediation evidence is not part of the LCK Review / Remediation
 lifecycle and MUST NOT authorize a current repair from an expected base/head
-or bounded handoff. Current remediation authority is `python -m tools.lck remediation
-prepare`, which reacquires the live Task/PR/head/base. A workspace-local failed
+or bounded handoff. Current remediation authority is `uv run --frozen python -m
+tools.lck remediation prepare`, which reacquires the live Task/PR/head/base. A workspace-local failed
 Review record is the default semantic-findings source only. If a maintainer
 intentionally switches clone or Agent runtime and that ignored audit record is
 unavailable, `remediation prepare --findings-file <FILE>` may carry the completed
