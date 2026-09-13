@@ -35,6 +35,13 @@ EXPECTED_TOP_LEVEL = {
     "uv.lock",
     "uv.toml",
 }
+APPROVED_NON_LCK_GUIDES = {
+    Path("docs/guides/nautilustrader-import-and-update-policy.md"),
+}
+HISTORICAL_LCK_GUIDE_PATHS = {
+    Path("docs/guides/LCK-overview.md"),
+    Path("docs/guides/LCK-adoption.md"),
+}
 
 
 def _toml(path: Path) -> dict[str, Any]:
@@ -51,6 +58,16 @@ def _candidate_paths() -> set[Path]:
         text=True,
     )
     return {Path(line) for line in completed.stdout.splitlines() if line}
+
+
+def _guide_paths_outside_approved_lck_layout(paths: set[Path]) -> set[Path]:
+    return {
+        path
+        for path in paths
+        if path.is_relative_to(Path("docs/guides"))
+        and not path.is_relative_to(Path("docs/guides/lck"))
+        and path not in APPROVED_NON_LCK_GUIDES
+    }
 
 
 def _nautilus_lock_entry() -> dict[str, Any]:
@@ -142,11 +159,8 @@ def test_candidate_tree_matches_the_approved_product_and_lck_layout() -> None:
         for path in paths
         if path.is_relative_to(Path("docs/workflows"))
     )
-    assert all(
-        path.is_relative_to(Path("docs/guides/lck"))
-        for path in paths
-        if path.is_relative_to(Path("docs/guides/lck"))
-    )
+    assert not (paths & HISTORICAL_LCK_GUIDE_PATHS)
+    assert not _guide_paths_outside_approved_lck_layout(paths)
 
     production_python = {
         path
@@ -239,6 +253,25 @@ def test_import_and_generated_path_guards_fail_closed() -> None:
         }
         & ignore_entries
     )
+
+
+def test_lck_guide_guard_rejects_historical_and_escaped_paths() -> None:
+    allowed = {
+        Path("docs/guides/lck/overview.md"),
+        Path("docs/guides/lck/adoption.md"),
+        Path("docs/guides/nautilustrader-import-and-update-policy.md"),
+    }
+    assert not (allowed & HISTORICAL_LCK_GUIDE_PATHS)
+    assert not _guide_paths_outside_approved_lck_layout(allowed)
+    assert _guide_paths_outside_approved_lck_layout(
+        allowed | {Path("docs/guides/LCK-overview.md")}
+    ) == {Path("docs/guides/LCK-overview.md")}
+    assert _guide_paths_outside_approved_lck_layout(
+        allowed | {Path("docs/guides/LCK-adoption.md")}
+    ) == {Path("docs/guides/LCK-adoption.md")}
+    assert _guide_paths_outside_approved_lck_layout(
+        allowed | {Path("docs/guides/other/overview.md")}
+    ) == {Path("docs/guides/other/overview.md")}
 
 
 def test_import_boundary_guard_rejects_direct_and_dynamic_references() -> None:
