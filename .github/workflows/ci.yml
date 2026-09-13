@@ -38,7 +38,7 @@ jobs:
       - name: Validate lock file
         run: uv lock --check
 
-      - name: Run bootstrap acceptance tests
+      - name: Run repository boundary acceptance tests
         run: uv run --frozen pytest
 
       - name: Run Ruff lint
@@ -48,4 +48,4 @@ jobs:
         run: uv run --frozen ruff format --check .
 
       - name: Run mypy
-        run: uv run --frozen mypy src tests
+        run: uv run --frozen mypy src tools/lck tests

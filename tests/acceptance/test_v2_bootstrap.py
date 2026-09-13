@@ -9,15 +9,21 @@ from pathlib import Path
 from typing import Any, cast
 
 import tracequant
-from tracequant.integrations import nautilus
+import tracequant.integrations.nautilus as nautilus
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_NAUTILUS_VERSION = "2.0.0rc4"
 EXPECTED_TOP_LEVEL = {
+    ".agents",
+    ".claude",
+    ".codex",
     ".env.example",
+    ".gitattributes",
     ".github",
     ".gitignore",
     ".python-version",
+    "AGENTS.md",
+    "CLAUDE.md",
     "LICENSE",
     "README.md",
     "config",
@@ -25,6 +31,7 @@ EXPECTED_TOP_LEVEL = {
     "pyproject.toml",
     "src",
     "tests",
+    "tools",
     "uv.lock",
     "uv.toml",
 }
@@ -104,14 +111,11 @@ def test_clean_bootstrap_uses_pinned_external_nautilus() -> None:
     assert nautilus.import_package().__name__ == "nautilus_trader"
 
 
-def test_candidate_tree_matches_the_closed_v2_skeleton() -> None:
+def test_candidate_tree_matches_the_approved_product_and_lck_layout() -> None:
     paths = _candidate_paths()
     assert {path.parts[0] for path in paths} == EXPECTED_TOP_LEVEL
 
     forbidden_roots = {
-        ".agents",
-        ".claude",
-        ".codex",
         ".workflow.local",
         "apps",
         "artifacts",
@@ -120,12 +124,29 @@ def test_candidate_tree_matches_the_closed_v2_skeleton() -> None:
         "packages",
         "runtime",
         "scripts",
-        "tools",
         "vendor",
     }
     assert not ({path.parts[0] for path in paths} & forbidden_roots)
-    assert not any(path.is_relative_to(Path("docs/workflows")) for path in paths)
-    assert not any(path.is_relative_to(Path("tests/tools")) for path in paths)
+    assert all(
+        path.is_relative_to(Path("tools/lck"))
+        for path in paths
+        if path.is_relative_to(Path("tools"))
+    )
+    assert all(
+        path.is_relative_to(Path("tests/tools/lck"))
+        for path in paths
+        if path.is_relative_to(Path("tests/tools"))
+    )
+    assert all(
+        path.is_relative_to(Path("docs/workflows/lck"))
+        for path in paths
+        if path.is_relative_to(Path("docs/workflows"))
+    )
+    assert all(
+        path.is_relative_to(Path("docs/guides/lck"))
+        for path in paths
+        if path.is_relative_to(Path("docs/guides/lck"))
+    )
 
     production_python = {
         path
@@ -140,6 +161,7 @@ def test_candidate_tree_matches_the_closed_v2_skeleton() -> None:
     assert all(
         path.is_relative_to(Path("src/tracequant"))
         or path.is_relative_to(Path("tests"))
+        or path.is_relative_to(Path("tools/lck"))
         for path in paths
         if path.suffix == ".py"
     )
@@ -198,6 +220,10 @@ def test_import_and_generated_path_guards_fail_closed() -> None:
         ".env",
         ".env.*.local",
         "*.local.toml",
+        ".agents/execution-profile.local.toml",
+        ".agents/evidence.local/",
+        ".agents/validation.local/",
+        ".workflow.local/",
     } == ignore_entries
     assert (
         not {
@@ -226,3 +252,58 @@ def test_import_boundary_guard_rejects_direct_and_dynamic_references() -> None:
 
     for source in prohibited_sources:
         assert _contains_forbidden_nautilus_reference(ast.parse(source))
+
+
+def test_lck_and_product_import_boundaries_are_one_way() -> None:
+    for relative_path in _candidate_paths():
+        if relative_path.suffix != ".py":
+            continue
+        if not (
+            relative_path.is_relative_to(Path("src"))
+            or relative_path.is_relative_to(Path("tools/lck"))
+        ):
+            continue
+        tree = ast.parse((REPOSITORY_ROOT / relative_path).read_text(encoding="utf-8"))
+        imported: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module)
+        if relative_path.is_relative_to(Path("src")):
+            assert not any(
+                name == "tools.lck" or name.startswith("tools.lck.")
+                for name in imported
+            )
+        else:
+            assert not any(
+                name == "tracequant"
+                or name.startswith("tracequant.")
+                or name == "nautilus_trader"
+                or name.startswith("nautilus_trader.")
+                for name in imported
+            )
+
+
+def test_distribution_excludes_lck_tooling() -> None:
+    build = _toml(REPOSITORY_ROOT / "pyproject.toml")["tool"]["uv"]["build-backend"]
+    assert build == {"module-name": "tracequant", "module-root": "src"}
+
+
+def test_repository_text_approves_lck_without_expanding_product_runtime() -> None:
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+    structure = (
+        REPOSITORY_ROOT / "docs/architecture/repository-structure.md"
+    ).read_text(encoding="utf-8")
+    baseline = (REPOSITORY_ROOT / "docs/architecture/technical-baseline.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "approved Local Control Kernel (LCK)" in readme
+    assert "tooling under `tools/lck/`" in readme
+    assert "initial v2 bootstrap restriction" in readme
+    assert "initial bootstrap text" in structure
+    assert "exact LCK-owned roots" in structure
+    assert "Repository-only LCK" in baseline
+    assert "engineering tooling is approved outside this runtime" in baseline
+    assert "LCK is not part of the TraceQuant product runtime" in readme
