@@ -2,10 +2,10 @@
 
 This document is the current ownership contract for the TraceQuant v2 product
 bootstrap and its repository engineering tooling. The product runtime pins
-NautilusTrader, owns source provenance, and implements the stage 1 BTCUSDT 1h
-catalog path. It does not provide a strategy, backtester, execution connection,
-or trading mode. LCK is an approved repository capability outside that product
-runtime.
+NautilusTrader, owns source provenance, implements the stage 1 BTCUSDT 1h
+catalog path, and runs one Nautilus-native offline MA-cross backtest. It does
+not provide an execution connection, Demo mode, or Live mode. LCK is an
+approved repository capability outside that product runtime.
 
 ## Tracked layout
 
@@ -78,6 +78,10 @@ src/tracequant/
     nautilus/
       __init__.py
       stage1_btcusdt.py
+      stage1_backtest.py
+      strategies/
+        __init__.py
+        stage1_ma_cross.py
 ```
 
 All self-developed production Python belongs below the single `tracequant`
@@ -88,17 +92,18 @@ belong in this repository.
 
 `tracequant.integrations.nautilus` is the only production boundary permitted to
 import `nautilus_trader`. Identity queries remain explicit and side-effect free.
-Stage 1 catalog ingest lives in a use-case module beside that seam; it is not a
-generic adapter, trading domain, or import-time runtime wrapper.
+Stage 1 catalog ingest and the offline MA-cross backtest live in use-case
+modules beside that seam; they are not a generic adapter, trading domain, or
+import-time runtime wrapper.
 
-Later scoped Issues may add these product boundaries only when implementing the
-corresponding capability:
+`integrations/nautilus/strategies/` now holds the stage 1 MA-cross Strategy.
+Later scoped Issues may add these remaining product boundaries only when
+implementing the corresponding capability:
 
 ```text
 src/tracequant/
   research/                    read-only views, features, labels, and models
   integrations/nautilus/
-    strategies/                concrete Nautilus Strategy/Actor code
     configuration/             concrete Nautilus runtime configuration
   operations/                  admission, observation, alerts, and release
 ```

@@ -25,20 +25,23 @@ for NautilusTrader.
 ## Implemented surface
 
 `tracequant.integrations.nautilus` owns explicit distribution/import identity
-queries and the stage 1 BTCUSDT 1h historical Bar path selected as
-`USE_NAUTILUS`. That path requests native Nautilus bars through the locked
-Binance public data client, records source provenance, and writes/reads
-`ParquetDataCatalog`. `tracequant.source_data` owns the frozen window,
-checksum, and provenance identity; it does not import `nautilus_trader`.
+queries, the stage 1 BTCUSDT 1h historical Bar path selected as `USE_NAUTILUS`,
+and the stage 1 Nautilus-native MA-cross offline backtest. The catalog path
+requests native Nautilus bars through the locked Binance public data client,
+records source provenance, and writes/reads `ParquetDataCatalog`. The backtest
+reads that catalog, runs one long-only SMA crossover Strategy, and writes
+order, fill, position, account, and summary reports. `tracequant.source_data`
+owns the frozen window, checksum, and provenance identity; it does not import
+`nautilus_trader`.
 
 Importing TraceQuant performs no I/O, environment read, directory creation,
 client construction, background startup, or global singleton initialization.
-Identity queries, catalog writes, and Nautilus requests perform their work only
-when called.
+Identity queries, catalog writes, backtests, and Nautilus requests perform
+their work only when called.
 
-No strategy, backtest, cache, order, risk policy, Demo, or Live execution
-capability is implemented. Public historical data requests do not use account
-credentials or a Binance execution client.
+The current product surface is `OFFLINE_BACKTEST_ONLY` and `LIVE_NOT_APPROVED`.
+Public historical data requests do not use account credentials or a Binance
+execution client. The backtest does not connect to an exchange.
 
 ## Quality baseline
 
