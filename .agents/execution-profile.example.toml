@@ -1,0 +1,97 @@
+# Copy this file to .agents/execution-profile.local.toml and adjust it for
+# this workstation. The local file is ignored by Git and must not contain
+# credentials, usernames, private keys, tokens, or sensitive local paths.
+
+schema_version = 1
+default_route = "sandbox-first"
+
+[[rules]]
+name = "lck-status"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "-m", "tools.lck", "status"]
+route = "sandbox-first"
+reason = "LCK status resolves live facts without writing repository metadata"
+
+[[rules]]
+name = "lck-delivery-prepare"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "-m", "tools.lck", "delivery", "prepare"]
+route = "elevated-first"
+reason = "Repeated sandbox-denied Git metadata writes; branch bootstrap is LCK-authorized"
+
+[[rules]]
+name = "lck-delivery-complete"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "-m", "tools.lck", "delivery", "complete"]
+route = "elevated-first"
+reason = "Repeated sandbox-denied Git and lifecycle metadata writes; Delivery effects are LCK-authorized"
+
+[[rules]]
+name = "lck-review-prepare"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "-m", "tools.lck", "review", "prepare"]
+route = "sandbox-first"
+reason = "Review keeps the source repository read-only; its temporary clone is operation-owned"
+
+[[rules]]
+name = "lck-review-complete"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "-m", "tools.lck", "review", "complete"]
+route = "sandbox-first"
+reason = "Review completion keeps the source repository read-only and writes only ignored LCK state"
+
+[[rules]]
+name = "lck-remediation-prepare"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "-m", "tools.lck", "remediation", "prepare"]
+route = "elevated-first"
+reason = "Repeated sandbox-denied branch metadata writes when restoring or selecting the Task branch"
+
+[[rules]]
+name = "lck-remediation-no-change"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "-m", "tools.lck", "remediation", "no-change"]
+route = "sandbox-first"
+reason = "No-change closes only ignored LCK continuity state and does not alter Git metadata"
+
+[[rules]]
+name = "lck-remediation-complete"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "-m", "tools.lck", "remediation", "complete"]
+route = "elevated-first"
+reason = "Repeated sandbox-denied Git and lifecycle metadata writes; remediation effects are LCK-authorized"
+
+[[rules]]
+name = "lck-merge-preflight"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "-m", "tools.lck", "merge", "preflight"]
+route = "sandbox-first"
+reason = "Merge Preflight is a source-repository read-only gate"
+
+[[rules]]
+name = "lck-merge-preflight-alias"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "-m", "tools.lck", "merge-preflight"]
+route = "sandbox-first"
+reason = "Compatibility alias for the source-repository read-only Merge Preflight gate"
+
+[[rules]]
+name = "lck-closeout"
+executable = "uv"
+argument_prefix = ["run", "--frozen", "python", "-m", "tools.lck", "closeout"]
+route = "elevated-first"
+reason = "Repeated sandbox-denied Git and lifecycle metadata writes; closeout effects are LCK-authorized"
+
+[[rules]]
+name = "git-status"
+executable = "git"
+argument_prefix = ["status"]
+route = "sandbox-first"
+reason = "Read-only repository status normally works in sandbox"
+
+[[rules]]
+name = "git-diff"
+executable = "git"
+argument_prefix = ["diff"]
+route = "sandbox-first"
+reason = "Read-only diff inspection normally works in sandbox"

@@ -1,8 +1,10 @@
 # TraceQuant v2 technical baseline
 
-The current implementation is a clean, non-production bootstrap. The runtime
-surface contains only the `tracequant` namespace and a minimal explicit identity
-seam for the installed NautilusTrader distribution.
+The current product implementation is a clean, non-production bootstrap. The
+runtime surface contains only the `tracequant` namespace and a minimal explicit
+identity seam for the installed NautilusTrader distribution. Repository-only LCK
+engineering tooling is approved outside this runtime and does not expand the
+product surface described here.
 
 ## Environment
 
@@ -51,7 +53,7 @@ uv lock --check
 uv run --frozen pytest
 uv run --frozen ruff check .
 uv run --frozen ruff format --check .
-uv run --frozen mypy src tests
+uv run --frozen mypy src tools/lck tests
 ```
 
 CI runs the clean no-cache wheel-only sync before these checks. The acceptance

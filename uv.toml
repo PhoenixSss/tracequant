@@ -1,1 +1,2 @@
+cache-dir = ".workflow.local/uv-cache"
 no-build-package = ["nautilus-trader"]

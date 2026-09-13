@@ -12,3 +12,7 @@ __pycache__/
 .env
 .env.*.local
 *.local.toml
+.agents/execution-profile.local.toml
+.agents/evidence.local/
+.agents/validation.local/
+.workflow.local/

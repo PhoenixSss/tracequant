@@ -1,0 +1,171 @@
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+from tools.lck import common as workflow_common
+from tools.lck.common import (
+    CommandRunner,
+    build_workflow_env,
+    command_warning,
+)
+
+ROOT = Path(__file__).parents[3]
+
+
+def test_project_uv_config_redirects_canonical_launcher_cache() -> None:
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv is not installed")
+
+    env = os.environ.copy()
+    env.pop("UV_CACHE_DIR", None)
+    result = subprocess.run(
+        [uv, "cache", "dir"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        Path(result.stdout.strip()).resolve()
+        == (ROOT / ".workflow.local" / "uv-cache").resolve()
+    )
+
+
+def test_build_workflow_env_defaults_to_repo_local_uv_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("UV_CACHE_DIR", raising=False)
+
+    env = build_workflow_env(tmp_path)
+
+    assert env["UV_CACHE_DIR"] == str(tmp_path / ".workflow.local" / "uv-cache")
+
+
+def test_build_workflow_env_preserves_explicit_uv_cache_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custom_cache = "/some/custom/cache"
+    monkeypatch.setenv("UV_CACHE_DIR", custom_cache)
+
+    env = build_workflow_env(tmp_path)
+
+    assert env["UV_CACHE_DIR"] == custom_cache
+
+
+def test_command_runner_passes_repo_local_uv_cache_to_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "uv-cache-env.txt"
+    uv = tmp_path / "uv"
+    uv.write_text(
+        f"#!{sys.executable}\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text(os.environ['UV_CACHE_DIR'], encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+    monkeypatch.delenv("UV_CACHE_DIR", raising=False)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+
+    result = CommandRunner(tmp_path).run(
+        ["uv", "run", "--frozen", "pytest"],
+        command_id="test-uv-cache-env",
+        validation=True,
+    )
+
+    assert result.returncode == 0
+    assert marker.read_text(encoding="utf-8") == str(
+        tmp_path / ".workflow.local" / "uv-cache"
+    )
+
+
+def test_command_runner_times_out_and_reports_bounded_diagnostic(
+    tmp_path: Path,
+) -> None:
+    result = CommandRunner(tmp_path).run(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        command_id="test-timeout",
+        timeout_seconds=0.2,
+    )
+
+    assert result.returncode == 124
+    assert result.stdout == ""
+    assert result.timed_out is True
+    assert result.timeout_seconds == 0.2
+    warning = command_warning(result)
+    assert warning["timed_out"] is True
+    assert warning["timeout_seconds"] == 0.2
+    assert "timed out after 0.2 seconds" in warning["error"]
+
+
+def test_command_runner_returns_immediately_when_process_finishes_before_heartbeat(
+    tmp_path: Path,
+) -> None:
+    started = time.monotonic()
+    result = CommandRunner(tmp_path).run(
+        [sys.executable, "-c", "print('finished')"],
+        command_id="test-early-finish",
+        timeout_seconds=1.0,
+        progress=lambda: pytest.fail("early completion must not wait for heartbeat"),
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "finished"
+    assert time.monotonic() - started < 0.8
+
+
+def test_command_runner_emits_low_frequency_heartbeat_without_changing_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workflow_common, "PROGRESS_HEARTBEAT_INTERVAL_SECONDS", 0.02)
+    heartbeats: list[int] = []
+
+    result = CommandRunner(tmp_path).run(
+        [sys.executable, "-c", "import time; time.sleep(0.07); print('finished')"],
+        command_id="test-heartbeat",
+        timeout_seconds=1.0,
+        progress=lambda: heartbeats.append(1),
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "finished"
+    assert heartbeats
+
+
+def test_command_runner_retries_only_when_requested(tmp_path: Path) -> None:
+    marker = tmp_path / "attempted"
+    flaky = tmp_path / "flaky-command"
+    flaky.write_text(
+        f"#!{sys.executable}\n"
+        "from pathlib import Path\n"
+        f"marker = Path({str(marker)!r})\n"
+        "if marker.exists():\n"
+        "    print('recovered')\n"
+        "else:\n"
+        "    marker.write_text('1', encoding='utf-8')\n"
+        "    raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    flaky.chmod(0o755)
+
+    result = CommandRunner(tmp_path).run(
+        [str(flaky)],
+        command_id="test-retry",
+        retries=1,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "recovered"

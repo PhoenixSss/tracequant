@@ -4,6 +4,14 @@ This record binds the initial clean v2 dependency boundary to the committed
 lock and the official NautilusTrader release. It is reproducibility evidence,
 not a trading-readiness claim.
 
+This is a historical record of the initial product bootstrap. Task #333 later
+approved repository-only LCK roots under `tools/lck/`, `tests/tools/lck/`,
+`docs/workflows/lck/`, `docs/guides/lck/`, `.agents/`, `.claude/`, and `.codex/`.
+Any wording from the initial bootstrap that excluded those workflow-tooling
+roots is superseded; the product runtime and NautilusTrader boundaries below are
+unchanged. The recorded lock digest is the initial bootstrap identity, not a
+claim about a later lock containing development-only LCK dependencies.
+
 | Field | Value |
 | --- | --- |
 | Distribution | `nautilus-trader==2.0.0rc4` |
