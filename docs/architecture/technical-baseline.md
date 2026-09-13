@@ -24,19 +24,21 @@ for NautilusTrader.
 
 ## Implemented surface
 
-`tracequant.integrations.nautilus` owns three explicit queries:
-
-- installed distribution version;
-- deferred import of the `nautilus_trader` namespace; and
-- concrete installed module origin.
+`tracequant.integrations.nautilus` owns explicit distribution/import identity
+queries and the stage 1 BTCUSDT 1h historical Bar path selected as
+`USE_NAUTILUS`. That path requests native Nautilus bars through the locked
+Binance public data client, records source provenance, and writes/reads
+`ParquetDataCatalog`. `tracequant.source_data` owns the frozen window,
+checksum, and provenance identity; it does not import `nautilus_trader`.
 
 Importing TraceQuant performs no I/O, environment read, directory creation,
 client construction, background startup, or global singleton initialization.
-The identity functions perform their work only when called.
+Identity queries, catalog writes, and Nautilus requests perform their work only
+when called.
 
-No trading configuration, source-data contract, catalog, cache, strategy,
-backtest, exchange adapter, order, risk policy, Demo, or Live capability is
-implemented.
+No strategy, backtest, cache, order, risk policy, Demo, or Live execution
+capability is implemented. Public historical data requests do not use account
+credentials or a Binance execution client.
 
 ## Quality baseline
 

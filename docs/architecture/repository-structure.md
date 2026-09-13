@@ -1,10 +1,11 @@
 # TraceQuant v2 repository structure
 
 This document is the current ownership contract for the TraceQuant v2 product
-bootstrap and its repository engineering tooling. The product bootstrap proves
-source and dependency separation; it does not provide a strategy, data pipeline,
-backtester, exchange connection, or trading mode. LCK is an approved repository
-capability outside that product runtime.
+bootstrap and its repository engineering tooling. The product runtime pins
+NautilusTrader, owns source provenance, and implements the stage 1 BTCUSDT 1h
+catalog path. It does not provide a strategy, backtester, execution connection,
+or trading mode. LCK is an approved repository capability outside that product
+runtime.
 
 ## Tracked layout
 
@@ -64,15 +65,19 @@ the product/tooling boundary.
 
 ## Python and dependency ownership
 
-The complete production package is initially:
+The complete production package is:
 
 ```text
 src/tracequant/
   __init__.py
+  source_data/
+    __init__.py
+    stage1_btcusdt.py
   integrations/
     __init__.py
     nautilus/
       __init__.py
+      stage1_btcusdt.py
 ```
 
 All self-developed production Python belongs below the single `tracequant`
@@ -82,17 +87,15 @@ Upstream source, tests, examples, bindings, and package-shaped copies never
 belong in this repository.
 
 `tracequant.integrations.nautilus` is the only production boundary permitted to
-import `nautilus_trader`. Its bootstrap implementation exposes only explicit
-distribution/import identity queries. Those calls prove separation without
-creating a generic adapter, trading domain, runtime wrapper, or import-time side
-effect.
+import `nautilus_trader`. Identity queries remain explicit and side-effect free.
+Stage 1 catalog ingest lives in a use-case module beside that seam; it is not a
+generic adapter, trading domain, or import-time runtime wrapper.
 
 Later scoped Issues may add these product boundaries only when implementing the
 corresponding capability:
 
 ```text
 src/tracequant/
-  source_data/                 immutable source provenance and acquisition
   research/                    read-only views, features, labels, and models
   integrations/nautilus/
     strategies/                concrete Nautilus Strategy/Actor code
