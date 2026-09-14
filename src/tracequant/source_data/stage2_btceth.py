@@ -31,11 +31,18 @@ STAGE2_BAR_INTERVALS: Final = ("15m", "1h", "4h")
 STAGE2_BAR_AGGREGATION: Final = "LAST-EXTERNAL"
 STAGE2_SOURCE_KIND: Final = "binance_public_data"
 STAGE2_DATA_TYPE_BARS: Final = "bars"
+STAGE2_DATA_TYPE_MARK: Final = "mark_price"
+STAGE2_DATA_TYPE_FUNDING: Final = "funding"
 STAGE2_MANIFEST_FILENAME: Final = "stage2_source_manifest.json"
 STAGE2_COVERAGE_FILENAME: Final = "stage2_coverage.json"
 STAGE2_INSTRUMENT_SNAPSHOT_FILENAME: Final = "stage2_instrument_snapshot.json"
 STAGE2_PUBLIC_DATA_ORIGIN: Final = "https://data.binance.vision"
 STAGE2_KLINE_ROOT: Final = "data/futures/um/monthly/klines"
+STAGE2_MARK_ROOT: Final = "data/futures/um/monthly/markPriceKlines"
+STAGE2_FUNDING_ROOT: Final = "data/futures/um/monthly/fundingRate"
+STAGE2_MARK_INTERVAL: Final = "15m"
+STAGE2_FUNDING_STREAM_ID: Final = "stage2-funding"
+STAGE2_MARK_MAX_AGE_MS: Final = 15 * 60 * 1000
 MS_NS: Final = 1_000_000
 
 STAGE2_INSTRUMENT_SYMBOLS: Final = {
@@ -66,6 +73,16 @@ _CANONICAL_KLINE_FIELDS: Final = (
     "taker_buy_quote_volume",
     "ignore",
 )
+_CANONICAL_FUNDING_FIELDS: Final = (
+    "calc_time",
+    "funding_interval_hours",
+    "last_funding_rate",
+)
+_FUNDING_HEADER_ALIASES: Final = {
+    "calc_time": "calc_time",
+    "funding_interval_hours": "funding_interval_hours",
+    "last_funding_rate": "last_funding_rate",
+}
 _HEADER_ALIASES: Final = {
     "open_time": "open_time",
     "open": "open",
@@ -155,6 +172,25 @@ class Stage2KlineArchive:
 
 
 @dataclass(frozen=True)
+class Stage2FundingRow:
+    calc_time: str
+    funding_interval_hours: str
+    last_funding_rate: str
+
+
+@dataclass(frozen=True)
+class Stage2FundingArchive:
+    instrument_id: str
+    symbol: str
+    year: int
+    month: int
+    zip_path: Path
+    checksum_path: Path
+    source_url: str
+    checksum_url: str
+
+
+@dataclass(frozen=True)
 class Stage2SourceObject:
     path: str
     source_url: str
@@ -201,6 +237,7 @@ class Stage2SourceManifest:
 @dataclass(frozen=True)
 class Stage2SeriesCoverage:
     instrument_id: str
+    data_type: str
     bar_interval: str
     row_count: int
     first_ts_event: int
@@ -213,6 +250,7 @@ class Stage2SeriesCoverage:
     def to_json_dict(self) -> dict[str, str | int]:
         return {
             "instrument_id": self.instrument_id,
+            "data_type": self.data_type,
             "bar_interval": self.bar_interval,
             "row_count": self.row_count,
             "first_ts_event": self.first_ts_event,
@@ -375,6 +413,83 @@ def discover_stage2_kline_archives(
     return tuple(archives)
 
 
+def discover_stage2_mark_archives(
+    config: Stage2DatasetConfig,
+) -> tuple[Stage2KlineArchive, ...]:
+    archives: list[Stage2KlineArchive] = []
+    for instrument_id in config.instrument_ids:
+        symbol = STAGE2_INSTRUMENT_SYMBOLS[instrument_id]
+        found = 0
+        for year, month in _month_keys(config.window_start, config.window_end):
+            name = f"{symbol}-{STAGE2_MARK_INTERVAL}-{year:04d}-{month:02d}.zip"
+            zip_path = (
+                config.raw_root
+                / STAGE2_MARK_ROOT
+                / symbol
+                / STAGE2_MARK_INTERVAL
+                / name
+            )
+            if not zip_path.exists():
+                continue
+            checksum_path = Path(f"{zip_path}.CHECKSUM")
+            if not checksum_path.is_file():
+                raise Stage2DataError("official checksum file is missing")
+            relative = f"{STAGE2_MARK_ROOT}/{symbol}/{STAGE2_MARK_INTERVAL}/{name}"
+            source_url = f"{STAGE2_PUBLIC_DATA_ORIGIN}/{relative}"
+            archives.append(
+                Stage2KlineArchive(
+                    instrument_id=instrument_id,
+                    interval=STAGE2_MARK_INTERVAL,
+                    symbol=symbol,
+                    year=year,
+                    month=month,
+                    zip_path=zip_path,
+                    checksum_path=checksum_path,
+                    source_url=source_url,
+                    checksum_url=f"{source_url}.CHECKSUM",
+                )
+            )
+            found += 1
+        if found == 0:
+            raise Stage2DataError("stage 2 mark source archive is missing")
+    return tuple(archives)
+
+
+def discover_stage2_funding_archives(
+    config: Stage2DatasetConfig,
+) -> tuple[Stage2FundingArchive, ...]:
+    archives: list[Stage2FundingArchive] = []
+    for instrument_id in config.instrument_ids:
+        symbol = STAGE2_INSTRUMENT_SYMBOLS[instrument_id]
+        found = 0
+        for year, month in _month_keys(config.window_start, config.window_end):
+            name = f"{symbol}-fundingRate-{year:04d}-{month:02d}.zip"
+            zip_path = config.raw_root / STAGE2_FUNDING_ROOT / symbol / name
+            if not zip_path.exists():
+                continue
+            checksum_path = Path(f"{zip_path}.CHECKSUM")
+            if not checksum_path.is_file():
+                raise Stage2DataError("official checksum file is missing")
+            relative = f"{STAGE2_FUNDING_ROOT}/{symbol}/{name}"
+            source_url = f"{STAGE2_PUBLIC_DATA_ORIGIN}/{relative}"
+            archives.append(
+                Stage2FundingArchive(
+                    instrument_id=instrument_id,
+                    symbol=symbol,
+                    year=year,
+                    month=month,
+                    zip_path=zip_path,
+                    checksum_path=checksum_path,
+                    source_url=source_url,
+                    checksum_url=f"{source_url}.CHECKSUM",
+                )
+            )
+            found += 1
+        if found == 0:
+            raise Stage2DataError("stage 2 funding source archive is missing")
+    return tuple(archives)
+
+
 def read_verified_kline_archive(
     archive: Stage2KlineArchive,
     *,
@@ -417,6 +532,189 @@ def read_verified_kline_archive(
         if open_time < month_start_ms or open_time >= month_end_ms:
             raise Stage2DataError("kline record is outside the archive month")
     return rows, digest
+
+
+def read_verified_funding_archive(
+    archive: Stage2FundingArchive,
+    *,
+    window_start: datetime,
+    window_end: datetime,
+) -> tuple[tuple[Stage2FundingRow, ...], str]:
+    digest = verify_zip_checksum(archive.zip_path, archive.checksum_path)
+    csv_name = (
+        f"{archive.symbol}-fundingRate-{archive.year:04d}-{archive.month:02d}.csv"
+    )
+    try:
+        with zipfile.ZipFile(archive.zip_path) as bundle:
+            names = bundle.namelist()
+            if names != [csv_name]:
+                raise Stage2DataError(
+                    "funding zip contents do not match the official CSV"
+                )
+            payload = bundle.read(csv_name)
+    except zipfile.BadZipFile as exc:
+        raise Stage2DataError("funding zip is invalid") from exc
+    rows = parse_funding_csv(payload)
+    if not rows:
+        raise Stage2DataError("funding csv has no records")
+    month_start = datetime(archive.year, archive.month, 1, tzinfo=UTC)
+    if archive.month == 12:
+        month_end = datetime(archive.year + 1, 1, 1, tzinfo=UTC)
+    else:
+        month_end = datetime(archive.year, archive.month + 1, 1, tzinfo=UTC)
+    month_start_ms = unix_millis(month_start)
+    month_end_ms = unix_millis(month_end)
+    window_start_ms = unix_millis(window_start)
+    window_end_ms = unix_millis(window_end)
+    for row in rows:
+        _validate_funding_row_values(
+            row,
+            window_start_ms=window_start_ms,
+            window_end_ms=window_end_ms,
+        )
+        calc_time = _require_int_string(row.calc_time, field="calc_time")
+        if calc_time < month_start_ms or calc_time >= month_end_ms:
+            raise Stage2DataError("funding record is outside the archive month")
+    return rows, digest
+
+
+def parse_funding_csv(payload: bytes) -> tuple[Stage2FundingRow, ...]:
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise Stage2DataError("funding csv is not valid UTF-8") from exc
+    reader = csv.reader(io.StringIO(text))
+    try:
+        first = next(reader)
+    except StopIteration as exc:
+        raise Stage2DataError("funding csv is empty") from exc
+    if not first:
+        raise Stage2DataError("funding csv has an empty record")
+    if _is_int_string(first[0].strip()):
+        rows = [first, *reader]
+        field_order = list(_CANONICAL_FUNDING_FIELDS)
+    else:
+        field_order = _map_funding_header(first)
+        rows = list(reader)
+    parsed: list[Stage2FundingRow] = []
+    for raw in rows:
+        if len(raw) != 3:
+            raise Stage2DataError("funding csv column count is not the fixed schema")
+        values = {field: raw[index].strip() for index, field in enumerate(field_order)}
+        parsed.append(
+            Stage2FundingRow(
+                calc_time=values["calc_time"],
+                funding_interval_hours=values["funding_interval_hours"],
+                last_funding_rate=values["last_funding_rate"],
+            )
+        )
+    return tuple(parsed)
+
+
+def validate_funding_row(
+    row: Stage2FundingRow,
+    *,
+    window_start: datetime,
+    window_end: datetime,
+) -> None:
+    _validate_funding_row_values(
+        row,
+        window_start_ms=unix_millis(window_start),
+        window_end_ms=unix_millis(window_end),
+    )
+
+
+def validate_funding_series(
+    rows: Sequence[Stage2FundingRow],
+    *,
+    instrument_id: str,
+    source_checksum: str,
+) -> Stage2SeriesCoverage:
+    if instrument_id not in STAGE2_INSTRUMENT_SYMBOLS:
+        raise Stage2DataError("instrument is not a stage 2 target")
+    if not rows:
+        raise Stage2DataError("funding series is empty")
+    seen: set[int] = set()
+    duplicate_count = 0
+    out_of_order_count = 0
+    previous: int | None = None
+    first_ts = 0
+    last_ts = 0
+    for index, row in enumerate(rows):
+        calc_time = _require_int_string(row.calc_time, field="calc_time")
+        ts_event = millis_to_nanos(calc_time)
+        if index == 0:
+            first_ts = ts_event
+        last_ts = ts_event
+        if calc_time in seen:
+            duplicate_count += 1
+        seen.add(calc_time)
+        if previous is not None and calc_time < previous:
+            out_of_order_count += 1
+        previous = calc_time
+    if duplicate_count:
+        raise Stage2DataError("funding series contains duplicate event times")
+    if out_of_order_count:
+        raise Stage2DataError("funding series is out of order")
+    return Stage2SeriesCoverage(
+        instrument_id=instrument_id,
+        data_type=STAGE2_DATA_TYPE_FUNDING,
+        bar_interval="",
+        row_count=len(rows),
+        first_ts_event=first_ts,
+        last_ts_event=last_ts,
+        duplicate_count=duplicate_count,
+        out_of_order_count=out_of_order_count,
+        gap_count=0,
+        source_checksum=source_checksum,
+    )
+
+
+def validate_mark_series(
+    rows: Sequence[Stage2KlineRow],
+    *,
+    instrument_id: str,
+    source_checksum: str,
+) -> Stage2SeriesCoverage:
+    coverage = validate_kline_series(
+        rows,
+        instrument_id=instrument_id,
+        interval=STAGE2_MARK_INTERVAL,
+        source_checksum=source_checksum,
+    )
+    return Stage2SeriesCoverage(
+        instrument_id=coverage.instrument_id,
+        data_type=STAGE2_DATA_TYPE_MARK,
+        bar_interval=STAGE2_MARK_INTERVAL,
+        row_count=coverage.row_count,
+        first_ts_event=coverage.first_ts_event,
+        last_ts_event=coverage.last_ts_event,
+        duplicate_count=coverage.duplicate_count,
+        out_of_order_count=coverage.out_of_order_count,
+        gap_count=coverage.gap_count,
+        source_checksum=coverage.source_checksum,
+    )
+
+
+def require_recent_mark_for_funding(
+    marks: Sequence[Stage2KlineRow],
+    fundings: Sequence[Stage2FundingRow],
+) -> None:
+    mark_times = tuple(
+        millis_to_nanos(_require_int_string(row.close_time, field="close_time"))
+        for row in marks
+    )
+    max_age_ns = STAGE2_MARK_MAX_AGE_MS * MS_NS
+    for funding in fundings:
+        funding_ts = millis_to_nanos(
+            _require_int_string(funding.calc_time, field="calc_time")
+        )
+        prior = tuple(ts for ts in mark_times if ts <= funding_ts)
+        if not prior:
+            raise Stage2DataError("funding event is missing a recent mark")
+        age = funding_ts - prior[-1]
+        if age > max_age_ns:
+            raise Stage2DataError("funding event is missing a recent mark")
 
 
 def verify_zip_checksum(zip_path: Path, checksum_path: Path) -> str:
@@ -531,6 +829,7 @@ def validate_kline_series(
         raise Stage2DataError("kline series contains a gap")
     return Stage2SeriesCoverage(
         instrument_id=instrument_id,
+        data_type=STAGE2_DATA_TYPE_BARS,
         bar_interval=interval,
         row_count=len(rows),
         first_ts_event=first_ts,
@@ -546,6 +845,8 @@ def build_source_object(
     archive: Stage2KlineArchive,
     rows: tuple[Stage2KlineRow, ...],
     sha256: str,
+    *,
+    data_type: str = STAGE2_DATA_TYPE_BARS,
 ) -> Stage2SourceObject:
     first = millis_to_nanos(_require_int_string(rows[0].close_time, field="close_time"))
     last = millis_to_nanos(_require_int_string(rows[-1].close_time, field="close_time"))
@@ -556,7 +857,28 @@ def build_source_object(
         checksum_url=archive.checksum_url,
         source_kind=STAGE2_SOURCE_KIND,
         instrument_id=archive.instrument_id,
-        data_type=STAGE2_DATA_TYPE_BARS,
+        data_type=data_type,
+        start_ns=first,
+        end_ns=last,
+        rows=len(rows),
+    )
+
+
+def build_funding_source_object(
+    archive: Stage2FundingArchive,
+    rows: tuple[Stage2FundingRow, ...],
+    sha256: str,
+) -> Stage2SourceObject:
+    first = millis_to_nanos(_require_int_string(rows[0].calc_time, field="calc_time"))
+    last = millis_to_nanos(_require_int_string(rows[-1].calc_time, field="calc_time"))
+    return Stage2SourceObject(
+        path=str(archive.zip_path),
+        source_url=archive.source_url,
+        sha256=sha256,
+        checksum_url=archive.checksum_url,
+        source_kind=STAGE2_SOURCE_KIND,
+        instrument_id=archive.instrument_id,
+        data_type=STAGE2_DATA_TYPE_FUNDING,
         start_ns=first,
         end_ns=last,
         rows=len(rows),
@@ -687,6 +1009,49 @@ def _parse_checksum_file(path: Path, zip_name: str) -> str:
     if len(first) > 1 and first[1].lstrip("*") not in {zip_name, ""}:
         raise Stage2DataError("official checksum file name does not match")
     return first[0]
+
+
+def _map_funding_header(fields: list[str]) -> list[str]:
+    mapped: list[str] = []
+    seen: set[str] = set()
+    for field in fields:
+        normalized = field.strip().lower().replace(" ", "_")
+        canonical = _FUNDING_HEADER_ALIASES.get(normalized)
+        if canonical is None:
+            raise Stage2DataError("funding csv header is not a known official schema")
+        if canonical in seen:
+            raise Stage2DataError("funding csv header maps to duplicate columns")
+        seen.add(canonical)
+        mapped.append(canonical)
+    if tuple(mapped) != _CANONICAL_FUNDING_FIELDS:
+        raise Stage2DataError("funding csv header is not the fixed schema")
+    return mapped
+
+
+def _validate_funding_row_values(
+    row: Stage2FundingRow,
+    *,
+    window_start_ms: int,
+    window_end_ms: int,
+) -> None:
+    calc_time = _require_int_string(row.calc_time, field="calc_time")
+    if calc_time < window_start_ms or calc_time >= window_end_ms:
+        raise Stage2DataError("funding record is outside the declared window")
+    hours = _require_int_string(
+        row.funding_interval_hours, field="funding_interval_hours"
+    )
+    if hours <= 0:
+        raise Stage2DataError("funding interval is illegal")
+    _require_decimal_string(row.last_funding_rate, field="last_funding_rate")
+
+
+def funding_interval_minutes(row: Stage2FundingRow) -> int:
+    hours = _require_int_string(
+        row.funding_interval_hours, field="funding_interval_hours"
+    )
+    if hours <= 0:
+        raise Stage2DataError("funding interval is illegal")
+    return hours * 60
 
 
 def _map_header(fields: list[str]) -> list[str]:
