@@ -44,6 +44,7 @@ from tracequant.research.views import (
 )
 from tracequant.source_data.stage2_btceth import (
     STAGE2_DATASET_ID,
+    STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
     STAGE2_INTERVAL_MS,
     STAGE2_MANIFEST_FILENAME,
     STAGE2_NAUTILUS_VERSION,
@@ -145,14 +146,23 @@ def _bar_at(
 
 
 def _write_manifest(catalog_path: Path, **overrides: object) -> None:
+    snapshot = {
+        "checksum_sha256": "1" * 64,
+        "fetched_at": "2026-09-14T12:00:00Z",
+    }
     payload: dict[str, object] = {
         "schema": STAGE2_SOURCE_SCHEMA,
         "dataset_id": STAGE2_DATASET_ID,
+        "instrument_snapshot": {
+            **snapshot,
+            "filename": STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
+        },
         "nautilus_version": STAGE2_NAUTILUS_VERSION,
         "sources": [],
     }
     payload.update(overrides)
     write_json(catalog_path / STAGE2_MANIFEST_FILENAME, payload)
+    write_json(catalog_path / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME, snapshot)
 
 
 def _write_research_catalog(root: Path) -> tuple[Path, str]:
@@ -380,6 +390,18 @@ def test_loader_rejects_empty_identity_window_and_future_reads(tmp_path: Path) -
     _write_manifest(other, dataset_id="other-dataset-r1")
     with pytest.raises(Stage2DataError, match="identity"):
         load_bars(other, bar_type, train_start, train_end)
+    mismatched_snapshot = tmp_path / "mismatched-snapshot"
+    mismatched_snapshot.mkdir()
+    _write_manifest(mismatched_snapshot)
+    write_json(
+        mismatched_snapshot / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
+        {
+            "checksum_sha256": "2" * 64,
+            "fetched_at": "2026-09-14T12:00:00Z",
+        },
+    )
+    with pytest.raises(Stage2DataError, match="snapshot identity"):
+        load_bars(mismatched_snapshot, bar_type, train_start, train_end)
     with pytest.raises(Stage2DataError, match="inverted"):
         load_bars(catalog_path, bar_type, train_end, train_start)
     with pytest.raises(Stage2DataError, match="outside the declared window"):

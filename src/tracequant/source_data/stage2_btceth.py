@@ -57,6 +57,10 @@ STAGE2_INCLUDE_INDEX_PRICE: Final = False
 STAGE2_NAUTILUS_TAIL_ENABLED: Final = False
 STAGE2_CROSSCHECK_START_ISO: Final = "2026-08-25T00:00:00Z"
 STAGE2_CROSSCHECK_END_ISO: Final = "2026-09-01T00:00:00Z"
+STAGE2_SMA_PARITY_START_ISO: Final = STAGE2_WINDOW_START_ISO
+STAGE2_SMA_PARITY_END_ISO: Final = "2020-01-02T00:00:00Z"
+STAGE2_SMA_PARITY_INTERVAL: Final = "15m"
+STAGE2_SMA_PARITY_PERIODS: Final = (10, 20)
 STAGE2_GENERATION_COMMAND: Final = (
     "uv run --frozen python -m tracequant.integrations.nautilus.stage2_btceth"
 )
@@ -274,14 +278,24 @@ class Stage2SourceManifest:
     schema: str
     dataset_id: str
     nautilus_version: str
+    instrument_snapshot_checksum: str
+    instrument_snapshot_fetched_at: str
     sources: tuple[Stage2SourceObject, ...]
     supplemental_sources: tuple[Stage2SourceObject, ...] = ()
+
+    def instrument_snapshot_identity(self) -> dict[str, str]:
+        return {
+            "checksum_sha256": self.instrument_snapshot_checksum,
+            "fetched_at": self.instrument_snapshot_fetched_at,
+            "filename": STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
+        }
 
     def to_json_dict(self) -> dict[str, object]:
         return {
             "schema": self.schema,
             "dataset_id": self.dataset_id,
             "nautilus_version": self.nautilus_version,
+            "instrument_snapshot": self.instrument_snapshot_identity(),
             "sources": [item.to_json_dict() for item in self.sources],
             "supplemental_sources": [
                 item.to_json_dict() for item in self.supplemental_sources
@@ -1083,6 +1097,33 @@ def require_stage2_catalog_identity(catalog_path: Path) -> None:
         raise Stage2DataError("catalog identity does not match")
     if payload.get("nautilus_version") != STAGE2_NAUTILUS_VERSION:
         raise Stage2DataError("catalog identity does not match")
+    snapshot_identity = payload.get("instrument_snapshot")
+    if not isinstance(snapshot_identity, Mapping):
+        raise Stage2DataError("catalog instrument snapshot identity is missing")
+    if snapshot_identity.get("filename") != STAGE2_INSTRUMENT_SNAPSHOT_FILENAME:
+        raise Stage2DataError("catalog instrument snapshot identity does not match")
+    snapshot_checksum = snapshot_identity.get("checksum_sha256")
+    snapshot_fetched_at = snapshot_identity.get("fetched_at")
+    if (
+        not isinstance(snapshot_checksum, str)
+        or not _is_sha256_string(snapshot_checksum)
+        or not isinstance(snapshot_fetched_at, str)
+    ):
+        raise Stage2DataError("catalog instrument snapshot identity does not match")
+    parse_utc(snapshot_fetched_at)
+    snapshot_path = catalog_path / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME
+    if not snapshot_path.is_file():
+        raise Stage2DataError("catalog instrument snapshot is missing")
+    try:
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise Stage2DataError("catalog instrument snapshot is invalid") from exc
+    if (
+        not isinstance(snapshot, Mapping)
+        or snapshot.get("checksum_sha256") != snapshot_checksum
+        or snapshot.get("fetched_at") != snapshot_fetched_at
+    ):
+        raise Stage2DataError("catalog instrument snapshot identity does not match")
 
 
 def write_json(path: Path, payload: Mapping[str, object]) -> None:
@@ -1159,7 +1200,7 @@ def expected_source_inventory_digest() -> str:
     return _canonical_digest(payload)
 
 
-def source_manifest_digest(manifest: Stage2SourceManifest) -> str:
+def market_data_manifest_digest(manifest: Stage2SourceManifest) -> str:
     def _identity(item: Stage2SourceObject) -> dict[str, str | int]:
         return {
             "checksum_url": item.checksum_url,
@@ -1179,6 +1220,15 @@ def source_manifest_digest(manifest: Stage2SourceManifest) -> str:
         ],
     }
     return _canonical_digest(payload)
+
+
+def source_manifest_digest(manifest: Stage2SourceManifest) -> str:
+    return _canonical_digest(
+        {
+            "instrument_snapshot": manifest.instrument_snapshot_identity(),
+            "market_data_manifest_digest": market_data_manifest_digest(manifest),
+        }
+    )
 
 
 def require_complete_source_inventory(source_urls: Sequence[str]) -> None:
@@ -1322,6 +1372,8 @@ def dataset_digest_payload(
     return {
         "coverage": coverage_summary(coverage),
         "dataset_id": manifest.dataset_id,
+        "instrument_snapshot": manifest.instrument_snapshot_identity(),
+        "market_data_manifest_digest": market_data_manifest_digest(manifest),
         "nautilus_version": manifest.nautilus_version,
         "runtime_identity": runtime_identity,
         "source_manifest_digest": source_manifest_digest(manifest),
@@ -1350,6 +1402,7 @@ def build_stage2_acceptance_record(
     runtime_identity: str,
     crosscheck: Mapping[str, object],
     homology: Mapping[str, object],
+    sma_parity: Mapping[str, object],
     checksum_probe: Callable[[str], bool] | None = None,
     index_coverage: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
@@ -1370,6 +1423,7 @@ def build_stage2_acceptance_record(
         "catalog_evidence": {
             "coverage_filename": STAGE2_COVERAGE_FILENAME,
             "dataset_digest_filename": STAGE2_DIGEST_FILENAME,
+            "instrument_snapshot_filename": STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
             "source_manifest_filename": STAGE2_MANIFEST_FILENAME,
             "source_object_count": len(manifest.sources),
             "supplemental_source_count": len(manifest.supplemental_sources),
@@ -1386,12 +1440,15 @@ def build_stage2_acceptance_record(
         "expected_source_inventory_digest": expected_source_inventory_digest(),
         "generation_command": STAGE2_GENERATION_COMMAND,
         "homology": dict(homology),
+        "instrument_snapshot": manifest.instrument_snapshot_identity(),
+        "market_data_manifest_digest": market_data_manifest_digest(manifest),
         "include_index_price": STAGE2_INCLUDE_INDEX_PRICE,
         "index_coverage": resolved_index_coverage,
         "nautilus_tail_enabled": STAGE2_NAUTILUS_TAIL_ENABLED,
         "nautilus_version": STAGE2_NAUTILUS_VERSION,
         "runtime_identity": runtime_identity,
         "schema": STAGE2_ACCEPTANCE_SCHEMA,
+        "sma_parity": dict(sma_parity),
         "source_manifest_digest": source_manifest_digest(manifest),
         "splits": {
             "test": ["2025-01-01T00:00:00Z", STAGE2_WINDOW_END_ISO],
@@ -1433,6 +1490,12 @@ def require_complete_acceptance_record(
         raise Stage2DataError("acceptance record coverage locator is missing")
     if evidence.get("dataset_digest_filename") != STAGE2_DIGEST_FILENAME:
         raise Stage2DataError("acceptance record dataset digest locator is missing")
+    if evidence.get("instrument_snapshot_filename") != (
+        STAGE2_INSTRUMENT_SNAPSHOT_FILENAME
+    ):
+        raise Stage2DataError(
+            "acceptance record instrument snapshot locator is missing"
+        )
     if evidence.get("source_object_count") != STAGE2_EXPECTED_SOURCE_COUNT:
         raise Stage2DataError("acceptance record catalog evidence is incomplete")
     supplemental_source_count = evidence.get("supplemental_source_count")
@@ -1442,12 +1505,100 @@ def require_complete_acceptance_record(
         STAGE2_EXPECTED_SUPPLEMENTAL_SOURCE_COUNT
     ):
         raise Stage2DataError("tracked acceptance gap-fill evidence is incomplete")
-    for key in ("dataset_digest", "source_manifest_digest"):
+    for key in (
+        "dataset_digest",
+        "market_data_manifest_digest",
+        "source_manifest_digest",
+    ):
         digest = record.get(key)
         if not isinstance(digest, str) or not _is_sha256_string(digest):
             raise Stage2DataError(f"acceptance record {key} is not a SHA-256 digest")
         if digest == "0" * 64:
             raise Stage2DataError(f"acceptance record {key} is a placeholder")
+
+    instrument_snapshot = record.get("instrument_snapshot")
+    if not isinstance(instrument_snapshot, Mapping):
+        raise Stage2DataError("acceptance record instrument snapshot is missing")
+    if instrument_snapshot.get("filename") != STAGE2_INSTRUMENT_SNAPSHOT_FILENAME:
+        raise Stage2DataError(
+            "acceptance record instrument snapshot locator is missing"
+        )
+    snapshot_checksum = instrument_snapshot.get("checksum_sha256")
+    if (
+        not isinstance(snapshot_checksum, str)
+        or not _is_sha256_string(snapshot_checksum)
+        or snapshot_checksum == "0" * 64
+    ):
+        raise Stage2DataError(
+            "acceptance record instrument snapshot is not source-bound"
+        )
+    snapshot_fetched_at = instrument_snapshot.get("fetched_at")
+    if not isinstance(snapshot_fetched_at, str):
+        raise Stage2DataError("acceptance record instrument fetch time is missing")
+    parse_utc(snapshot_fetched_at)
+    normalized_snapshot = dict(instrument_snapshot)
+    market_data_digest = record.get("market_data_manifest_digest")
+    expected_source_manifest_digest = _canonical_digest(
+        {
+            "instrument_snapshot": normalized_snapshot,
+            "market_data_manifest_digest": market_data_digest,
+        }
+    )
+    if record.get("source_manifest_digest") != expected_source_manifest_digest:
+        raise Stage2DataError(
+            "acceptance record source manifest identity does not match"
+        )
+    expected_dataset_digest = _canonical_digest(
+        {
+            "coverage": record.get("coverage_summary"),
+            "dataset_id": record.get("dataset_id"),
+            "instrument_snapshot": normalized_snapshot,
+            "market_data_manifest_digest": market_data_digest,
+            "nautilus_version": record.get("nautilus_version"),
+            "runtime_identity": record.get("runtime_identity"),
+            "source_manifest_digest": expected_source_manifest_digest,
+        }
+    )
+    if record.get("dataset_digest") != expected_dataset_digest:
+        raise Stage2DataError("acceptance record dataset identity does not match")
+
+    sma_parity = record.get("sma_parity")
+    if not isinstance(sma_parity, Mapping) or sma_parity.get("passed") is not True:
+        raise Stage2DataError("acceptance record SMA parity is missing")
+    if (
+        sma_parity.get("start") != STAGE2_SMA_PARITY_START_ISO
+        or sma_parity.get("end") != STAGE2_SMA_PARITY_END_ISO
+        or sma_parity.get("interval") != STAGE2_SMA_PARITY_INTERVAL
+    ):
+        raise Stage2DataError("acceptance record SMA parity window does not match")
+    sma_series = sma_parity.get("series")
+    if not isinstance(sma_series, list) or len(sma_series) != len(
+        STAGE2_INSTRUMENT_IDS
+    ):
+        raise Stage2DataError("acceptance record SMA parity series are incomplete")
+    observed_sma: set[str] = set()
+    for item in sma_series:
+        if not isinstance(item, Mapping):
+            raise Stage2DataError("acceptance record SMA parity series is invalid")
+        instrument_id = item.get("instrument_id")
+        if not isinstance(instrument_id, str):
+            raise Stage2DataError("acceptance record SMA parity instrument is invalid")
+        results = item.get("periods")
+        if not isinstance(results, list) or {
+            result.get("period") for result in results if isinstance(result, Mapping)
+        } != set(STAGE2_SMA_PARITY_PERIODS):
+            raise Stage2DataError("acceptance record SMA parity periods are incomplete")
+        if any(
+            not isinstance(result, Mapping)
+            or result.get("passed") is not True
+            or not isinstance(result.get("compared_points"), int)
+            or result["compared_points"] <= 0
+            for result in results
+        ):
+            raise Stage2DataError("acceptance record SMA parity contains failures")
+        observed_sma.add(instrument_id)
+    if observed_sma != set(STAGE2_INSTRUMENT_IDS):
+        raise Stage2DataError("acceptance record SMA parity instruments are incomplete")
 
     coverage = record.get("coverage_summary")
     if not isinstance(coverage, list) or len(coverage) != 10:

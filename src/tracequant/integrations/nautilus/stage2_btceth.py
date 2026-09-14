@@ -78,6 +78,10 @@ from tracequant.source_data.stage2_btceth import (
     STAGE2_INSTRUMENT_SYMBOLS,
     STAGE2_MANIFEST_FILENAME,
     STAGE2_NAUTILUS_VERSION,
+    STAGE2_SMA_PARITY_END_ISO,
+    STAGE2_SMA_PARITY_INTERVAL,
+    STAGE2_SMA_PARITY_PERIODS,
+    STAGE2_SMA_PARITY_START_ISO,
     STAGE2_SOURCE_SCHEMA,
     Stage2CoverageReport,
     Stage2DataError,
@@ -322,17 +326,19 @@ def prepare_stage2_bar_catalog(
         )
         _assert_round_trip(bars, queried)
         coverage_series.append(series_coverage)
+    snapshot_payload = instrument_snapshot_payload(native, fetched_at=observed_at)
     manifest = Stage2SourceManifest(
         schema=STAGE2_SOURCE_SCHEMA,
         dataset_id=config.dataset_id,
         nautilus_version=config.nautilus_version,
+        instrument_snapshot_checksum=snapshot_checksum,
+        instrument_snapshot_fetched_at=isoformat_utc(observed_at),
         sources=tuple(source_objects),
     )
     report = Stage2CoverageReport(
         dataset_id=config.dataset_id,
         series=tuple(coverage_series),
     )
-    snapshot_payload = instrument_snapshot_payload(native, fetched_at=observed_at)
     write_json(config.catalog_path / STAGE2_MANIFEST_FILENAME, manifest.to_json_dict())
     write_json(config.catalog_path / STAGE2_COVERAGE_FILENAME, report.to_json_dict())
     write_json(
@@ -383,10 +389,13 @@ def prepare_stage2_mark_funding_catalog(
         fundings,
         instance_id=STAGE2_FUNDING_STREAM_ID,
     )
+    snapshot_payload = instrument_snapshot_payload(native, fetched_at=observed_at)
     manifest = Stage2SourceManifest(
         schema=STAGE2_SOURCE_SCHEMA,
         dataset_id=config.dataset_id,
         nautilus_version=config.nautilus_version,
+        instrument_snapshot_checksum=snapshot_checksum,
+        instrument_snapshot_fetched_at=isoformat_utc(observed_at),
         sources=tuple(source_objects),
         supplemental_sources=tuple(supplemental_objects),
     )
@@ -394,7 +403,6 @@ def prepare_stage2_mark_funding_catalog(
         dataset_id=config.dataset_id,
         series=tuple(coverage_series),
     )
-    snapshot_payload = instrument_snapshot_payload(native, fetched_at=observed_at)
     write_json(config.catalog_path / STAGE2_MANIFEST_FILENAME, manifest.to_json_dict())
     write_json(config.catalog_path / STAGE2_COVERAGE_FILENAME, report.to_json_dict())
     write_json(
@@ -1040,10 +1048,13 @@ def prepare_stage2_combined_catalog(
     )
     coverage_series = [item[3] for item in prepared]
     coverage_series.extend(mark_coverage)
+    snapshot_payload = instrument_snapshot_payload(native, fetched_at=observed_at)
     manifest = Stage2SourceManifest(
         schema=STAGE2_SOURCE_SCHEMA,
         dataset_id=config.dataset_id,
         nautilus_version=config.nautilus_version,
+        instrument_snapshot_checksum=snapshot_checksum,
+        instrument_snapshot_fetched_at=isoformat_utc(observed_at),
         sources=tuple(bar_objects + mark_objects),
         supplemental_sources=tuple(supplemental_objects),
     )
@@ -1053,7 +1064,6 @@ def prepare_stage2_combined_catalog(
         series=tuple(coverage_series),
     )
     coverage_summary(report)
-    snapshot_payload = instrument_snapshot_payload(native, fetched_at=observed_at)
     if snapshot_checksum != _snapshot_checksum(
         [instrument.to_dict() for instrument in native]
     ):
@@ -1174,12 +1184,14 @@ def prepare_stage2_dataset(
     crosscheck = {**crosscheck, "source": crosscheck_source}
     if homology is None:
         homology = _stage2_split_homology(catalog_path)
+    sma_parity = _stage2_sma_parity_evidence(catalog_path)
     record = build_stage2_acceptance_record(
         manifest=manifest,
         coverage=coverage,
         runtime_identity=UPSTREAM_RELEASE_IDENTITY,
         crosscheck=crosscheck,
         homology=homology,
+        sma_parity=sma_parity,
         index_coverage=index_coverage,
     )
     if acceptance_path is not None:
@@ -1391,9 +1403,10 @@ def stage2_sma_parity(
     period: int,
     precision: int,
     tick: Decimal,
-) -> None:
+) -> dict[str, object]:
     nautilus_values = nautilus_close_sma(bars, period)
     compared = 0
+    max_error = Decimal(0)
     for research_value, nautilus_value in zip(
         research_values, nautilus_values, strict=True
     ):
@@ -1405,11 +1418,20 @@ def stage2_sma_parity(
         nautilus_tick = quantize_price(
             Decimal(str(nautilus_value)), precision=precision
         )
-        if abs(research_tick - nautilus_tick) > tick:
+        error = abs(research_tick - nautilus_tick)
+        if error > tick:
             raise Stage2DataError("sma parity exceeds one price tick")
+        max_error = max(max_error, error)
         compared += 1
     if compared != len(bars) - period + 1:
         raise Stage2DataError("sma parity compared count is incomplete")
+    return {
+        "compared_points": compared,
+        "max_absolute_error": str(max_error),
+        "passed": True,
+        "period": period,
+        "price_tick": str(tick),
+    }
 
 
 def _require_stage2_bar_type(bar_type: str) -> None:
@@ -1590,6 +1612,51 @@ def _stage2_split_homology(catalog_path: Path) -> dict[str, object]:
                 ),
             )
     return result
+
+
+def _stage2_sma_parity_evidence(catalog_path: Path) -> dict[str, object]:
+    from tracequant.research.views import load_bars, sma_close
+
+    start = parse_utc(STAGE2_SMA_PARITY_START_ISO)
+    end = parse_utc(STAGE2_SMA_PARITY_END_ISO)
+    series: list[dict[str, object]] = []
+    for instrument_id in STAGE2_INSTRUMENT_IDS:
+        bar_type = stage2_bar_type_str(instrument_id, STAGE2_SMA_PARITY_INTERVAL)
+        research_bars = load_bars(catalog_path, bar_type, start, end)
+        bars = query_stage2_bars(
+            catalog_path,
+            bar_type,
+            start_ns=int(research_bars.get_column("ts_event")[0]),
+            end_ns=int(research_bars.get_column("ts_event")[-1]),
+        )
+        precision, tick_value = stage2_price_spec(catalog_path, instrument_id)
+        tick = Decimal(tick_value)
+        period_results = [
+            stage2_sma_parity(
+                sma_close(research_bars, period),
+                bars,
+                period=period,
+                precision=precision,
+                tick=tick,
+            )
+            for period in STAGE2_SMA_PARITY_PERIODS
+        ]
+        series.append(
+            {
+                "bar_type": bar_type,
+                "instrument_id": instrument_id,
+                "periods": period_results,
+                "price_precision": precision,
+                "row_count": len(bars),
+            }
+        )
+    return {
+        "end": STAGE2_SMA_PARITY_END_ISO,
+        "interval": STAGE2_SMA_PARITY_INTERVAL,
+        "passed": True,
+        "series": series,
+        "start": STAGE2_SMA_PARITY_START_ISO,
+    }
 
 
 def fetch_stage2_nautilus_crosscheck() -> tuple[
