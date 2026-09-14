@@ -590,5 +590,9 @@ def test_nautilus_boundary_owns_catalog_writes() -> None:
     assert "write_bars" in nautilus
     assert "query_bars" in nautilus
     assert "skip_disjoint_check=True" not in nautilus
-    assert "request_bars" not in nautilus
     assert "download-kline" not in nautilus
+    assert "def fetch_stage2_nautilus_crosscheck" in nautilus
+    assert "def prepare_stage2_bar_catalog" in nautilus
+    prepare_start = nautilus.index("def prepare_stage2_bar_catalog")
+    prepare_end = nautilus.index("def prepare_stage2_mark_funding_catalog")
+    assert "request_bars" not in nautilus[prepare_start:prepare_end]

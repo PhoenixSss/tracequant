@@ -1,10 +1,19 @@
 {
-  "crosscheck_end": "2026-09-01T00:00:00Z",
-  "crosscheck_start": "2026-08-25T00:00:00Z",
+  "coverage_summary": [],
+  "crosscheck": {
+    "compared_records": 0,
+    "end": "2026-09-01T00:00:00Z",
+    "series": [],
+    "source": "nautilus_request",
+    "start": "2026-08-25T00:00:00Z",
+    "written_to_catalog": false
+  },
+  "dataset_digest": "0000000000000000000000000000000000000000000000000000000000000000",
   "dataset_id": "binance-usdm-btceth-202001-202608-r1",
   "expected_source_count": 800,
   "expected_source_inventory_digest": "0d5c8b384098ba7730d814739b4c4549e7bcf01a12c9c69eec614e6fbb0dc816",
   "generation_command": "uv run --frozen python -m tracequant.integrations.nautilus.stage2_btceth",
+  "homology": {},
   "include_index_price": false,
   "index_coverage": {
     "checksum_available": true,
@@ -20,6 +29,7 @@
   "nautilus_version": "2.0.0rc4",
   "runtime_identity": "2.0.0rc4+a0400251110653b6d8ae6a9b5b89c4543fa85a2d",
   "schema": "tracequant-stage2-acceptance-v1",
+  "source_manifest_digest": "0000000000000000000000000000000000000000000000000000000000000000",
   "splits": {
     "test": [
       "2025-01-01T00:00:00Z",

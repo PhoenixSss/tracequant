@@ -5,10 +5,12 @@ import hashlib
 import io
 import json
 import tomllib
+import urllib.error
+import urllib.request
 import zipfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Final
@@ -54,6 +56,10 @@ STAGE2_CROSSCHECK_START_ISO: Final = "2026-08-25T00:00:00Z"
 STAGE2_CROSSCHECK_END_ISO: Final = "2026-09-01T00:00:00Z"
 STAGE2_GENERATION_COMMAND: Final = (
     "uv run --frozen python -m tracequant.integrations.nautilus.stage2_btceth"
+)
+STAGE2_CONFIG_ENV: Final = "TRACEQUANT_STAGE2_CONFIG"
+STAGE2_MONTH_BOUNDARY_GAP_EXPLANATION: Final = (
+    "binance-public-data monthly archive boundary"
 )
 MS_NS: Final = 1_000_000
 
@@ -258,6 +264,7 @@ class Stage2SeriesCoverage:
     out_of_order_count: int
     gap_count: int
     source_checksum: str
+    gap_explanation: str = ""
 
     def to_json_dict(self) -> dict[str, str | int]:
         payload: dict[str, str | int] = {
@@ -270,6 +277,7 @@ class Stage2SeriesCoverage:
             "duplicate_count": self.duplicate_count,
             "out_of_order_count": self.out_of_order_count,
             "gap_count": self.gap_count,
+            "gap_explanation": self.gap_explanation,
             "source_checksum": self.source_checksum,
             "source_sha256": self.source_checksum,
         }
@@ -426,6 +434,8 @@ def load_stage2_config(path: Path, *, repository_root: Path) -> Stage2DatasetCon
 
 def discover_stage2_kline_archives(
     config: Stage2DatasetConfig,
+    *,
+    require_complete: bool = False,
 ) -> tuple[Stage2KlineArchive, ...]:
     archives: list[Stage2KlineArchive] = []
     for instrument_id in config.instrument_ids:
@@ -438,6 +448,8 @@ def discover_stage2_kline_archives(
                     config.raw_root / STAGE2_KLINE_ROOT / symbol / interval / name
                 )
                 if not zip_path.exists():
+                    if require_complete:
+                        raise Stage2DataError("stage 2 kline source archive is missing")
                     continue
                 checksum_path = Path(f"{zip_path}.CHECKSUM")
                 if not checksum_path.is_file():
@@ -465,6 +477,8 @@ def discover_stage2_kline_archives(
 
 def discover_stage2_mark_archives(
     config: Stage2DatasetConfig,
+    *,
+    require_complete: bool = False,
 ) -> tuple[Stage2KlineArchive, ...]:
     archives: list[Stage2KlineArchive] = []
     for instrument_id in config.instrument_ids:
@@ -480,6 +494,8 @@ def discover_stage2_mark_archives(
                 / name
             )
             if not zip_path.exists():
+                if require_complete:
+                    raise Stage2DataError("stage 2 mark source archive is missing")
                 continue
             checksum_path = Path(f"{zip_path}.CHECKSUM")
             if not checksum_path.is_file():
@@ -507,6 +523,8 @@ def discover_stage2_mark_archives(
 
 def discover_stage2_funding_archives(
     config: Stage2DatasetConfig,
+    *,
+    require_complete: bool = False,
 ) -> tuple[Stage2FundingArchive, ...]:
     archives: list[Stage2FundingArchive] = []
     for instrument_id in config.instrument_ids:
@@ -516,6 +534,8 @@ def discover_stage2_funding_archives(
             name = f"{symbol}-fundingRate-{year:04d}-{month:02d}.zip"
             zip_path = config.raw_root / STAGE2_FUNDING_ROOT / symbol / name
             if not zip_path.exists():
+                if require_complete:
+                    raise Stage2DataError("stage 2 funding source archive is missing")
                 continue
             checksum_path = Path(f"{zip_path}.CHECKSUM")
             if not checksum_path.is_file():
@@ -687,11 +707,15 @@ def validate_funding_series(
     seen: set[int] = set()
     duplicate_count = 0
     out_of_order_count = 0
+    gap_count = 0
+    unexplained_gaps = 0
     previous: int | None = None
+    previous_interval_ms = 0
     first_ts = 0
     last_ts = 0
     for index, row in enumerate(rows):
         calc_time = _require_int_string(row.calc_time, field="calc_time")
+        interval_ms = funding_interval_minutes(row) * 60 * 1000
         ts_event = millis_to_nanos(calc_time)
         if index == 0:
             first_ts = ts_event
@@ -699,13 +723,21 @@ def validate_funding_series(
         if calc_time in seen:
             duplicate_count += 1
         seen.add(calc_time)
-        if previous is not None and calc_time < previous:
-            out_of_order_count += 1
+        if previous is not None:
+            if calc_time < previous:
+                out_of_order_count += 1
+            elif calc_time - previous > previous_interval_ms:
+                gap_count += 1
+                if not _is_month_boundary_gap(previous, calc_time):
+                    unexplained_gaps += 1
         previous = calc_time
+        previous_interval_ms = interval_ms
     if duplicate_count:
         raise Stage2DataError("funding series contains duplicate event times")
     if out_of_order_count:
         raise Stage2DataError("funding series is out of order")
+    if unexplained_gaps:
+        raise Stage2DataError("funding series contains a gap")
     return Stage2SeriesCoverage(
         instrument_id=instrument_id,
         data_type=STAGE2_DATA_TYPE_FUNDING,
@@ -715,8 +747,9 @@ def validate_funding_series(
         last_ts_event=last_ts,
         duplicate_count=duplicate_count,
         out_of_order_count=out_of_order_count,
-        gap_count=0,
+        gap_count=gap_count,
         source_checksum=source_checksum,
+        gap_explanation=(STAGE2_MONTH_BOUNDARY_GAP_EXPLANATION if gap_count else ""),
     )
 
 
@@ -743,6 +776,7 @@ def validate_mark_series(
         out_of_order_count=coverage.out_of_order_count,
         gap_count=coverage.gap_count,
         source_checksum=coverage.source_checksum,
+        gap_explanation=coverage.gap_explanation,
     )
 
 
@@ -852,6 +886,7 @@ def validate_kline_series(
     duplicate_count = 0
     out_of_order_count = 0
     gap_count = 0
+    unexplained_gaps = 0
     previous_open: int | None = None
     first_ts = 0
     last_ts = 0
@@ -870,12 +905,14 @@ def validate_kline_series(
                 out_of_order_count += 1
             elif open_time - previous_open != interval_ms:
                 gap_count += 1
+                if not _is_month_boundary_gap(previous_open, open_time):
+                    unexplained_gaps += 1
         previous_open = open_time
     if duplicate_count:
         raise Stage2DataError("kline series contains duplicate event times")
     if out_of_order_count:
         raise Stage2DataError("kline series is out of order")
-    if gap_count:
+    if unexplained_gaps:
         raise Stage2DataError("kline series contains a gap")
     return Stage2SeriesCoverage(
         instrument_id=instrument_id,
@@ -888,6 +925,7 @@ def validate_kline_series(
         out_of_order_count=out_of_order_count,
         gap_count=gap_count,
         source_checksum=source_checksum,
+        gap_explanation=(STAGE2_MONTH_BOUNDARY_GAP_EXPLANATION if gap_count else ""),
     )
 
 
@@ -1063,30 +1101,59 @@ def require_tail_disabled() -> None:
         raise Stage2DataError("nautilus tail must stay disabled")
 
 
-def stage2_index_coverage_conclusion() -> dict[str, object]:
+def probe_index_checksum_url(url: str) -> bool:
+    if not url.startswith(f"{STAGE2_PUBLIC_DATA_ORIGIN}/") or not url.endswith(
+        ".CHECKSUM"
+    ):
+        return False
+    request = urllib.request.Request(url, method="HEAD")
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            status = int(getattr(response, "status", 0))
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        return False
+    return 200 <= status < 300
+
+
+def stage2_index_coverage_conclusion(
+    *,
+    checksum_probe: Callable[[str], bool] | None = None,
+) -> dict[str, object]:
     if STAGE2_INCLUDE_INDEX_PRICE:
         raise Stage2DataError("index price must not be included in the first catalog")
     months = stage2_month_keys()
-    _require_continuous_months(months)
+    continuous_months = True
+    try:
+        _require_continuous_months(months)
+    except Stage2DataError:
+        continuous_months = False
+    probe = checksum_probe if checksum_probe is not None else probe_index_checksum_url
     objects: list[dict[str, str | int]] = []
+    checksum_available = True
     for instrument_id in STAGE2_INSTRUMENT_IDS:
         symbol = STAGE2_INSTRUMENT_SYMBOLS[instrument_id]
         for year, month in months:
             name = f"{symbol}-{STAGE2_INDEX_INTERVAL}-{year:04d}-{month:02d}.zip"
             relative = f"{STAGE2_INDEX_ROOT}/{symbol}/{STAGE2_INDEX_INTERVAL}/{name}"
             source_url = f"{STAGE2_PUBLIC_DATA_ORIGIN}/{relative}"
+            checksum_url = f"{source_url}.CHECKSUM"
+            if not probe(checksum_url):
+                checksum_available = False
             objects.append(
                 {
-                    "checksum_url": f"{source_url}.CHECKSUM",
+                    "checksum_url": checksum_url,
                     "instrument_id": instrument_id,
                     "month": month,
                     "source_url": source_url,
                     "year": year,
                 }
             )
+    expected = len(STAGE2_INSTRUMENT_IDS) * len(months)
+    if len(objects) != expected:
+        continuous_months = False
     return {
-        "checksum_available": True,
-        "continuous_months": True,
+        "checksum_available": checksum_available,
+        "continuous_months": continuous_months,
         "downloaded": False,
         "include_index_price": False,
         "interval": STAGE2_INDEX_INTERVAL,
@@ -1105,7 +1172,9 @@ def coverage_summary(
             raise Stage2DataError(
                 "coverage report contains duplicate or out-of-order rows"
             )
-        if item.gap_count:
+        if item.gap_count and item.gap_explanation != (
+            STAGE2_MONTH_BOUNDARY_GAP_EXPLANATION
+        ):
             raise Stage2DataError("coverage report contains an unexplained gap")
     summary: list[dict[str, str | int]] = []
     for item in report.series:
@@ -1115,6 +1184,7 @@ def coverage_summary(
             "duplicate_count": item.duplicate_count,
             "first_ts_event": item.first_ts_event,
             "gap_count": item.gap_count,
+            "gap_explanation": item.gap_explanation,
             "instrument_id": item.instrument_id,
             "last_ts_event": item.last_ts_event,
             "out_of_order_count": item.out_of_order_count,
@@ -1166,6 +1236,7 @@ def build_stage2_acceptance_record(
     runtime_identity: str,
     crosscheck: Mapping[str, object],
     homology: Mapping[str, object],
+    checksum_probe: Callable[[str], bool] | None = None,
 ) -> dict[str, object]:
     require_tail_disabled()
     record: dict[str, object] = {
@@ -1182,7 +1253,9 @@ def build_stage2_acceptance_record(
         "generation_command": STAGE2_GENERATION_COMMAND,
         "homology": dict(homology),
         "include_index_price": STAGE2_INCLUDE_INDEX_PRICE,
-        "index_coverage": stage2_index_coverage_conclusion(),
+        "index_coverage": stage2_index_coverage_conclusion(
+            checksum_probe=checksum_probe
+        ),
         "nautilus_tail_enabled": STAGE2_NAUTILUS_TAIL_ENABLED,
         "nautilus_version": STAGE2_NAUTILUS_VERSION,
         "runtime_identity": runtime_identity,
@@ -1246,6 +1319,12 @@ def _source_spec(
 def _canonical_digest(payload: object) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _is_month_boundary_gap(previous_ms: int, next_ms: int) -> bool:
+    previous = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=previous_ms)
+    nxt = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=next_ms)
+    return (previous.year, previous.month) != (nxt.year, nxt.month)
 
 
 def _require_continuous_months(months: Sequence[tuple[int, int]]) -> None:

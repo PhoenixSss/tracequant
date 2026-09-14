@@ -4,13 +4,15 @@ import asyncio
 import hashlib
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
 from nautilus_trader.adapters.binance import (
+    BINANCE_CLIENT_ID,
     BinanceDataClientConfig,
+    BinanceDataClientFactory,
     BinanceEnvironment,
     BinanceInstrumentProviderConfig,
     BinanceProductType,
@@ -23,8 +25,17 @@ from nautilus_trader.backtest import (
     BacktestRunConfig,
     BacktestVenueConfig,
 )
-from nautilus_trader.common import Cache, Clock, LoggerConfig, LogLevel
+from nautilus_trader.common import (
+    Cache,
+    Clock,
+    DataActor,
+    DataActorConfig,
+    Environment,
+    LoggerConfig,
+    LogLevel,
+)
 from nautilus_trader.indicators import SimpleMovingAverage
+from nautilus_trader.live import LiveNode
 from nautilus_trader.model import (
     AccountType,
     Bar,
@@ -50,12 +61,14 @@ from tracequant.integrations.nautilus import (
 from tracequant.research.source_schema import quantize_price
 from tracequant.source_data.stage2_btceth import (
     STAGE2_BAR_INTERVALS,
+    STAGE2_CONFIG_ENV,
     STAGE2_COVERAGE_FILENAME,
     STAGE2_CROSSCHECK_END_ISO,
     STAGE2_CROSSCHECK_START_ISO,
     STAGE2_DATA_TYPE_BARS,
     STAGE2_DATA_TYPE_FUNDING,
     STAGE2_DATA_TYPE_MARK,
+    STAGE2_DATASET_ID,
     STAGE2_DIGEST_FILENAME,
     STAGE2_FUNDING_STREAM_ID,
     STAGE2_INSTRUMENT_IDS,
@@ -77,6 +90,7 @@ from tracequant.source_data.stage2_btceth import (
     build_source_object,
     build_stage2_acceptance_record,
     combined_source_checksum,
+    coverage_summary,
     dataset_digest_payload,
     discover_stage2_funding_archives,
     discover_stage2_kline_archives,
@@ -575,11 +589,13 @@ def _default_instrument_snapshot_path(config: Stage2DatasetConfig) -> Path:
 
 def _load_validated_stage2_series(
     config: Stage2DatasetConfig,
+    *,
+    require_complete: bool = False,
 ) -> tuple[
     list[Stage2SourceObject],
     list[tuple[str, str, tuple[Bar, ...], Stage2SeriesCoverage]],
 ]:
-    archives = discover_stage2_kline_archives(config)
+    archives = discover_stage2_kline_archives(config, require_complete=require_complete)
     grouped: dict[tuple[str, str], list[Stage2KlineArchive]] = {}
     for archive in archives:
         key = (archive.instrument_id, archive.interval)
@@ -618,14 +634,20 @@ def _load_validated_stage2_series(
 
 def _load_validated_stage2_mark_funding(
     config: Stage2DatasetConfig,
+    *,
+    require_complete: bool = False,
 ) -> tuple[
     list[Stage2SourceObject],
     list[tuple[str, tuple[MarkPriceUpdate, ...]]],
     list[tuple[str, tuple[FundingRateUpdate, ...]]],
     list[Stage2SeriesCoverage],
 ]:
-    mark_archives = discover_stage2_mark_archives(config)
-    funding_archives = discover_stage2_funding_archives(config)
+    mark_archives = discover_stage2_mark_archives(
+        config, require_complete=require_complete
+    )
+    funding_archives = discover_stage2_funding_archives(
+        config, require_complete=require_complete
+    )
     marks_grouped: dict[str, list[Stage2KlineArchive]] = {}
     for mark_archive in mark_archives:
         marks_grouped.setdefault(mark_archive.instrument_id, []).append(mark_archive)
@@ -872,6 +894,28 @@ def _run_load_instruments(config: BinanceDataClientConfig) -> list[object]:
     return list(asyncio.run(load_binance_instruments(config)))
 
 
+_CONNECTION_TIMEOUT_SECS = 120
+
+
+def _clear_directory(path: Path) -> None:
+    for item in path.iterdir():
+        if item.is_dir():
+            _clear_directory(item)
+            item.rmdir()
+        else:
+            item.unlink()
+
+
+def _catalog_tree_digest(catalog_path: Path) -> str:
+    digest = hashlib.sha256()
+    for item in sorted(catalog_path.rglob("*")):
+        if not item.is_file():
+            continue
+        digest.update(str(item.relative_to(catalog_path)).encode("utf-8"))
+        digest.update(item.read_bytes())
+    return digest.hexdigest()
+
+
 def prepare_stage2_combined_catalog(
     config_path: Path,
     *,
@@ -892,34 +936,11 @@ def prepare_stage2_combined_catalog(
         instrument_snapshot_path=instrument_snapshot_path,
         fetched_at=fetched_at,
     )
-    bar_objects, prepared = _load_validated_stage2_series(config)
+    bar_objects, prepared = _load_validated_stage2_series(config, require_complete=True)
     mark_objects, marks, fundings, mark_coverage = _load_validated_stage2_mark_funding(
-        config
+        config, require_complete=True
     )
-    catalog = ParquetDataCatalog(str(config.catalog_path))
-    catalog.write_instruments(list(native))
-    coverage_series: list[Stage2SeriesCoverage] = []
-    for instrument_id, interval, bars, series_coverage in prepared:
-        catalog.write_bars(list(bars))
-        queried = tuple(
-            catalog.query_bars(
-                identifiers=[stage2_bar_type_str(instrument_id, interval)]
-            )
-        )
-        _assert_round_trip(bars, queried)
-        coverage_series.append(series_coverage)
-    for instrument_id, mark_updates in marks:
-        catalog.write_mark_price_updates(list(mark_updates))
-        queried_marks = tuple(
-            catalog.query_mark_price_updates(instrument_ids=[instrument_id])
-        )
-        _assert_mark_round_trip(mark_updates, queried_marks)
-    write_stage2_funding_rate_updates(
-        catalog,
-        config.catalog_path,
-        fundings,
-        instance_id=STAGE2_FUNDING_STREAM_ID,
-    )
+    coverage_series = [item[3] for item in prepared]
     coverage_series.extend(mark_coverage)
     manifest = Stage2SourceManifest(
         schema=STAGE2_SOURCE_SCHEMA,
@@ -927,37 +948,65 @@ def prepare_stage2_combined_catalog(
         nautilus_version=config.nautilus_version,
         sources=tuple(bar_objects + mark_objects),
     )
+    require_complete_source_inventory([item.source_url for item in manifest.sources])
     report = Stage2CoverageReport(
         dataset_id=config.dataset_id,
         series=tuple(coverage_series),
     )
+    coverage_summary(report)
     snapshot_payload = instrument_snapshot_payload(native, fetched_at=observed_at)
-    write_json(
-        config.catalog_path / STAGE2_MANIFEST_FILENAME,
-        manifest.to_json_dict(),
-    )
-    write_json(
-        config.catalog_path / STAGE2_COVERAGE_FILENAME,
-        report.to_json_dict(catalog_path=config.catalog_path),
-    )
-    write_json(
-        config.catalog_path / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
-        snapshot_payload,
-    )
-    write_json(_default_instrument_snapshot_path(config), snapshot_payload)
-    write_json(
-        config.catalog_path / STAGE2_DIGEST_FILENAME,
-        dataset_digest_payload(
-            manifest=manifest,
-            coverage=report,
-            runtime_identity=UPSTREAM_RELEASE_IDENTITY,
-        ),
-    )
     if snapshot_checksum != _snapshot_checksum(
         [instrument.to_dict() for instrument in native]
     ):
         raise Stage2DataError("instrument snapshot checksum does not match")
-    require_no_index_or_1m_reference(config.catalog_path)
+    try:
+        catalog = ParquetDataCatalog(str(config.catalog_path))
+        catalog.write_instruments(list(native))
+        for instrument_id, interval, bars, _series_coverage in prepared:
+            catalog.write_bars(list(bars))
+            queried = tuple(
+                catalog.query_bars(
+                    identifiers=[stage2_bar_type_str(instrument_id, interval)]
+                )
+            )
+            _assert_round_trip(bars, queried)
+        for instrument_id, mark_updates in marks:
+            catalog.write_mark_price_updates(list(mark_updates))
+            queried_marks = tuple(
+                catalog.query_mark_price_updates(instrument_ids=[instrument_id])
+            )
+            _assert_mark_round_trip(mark_updates, queried_marks)
+        write_stage2_funding_rate_updates(
+            catalog,
+            config.catalog_path,
+            fundings,
+            instance_id=STAGE2_FUNDING_STREAM_ID,
+        )
+        write_json(
+            config.catalog_path / STAGE2_MANIFEST_FILENAME,
+            manifest.to_json_dict(),
+        )
+        write_json(
+            config.catalog_path / STAGE2_COVERAGE_FILENAME,
+            report.to_json_dict(),
+        )
+        write_json(
+            config.catalog_path / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
+            snapshot_payload,
+        )
+        write_json(
+            config.catalog_path / STAGE2_DIGEST_FILENAME,
+            dataset_digest_payload(
+                manifest=manifest,
+                coverage=report,
+                runtime_identity=UPSTREAM_RELEASE_IDENTITY,
+            ),
+        )
+        require_no_index_or_1m_reference(config.catalog_path)
+    except Exception:
+        _clear_directory(config.catalog_path)
+        raise
+    write_json(_default_instrument_snapshot_path(config), snapshot_payload)
     return manifest, report, config.catalog_path
 
 
@@ -968,10 +1017,21 @@ def prepare_stage2_dataset(
     instruments: Sequence[object] | None = None,
     instrument_snapshot_path: Path | None = None,
     fetched_at: datetime | None = None,
-    crosscheck_bars: Mapping[str, Sequence[Bar]],
-    crosscheck_funding: Mapping[str, Sequence[FundingRateUpdate]],
-    homology: Mapping[str, object],
+    crosscheck_bars: Mapping[str, Sequence[Bar]] | None = None,
+    crosscheck_funding: Mapping[str, Sequence[FundingRateUpdate]] | None = None,
+    homology: Mapping[str, object] | None = None,
     acceptance_path: Path | None = None,
+    fetch_crosscheck: (
+        Callable[
+            [],
+            tuple[
+                Mapping[str, Sequence[Bar]],
+                Mapping[str, Sequence[FundingRateUpdate]],
+            ],
+        ]
+        | None
+    ) = None,
+    checksum_probe: Callable[[str], bool] | None = None,
 ) -> dict[str, object]:
     require_tail_disabled()
     manifest, coverage, catalog_path = prepare_stage2_combined_catalog(
@@ -982,17 +1042,41 @@ def prepare_stage2_dataset(
         fetched_at=fetched_at,
     )
     require_complete_source_inventory([item.source_url for item in manifest.sources])
+    if crosscheck_bars is None or crosscheck_funding is None:
+        requested_bars: Mapping[str, Sequence[Bar]]
+        requested_funding: Mapping[str, Sequence[FundingRateUpdate]]
+        if fetch_crosscheck is None:
+            requested_bars, requested_funding = fetch_stage2_nautilus_crosscheck()
+            crosscheck_source = "nautilus_request"
+        else:
+            requested_bars, requested_funding = fetch_crosscheck()
+            crosscheck_source = "injected"
+        nautilus_bars = requested_bars if crosscheck_bars is None else crosscheck_bars
+        nautilus_funding = (
+            requested_funding if crosscheck_funding is None else crosscheck_funding
+        )
+    else:
+        nautilus_bars = crosscheck_bars
+        nautilus_funding = crosscheck_funding
+        crosscheck_source = "injected"
+    before = _catalog_tree_digest(catalog_path)
     crosscheck = crosscheck_stage2_catalog(
         catalog_path,
-        nautilus_bars=crosscheck_bars,
-        nautilus_funding=crosscheck_funding,
+        nautilus_bars=nautilus_bars,
+        nautilus_funding=nautilus_funding,
     )
+    if _catalog_tree_digest(catalog_path) != before:
+        raise Stage2DataError("cross-check mutated the catalog")
+    crosscheck = {**crosscheck, "source": crosscheck_source}
+    if homology is None:
+        homology = _stage2_split_homology(catalog_path)
     record = build_stage2_acceptance_record(
         manifest=manifest,
         coverage=coverage,
         runtime_identity=UPSTREAM_RELEASE_IDENTITY,
         crosscheck=crosscheck,
         homology=homology,
+        checksum_probe=checksum_probe,
     )
     if acceptance_path is not None:
         write_json(acceptance_path, record)
@@ -1099,9 +1183,9 @@ def loaded_window(
     payload: dict[str, str | int] = {
         "data_type": data_type,
         "dataset_id": dataset_id,
-        "first_ts_event": times[0],
+        "first_ts_event": min(times),
         "instrument_id": instrument_id,
-        "last_ts_event": times[-1],
+        "last_ts_event": max(times),
         "row_count": len(records),
     }
     if bar_type:
@@ -1123,14 +1207,10 @@ def crosscheck_stage2_catalog(
     *,
     nautilus_bars: Mapping[str, Sequence[Bar]],
     nautilus_funding: Mapping[str, Sequence[FundingRateUpdate]],
-    start: datetime | None = None,
-    end: datetime | None = None,
 ) -> dict[str, object]:
     require_tail_disabled()
-    window_start = (
-        start if start is not None else parse_utc(STAGE2_CROSSCHECK_START_ISO)
-    )
-    window_end = end if end is not None else parse_utc(STAGE2_CROSSCHECK_END_ISO)
+    window_start = parse_utc(STAGE2_CROSSCHECK_START_ISO)
+    window_end = parse_utc(STAGE2_CROSSCHECK_END_ISO)
     start_ns = millis_to_nanos(unix_millis(window_start))
     end_ns = millis_to_nanos(unix_millis(window_end)) - 1
     compared = 0
@@ -1341,3 +1421,205 @@ class _RecordFunding(Strategy):
 
     def on_funding_rate(self, event: FundingRateUpdate) -> None:
         self.seen.append(event)
+
+
+def _stage2_split_homology(catalog_path: Path) -> dict[str, object]:
+    from tracequant.research.source_schema import stage2_split_bounds
+    from tracequant.research.views import load_bars, load_funding
+
+    result: dict[str, object] = {}
+    for name, (start, end) in stage2_split_bounds().items():
+        for instrument_id in STAGE2_INSTRUMENT_IDS:
+            bar_type = stage2_bar_type_str(instrument_id, "1h")
+            research_bars = load_bars(catalog_path, bar_type, start, end)
+            backtest_bars = load_stage2_backtest_bars(
+                catalog_path, bar_type, start=start, end=end
+            )
+            result[f"{name}:{instrument_id}:bars"] = compare_loaded_windows(
+                {
+                    "bar_type": bar_type,
+                    "data_type": STAGE2_DATA_TYPE_BARS,
+                    "dataset_id": STAGE2_DATASET_ID,
+                    "first_ts_event": int(research_bars.get_column("ts_event")[0]),
+                    "instrument_id": instrument_id,
+                    "last_ts_event": int(research_bars.get_column("ts_event")[-1]),
+                    "row_count": research_bars.height,
+                },
+                loaded_window(
+                    backtest_bars,
+                    dataset_id=STAGE2_DATASET_ID,
+                    data_type=STAGE2_DATA_TYPE_BARS,
+                    instrument_id=instrument_id,
+                    bar_type=bar_type,
+                ),
+            )
+            research_funding = load_funding(
+                catalog_path, instrument_id, start, end
+            ).collect()
+            backtest_funding = load_stage2_backtest_funding(
+                catalog_path,
+                instrument_id,
+                bar_type,
+                start=start,
+                end=end,
+            )
+            result[f"{name}:{instrument_id}:funding"] = compare_loaded_windows(
+                {
+                    "data_type": STAGE2_DATA_TYPE_FUNDING,
+                    "dataset_id": STAGE2_DATASET_ID,
+                    "first_ts_event": int(research_funding.get_column("ts_event")[0]),
+                    "instrument_id": instrument_id,
+                    "last_ts_event": int(research_funding.get_column("ts_event")[-1]),
+                    "row_count": research_funding.height,
+                },
+                loaded_window(
+                    backtest_funding,
+                    dataset_id=STAGE2_DATASET_ID,
+                    data_type=STAGE2_DATA_TYPE_FUNDING,
+                    instrument_id=instrument_id,
+                ),
+            )
+    return result
+
+
+def fetch_stage2_nautilus_crosscheck() -> tuple[
+    dict[str, tuple[Bar, ...]],
+    dict[str, tuple[FundingRateUpdate, ...]],
+]:
+    require_tail_disabled()
+    start = parse_utc(STAGE2_CROSSCHECK_START_ISO)
+    end = parse_utc(STAGE2_CROSSCHECK_END_ISO)
+    config = build_stage2_binance_instrument_client_config(_runtime_proxy_url())
+    actor = _Stage2CrosscheckActor(start=start, end=end)
+    builder = (
+        LiveNode.builder(
+            "STAGE2-BTCETH-CROSSCHECK",
+            TraderId.from_str("TRACEQUANT-001"),
+            Environment.LIVE,
+        )
+        .add_data_client(None, BinanceDataClientFactory(), config)
+        .with_timeout_connection(_CONNECTION_TIMEOUT_SECS)
+        .with_delay_post_stop_secs(0)
+        .with_reconciliation(False)
+    )
+    node = builder.build()
+    node.add_actor(actor)
+    try:
+        node.run()
+    finally:
+        node.dispose()
+    if actor.error is not None:
+        raise Stage2DataError(actor.error)
+    return actor.bars, actor.funding
+
+
+class _Stage2CrosscheckActor(DataActor):
+    def __init__(self, *, start: datetime, end: datetime) -> None:
+        super().__init__(DataActorConfig())
+        self._start = start
+        self._end = end
+        self._jobs: list[tuple[str, str]] = [
+            ("bars", instrument_id) for instrument_id in STAGE2_INSTRUMENT_IDS
+        ] + [("funding", instrument_id) for instrument_id in STAGE2_INSTRUMENT_IDS]
+        self._index = 0
+        self.bars: dict[str, tuple[Bar, ...]] = {}
+        self.funding: dict[str, tuple[FundingRateUpdate, ...]] = {}
+        self.error: str | None = None
+
+    def on_start(self) -> None:
+        self._request_current()
+
+    def on_historical_bars(self, bars: object) -> None:
+        try:
+            payload = list(bars) if isinstance(bars, Iterable) else None
+        except TypeError:
+            payload = None
+        if payload is None:
+            self.error = "historical bar payload is not iterable"
+            self.shutdown_system(reason=self.error)
+            return
+        received = [bar for bar in payload if isinstance(bar, Bar)]
+        if len(received) != len(payload):
+            self.error = "historical payload contains non-Bar objects"
+            self.shutdown_system(reason=self.error)
+            return
+        if not received:
+            self.error = "empty historical bar segment"
+            self.shutdown_system(reason=self.error)
+            return
+        _kind, instrument_id = self._jobs[self._index]
+        self.bars[instrument_id] = tuple(received)
+        self._advance()
+
+    def on_historical_funding_rates(self, funding_rates: object) -> None:
+        try:
+            payload = (
+                list(funding_rates) if isinstance(funding_rates, Iterable) else None
+            )
+        except TypeError:
+            payload = None
+        if payload is None:
+            self.error = "historical funding payload is not iterable"
+            self.shutdown_system(reason=self.error)
+            return
+        received = [item for item in payload if isinstance(item, FundingRateUpdate)]
+        if len(received) != len(payload):
+            self.error = "historical payload contains non-funding objects"
+            self.shutdown_system(reason=self.error)
+            return
+        if not received:
+            self.error = "empty historical funding segment"
+            self.shutdown_system(reason=self.error)
+            return
+        _kind, instrument_id = self._jobs[self._index]
+        self.funding[instrument_id] = tuple(received)
+        self._advance()
+
+    def on_fault(self) -> None:
+        self.error = "Nautilus cross-check actor faulted"
+        self.shutdown_system(reason=self.error)
+
+    def _advance(self) -> None:
+        self._index += 1
+        if self._index >= len(self._jobs):
+            self.shutdown_system(reason="stage2-crosscheck-complete")
+            return
+        self._request_current()
+
+    def _request_current(self) -> None:
+        kind, instrument_id = self._jobs[self._index]
+        if kind == "bars":
+            self.request_bars(
+                bar_type=stage2_bar_type(instrument_id, "1h"),
+                start=self._start,
+                end=self._end,
+                client_id=BINANCE_CLIENT_ID,
+            )
+            return
+        self.request_funding_rates(
+            instrument_id=InstrumentId.from_str(instrument_id),
+            start=self._start,
+            end=self._end,
+            client_id=BINANCE_CLIENT_ID,
+        )
+
+
+def main() -> int:
+    raw = os.environ.get(STAGE2_CONFIG_ENV, "")
+    if not raw:
+        raise Stage2DataError(f"{STAGE2_CONFIG_ENV} must point to the stage 2 config")
+    config_path = Path(raw)
+    repository_root = Path(__file__).resolve().parents[4]
+    acceptance_path = (
+        repository_root / "docs/product/stage2-btceth-dataset-acceptance.json"
+    )
+    prepare_stage2_dataset(
+        config_path,
+        repository_root=repository_root,
+        acceptance_path=acceptance_path,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
