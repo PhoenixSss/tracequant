@@ -59,6 +59,9 @@ from tracequant.source_data.stage2_btceth import (
     STAGE2_CONFIG_ENV,
     STAGE2_CROSSCHECK_END_ISO,
     STAGE2_CROSSCHECK_START_ISO,
+    STAGE2_DATA_TYPE_BARS,
+    STAGE2_DATA_TYPE_FUNDING,
+    STAGE2_DATA_TYPE_MARK,
     STAGE2_DATASET_ID,
     STAGE2_EXPECTED_SOURCE_COUNT,
     STAGE2_FUNDING_ROOT,
@@ -68,9 +71,9 @@ from tracequant.source_data.stage2_btceth import (
     STAGE2_INSTRUMENT_IDS,
     STAGE2_INTERVAL_MS,
     STAGE2_KLINE_ROOT,
+    STAGE2_MARK_GAP_EXPLANATION,
     STAGE2_MARK_INTERVAL,
     STAGE2_MARK_ROOT,
-    STAGE2_MONTH_BOUNDARY_GAP_EXPLANATION,
     STAGE2_NAUTILUS_TAIL_ENABLED,
     STAGE2_WINDOW_END_ISO,
     STAGE2_WINDOW_START_ISO,
@@ -78,10 +81,13 @@ from tracequant.source_data.stage2_btceth import (
     Stage2DataError,
     Stage2FundingRow,
     Stage2KlineRow,
+    Stage2SeriesCoverage,
     Stage2SourceManifest,
+    build_stage2_acceptance_record,
     expected_source_inventory_digest,
     expected_stage2_source_specs,
     parse_utc,
+    require_complete_acceptance_record,
     require_complete_source_inventory,
     require_no_local_absolute_paths,
     require_tail_disabled,
@@ -89,7 +95,9 @@ from tracequant.source_data.stage2_btceth import (
     stage2_index_coverage_conclusion,
     stage2_month_keys,
     unix_millis,
+    validate_funding_series,
     validate_kline_series,
+    validate_mark_series,
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -103,6 +111,7 @@ START_MS = 1577836800000
 BAR_COUNT_15M = 30
 CROSSCHECK_START = parse_utc(STAGE2_CROSSCHECK_START_ISO)
 ACCEPTANCE_KEYS = {
+    "catalog_evidence",
     "coverage_summary",
     "crosscheck",
     "dataset_digest",
@@ -449,6 +458,82 @@ def _write_config(tmp_path: Path) -> tuple[Path, Path, Path]:
     return config_path, catalog_path, raw_root
 
 
+def _allow_sparse_archive_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the 800-file orchestration fixture small; gap behavior is tested directly."""
+
+    def _kline_coverage(
+        rows: tuple[Stage2KlineRow, ...] | list[Stage2KlineRow],
+        *,
+        instrument_id: str,
+        interval: str,
+        source_checksum: str,
+    ) -> Stage2SeriesCoverage:
+        return Stage2SeriesCoverage(
+            instrument_id=instrument_id,
+            data_type=STAGE2_DATA_TYPE_BARS,
+            bar_interval=interval,
+            row_count=len(rows),
+            first_ts_event=int(rows[0].close_time) * 1_000_000,
+            last_ts_event=int(rows[-1].close_time) * 1_000_000,
+            duplicate_count=0,
+            out_of_order_count=0,
+            gap_count=0,
+            source_checksum=source_checksum,
+        )
+
+    def _mark_coverage(
+        rows: tuple[Stage2KlineRow, ...] | list[Stage2KlineRow],
+        *,
+        instrument_id: str,
+        source_checksum: str,
+    ) -> Stage2SeriesCoverage:
+        coverage = _kline_coverage(
+            rows,
+            instrument_id=instrument_id,
+            interval=STAGE2_MARK_INTERVAL,
+            source_checksum=source_checksum,
+        )
+        return Stage2SeriesCoverage(
+            instrument_id=coverage.instrument_id,
+            data_type=STAGE2_DATA_TYPE_MARK,
+            bar_interval=coverage.bar_interval,
+            row_count=coverage.row_count,
+            first_ts_event=coverage.first_ts_event,
+            last_ts_event=coverage.last_ts_event,
+            duplicate_count=coverage.duplicate_count,
+            out_of_order_count=coverage.out_of_order_count,
+            gap_count=coverage.gap_count,
+            source_checksum=coverage.source_checksum,
+        )
+
+    def _funding_coverage(
+        rows: tuple[Stage2FundingRow, ...] | list[Stage2FundingRow],
+        *,
+        instrument_id: str,
+        source_checksum: str,
+    ) -> Stage2SeriesCoverage:
+        return Stage2SeriesCoverage(
+            instrument_id=instrument_id,
+            data_type=STAGE2_DATA_TYPE_FUNDING,
+            bar_interval="",
+            row_count=len(rows),
+            first_ts_event=int(rows[0].calc_time) * 1_000_000,
+            last_ts_event=int(rows[-1].calc_time) * 1_000_000,
+            duplicate_count=0,
+            out_of_order_count=0,
+            gap_count=0,
+            source_checksum=source_checksum,
+        )
+
+    module = "tracequant.integrations.nautilus.stage2_btceth"
+    monkeypatch.setattr(f"{module}.validate_kline_series", _kline_coverage)
+    monkeypatch.setattr(f"{module}.validate_mark_series", _mark_coverage)
+    monkeypatch.setattr(f"{module}.validate_funding_series", _funding_coverage)
+    monkeypatch.setattr(
+        f"{module}.discover_stage2_mark_gap_fill_archives", lambda _config: ()
+    )
+
+
 def _prepare_catalog(
     tmp_path: Path,
 ) -> tuple[Path, Stage2SourceManifest, Stage2CoverageReport]:
@@ -546,8 +631,10 @@ def _run_settlement(
 
 
 def test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    _allow_sparse_archive_fixture(monkeypatch)
     config_path, catalog_path, _raw_root = _write_config(tmp_path)
     independent_bars, independent_funding = _independent_crosscheck()
     record = prepare_stage2_dataset(
@@ -602,7 +689,7 @@ def test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog(
     for item in coverage_summary:
         assert isinstance(item, dict)
         if item["gap_count"]:
-            assert item["gap_explanation"] == STAGE2_MONTH_BOUNDARY_GAP_EXPLANATION
+            assert item["gap_explanation"] == STAGE2_MARK_GAP_EXPLANATION
     homology = record["homology"]
     assert isinstance(homology, dict)
     for split in ("train", "validation", "test"):
@@ -709,6 +796,19 @@ def test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog(
     assert tracked["crosscheck"]["start"] == STAGE2_CROSSCHECK_START_ISO
     assert tracked["crosscheck"]["end"] == STAGE2_CROSSCHECK_END_ISO
     assert tracked["crosscheck"]["written_to_catalog"] is False
+    require_complete_acceptance_record(
+        tracked,
+        require_gap_fill_sources=True,
+        require_live_crosscheck=True,
+    )
+
+    written_coverage = json.loads(
+        (catalog_path / "stage2_coverage.json").read_text(encoding="utf-8")
+    )
+    assert written_coverage["catalog_path"] == str(catalog_path)
+    assert all(
+        item["catalog_path"] == str(catalog_path) for item in written_coverage["series"]
+    )
 
 
 def test_expected_source_inventory_is_800_complete_months() -> None:
@@ -737,6 +837,38 @@ def test_index_checksum_probe_changes_conclusion() -> None:
     missing = stage2_index_coverage_conclusion(checksum_probe=lambda _url: False)
     assert missing["checksum_available"] is False
     assert missing["continuous_months"] is True
+    with pytest.raises(Stage2DataError, match="index checksum availability"):
+        build_stage2_acceptance_record(
+            manifest=Stage2SourceManifest(
+                schema="tracequant-stage2-source-v1",
+                dataset_id=STAGE2_DATASET_ID,
+                nautilus_version="2.0.0rc4",
+                sources=(),
+            ),
+            coverage=Stage2CoverageReport(dataset_id=STAGE2_DATASET_ID, series=()),
+            runtime_identity=UPSTREAM_RELEASE_IDENTITY,
+            crosscheck={},
+            homology={},
+            checksum_probe=lambda _url: False,
+        )
+
+
+def test_dataset_prepare_rejects_missing_index_before_catalog_write(
+    tmp_path: Path,
+) -> None:
+    raw_root = tmp_path / "raw"
+    catalog_path = tmp_path / "catalog"
+    raw_root.mkdir()
+    catalog_path.mkdir()
+    config_path = tmp_path / "dataset.toml"
+    config_path.write_text(_config_text(raw_root, catalog_path), encoding="utf-8")
+    with pytest.raises(Stage2DataError, match="index checksum availability"):
+        prepare_stage2_dataset(
+            config_path,
+            repository_root=REPOSITORY_ROOT,
+            checksum_probe=lambda _url: False,
+        )
+    assert list(catalog_path.iterdir()) == []
 
 
 def test_index_continuity_uses_month_templates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -747,6 +879,20 @@ def test_index_continuity_uses_month_templates(monkeypatch: pytest.MonkeyPatch) 
     conclusion = stage2_index_coverage_conclusion(checksum_probe=_always_available)
     assert conclusion["continuous_months"] is False
     assert conclusion["object_count"] == 4
+    with pytest.raises(Stage2DataError, match="not continuous"):
+        build_stage2_acceptance_record(
+            manifest=Stage2SourceManifest(
+                schema="tracequant-stage2-source-v1",
+                dataset_id=STAGE2_DATASET_ID,
+                nautilus_version="2.0.0rc4",
+                sources=(),
+            ),
+            coverage=Stage2CoverageReport(dataset_id=STAGE2_DATASET_ID, series=()),
+            runtime_identity=UPSTREAM_RELEASE_IDENTITY,
+            crosscheck={},
+            homology={},
+            checksum_probe=_always_available,
+        )
 
 
 def test_combined_catalog_rejects_incomplete_inventory(tmp_path: Path) -> None:
@@ -803,6 +949,65 @@ def test_unexplained_intra_month_gap_fails() -> None:
         )
 
 
+def test_cross_month_kline_gap_fails() -> None:
+    rows = _kline_rows(BTC, "15m", 1, START_MS)
+    next_month = _kline_rows(
+        BTC,
+        "15m",
+        1,
+        unix_millis(datetime(2020, 2, 28, tzinfo=UTC)),
+    )
+    with pytest.raises(Stage2DataError, match="gap"):
+        validate_kline_series(
+            (*rows, *next_month),
+            instrument_id=BTC,
+            interval="15m",
+            source_checksum="abc",
+        )
+
+
+def test_only_exact_verified_mark_omissions_are_explained() -> None:
+    known = (
+        *_kline_rows(BTC, "15m", 1, 1579438800000),
+        *_kline_rows(BTC, "15m", 1, 1579440600000),
+    )
+    coverage = validate_mark_series(
+        known,
+        instrument_id=BTC,
+        source_checksum="abc",
+    )
+    assert coverage.gap_count == 1
+    assert coverage.gap_explanation == STAGE2_MARK_GAP_EXPLANATION
+
+    arbitrary = (
+        *_kline_rows(BTC, "15m", 1, START_MS),
+        *_kline_rows(BTC, "15m", 1, START_MS + 3 * STAGE2_INTERVAL_MS["15m"]),
+    )
+    with pytest.raises(Stage2DataError, match="gap"):
+        validate_mark_series(
+            arbitrary,
+            instrument_id=BTC,
+            source_checksum="abc",
+        )
+
+
+def test_cross_month_funding_gap_fails() -> None:
+    rows = (
+        Stage2FundingRow(str(START_MS), "8", "0.0001"),
+        Stage2FundingRow(
+            str(unix_millis(datetime(2020, 2, 28, tzinfo=UTC))),
+            "8",
+            "0.0001",
+        ),
+    )
+    with pytest.raises(Stage2DataError, match="gap"):
+        validate_funding_series(
+            rows,
+            instrument_id=BTC,
+            source_checksum="abc",
+        )
+
+
 def test_acceptance_record_rejects_local_absolute_paths() -> None:
     with pytest.raises(Stage2DataError, match="local absolute paths"):
         require_no_local_absolute_paths({"catalog": "/tmp/stage2-catalog"})
@@ -834,7 +1039,10 @@ def test_generation_command_entrypoint(
         main()
 
 
-def test_crosscheck_mismatch_and_empty_window_fail(tmp_path: Path) -> None:
+def test_crosscheck_mismatch_and_empty_window_fail(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _allow_sparse_archive_fixture(monkeypatch)
     catalog_path, _, _ = _prepare_catalog(tmp_path)
     with pytest.raises(Stage2DataError, match="bar count"):
         crosscheck_stage2_catalog(

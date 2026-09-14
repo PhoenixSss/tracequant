@@ -43,13 +43,16 @@ STAGE2_ACCEPTANCE_SCHEMA: Final = "tracequant-stage2-acceptance-v1"
 STAGE2_PUBLIC_DATA_ORIGIN: Final = "https://data.binance.vision"
 STAGE2_KLINE_ROOT: Final = "data/futures/um/monthly/klines"
 STAGE2_MARK_ROOT: Final = "data/futures/um/monthly/markPriceKlines"
+STAGE2_DAILY_MARK_ROOT: Final = "data/futures/um/daily/markPriceKlines"
 STAGE2_FUNDING_ROOT: Final = "data/futures/um/monthly/fundingRate"
 STAGE2_INDEX_ROOT: Final = "data/futures/um/monthly/indexPriceKlines"
 STAGE2_MARK_INTERVAL: Final = "15m"
 STAGE2_INDEX_INTERVAL: Final = "15m"
 STAGE2_FUNDING_STREAM_ID: Final = "stage2-funding"
 STAGE2_MARK_MAX_AGE_MS: Final = 15 * 60 * 1000
+STAGE2_FUNDING_SCHEDULE_TOLERANCE_MS: Final = 60 * 1000
 STAGE2_EXPECTED_SOURCE_COUNT: Final = 800
+STAGE2_EXPECTED_SUPPLEMENTAL_SOURCE_COUNT: Final = 18
 STAGE2_INCLUDE_INDEX_PRICE: Final = False
 STAGE2_NAUTILUS_TAIL_ENABLED: Final = False
 STAGE2_CROSSCHECK_START_ISO: Final = "2026-08-25T00:00:00Z"
@@ -58,14 +61,43 @@ STAGE2_GENERATION_COMMAND: Final = (
     "uv run --frozen python -m tracequant.integrations.nautilus.stage2_btceth"
 )
 STAGE2_CONFIG_ENV: Final = "TRACEQUANT_STAGE2_CONFIG"
-STAGE2_MONTH_BOUNDARY_GAP_EXPLANATION: Final = (
-    "binance-public-data monthly archive boundary"
+STAGE2_MARK_GAP_EXPLANATION: Final = (
+    "Binance monthly and daily markPriceKlines both omit the 2020-01-19T13:15Z "
+    "and 2023-11-10T03:45Z intervals; no funding event overlaps either omission"
+)
+STAGE2_MARK_ALLOWED_GAPS: Final = (
+    (1579438800000, 1579440600000),
+    (1699587000000, 1699588800000),
 )
 MS_NS: Final = 1_000_000
 
 STAGE2_INSTRUMENT_SYMBOLS: Final = {
     "BTCUSDT-PERP.BINANCE": "BTCUSDT",
     "ETHUSDT-PERP.BINANCE": "ETHUSDT",
+}
+STAGE2_MARK_GAP_FILL_DATES: Final = {
+    "BTCUSDT-PERP.BINANCE": (
+        "2019-12-31",
+        "2020-01-19",
+        "2021-07-01",
+        "2021-07-24",
+        "2021-07-25",
+        "2021-07-26",
+        "2021-07-27",
+        "2022-07-31",
+        "2022-10-02",
+        "2023-02-24",
+        "2023-11-10",
+        "2026-06-29",
+    ),
+    "ETHUSDT-PERP.BINANCE": (
+        "2019-12-31",
+        "2020-01-19",
+        "2022-10-02",
+        "2023-02-24",
+        "2023-11-10",
+        "2026-06-29",
+    ),
 }
 STAGE2_INTERVAL_MS: Final = {
     "15m": 15 * 60 * 1000,
@@ -187,6 +219,7 @@ class Stage2KlineArchive:
     checksum_path: Path
     source_url: str
     checksum_url: str
+    day: int | None = None
 
 
 @dataclass(frozen=True)
@@ -242,6 +275,7 @@ class Stage2SourceManifest:
     dataset_id: str
     nautilus_version: str
     sources: tuple[Stage2SourceObject, ...]
+    supplemental_sources: tuple[Stage2SourceObject, ...] = ()
 
     def to_json_dict(self) -> dict[str, object]:
         return {
@@ -249,6 +283,9 @@ class Stage2SourceManifest:
             "dataset_id": self.dataset_id,
             "nautilus_version": self.nautilus_version,
             "sources": [item.to_json_dict() for item in self.sources],
+            "supplemental_sources": [
+                item.to_json_dict() for item in self.supplemental_sources
+            ],
         }
 
 
@@ -521,6 +558,50 @@ def discover_stage2_mark_archives(
     return tuple(archives)
 
 
+def discover_stage2_mark_gap_fill_archives(
+    config: Stage2DatasetConfig,
+) -> tuple[Stage2KlineArchive, ...]:
+    archives: list[Stage2KlineArchive] = []
+    for instrument_id in config.instrument_ids:
+        symbol = STAGE2_INSTRUMENT_SYMBOLS[instrument_id]
+        for date_text in STAGE2_MARK_GAP_FILL_DATES[instrument_id]:
+            day = datetime.fromisoformat(date_text).replace(tzinfo=UTC)
+            name = f"{symbol}-{STAGE2_MARK_INTERVAL}-{date_text}.zip"
+            zip_path = (
+                config.raw_root
+                / STAGE2_DAILY_MARK_ROOT
+                / symbol
+                / STAGE2_MARK_INTERVAL
+                / name
+            )
+            if not zip_path.is_file():
+                raise Stage2DataError("stage 2 daily mark gap-fill archive is missing")
+            checksum_path = Path(f"{zip_path}.CHECKSUM")
+            if not checksum_path.is_file():
+                raise Stage2DataError("official daily mark checksum file is missing")
+            relative = (
+                f"{STAGE2_DAILY_MARK_ROOT}/{symbol}/{STAGE2_MARK_INTERVAL}/{name}"
+            )
+            source_url = f"{STAGE2_PUBLIC_DATA_ORIGIN}/{relative}"
+            archives.append(
+                Stage2KlineArchive(
+                    instrument_id=instrument_id,
+                    interval=STAGE2_MARK_INTERVAL,
+                    symbol=symbol,
+                    year=day.year,
+                    month=day.month,
+                    day=day.day,
+                    zip_path=zip_path,
+                    checksum_path=checksum_path,
+                    source_url=source_url,
+                    checksum_url=f"{source_url}.CHECKSUM",
+                )
+            )
+    if len(archives) != STAGE2_EXPECTED_SUPPLEMENTAL_SOURCE_COUNT:
+        raise Stage2DataError("stage 2 daily mark gap-fill inventory is incomplete")
+    return tuple(archives)
+
+
 def discover_stage2_funding_archives(
     config: Stage2DatasetConfig,
     *,
@@ -567,7 +648,10 @@ def read_verified_kline_archive(
     window_end: datetime,
 ) -> tuple[tuple[Stage2KlineRow, ...], str]:
     digest = verify_zip_checksum(archive.zip_path, archive.checksum_path)
-    csv_name = f"{archive.symbol}-{archive.interval}-{archive.year:04d}-{archive.month:02d}.csv"
+    archive_date = f"{archive.year:04d}-{archive.month:02d}"
+    if archive.day is not None:
+        archive_date = f"{archive_date}-{archive.day:02d}"
+    csv_name = f"{archive.symbol}-{archive.interval}-{archive_date}.csv"
     try:
         with zipfile.ZipFile(archive.zip_path) as bundle:
             names = bundle.namelist()
@@ -581,11 +665,15 @@ def read_verified_kline_archive(
     rows = parse_kline_csv(payload)
     if not rows:
         raise Stage2DataError("kline csv has no records")
-    month_start = datetime(archive.year, archive.month, 1, tzinfo=UTC)
-    if archive.month == 12:
-        month_end = datetime(archive.year + 1, 1, 1, tzinfo=UTC)
+    if archive.day is not None:
+        month_start = datetime(archive.year, archive.month, archive.day, tzinfo=UTC)
+        month_end = month_start + timedelta(days=1)
     else:
-        month_end = datetime(archive.year, archive.month + 1, 1, tzinfo=UTC)
+        month_start = datetime(archive.year, archive.month, 1, tzinfo=UTC)
+        if archive.month == 12:
+            month_end = datetime(archive.year + 1, 1, 1, tzinfo=UTC)
+        else:
+            month_end = datetime(archive.year, archive.month + 1, 1, tzinfo=UTC)
     month_start_ms = unix_millis(month_start)
     month_end_ms = unix_millis(month_end)
     window_start_ms = unix_millis(window_start)
@@ -708,7 +796,6 @@ def validate_funding_series(
     duplicate_count = 0
     out_of_order_count = 0
     gap_count = 0
-    unexplained_gaps = 0
     previous: int | None = None
     previous_interval_ms = 0
     first_ts = 0
@@ -726,17 +813,18 @@ def validate_funding_series(
         if previous is not None:
             if calc_time < previous:
                 out_of_order_count += 1
-            elif calc_time - previous > previous_interval_ms:
+            elif (
+                calc_time - previous
+                > previous_interval_ms + STAGE2_FUNDING_SCHEDULE_TOLERANCE_MS
+            ):
                 gap_count += 1
-                if not _is_month_boundary_gap(previous, calc_time):
-                    unexplained_gaps += 1
         previous = calc_time
         previous_interval_ms = interval_ms
     if duplicate_count:
         raise Stage2DataError("funding series contains duplicate event times")
     if out_of_order_count:
         raise Stage2DataError("funding series is out of order")
-    if unexplained_gaps:
+    if gap_count:
         raise Stage2DataError("funding series contains a gap")
     return Stage2SeriesCoverage(
         instrument_id=instrument_id,
@@ -749,7 +837,7 @@ def validate_funding_series(
         out_of_order_count=out_of_order_count,
         gap_count=gap_count,
         source_checksum=source_checksum,
-        gap_explanation=(STAGE2_MONTH_BOUNDARY_GAP_EXPLANATION if gap_count else ""),
+        gap_explanation="",
     )
 
 
@@ -764,6 +852,7 @@ def validate_mark_series(
         instrument_id=instrument_id,
         interval=STAGE2_MARK_INTERVAL,
         source_checksum=source_checksum,
+        _allowed_gaps=STAGE2_MARK_ALLOWED_GAPS,
     )
     return Stage2SeriesCoverage(
         instrument_id=coverage.instrument_id,
@@ -776,7 +865,7 @@ def validate_mark_series(
         out_of_order_count=coverage.out_of_order_count,
         gap_count=coverage.gap_count,
         source_checksum=coverage.source_checksum,
-        gap_explanation=coverage.gap_explanation,
+        gap_explanation=(STAGE2_MARK_GAP_EXPLANATION if coverage.gap_count else ""),
     )
 
 
@@ -874,6 +963,7 @@ def validate_kline_series(
     instrument_id: str,
     interval: str,
     source_checksum: str,
+    _allowed_gaps: tuple[tuple[int, int], ...] = (),
 ) -> Stage2SeriesCoverage:
     if instrument_id not in STAGE2_INSTRUMENT_SYMBOLS:
         raise Stage2DataError("instrument is not a stage 2 target")
@@ -886,7 +976,7 @@ def validate_kline_series(
     duplicate_count = 0
     out_of_order_count = 0
     gap_count = 0
-    unexplained_gaps = 0
+    unexplained_gap_count = 0
     previous_open: int | None = None
     first_ts = 0
     last_ts = 0
@@ -905,14 +995,14 @@ def validate_kline_series(
                 out_of_order_count += 1
             elif open_time - previous_open != interval_ms:
                 gap_count += 1
-                if not _is_month_boundary_gap(previous_open, open_time):
-                    unexplained_gaps += 1
+                if (previous_open, open_time) not in _allowed_gaps:
+                    unexplained_gap_count += 1
         previous_open = open_time
     if duplicate_count:
         raise Stage2DataError("kline series contains duplicate event times")
     if out_of_order_count:
         raise Stage2DataError("kline series is out of order")
-    if unexplained_gaps:
+    if unexplained_gap_count:
         raise Stage2DataError("kline series contains a gap")
     return Stage2SeriesCoverage(
         instrument_id=instrument_id,
@@ -925,7 +1015,7 @@ def validate_kline_series(
         out_of_order_count=out_of_order_count,
         gap_count=gap_count,
         source_checksum=source_checksum,
-        gap_explanation=(STAGE2_MONTH_BOUNDARY_GAP_EXPLANATION if gap_count else ""),
+        gap_explanation=(STAGE2_MARK_GAP_EXPLANATION if gap_count else ""),
     )
 
 
@@ -1070,8 +1160,8 @@ def expected_source_inventory_digest() -> str:
 
 
 def source_manifest_digest(manifest: Stage2SourceManifest) -> str:
-    payload = [
-        {
+    def _identity(item: Stage2SourceObject) -> dict[str, str | int]:
+        return {
             "checksum_url": item.checksum_url,
             "data_type": item.data_type,
             "end_ns": item.end_ns,
@@ -1081,8 +1171,13 @@ def source_manifest_digest(manifest: Stage2SourceManifest) -> str:
             "source_url": item.source_url,
             "start_ns": item.start_ns,
         }
-        for item in manifest.sources
-    ]
+
+    payload = {
+        "sources": [_identity(item) for item in manifest.sources],
+        "supplemental_sources": [
+            _identity(item) for item in manifest.supplemental_sources
+        ],
+    }
     return _canonical_digest(payload)
 
 
@@ -1106,13 +1201,30 @@ def probe_index_checksum_url(url: str) -> bool:
         ".CHECKSUM"
     ):
         return False
-    request = urllib.request.Request(url, method="HEAD")
-    try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            status = int(getattr(response, "status", 0))
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
-        return False
-    return 200 <= status < 300
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "tracequant-stage2-index/1"},
+    )
+    for _attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                if not 200 <= int(getattr(response, "status", 0)) < 300:
+                    continue
+                fields = response.read(256).decode("utf-8").split()
+                return (
+                    len(fields) == 2
+                    and _is_sha256_string(fields[0])
+                    and fields[1].endswith(".zip")
+                )
+        except (
+            UnicodeDecodeError,
+            urllib.error.URLError,
+            TimeoutError,
+            ValueError,
+            OSError,
+        ):
+            continue
+    return False
 
 
 def stage2_index_coverage_conclusion(
@@ -1172,8 +1284,10 @@ def coverage_summary(
             raise Stage2DataError(
                 "coverage report contains duplicate or out-of-order rows"
             )
-        if item.gap_count and item.gap_explanation != (
-            STAGE2_MONTH_BOUNDARY_GAP_EXPLANATION
+        if item.gap_count and not (
+            item.data_type == STAGE2_DATA_TYPE_MARK
+            and item.gap_count == len(STAGE2_MARK_ALLOWED_GAPS)
+            and item.gap_explanation == STAGE2_MARK_GAP_EXPLANATION
         ):
             raise Stage2DataError("coverage report contains an unexplained gap")
     summary: list[dict[str, str | int]] = []
@@ -1237,9 +1351,29 @@ def build_stage2_acceptance_record(
     crosscheck: Mapping[str, object],
     homology: Mapping[str, object],
     checksum_probe: Callable[[str], bool] | None = None,
+    index_coverage: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     require_tail_disabled()
+    resolved_index_coverage = (
+        dict(index_coverage)
+        if index_coverage is not None
+        else stage2_index_coverage_conclusion(checksum_probe=checksum_probe)
+    )
+    if resolved_index_coverage.get("checksum_available") is not True:
+        raise Stage2DataError("index checksum availability is incomplete")
+    if resolved_index_coverage.get("continuous_months") is not True:
+        raise Stage2DataError("index month objects are not continuous")
+    if len(manifest.sources) != STAGE2_EXPECTED_SOURCE_COUNT:
+        raise Stage2DataError("source manifest does not contain 800 objects")
+    require_complete_source_inventory([item.source_url for item in manifest.sources])
     record: dict[str, object] = {
+        "catalog_evidence": {
+            "coverage_filename": STAGE2_COVERAGE_FILENAME,
+            "dataset_digest_filename": STAGE2_DIGEST_FILENAME,
+            "source_manifest_filename": STAGE2_MANIFEST_FILENAME,
+            "source_object_count": len(manifest.sources),
+            "supplemental_source_count": len(manifest.supplemental_sources),
+        },
         "coverage_summary": list(coverage_summary(coverage)),
         "crosscheck": dict(crosscheck),
         "dataset_digest": dataset_digest(
@@ -1253,9 +1387,7 @@ def build_stage2_acceptance_record(
         "generation_command": STAGE2_GENERATION_COMMAND,
         "homology": dict(homology),
         "include_index_price": STAGE2_INCLUDE_INDEX_PRICE,
-        "index_coverage": stage2_index_coverage_conclusion(
-            checksum_probe=checksum_probe
-        ),
+        "index_coverage": resolved_index_coverage,
         "nautilus_tail_enabled": STAGE2_NAUTILUS_TAIL_ENABLED,
         "nautilus_version": STAGE2_NAUTILUS_VERSION,
         "runtime_identity": runtime_identity,
@@ -1271,8 +1403,156 @@ def build_stage2_acceptance_record(
             "test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog"
         ),
     }
+    require_complete_acceptance_record(record)
     require_no_local_absolute_paths(record)
     return record
+
+
+def require_complete_acceptance_record(
+    record: Mapping[str, object],
+    *,
+    require_gap_fill_sources: bool = False,
+    require_live_crosscheck: bool = False,
+) -> None:
+    if record.get("schema") != STAGE2_ACCEPTANCE_SCHEMA:
+        raise Stage2DataError("acceptance record schema does not match")
+    if record.get("dataset_id") != STAGE2_DATASET_ID:
+        raise Stage2DataError("acceptance record dataset identity does not match")
+    if record.get("expected_source_count") != STAGE2_EXPECTED_SOURCE_COUNT:
+        raise Stage2DataError("acceptance record source count does not match")
+    if record.get("expected_source_inventory_digest") != (
+        expected_source_inventory_digest()
+    ):
+        raise Stage2DataError("acceptance record source inventory does not match")
+    evidence = record.get("catalog_evidence")
+    if not isinstance(evidence, Mapping):
+        raise Stage2DataError("acceptance record catalog evidence is missing")
+    if evidence.get("source_manifest_filename") != STAGE2_MANIFEST_FILENAME:
+        raise Stage2DataError("acceptance record source manifest locator is missing")
+    if evidence.get("coverage_filename") != STAGE2_COVERAGE_FILENAME:
+        raise Stage2DataError("acceptance record coverage locator is missing")
+    if evidence.get("dataset_digest_filename") != STAGE2_DIGEST_FILENAME:
+        raise Stage2DataError("acceptance record dataset digest locator is missing")
+    if evidence.get("source_object_count") != STAGE2_EXPECTED_SOURCE_COUNT:
+        raise Stage2DataError("acceptance record catalog evidence is incomplete")
+    supplemental_source_count = evidence.get("supplemental_source_count")
+    if not isinstance(supplemental_source_count, int):
+        raise Stage2DataError("acceptance record supplemental evidence is missing")
+    if require_gap_fill_sources and supplemental_source_count != (
+        STAGE2_EXPECTED_SUPPLEMENTAL_SOURCE_COUNT
+    ):
+        raise Stage2DataError("tracked acceptance gap-fill evidence is incomplete")
+    for key in ("dataset_digest", "source_manifest_digest"):
+        digest = record.get(key)
+        if not isinstance(digest, str) or not _is_sha256_string(digest):
+            raise Stage2DataError(f"acceptance record {key} is not a SHA-256 digest")
+        if digest == "0" * 64:
+            raise Stage2DataError(f"acceptance record {key} is a placeholder")
+
+    coverage = record.get("coverage_summary")
+    if not isinstance(coverage, list) or len(coverage) != 10:
+        raise Stage2DataError("acceptance record coverage is incomplete")
+    expected_coverage = {
+        (data_type, instrument_id, stage2_bar_type_str(instrument_id, interval))
+        for instrument_id in STAGE2_INSTRUMENT_IDS
+        for data_type, interval in (
+            *((STAGE2_DATA_TYPE_BARS, item) for item in STAGE2_BAR_INTERVALS),
+            (STAGE2_DATA_TYPE_MARK, STAGE2_MARK_INTERVAL),
+        )
+    }
+    expected_coverage.update(
+        (STAGE2_DATA_TYPE_FUNDING, instrument_id, "")
+        for instrument_id in STAGE2_INSTRUMENT_IDS
+    )
+    observed_coverage: set[tuple[object, object, object]] = set()
+    for item in coverage:
+        if not isinstance(item, Mapping):
+            raise Stage2DataError("acceptance record coverage entry is invalid")
+        if not isinstance(item.get("row_count"), int) or item["row_count"] <= 0:
+            raise Stage2DataError("acceptance record coverage is empty")
+        if any(item.get(key) != 0 for key in ("duplicate_count", "out_of_order_count")):
+            raise Stage2DataError("acceptance record coverage contains failures")
+        if item.get("gap_count") != 0 and not (
+            item.get("data_type") == STAGE2_DATA_TYPE_MARK
+            and item.get("gap_count") == len(STAGE2_MARK_ALLOWED_GAPS)
+            and item.get("gap_explanation") == STAGE2_MARK_GAP_EXPLANATION
+        ):
+            raise Stage2DataError("acceptance record coverage contains failures")
+        source_digest = item.get("source_sha256")
+        if (
+            not isinstance(source_digest, str)
+            or not _is_sha256_string(source_digest)
+            or source_digest == "0" * 64
+        ):
+            raise Stage2DataError("acceptance record coverage is not source-bound")
+        observed_coverage.add(
+            (
+                item.get("data_type"),
+                item.get("instrument_id"),
+                item.get("bar_type", ""),
+            )
+        )
+    if observed_coverage != expected_coverage:
+        raise Stage2DataError("acceptance record coverage identities are incomplete")
+
+    crosscheck = record.get("crosscheck")
+    if not isinstance(crosscheck, Mapping):
+        raise Stage2DataError("acceptance record cross-check is missing")
+    if (
+        not isinstance(crosscheck.get("compared_records"), int)
+        or crosscheck["compared_records"] <= 0
+    ):
+        raise Stage2DataError("acceptance record cross-check is empty")
+    crosscheck_series = crosscheck.get("series")
+    if not isinstance(crosscheck_series, list) or len(crosscheck_series) != 4:
+        raise Stage2DataError("acceptance record cross-check series are incomplete")
+    if any(
+        not isinstance(item, Mapping)
+        or not isinstance(item.get("row_count"), int)
+        or item["row_count"] <= 0
+        for item in crosscheck_series
+    ):
+        raise Stage2DataError("acceptance record cross-check series are empty")
+    observed_crosscheck = {
+        (item.get("data_type"), item.get("instrument_id"))
+        for item in crosscheck_series
+        if isinstance(item, Mapping)
+    }
+    expected_crosscheck = {
+        (data_type, instrument_id)
+        for instrument_id in STAGE2_INSTRUMENT_IDS
+        for data_type in (STAGE2_DATA_TYPE_BARS, STAGE2_DATA_TYPE_FUNDING)
+    }
+    if observed_crosscheck != expected_crosscheck:
+        raise Stage2DataError("acceptance record cross-check identities are incomplete")
+    if (
+        crosscheck.get("start") != STAGE2_CROSSCHECK_START_ISO
+        or crosscheck.get("end") != STAGE2_CROSSCHECK_END_ISO
+    ):
+        raise Stage2DataError("acceptance record cross-check window does not match")
+    if crosscheck.get("written_to_catalog") is not False:
+        raise Stage2DataError("acceptance cross-check must not write to the catalog")
+    if require_live_crosscheck and crosscheck.get("source") != (
+        "nautilus_bars+binance_rest_funding"
+    ):
+        raise Stage2DataError("tracked acceptance requires a Nautilus cross-check")
+
+    homology = record.get("homology")
+    expected_homology = {
+        f"{split}:{instrument_id}:{data_type}"
+        for split in ("train", "validation", "test")
+        for instrument_id in STAGE2_INSTRUMENT_IDS
+        for data_type in (STAGE2_DATA_TYPE_BARS, STAGE2_DATA_TYPE_FUNDING)
+    }
+    if not isinstance(homology, Mapping) or set(homology) != expected_homology:
+        raise Stage2DataError("acceptance record homology is incomplete")
+    if any(
+        not isinstance(item, Mapping)
+        or not isinstance(item.get("row_count"), int)
+        or item["row_count"] <= 0
+        for item in homology.values()
+    ):
+        raise Stage2DataError("acceptance record homology contains empty windows")
 
 
 def require_no_local_absolute_paths(payload: object) -> None:
@@ -1319,12 +1599,6 @@ def _source_spec(
 def _canonical_digest(payload: object) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
-def _is_month_boundary_gap(previous_ms: int, next_ms: int) -> bool:
-    previous = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=previous_ms)
-    nxt = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=next_ms)
-    return (previous.year, previous.month) != (nxt.year, nxt.month)
 
 
 def _require_continuous_months(months: Sequence[tuple[int, int]]) -> None:
@@ -1533,31 +1807,23 @@ def _require_int_string(value: str, *, field: str) -> int:
 
 
 def _require_decimal_string(value: str, *, field: str) -> Decimal:
-    negative = value.startswith("-")
-    unsigned = value[1:] if negative else value
-    if not _is_decimal_string(unsigned):
+    if not value or value.strip() != value:
         raise Stage2DataError(f"kline field {field} is not a valid number")
-    if negative and field == "volume":
-        raise Stage2DataError("kline volume is negative")
     try:
-        return Decimal(value)
+        parsed = Decimal(value)
     except InvalidOperation as exc:
         raise Stage2DataError(f"kline field {field} is not a valid number") from exc
+    if not parsed.is_finite():
+        raise Stage2DataError(f"kline field {field} is not a valid number")
+    if parsed < 0 and field == "volume":
+        raise Stage2DataError("kline volume is negative")
+    return parsed
 
 
 def _is_int_string(value: str) -> bool:
     if value == "0":
         return True
     return bool(value) and value[0] != "0" and value.isdigit()
-
-
-def _is_decimal_string(value: str) -> bool:
-    if "." not in value:
-        return _is_int_string(value)
-    whole, fraction = value.split(".", 1)
-    if not fraction or not fraction.isdigit():
-        return False
-    return _is_int_string(whole)
 
 
 def _is_sha256_string(value: str) -> bool:

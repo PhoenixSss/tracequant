@@ -4,8 +4,10 @@ import asyncio
 import hashlib
 import json
 import os
+import urllib.parse
+import urllib.request
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -73,6 +75,7 @@ from tracequant.source_data.stage2_btceth import (
     STAGE2_FUNDING_STREAM_ID,
     STAGE2_INSTRUMENT_IDS,
     STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
+    STAGE2_INSTRUMENT_SYMBOLS,
     STAGE2_MANIFEST_FILENAME,
     STAGE2_NAUTILUS_VERSION,
     STAGE2_SOURCE_SCHEMA,
@@ -95,6 +98,7 @@ from tracequant.source_data.stage2_btceth import (
     discover_stage2_funding_archives,
     discover_stage2_kline_archives,
     discover_stage2_mark_archives,
+    discover_stage2_mark_gap_fill_archives,
     funding_interval_minutes,
     isoformat_utc,
     load_stage2_config,
@@ -107,6 +111,7 @@ from tracequant.source_data.stage2_btceth import (
     require_tail_disabled,
     require_utc,
     stage2_bar_type_str,
+    stage2_index_coverage_conclusion,
     unix_millis,
     validate_funding_series,
     validate_kline_series,
@@ -119,25 +124,45 @@ def stage2_bar_type(instrument_id: str, interval: str) -> BarType:
     return BarType.from_str(stage2_bar_type_str(instrument_id, interval))
 
 
+def _fixed_precision(value: str, precision: int | None) -> str:
+    if precision is None:
+        return value
+    return f"{Decimal(value):.{precision}f}"
+
+
+def _decimal_precision(value: str) -> int:
+    exponent = Decimal(value).as_tuple().exponent
+    if not isinstance(exponent, int):
+        raise Stage2DataError("decimal precision requires a finite number")
+    return max(0, -exponent)
+
+
 def bars_from_kline_rows(
     rows: Sequence[Stage2KlineRow],
     *,
     instrument_id: str,
     interval: str,
+    price_precision: int | None = None,
+    size_precision: int | None = None,
 ) -> tuple[Bar, ...]:
     bar_type = stage2_bar_type(instrument_id, interval)
     bars: list[Bar] = []
     for row in rows:
         close_time = int(row.close_time)
         ts_event = millis_to_nanos(close_time)
+        open_value = _fixed_precision(row.open, price_precision)
+        high_value = _fixed_precision(row.high, price_precision)
+        low_value = _fixed_precision(row.low, price_precision)
+        close_value = _fixed_precision(row.close, price_precision)
+        volume_value = _fixed_precision(row.volume, size_precision)
         bars.append(
             Bar(
                 bar_type=bar_type,
-                open=Price.from_str(row.open),
-                high=Price.from_str(row.high),
-                low=Price.from_str(row.low),
-                close=Price.from_str(row.close),
-                volume=Quantity.from_str(row.volume),
+                open=Price.from_str(open_value),
+                high=Price.from_str(high_value),
+                low=Price.from_str(low_value),
+                close=Price.from_str(close_value),
+                volume=Quantity.from_str(volume_value),
                 ts_event=ts_event,
                 ts_init=ts_event,
             )
@@ -149,6 +174,7 @@ def mark_price_updates_from_kline_rows(
     rows: Sequence[Stage2KlineRow],
     *,
     instrument_id: str,
+    price_precision: int | None = None,
 ) -> tuple[MarkPriceUpdate, ...]:
     native_id = InstrumentId.from_str(instrument_id)
     marks: list[MarkPriceUpdate] = []
@@ -157,7 +183,7 @@ def mark_price_updates_from_kline_rows(
         marks.append(
             MarkPriceUpdate(
                 instrument_id=native_id,
-                value=Price.from_str(row.close),
+                value=Price.from_str(_fixed_precision(row.close, price_precision)),
                 ts_event=ts_event,
                 ts_init=ts_event,
             )
@@ -340,7 +366,7 @@ def prepare_stage2_mark_funding_catalog(
         instrument_snapshot_path=instrument_snapshot_path,
         fetched_at=fetched_at,
     )
-    source_objects, marks, fundings, coverage_series = (
+    source_objects, supplemental_objects, marks, fundings, coverage_series = (
         _load_validated_stage2_mark_funding(config)
     )
     catalog = ParquetDataCatalog(str(config.catalog_path))
@@ -362,6 +388,7 @@ def prepare_stage2_mark_funding_catalog(
         dataset_id=config.dataset_id,
         nautilus_version=config.nautilus_version,
         sources=tuple(source_objects),
+        supplemental_sources=tuple(supplemental_objects),
     )
     report = Stage2CoverageReport(
         dataset_id=config.dataset_id,
@@ -622,8 +649,18 @@ def _load_validated_stage2_series(
                 interval=interval,
                 source_checksum=combined_source_checksum(tuple(series_digests)),
             )
+            price_precision = max(
+                _decimal_precision(value)
+                for row in series_rows
+                for value in (row.open, row.high, row.low, row.close)
+            )
+            size_precision = max(_decimal_precision(row.volume) for row in series_rows)
             bars = bars_from_kline_rows(
-                series_rows, instrument_id=instrument_id, interval=interval
+                series_rows,
+                instrument_id=instrument_id,
+                interval=interval,
+                price_precision=price_precision,
+                size_precision=size_precision,
             )
             _assert_bars_match_rows(
                 bars, series_rows, instrument_id=instrument_id, interval=interval
@@ -638,6 +675,7 @@ def _load_validated_stage2_mark_funding(
     require_complete: bool = False,
 ) -> tuple[
     list[Stage2SourceObject],
+    list[Stage2SourceObject],
     list[tuple[str, tuple[MarkPriceUpdate, ...]]],
     list[tuple[str, tuple[FundingRateUpdate, ...]]],
     list[Stage2SeriesCoverage],
@@ -648,6 +686,9 @@ def _load_validated_stage2_mark_funding(
     funding_archives = discover_stage2_funding_archives(
         config, require_complete=require_complete
     )
+    mark_gap_fill_archives = (
+        discover_stage2_mark_gap_fill_archives(config) if require_complete else ()
+    )
     marks_grouped: dict[str, list[Stage2KlineArchive]] = {}
     for mark_archive in mark_archives:
         marks_grouped.setdefault(mark_archive.instrument_id, []).append(mark_archive)
@@ -656,12 +697,17 @@ def _load_validated_stage2_mark_funding(
         funding_grouped.setdefault(funding_archive.instrument_id, []).append(
             funding_archive
         )
+    fill_grouped: dict[str, list[Stage2KlineArchive]] = {}
+    for fill_archive in mark_gap_fill_archives:
+        fill_grouped.setdefault(fill_archive.instrument_id, []).append(fill_archive)
     source_objects: list[Stage2SourceObject] = []
+    supplemental_source_objects: list[Stage2SourceObject] = []
     marks: list[tuple[str, tuple[MarkPriceUpdate, ...]]] = []
     fundings: list[tuple[str, tuple[FundingRateUpdate, ...]]] = []
     coverage_series: list[Stage2SeriesCoverage] = []
     for instrument_id in config.instrument_ids:
         mark_rows: list[Stage2KlineRow] = []
+        validation_only_mark_rows: list[Stage2KlineRow] = []
         mark_digests: list[str] = []
         for mark_archive in marks_grouped[instrument_id]:
             mark_chunk, digest = read_verified_kline_archive(
@@ -679,13 +725,43 @@ def _load_validated_stage2_mark_funding(
             )
             mark_rows.extend(mark_chunk)
             mark_digests.append(digest)
+        by_open_time = {int(row.open_time): row for row in mark_rows}
+        for fill_archive in fill_grouped.get(instrument_id, []):
+            fill_rows, digest = read_verified_kline_archive(
+                fill_archive,
+                window_start=config.window_start - timedelta(days=1),
+                window_end=config.window_end,
+            )
+            supplemental_source_objects.append(
+                build_source_object(
+                    fill_archive,
+                    fill_rows,
+                    digest,
+                    data_type=STAGE2_DATA_TYPE_MARK,
+                )
+            )
+            for row in fill_rows:
+                open_time = int(row.open_time)
+                if open_time < unix_millis(config.window_start):
+                    validation_only_mark_rows.append(row)
+                    continue
+                existing = by_open_time.get(open_time)
+                if existing is not None and existing != row:
+                    raise Stage2DataError(
+                        "daily mark gap-fill conflicts with the monthly archive"
+                    )
+                by_open_time[open_time] = row
+            mark_digests.append(digest)
+        mark_rows = [by_open_time[key] for key in sorted(by_open_time)]
         mark_coverage = validate_mark_series(
             mark_rows,
             instrument_id=instrument_id,
             source_checksum=combined_source_checksum(tuple(mark_digests)),
         )
         mark_updates = mark_price_updates_from_kline_rows(
-            mark_rows, instrument_id=instrument_id
+            mark_rows,
+            instrument_id=instrument_id,
+            price_precision=max(_decimal_precision(row.close) for row in mark_rows),
         )
         _assert_marks_match_rows(mark_updates, mark_rows, instrument_id=instrument_id)
         funding_rows: list[Stage2FundingRow] = []
@@ -706,7 +782,9 @@ def _load_validated_stage2_mark_funding(
             instrument_id=instrument_id,
             source_checksum=combined_source_checksum(tuple(funding_digests)),
         )
-        require_recent_mark_for_funding(mark_rows, funding_rows)
+        require_recent_mark_for_funding(
+            [*validation_only_mark_rows, *mark_rows], funding_rows
+        )
         funding_updates = funding_rate_updates_from_rows(
             funding_rows, instrument_id=instrument_id
         )
@@ -717,7 +795,13 @@ def _load_validated_stage2_mark_funding(
         fundings.append((instrument_id, funding_updates))
         coverage_series.append(mark_coverage)
         coverage_series.append(funding_coverage)
-    return source_objects, marks, fundings, coverage_series
+    return (
+        source_objects,
+        supplemental_source_objects,
+        marks,
+        fundings,
+        coverage_series,
+    )
 
 
 def _resolve_instruments(
@@ -779,11 +863,15 @@ def _assert_bars_match_rows(
         ts_event = millis_to_nanos(int(row.close_time))
         if int(bar.ts_event) != ts_event or int(bar.ts_init) != ts_event:
             raise Stage2DataError("bar event time does not match close_time")
-        if str(bar.open) != row.open or str(bar.high) != row.high:
+        if Decimal(str(bar.open)) != Decimal(row.open) or Decimal(
+            str(bar.high)
+        ) != Decimal(row.high):
             raise Stage2DataError("bar OHLC does not match source strings")
-        if str(bar.low) != row.low or str(bar.close) != row.close:
+        if Decimal(str(bar.low)) != Decimal(row.low) or Decimal(
+            str(bar.close)
+        ) != Decimal(row.close):
             raise Stage2DataError("bar OHLC does not match source strings")
-        if str(bar.volume) != row.volume:
+        if Decimal(str(bar.volume)) != Decimal(row.volume):
             raise Stage2DataError("bar volume does not match source strings")
 
 
@@ -802,7 +890,7 @@ def _assert_marks_match_rows(
         ts_event = millis_to_nanos(int(row.close_time))
         if int(mark.ts_event) != ts_event or int(mark.ts_init) != ts_event:
             raise Stage2DataError("mark event time does not match close_time")
-        if str(mark.value) != row.close:
+        if Decimal(str(mark.value)) != Decimal(row.close):
             raise Stage2DataError("mark price does not match source close")
 
 
@@ -936,9 +1024,19 @@ def prepare_stage2_combined_catalog(
         instrument_snapshot_path=instrument_snapshot_path,
         fetched_at=fetched_at,
     )
-    bar_objects, prepared = _load_validated_stage2_series(config, require_complete=True)
-    mark_objects, marks, fundings, mark_coverage = _load_validated_stage2_mark_funding(
-        config, require_complete=True
+    bar_objects, prepared = _load_validated_stage2_series(
+        config,
+        require_complete=True,
+    )
+    (
+        mark_objects,
+        supplemental_objects,
+        marks,
+        fundings,
+        mark_coverage,
+    ) = _load_validated_stage2_mark_funding(
+        config,
+        require_complete=True,
     )
     coverage_series = [item[3] for item in prepared]
     coverage_series.extend(mark_coverage)
@@ -947,6 +1045,7 @@ def prepare_stage2_combined_catalog(
         dataset_id=config.dataset_id,
         nautilus_version=config.nautilus_version,
         sources=tuple(bar_objects + mark_objects),
+        supplemental_sources=tuple(supplemental_objects),
     )
     require_complete_source_inventory([item.source_url for item in manifest.sources])
     report = Stage2CoverageReport(
@@ -988,7 +1087,7 @@ def prepare_stage2_combined_catalog(
         )
         write_json(
             config.catalog_path / STAGE2_COVERAGE_FILENAME,
-            report.to_json_dict(),
+            report.to_json_dict(catalog_path=config.catalog_path),
         )
         write_json(
             config.catalog_path / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
@@ -1034,6 +1133,11 @@ def prepare_stage2_dataset(
     checksum_probe: Callable[[str], bool] | None = None,
 ) -> dict[str, object]:
     require_tail_disabled()
+    index_coverage = stage2_index_coverage_conclusion(checksum_probe=checksum_probe)
+    if index_coverage["checksum_available"] is not True:
+        raise Stage2DataError("index checksum availability is incomplete")
+    if index_coverage["continuous_months"] is not True:
+        raise Stage2DataError("index month objects are not continuous")
     manifest, coverage, catalog_path = prepare_stage2_combined_catalog(
         config_path,
         repository_root=repository_root,
@@ -1047,7 +1151,7 @@ def prepare_stage2_dataset(
         requested_funding: Mapping[str, Sequence[FundingRateUpdate]]
         if fetch_crosscheck is None:
             requested_bars, requested_funding = fetch_stage2_nautilus_crosscheck()
-            crosscheck_source = "nautilus_request"
+            crosscheck_source = "nautilus_bars+binance_rest_funding"
         else:
             requested_bars, requested_funding = fetch_crosscheck()
             crosscheck_source = "injected"
@@ -1076,7 +1180,7 @@ def prepare_stage2_dataset(
         runtime_identity=UPSTREAM_RELEASE_IDENTITY,
         crosscheck=crosscheck,
         homology=homology,
-        checksum_probe=checksum_probe,
+        index_coverage=index_coverage,
     )
     if acceptance_path is not None:
         write_json(acceptance_path, record)
@@ -1096,7 +1200,7 @@ def stage2_bar_backtest_data_config(
         catalog_path=str(catalog_path),
         bar_types=[bar_type],
         start_time=start,
-        end_time=end,
+        end_time=_backtest_inclusive_end(start=start, end=end),
     )
 
 
@@ -1114,8 +1218,14 @@ def stage2_funding_window_backtest_data_config(
         catalog_path=str(catalog_path),
         instrument_id=InstrumentId.from_str(instrument_id),
         start_time=start,
-        end_time=end,
+        end_time=_backtest_inclusive_end(start=start, end=end),
     )
+
+
+def _backtest_inclusive_end(*, start: datetime, end: datetime) -> datetime:
+    if end <= start:
+        raise Stage2DataError("backtest data window is inverted")
+    return end - timedelta(microseconds=1)
 
 
 def load_stage2_backtest_bars(
@@ -1490,7 +1600,8 @@ def fetch_stage2_nautilus_crosscheck() -> tuple[
     start = parse_utc(STAGE2_CROSSCHECK_START_ISO)
     end = parse_utc(STAGE2_CROSSCHECK_END_ISO)
     config = build_stage2_binance_instrument_client_config(_runtime_proxy_url())
-    actor = _Stage2CrosscheckActor(start=start, end=end)
+    actor = _Stage2CrosscheckActor()
+    actor.configure_window(start=start, end=end)
     builder = (
         LiveNode.builder(
             "STAGE2-BTCETH-CROSSCHECK",
@@ -1510,21 +1621,70 @@ def fetch_stage2_nautilus_crosscheck() -> tuple[
         node.dispose()
     if actor.error is not None:
         raise Stage2DataError(actor.error)
-    return actor.bars, actor.funding
+    return actor.bars, _fetch_stage2_rest_funding(start=start, end=end)
+
+
+def _fetch_stage2_rest_funding(
+    *, start: datetime, end: datetime
+) -> dict[str, tuple[FundingRateUpdate, ...]]:
+    start_ms = unix_millis(start)
+    end_ms = unix_millis(end)
+    result: dict[str, tuple[FundingRateUpdate, ...]] = {}
+    for instrument_id in STAGE2_INSTRUMENT_IDS:
+        symbol = STAGE2_INSTRUMENT_SYMBOLS[instrument_id]
+        query = urllib.parse.urlencode(
+            {
+                "endTime": end_ms,
+                "limit": 1000,
+                "startTime": start_ms,
+                "symbol": symbol,
+            }
+        )
+        request = urllib.request.Request(
+            f"https://fapi.binance.com/fapi/v1/fundingRate?{query}",
+            headers={"User-Agent": "tracequant-stage2-crosscheck/1"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.load(response)
+        except (OSError, ValueError) as exc:
+            raise Stage2DataError("Binance funding cross-check request failed") from exc
+        if not isinstance(payload, list):
+            raise Stage2DataError("Binance funding cross-check response is invalid")
+        rows: list[Stage2FundingRow] = []
+        for item in payload:
+            if not isinstance(item, dict) or item.get("symbol") != symbol:
+                raise Stage2DataError("Binance funding cross-check identity is invalid")
+            funding_time = item.get("fundingTime")
+            funding_rate = item.get("fundingRate")
+            if (
+                not isinstance(funding_time, int)
+                or not isinstance(funding_rate, str)
+                or not start_ms <= funding_time < end_ms
+            ):
+                continue
+            rows.append(Stage2FundingRow(str(funding_time), "8", funding_rate))
+        if not rows:
+            raise Stage2DataError("Binance funding cross-check response is empty")
+        result[instrument_id] = funding_rate_updates_from_rows(
+            rows, instrument_id=instrument_id
+        )
+    return result
 
 
 class _Stage2CrosscheckActor(DataActor):
-    def __init__(self, *, start: datetime, end: datetime) -> None:
+    def __init__(self) -> None:
         super().__init__(DataActorConfig())
-        self._start = start
-        self._end = end
-        self._jobs: list[tuple[str, str]] = [
-            ("bars", instrument_id) for instrument_id in STAGE2_INSTRUMENT_IDS
-        ] + [("funding", instrument_id) for instrument_id in STAGE2_INSTRUMENT_IDS]
+        self._start: datetime | None = None
+        self._end: datetime | None = None
+        self._jobs = list(STAGE2_INSTRUMENT_IDS)
         self._index = 0
         self.bars: dict[str, tuple[Bar, ...]] = {}
-        self.funding: dict[str, tuple[FundingRateUpdate, ...]] = {}
         self.error: str | None = None
+
+    def configure_window(self, *, start: datetime, end: datetime) -> None:
+        self._start = start
+        self._end = end
 
     def on_start(self) -> None:
         self._request_current()
@@ -1547,32 +1707,8 @@ class _Stage2CrosscheckActor(DataActor):
             self.error = "empty historical bar segment"
             self.shutdown_system(reason=self.error)
             return
-        _kind, instrument_id = self._jobs[self._index]
+        instrument_id = self._jobs[self._index]
         self.bars[instrument_id] = tuple(received)
-        self._advance()
-
-    def on_historical_funding_rates(self, funding_rates: object) -> None:
-        try:
-            payload = (
-                list(funding_rates) if isinstance(funding_rates, Iterable) else None
-            )
-        except TypeError:
-            payload = None
-        if payload is None:
-            self.error = "historical funding payload is not iterable"
-            self.shutdown_system(reason=self.error)
-            return
-        received = [item for item in payload if isinstance(item, FundingRateUpdate)]
-        if len(received) != len(payload):
-            self.error = "historical payload contains non-funding objects"
-            self.shutdown_system(reason=self.error)
-            return
-        if not received:
-            self.error = "empty historical funding segment"
-            self.shutdown_system(reason=self.error)
-            return
-        _kind, instrument_id = self._jobs[self._index]
-        self.funding[instrument_id] = tuple(received)
         self._advance()
 
     def on_fault(self) -> None:
@@ -1587,17 +1723,13 @@ class _Stage2CrosscheckActor(DataActor):
         self._request_current()
 
     def _request_current(self) -> None:
-        kind, instrument_id = self._jobs[self._index]
-        if kind == "bars":
-            self.request_bars(
-                bar_type=stage2_bar_type(instrument_id, "1h"),
-                start=self._start,
-                end=self._end,
-                client_id=BINANCE_CLIENT_ID,
-            )
+        if self._start is None or self._end is None:
+            self.error = "stage 2 cross-check window is not configured"
+            self.shutdown_system(reason=self.error)
             return
-        self.request_funding_rates(
-            instrument_id=InstrumentId.from_str(instrument_id),
+        instrument_id = self._jobs[self._index]
+        self.request_bars(
+            bar_type=stage2_bar_type(instrument_id, "1h"),
             start=self._start,
             end=self._end,
             client_id=BINANCE_CLIENT_ID,

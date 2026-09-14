@@ -484,6 +484,12 @@ def test_header_and_headerless_funding_share_fixed_schema() -> None:
     assert headerless[1].funding_interval_hours == "4"
 
 
+def test_official_scientific_notation_funding_rate_is_valid() -> None:
+    window_start, window_end = stage2_window()
+    row = Stage2FundingRow("1578124800000", "8", "8.4E-7")
+    validate_funding_row(row, window_start=window_start, window_end=window_end)
+
+
 def test_checksum_mismatch_rejects_mark_funding_write(tmp_path: Path) -> None:
     raw_root = tmp_path / "raw"
     catalog_path = tmp_path / "catalog"

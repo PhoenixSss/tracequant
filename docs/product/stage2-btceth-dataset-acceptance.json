@@ -1,19 +1,289 @@
 {
-  "coverage_summary": [],
+  "catalog_evidence": {
+    "coverage_filename": "stage2_coverage.json",
+    "dataset_digest_filename": "stage2_dataset_digest.json",
+    "source_manifest_filename": "stage2_source_manifest.json",
+    "source_object_count": 800,
+    "supplemental_source_count": 18
+  },
+  "coverage_summary": [
+    {
+      "bar_type": "BTCUSDT-PERP.BINANCE-15-MINUTE-LAST-EXTERNAL",
+      "data_type": "bars",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "duplicate_count": 0,
+      "first_ts_event": 1577837699999000000,
+      "gap_count": 0,
+      "gap_explanation": "",
+      "instrument_id": "BTCUSDT-PERP.BINANCE",
+      "last_ts_event": 1788220799999000000,
+      "out_of_order_count": 0,
+      "row_count": 233760,
+      "source_sha256": "d132746fc074aeadcc407e0feac7e7579bba13f6a74f3d0dc57a641ce53ef39a"
+    },
+    {
+      "bar_type": "BTCUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL",
+      "data_type": "bars",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "duplicate_count": 0,
+      "first_ts_event": 1577840399999000000,
+      "gap_count": 0,
+      "gap_explanation": "",
+      "instrument_id": "BTCUSDT-PERP.BINANCE",
+      "last_ts_event": 1788220799999000000,
+      "out_of_order_count": 0,
+      "row_count": 58440,
+      "source_sha256": "5d602c42377b3667fb591e730455bd5227e7f04a02ffec9cfccb94d7014bc146"
+    },
+    {
+      "bar_type": "BTCUSDT-PERP.BINANCE-4-HOUR-LAST-EXTERNAL",
+      "data_type": "bars",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "duplicate_count": 0,
+      "first_ts_event": 1577851199999000000,
+      "gap_count": 0,
+      "gap_explanation": "",
+      "instrument_id": "BTCUSDT-PERP.BINANCE",
+      "last_ts_event": 1788220799999000000,
+      "out_of_order_count": 0,
+      "row_count": 14610,
+      "source_sha256": "76e30f50cf88ab2886f4f9d4d348674ffc6b6bf7d615ba72296735e3ecb86aeb"
+    },
+    {
+      "bar_type": "ETHUSDT-PERP.BINANCE-15-MINUTE-LAST-EXTERNAL",
+      "data_type": "bars",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "duplicate_count": 0,
+      "first_ts_event": 1577837699999000000,
+      "gap_count": 0,
+      "gap_explanation": "",
+      "instrument_id": "ETHUSDT-PERP.BINANCE",
+      "last_ts_event": 1788220799999000000,
+      "out_of_order_count": 0,
+      "row_count": 233760,
+      "source_sha256": "2d4796247084c0e44fa3d44a98c0d0809b6df277bce05582b49689772616ee23"
+    },
+    {
+      "bar_type": "ETHUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL",
+      "data_type": "bars",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "duplicate_count": 0,
+      "first_ts_event": 1577840399999000000,
+      "gap_count": 0,
+      "gap_explanation": "",
+      "instrument_id": "ETHUSDT-PERP.BINANCE",
+      "last_ts_event": 1788220799999000000,
+      "out_of_order_count": 0,
+      "row_count": 58440,
+      "source_sha256": "b773b956e51c4f65d03b60d65ce1f37fb038d352adbf0d329f0fdfc0cde59a41"
+    },
+    {
+      "bar_type": "ETHUSDT-PERP.BINANCE-4-HOUR-LAST-EXTERNAL",
+      "data_type": "bars",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "duplicate_count": 0,
+      "first_ts_event": 1577851199999000000,
+      "gap_count": 0,
+      "gap_explanation": "",
+      "instrument_id": "ETHUSDT-PERP.BINANCE",
+      "last_ts_event": 1788220799999000000,
+      "out_of_order_count": 0,
+      "row_count": 14610,
+      "source_sha256": "30c5eb4e9140259c3476df3127a28b4d92e2a297a223bfabaab2566c4a83ce12"
+    },
+    {
+      "bar_type": "BTCUSDT-PERP.BINANCE-15-MINUTE-LAST-EXTERNAL",
+      "data_type": "mark_price",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "duplicate_count": 0,
+      "first_ts_event": 1577837699999000000,
+      "gap_count": 2,
+      "gap_explanation": "Binance monthly and daily markPriceKlines both omit the 2020-01-19T13:15Z and 2023-11-10T03:45Z intervals; no funding event overlaps either omission",
+      "instrument_id": "BTCUSDT-PERP.BINANCE",
+      "last_ts_event": 1788220799999000000,
+      "out_of_order_count": 0,
+      "row_count": 233758,
+      "source_sha256": "0071b017731ae5165ac2bf83db9a5102e97e55bac1f2eb31d4f950cbb05ab6da"
+    },
+    {
+      "data_type": "funding",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "duplicate_count": 0,
+      "first_ts_event": 1577836800000000000,
+      "gap_count": 0,
+      "gap_explanation": "",
+      "instrument_id": "BTCUSDT-PERP.BINANCE",
+      "last_ts_event": 1788192000001000000,
+      "out_of_order_count": 0,
+      "row_count": 7305,
+      "source_sha256": "d552324a4e36f159b018e5b771a7a031f477ba8e4938b3812afc692ca9495117"
+    },
+    {
+      "bar_type": "ETHUSDT-PERP.BINANCE-15-MINUTE-LAST-EXTERNAL",
+      "data_type": "mark_price",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "duplicate_count": 0,
+      "first_ts_event": 1577837699999000000,
+      "gap_count": 2,
+      "gap_explanation": "Binance monthly and daily markPriceKlines both omit the 2020-01-19T13:15Z and 2023-11-10T03:45Z intervals; no funding event overlaps either omission",
+      "instrument_id": "ETHUSDT-PERP.BINANCE",
+      "last_ts_event": 1788220799999000000,
+      "out_of_order_count": 0,
+      "row_count": 233758,
+      "source_sha256": "7c4afd42b39b0599e3236ba095e2d3cbd4865bde944d496802e66730a71d40bf"
+    },
+    {
+      "data_type": "funding",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "duplicate_count": 0,
+      "first_ts_event": 1577836800000000000,
+      "gap_count": 0,
+      "gap_explanation": "",
+      "instrument_id": "ETHUSDT-PERP.BINANCE",
+      "last_ts_event": 1788192000001000000,
+      "out_of_order_count": 0,
+      "row_count": 7305,
+      "source_sha256": "7e1e43fc890bb0fca5e03aa5408536bc320b229203a1be26cbcccae738a73556"
+    }
+  ],
   "crosscheck": {
-    "compared_records": 0,
+    "compared_records": 378,
     "end": "2026-09-01T00:00:00Z",
-    "series": [],
-    "source": "nautilus_request",
+    "series": [
+      {
+        "data_type": "bars",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "row_count": 168
+      },
+      {
+        "data_type": "funding",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "row_count": 21
+      },
+      {
+        "data_type": "bars",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "row_count": 168
+      },
+      {
+        "data_type": "funding",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "row_count": 21
+      }
+    ],
+    "source": "nautilus_bars+binance_rest_funding",
     "start": "2026-08-25T00:00:00Z",
     "written_to_catalog": false
   },
-  "dataset_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "dataset_digest": "50232aecf29931541c3d5eefdd28eec8013226b745bff531867b218761137507",
   "dataset_id": "binance-usdm-btceth-202001-202608-r1",
   "expected_source_count": 800,
   "expected_source_inventory_digest": "0d5c8b384098ba7730d814739b4c4549e7bcf01a12c9c69eec614e6fbb0dc816",
   "generation_command": "uv run --frozen python -m tracequant.integrations.nautilus.stage2_btceth",
-  "homology": {},
+  "homology": {
+    "test:BTCUSDT-PERP.BINANCE:bars": {
+      "bar_type": "BTCUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL",
+      "data_type": "bars",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "first_ts_event": 1735693199999000000,
+      "instrument_id": "BTCUSDT-PERP.BINANCE",
+      "last_ts_event": 1788220799999000000,
+      "row_count": 14592
+    },
+    "test:BTCUSDT-PERP.BINANCE:funding": {
+      "data_type": "funding",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "first_ts_event": 1735689600015000000,
+      "instrument_id": "BTCUSDT-PERP.BINANCE",
+      "last_ts_event": 1788192000001000000,
+      "row_count": 1824
+    },
+    "test:ETHUSDT-PERP.BINANCE:bars": {
+      "bar_type": "ETHUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL",
+      "data_type": "bars",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "first_ts_event": 1735693199999000000,
+      "instrument_id": "ETHUSDT-PERP.BINANCE",
+      "last_ts_event": 1788220799999000000,
+      "row_count": 14592
+    },
+    "test:ETHUSDT-PERP.BINANCE:funding": {
+      "data_type": "funding",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "first_ts_event": 1735689600015000000,
+      "instrument_id": "ETHUSDT-PERP.BINANCE",
+      "last_ts_event": 1788192000001000000,
+      "row_count": 1824
+    },
+    "train:BTCUSDT-PERP.BINANCE:bars": {
+      "bar_type": "BTCUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL",
+      "data_type": "bars",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "first_ts_event": 1577840399999000000,
+      "instrument_id": "BTCUSDT-PERP.BINANCE",
+      "last_ts_event": 1704067199999000000,
+      "row_count": 35064
+    },
+    "train:BTCUSDT-PERP.BINANCE:funding": {
+      "data_type": "funding",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "first_ts_event": 1577836800000000000,
+      "instrument_id": "BTCUSDT-PERP.BINANCE",
+      "last_ts_event": 1704038400000000000,
+      "row_count": 4383
+    },
+    "train:ETHUSDT-PERP.BINANCE:bars": {
+      "bar_type": "ETHUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL",
+      "data_type": "bars",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "first_ts_event": 1577840399999000000,
+      "instrument_id": "ETHUSDT-PERP.BINANCE",
+      "last_ts_event": 1704067199999000000,
+      "row_count": 35064
+    },
+    "train:ETHUSDT-PERP.BINANCE:funding": {
+      "data_type": "funding",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "first_ts_event": 1577836800000000000,
+      "instrument_id": "ETHUSDT-PERP.BINANCE",
+      "last_ts_event": 1704038400000000000,
+      "row_count": 4383
+    },
+    "validation:BTCUSDT-PERP.BINANCE:bars": {
+      "bar_type": "BTCUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL",
+      "data_type": "bars",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "first_ts_event": 1704070799999000000,
+      "instrument_id": "BTCUSDT-PERP.BINANCE",
+      "last_ts_event": 1735689599999000000,
+      "row_count": 8784
+    },
+    "validation:BTCUSDT-PERP.BINANCE:funding": {
+      "data_type": "funding",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "first_ts_event": 1704067200000000000,
+      "instrument_id": "BTCUSDT-PERP.BINANCE",
+      "last_ts_event": 1735660800000000000,
+      "row_count": 1098
+    },
+    "validation:ETHUSDT-PERP.BINANCE:bars": {
+      "bar_type": "ETHUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL",
+      "data_type": "bars",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "first_ts_event": 1704070799999000000,
+      "instrument_id": "ETHUSDT-PERP.BINANCE",
+      "last_ts_event": 1735689599999000000,
+      "row_count": 8784
+    },
+    "validation:ETHUSDT-PERP.BINANCE:funding": {
+      "data_type": "funding",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "first_ts_event": 1704067200000000000,
+      "instrument_id": "ETHUSDT-PERP.BINANCE",
+      "last_ts_event": 1735660800000000000,
+      "row_count": 1098
+    }
+  },
   "include_index_price": false,
   "index_coverage": {
     "checksum_available": true,
@@ -23,13 +293,1135 @@
     "interval": "15m",
     "month_count": 80,
     "object_count": 160,
+    "objects": [
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-01.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 1,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-01.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-02.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 2,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-02.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-03.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 3,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-03.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-04.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 4,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-04.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-05.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 5,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-05.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-06.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 6,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-06.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-07.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 7,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-07.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-08.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 8,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-08.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-09.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 9,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-09.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-10.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 10,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-10.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-11.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 11,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-11.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-12.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 12,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2020-12.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-01.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 1,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-01.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-02.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 2,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-02.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-03.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 3,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-03.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-04.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 4,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-04.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-05.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 5,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-05.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-06.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 6,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-06.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-07.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 7,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-07.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-08.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 8,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-08.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-09.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 9,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-09.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-10.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 10,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-10.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-11.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 11,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-11.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-12.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 12,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2021-12.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-01.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 1,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-01.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-02.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 2,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-02.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-03.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 3,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-03.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-04.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 4,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-04.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-05.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 5,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-05.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-06.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 6,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-06.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-07.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 7,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-07.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-08.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 8,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-08.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-09.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 9,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-09.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-10.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 10,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-10.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-11.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 11,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-11.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-12.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 12,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2022-12.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-01.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 1,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-01.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-02.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 2,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-02.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-03.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 3,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-03.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-04.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 4,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-04.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-05.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 5,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-05.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-06.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 6,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-06.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-07.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 7,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-07.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-08.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 8,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-08.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-09.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 9,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-09.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-10.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 10,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-10.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-11.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 11,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-11.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-12.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 12,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2023-12.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-01.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 1,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-01.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-02.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 2,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-02.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-03.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 3,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-03.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-04.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 4,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-04.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-05.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 5,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-05.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-06.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 6,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-06.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-07.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 7,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-07.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-08.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 8,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-08.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-09.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 9,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-09.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-10.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 10,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-10.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-11.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 11,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-11.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-12.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 12,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2024-12.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-01.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 1,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-01.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-02.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 2,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-02.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-03.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 3,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-03.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-04.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 4,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-04.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-05.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 5,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-05.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-06.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 6,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-06.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-07.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 7,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-07.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-08.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 8,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-08.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-09.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 9,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-09.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-10.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 10,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-10.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-11.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 11,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-11.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-12.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 12,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2025-12.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-01.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 1,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-01.zip",
+        "year": 2026
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-02.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 2,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-02.zip",
+        "year": 2026
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-03.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 3,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-03.zip",
+        "year": 2026
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-04.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 4,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-04.zip",
+        "year": 2026
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-05.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 5,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-05.zip",
+        "year": 2026
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-06.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 6,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-06.zip",
+        "year": 2026
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-07.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 7,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-07.zip",
+        "year": 2026
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-08.zip.CHECKSUM",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "month": 8,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/BTCUSDT/15m/BTCUSDT-15m-2026-08.zip",
+        "year": 2026
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-01.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 1,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-01.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-02.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 2,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-02.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-03.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 3,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-03.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-04.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 4,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-04.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-05.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 5,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-05.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-06.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 6,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-06.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-07.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 7,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-07.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-08.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 8,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-08.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-09.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 9,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-09.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-10.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 10,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-10.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-11.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 11,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-11.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-12.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 12,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2020-12.zip",
+        "year": 2020
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-01.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 1,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-01.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-02.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 2,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-02.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-03.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 3,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-03.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-04.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 4,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-04.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-05.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 5,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-05.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-06.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 6,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-06.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-07.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 7,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-07.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-08.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 8,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-08.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-09.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 9,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-09.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-10.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 10,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-10.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-11.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 11,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-11.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-12.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 12,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2021-12.zip",
+        "year": 2021
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-01.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 1,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-01.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-02.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 2,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-02.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-03.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 3,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-03.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-04.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 4,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-04.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-05.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 5,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-05.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-06.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 6,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-06.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-07.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 7,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-07.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-08.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 8,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-08.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-09.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 9,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-09.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-10.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 10,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-10.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-11.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 11,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-11.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-12.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 12,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2022-12.zip",
+        "year": 2022
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-01.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 1,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-01.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-02.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 2,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-02.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-03.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 3,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-03.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-04.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 4,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-04.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-05.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 5,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-05.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-06.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 6,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-06.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-07.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 7,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-07.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-08.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 8,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-08.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-09.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 9,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-09.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-10.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 10,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-10.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-11.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 11,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-11.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-12.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 12,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2023-12.zip",
+        "year": 2023
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-01.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 1,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-01.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-02.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 2,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-02.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-03.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 3,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-03.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-04.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 4,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-04.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-05.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 5,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-05.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-06.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 6,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-06.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-07.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 7,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-07.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-08.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 8,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-08.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-09.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 9,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-09.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-10.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 10,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-10.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-11.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 11,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-11.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-12.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 12,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2024-12.zip",
+        "year": 2024
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-01.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 1,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-01.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-02.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 2,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-02.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-03.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 3,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-03.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-04.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 4,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-04.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-05.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 5,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-05.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-06.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 6,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-06.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-07.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 7,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-07.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-08.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 8,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-08.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-09.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 9,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-09.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-10.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 10,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-10.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-11.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 11,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-11.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-12.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 12,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2025-12.zip",
+        "year": 2025
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-01.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 1,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-01.zip",
+        "year": 2026
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-02.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 2,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-02.zip",
+        "year": 2026
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-03.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 3,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-03.zip",
+        "year": 2026
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-04.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 4,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-04.zip",
+        "year": 2026
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-05.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 5,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-05.zip",
+        "year": 2026
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-06.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 6,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-06.zip",
+        "year": 2026
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-07.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 7,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-07.zip",
+        "year": 2026
+      },
+      {
+        "checksum_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-08.zip.CHECKSUM",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "month": 8,
+        "source_url": "https://data.binance.vision/data/futures/um/monthly/indexPriceKlines/ETHUSDT/15m/ETHUSDT-15m-2026-08.zip",
+        "year": 2026
+      }
+    ],
     "written_to_catalog": false
   },
   "nautilus_tail_enabled": false,
   "nautilus_version": "2.0.0rc4",
   "runtime_identity": "2.0.0rc4+a0400251110653b6d8ae6a9b5b89c4543fa85a2d",
   "schema": "tracequant-stage2-acceptance-v1",
-  "source_manifest_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "source_manifest_digest": "a0d9a36bb65ec7c2ec41f47cdf6ba7d20f57ad28d8d3494a69624c60d6d0a110",
   "splits": {
     "test": [
       "2025-01-01T00:00:00Z",
