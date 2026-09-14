@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -16,29 +16,47 @@ from nautilus_trader.adapters.binance import (
     BinanceProductType,
     load_binance_instruments,
 )
-from nautilus_trader.backtest import BacktestDataConfig
-from nautilus_trader.common import Cache, Clock
+from nautilus_trader.backtest import (
+    BacktestDataConfig,
+    BacktestEngineConfig,
+    BacktestNode,
+    BacktestRunConfig,
+    BacktestVenueConfig,
+)
+from nautilus_trader.common import Cache, Clock, LoggerConfig, LogLevel
 from nautilus_trader.indicators import SimpleMovingAverage
 from nautilus_trader.model import (
+    AccountType,
     Bar,
     BarType,
     CryptoPerpetual,
+    Currency,
     FundingRateUpdate,
     InstrumentId,
     MarkPriceUpdate,
+    OmsType,
     Price,
     Quantity,
+    TraderId,
 )
 from nautilus_trader.persistence import ParquetDataCatalog, StreamingFeatherWriter
+from nautilus_trader.trading import Strategy, StrategyConfig
 
 from tracequant.integrations.nautilus import (
     EXPECTED_VERSION,
     UPSTREAM_RELEASE_IDENTITY,
     distribution_version,
 )
+from tracequant.research.source_schema import quantize_price
 from tracequant.source_data.stage2_btceth import (
+    STAGE2_BAR_INTERVALS,
     STAGE2_COVERAGE_FILENAME,
+    STAGE2_CROSSCHECK_END_ISO,
+    STAGE2_CROSSCHECK_START_ISO,
+    STAGE2_DATA_TYPE_BARS,
+    STAGE2_DATA_TYPE_FUNDING,
     STAGE2_DATA_TYPE_MARK,
+    STAGE2_DIGEST_FILENAME,
     STAGE2_FUNDING_STREAM_ID,
     STAGE2_INSTRUMENT_IDS,
     STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
@@ -57,7 +75,9 @@ from tracequant.source_data.stage2_btceth import (
     Stage2SourceObject,
     build_funding_source_object,
     build_source_object,
+    build_stage2_acceptance_record,
     combined_source_checksum,
+    dataset_digest_payload,
     discover_stage2_funding_archives,
     discover_stage2_kline_archives,
     discover_stage2_mark_archives,
@@ -68,9 +88,12 @@ from tracequant.source_data.stage2_btceth import (
     parse_utc,
     read_verified_funding_archive,
     read_verified_kline_archive,
+    require_complete_source_inventory,
     require_recent_mark_for_funding,
+    require_tail_disabled,
     require_utc,
     stage2_bar_type_str,
+    unix_millis,
     validate_funding_series,
     validate_kline_series,
     validate_mark_series,
@@ -847,3 +870,474 @@ def _runtime_proxy_url() -> str:
 
 def _run_load_instruments(config: BinanceDataClientConfig) -> list[object]:
     return list(asyncio.run(load_binance_instruments(config)))
+
+
+def prepare_stage2_combined_catalog(
+    config_path: Path,
+    *,
+    repository_root: Path,
+    instruments: Sequence[object] | None = None,
+    instrument_snapshot_path: Path | None = None,
+    fetched_at: datetime | None = None,
+) -> tuple[Stage2SourceManifest, Stage2CoverageReport, Path]:
+    if distribution_version() != EXPECTED_VERSION:
+        raise Stage2DataError(
+            "installed Nautilus version does not match the locked runtime"
+        )
+    require_tail_disabled()
+    config = load_stage2_config(config_path, repository_root=repository_root)
+    native, observed_at, snapshot_checksum = _resolve_instruments(
+        config,
+        instruments=instruments,
+        instrument_snapshot_path=instrument_snapshot_path,
+        fetched_at=fetched_at,
+    )
+    bar_objects, prepared = _load_validated_stage2_series(config)
+    mark_objects, marks, fundings, mark_coverage = _load_validated_stage2_mark_funding(
+        config
+    )
+    catalog = ParquetDataCatalog(str(config.catalog_path))
+    catalog.write_instruments(list(native))
+    coverage_series: list[Stage2SeriesCoverage] = []
+    for instrument_id, interval, bars, series_coverage in prepared:
+        catalog.write_bars(list(bars))
+        queried = tuple(
+            catalog.query_bars(
+                identifiers=[stage2_bar_type_str(instrument_id, interval)]
+            )
+        )
+        _assert_round_trip(bars, queried)
+        coverage_series.append(series_coverage)
+    for instrument_id, mark_updates in marks:
+        catalog.write_mark_price_updates(list(mark_updates))
+        queried_marks = tuple(
+            catalog.query_mark_price_updates(instrument_ids=[instrument_id])
+        )
+        _assert_mark_round_trip(mark_updates, queried_marks)
+    write_stage2_funding_rate_updates(
+        catalog,
+        config.catalog_path,
+        fundings,
+        instance_id=STAGE2_FUNDING_STREAM_ID,
+    )
+    coverage_series.extend(mark_coverage)
+    manifest = Stage2SourceManifest(
+        schema=STAGE2_SOURCE_SCHEMA,
+        dataset_id=config.dataset_id,
+        nautilus_version=config.nautilus_version,
+        sources=tuple(bar_objects + mark_objects),
+    )
+    report = Stage2CoverageReport(
+        dataset_id=config.dataset_id,
+        series=tuple(coverage_series),
+    )
+    snapshot_payload = instrument_snapshot_payload(native, fetched_at=observed_at)
+    write_json(
+        config.catalog_path / STAGE2_MANIFEST_FILENAME,
+        manifest.to_json_dict(),
+    )
+    write_json(
+        config.catalog_path / STAGE2_COVERAGE_FILENAME,
+        report.to_json_dict(catalog_path=config.catalog_path),
+    )
+    write_json(
+        config.catalog_path / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
+        snapshot_payload,
+    )
+    write_json(_default_instrument_snapshot_path(config), snapshot_payload)
+    write_json(
+        config.catalog_path / STAGE2_DIGEST_FILENAME,
+        dataset_digest_payload(
+            manifest=manifest,
+            coverage=report,
+            runtime_identity=UPSTREAM_RELEASE_IDENTITY,
+        ),
+    )
+    if snapshot_checksum != _snapshot_checksum(
+        [instrument.to_dict() for instrument in native]
+    ):
+        raise Stage2DataError("instrument snapshot checksum does not match")
+    require_no_index_or_1m_reference(config.catalog_path)
+    return manifest, report, config.catalog_path
+
+
+def prepare_stage2_dataset(
+    config_path: Path,
+    *,
+    repository_root: Path,
+    instruments: Sequence[object] | None = None,
+    instrument_snapshot_path: Path | None = None,
+    fetched_at: datetime | None = None,
+    crosscheck_bars: Mapping[str, Sequence[Bar]],
+    crosscheck_funding: Mapping[str, Sequence[FundingRateUpdate]],
+    homology: Mapping[str, object],
+    acceptance_path: Path | None = None,
+) -> dict[str, object]:
+    require_tail_disabled()
+    manifest, coverage, catalog_path = prepare_stage2_combined_catalog(
+        config_path,
+        repository_root=repository_root,
+        instruments=instruments,
+        instrument_snapshot_path=instrument_snapshot_path,
+        fetched_at=fetched_at,
+    )
+    require_complete_source_inventory([item.source_url for item in manifest.sources])
+    crosscheck = crosscheck_stage2_catalog(
+        catalog_path,
+        nautilus_bars=crosscheck_bars,
+        nautilus_funding=crosscheck_funding,
+    )
+    record = build_stage2_acceptance_record(
+        manifest=manifest,
+        coverage=coverage,
+        runtime_identity=UPSTREAM_RELEASE_IDENTITY,
+        crosscheck=crosscheck,
+        homology=homology,
+    )
+    if acceptance_path is not None:
+        write_json(acceptance_path, record)
+    return record
+
+
+def stage2_bar_backtest_data_config(
+    catalog_path: Path,
+    bar_type: str,
+    *,
+    start: datetime,
+    end: datetime,
+) -> BacktestDataConfig:
+    _require_stage2_bar_type(bar_type)
+    return BacktestDataConfig(
+        data_type="Bar",
+        catalog_path=str(catalog_path),
+        bar_types=[bar_type],
+        start_time=start,
+        end_time=end,
+    )
+
+
+def stage2_funding_window_backtest_data_config(
+    catalog_path: Path,
+    instrument_id: str,
+    *,
+    start: datetime,
+    end: datetime,
+) -> BacktestDataConfig:
+    if instrument_id not in STAGE2_INSTRUMENT_IDS:
+        raise Stage2DataError("instrument is not a stage 2 target")
+    return BacktestDataConfig(
+        data_type="FundingRateUpdate",
+        catalog_path=str(catalog_path),
+        instrument_id=InstrumentId.from_str(instrument_id),
+        start_time=start,
+        end_time=end,
+    )
+
+
+def load_stage2_backtest_bars(
+    catalog_path: Path,
+    bar_type: str,
+    *,
+    start: datetime,
+    end: datetime,
+) -> tuple[Bar, ...]:
+    recorder = _RecordBars(bar_type)
+    _run_recording_backtest(
+        catalog_path,
+        recorder,
+        data=[
+            stage2_bar_backtest_data_config(
+                catalog_path, bar_type, start=start, end=end
+            )
+        ],
+    )
+    if not recorder.seen:
+        raise Stage2DataError("backtest loaded no bars")
+    return tuple(recorder.seen)
+
+
+def load_stage2_backtest_funding(
+    catalog_path: Path,
+    instrument_id: str,
+    bar_type: str,
+    *,
+    start: datetime,
+    end: datetime,
+    require_records: bool = True,
+) -> tuple[FundingRateUpdate, ...]:
+    recorder = _RecordFunding()
+    recorder.instrument_id = instrument_id
+    recorder.bar_type = bar_type
+    _run_recording_backtest(
+        catalog_path,
+        recorder,
+        data=[
+            stage2_bar_backtest_data_config(
+                catalog_path, bar_type, start=start, end=end
+            ),
+            stage2_funding_window_backtest_data_config(
+                catalog_path, instrument_id, start=start, end=end
+            ),
+        ],
+    )
+    if require_records and not recorder.seen:
+        raise Stage2DataError("backtest loaded no funding")
+    return tuple(recorder.seen)
+
+
+def loaded_window(
+    records: Sequence[Bar] | Sequence[FundingRateUpdate],
+    *,
+    dataset_id: str,
+    data_type: str,
+    instrument_id: str,
+    bar_type: str = "",
+) -> dict[str, str | int]:
+    if not records:
+        raise Stage2DataError("loaded window has no records")
+    times = [int(item.ts_event) for item in records]
+    payload: dict[str, str | int] = {
+        "data_type": data_type,
+        "dataset_id": dataset_id,
+        "first_ts_event": times[0],
+        "instrument_id": instrument_id,
+        "last_ts_event": times[-1],
+        "row_count": len(records),
+    }
+    if bar_type:
+        payload["bar_type"] = bar_type
+    return payload
+
+
+def compare_loaded_windows(
+    research: Mapping[str, str | int],
+    backtest: Mapping[str, str | int],
+) -> dict[str, str | int]:
+    if dict(research) != dict(backtest):
+        raise Stage2DataError("research and backtest loaded windows do not match")
+    return dict(research)
+
+
+def crosscheck_stage2_catalog(
+    catalog_path: Path,
+    *,
+    nautilus_bars: Mapping[str, Sequence[Bar]],
+    nautilus_funding: Mapping[str, Sequence[FundingRateUpdate]],
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> dict[str, object]:
+    require_tail_disabled()
+    window_start = (
+        start if start is not None else parse_utc(STAGE2_CROSSCHECK_START_ISO)
+    )
+    window_end = end if end is not None else parse_utc(STAGE2_CROSSCHECK_END_ISO)
+    start_ns = millis_to_nanos(unix_millis(window_start))
+    end_ns = millis_to_nanos(unix_millis(window_end)) - 1
+    compared = 0
+    bar_results: list[dict[str, str | int]] = []
+    for instrument_id in STAGE2_INSTRUMENT_IDS:
+        bar_type = stage2_bar_type_str(instrument_id, "1h")
+        catalog_bars = query_stage2_bars(
+            catalog_path, bar_type, start_ns=start_ns, end_ns=end_ns
+        )
+        requested = tuple(nautilus_bars.get(instrument_id, ()))
+        _assert_crosscheck_bars(catalog_bars, requested, instrument_id=instrument_id)
+        compared += len(catalog_bars)
+        bar_results.append(
+            {
+                "data_type": STAGE2_DATA_TYPE_BARS,
+                "instrument_id": instrument_id,
+                "row_count": len(catalog_bars),
+            }
+        )
+        catalog_funding = load_stage2_backtest_funding(
+            catalog_path,
+            instrument_id,
+            bar_type,
+            start=window_start,
+            end=window_end,
+            require_records=False,
+        )
+        requested_funding = tuple(nautilus_funding.get(instrument_id, ()))
+        _assert_crosscheck_funding(
+            catalog_funding, requested_funding, instrument_id=instrument_id
+        )
+        compared += len(catalog_funding)
+        bar_results.append(
+            {
+                "data_type": STAGE2_DATA_TYPE_FUNDING,
+                "instrument_id": instrument_id,
+                "row_count": len(catalog_funding),
+            }
+        )
+    if compared == 0:
+        raise Stage2DataError("nautilus cross-check has no overlapping records")
+    return {
+        "compared_records": compared,
+        "end": isoformat_utc(window_end),
+        "series": bar_results,
+        "start": isoformat_utc(window_start),
+        "written_to_catalog": False,
+    }
+
+
+def require_no_index_or_1m_reference(catalog_path: Path) -> None:
+    catalog = _require_catalog(catalog_path)
+    index_files = catalog.query_files("index_price_update")
+    if index_files:
+        raise Stage2DataError("index data must not exist in the first catalog")
+    for path in catalog_path.rglob("*"):
+        name = path.name.lower()
+        if "index_price" in name or "indexprice" in name:
+            raise Stage2DataError("index data must not exist in the first catalog")
+        if "-1-minute-" in name:
+            raise Stage2DataError("1m mark or index data must not exist")
+
+
+def stage2_sma_parity(
+    research_values: Sequence[Decimal | None],
+    bars: Sequence[Bar],
+    *,
+    period: int,
+    precision: int,
+    tick: Decimal,
+) -> None:
+    nautilus_values = nautilus_close_sma(bars, period)
+    compared = 0
+    for research_value, nautilus_value in zip(
+        research_values, nautilus_values, strict=True
+    ):
+        if research_value is None or nautilus_value is None:
+            if research_value is not None or nautilus_value is not None:
+                raise Stage2DataError("sma warm-up values do not match")
+            continue
+        research_tick = quantize_price(research_value, precision=precision)
+        nautilus_tick = quantize_price(
+            Decimal(str(nautilus_value)), precision=precision
+        )
+        if abs(research_tick - nautilus_tick) > tick:
+            raise Stage2DataError("sma parity exceeds one price tick")
+        compared += 1
+    if compared != len(bars) - period + 1:
+        raise Stage2DataError("sma parity compared count is incomplete")
+
+
+def _require_stage2_bar_type(bar_type: str) -> None:
+    known = {
+        stage2_bar_type_str(instrument_id, interval)
+        for instrument_id in STAGE2_INSTRUMENT_IDS
+        for interval in STAGE2_BAR_INTERVALS
+    }
+    if bar_type not in known:
+        raise Stage2DataError("bar type is not a stage 2 target")
+
+
+def _assert_crosscheck_bars(
+    catalog_bars: Sequence[Bar],
+    nautilus_bars: Sequence[Bar],
+    *,
+    instrument_id: str,
+) -> None:
+    if len(catalog_bars) != len(nautilus_bars):
+        raise Stage2DataError("nautilus cross-check bar count does not match")
+    expected_type = stage2_bar_type(instrument_id, "1h")
+    for catalog_bar, nautilus_bar in zip(catalog_bars, nautilus_bars, strict=True):
+        if (
+            catalog_bar.bar_type != expected_type
+            or nautilus_bar.bar_type != expected_type
+        ):
+            raise Stage2DataError("nautilus cross-check instrument does not match")
+        if int(catalog_bar.ts_event) != int(nautilus_bar.ts_event):
+            raise Stage2DataError("nautilus cross-check timestamp does not match")
+        if str(catalog_bar.close) != str(nautilus_bar.close):
+            raise Stage2DataError("nautilus cross-check price does not match")
+
+
+def _assert_crosscheck_funding(
+    catalog_funding: Sequence[FundingRateUpdate],
+    nautilus_funding: Sequence[FundingRateUpdate],
+    *,
+    instrument_id: str,
+) -> None:
+    if len(catalog_funding) != len(nautilus_funding):
+        raise Stage2DataError("nautilus cross-check funding count does not match")
+    expected_id = InstrumentId.from_str(instrument_id)
+    for catalog_item, nautilus_item in zip(
+        catalog_funding, nautilus_funding, strict=True
+    ):
+        if (
+            catalog_item.instrument_id != expected_id
+            or nautilus_item.instrument_id != expected_id
+        ):
+            raise Stage2DataError("nautilus cross-check instrument does not match")
+        if int(catalog_item.ts_event) != int(nautilus_item.ts_event):
+            raise Stage2DataError("nautilus cross-check timestamp does not match")
+        if Decimal(str(catalog_item.rate)) != Decimal(str(nautilus_item.rate)):
+            raise Stage2DataError("nautilus cross-check rate does not match")
+
+
+def _run_recording_backtest(
+    catalog_path: Path,
+    strategy: Strategy,
+    *,
+    data: list[BacktestDataConfig],
+) -> None:
+    usdt = Currency.from_str("USDT")
+    venue = BacktestVenueConfig(
+        name="BINANCE",
+        oms_type=OmsType.NETTING,
+        account_type=AccountType.MARGIN,
+        starting_balances=["100000 USDT"],
+        base_currency=usdt,
+        default_leverage=Decimal("1"),
+        bar_execution=True,
+        use_random_ids=False,
+    )
+    engine_cfg = BacktestEngineConfig(
+        trader_id=TraderId.from_str("TRACEQUANT-001"),
+        bypass_logging=True,
+        run_analysis=False,
+        logging=LoggerConfig(bypass_logging=True, stdout_level=LogLevel.OFF),
+    )
+    run_cfg = BacktestRunConfig(
+        venues=[venue],
+        data=data,
+        engine=engine_cfg,
+        dispose_on_completion=True,
+    )
+    node = BacktestNode([run_cfg])
+    node.build()
+    node.add_strategy(run_cfg.id, strategy)
+    node.run()
+
+
+class _RecordBars(Strategy):
+    def __init__(self, bar_type: str) -> None:
+        super().__init__(
+            StrategyConfig(oms_type=OmsType.NETTING, use_uuid_client_order_ids=False)
+        )
+        self._bar_type = BarType.from_str(bar_type)
+        self.seen: list[Bar] = []
+
+    def on_start(self) -> None:
+        self.subscribe_bars(self._bar_type)
+
+    def on_bar(self, bar: Bar) -> None:
+        self.seen.append(bar)
+
+
+class _RecordFunding(Strategy):
+    def __init__(self) -> None:
+        super().__init__(
+            StrategyConfig(oms_type=OmsType.NETTING, use_uuid_client_order_ids=False)
+        )
+        self.instrument_id = ""
+        self.bar_type = ""
+        self.seen: list[FundingRateUpdate] = []
+
+    def on_start(self) -> None:
+        self.subscribe_bars(BarType.from_str(self.bar_type))
+        self.subscribe_funding_rates(InstrumentId.from_str(self.instrument_id))
+
+    def on_funding_rate(self, event: FundingRateUpdate) -> None:
+        self.seen.append(event)

@@ -1,0 +1,38 @@
+{
+  "crosscheck_end": "2026-09-01T00:00:00Z",
+  "crosscheck_start": "2026-08-25T00:00:00Z",
+  "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+  "expected_source_count": 800,
+  "expected_source_inventory_digest": "0d5c8b384098ba7730d814739b4c4549e7bcf01a12c9c69eec614e6fbb0dc816",
+  "generation_command": "uv run --frozen python -m tracequant.integrations.nautilus.stage2_btceth",
+  "include_index_price": false,
+  "index_coverage": {
+    "checksum_available": true,
+    "continuous_months": true,
+    "downloaded": false,
+    "include_index_price": false,
+    "interval": "15m",
+    "month_count": 80,
+    "object_count": 160,
+    "written_to_catalog": false
+  },
+  "nautilus_tail_enabled": false,
+  "nautilus_version": "2.0.0rc4",
+  "runtime_identity": "2.0.0rc4+a0400251110653b6d8ae6a9b5b89c4543fa85a2d",
+  "schema": "tracequant-stage2-acceptance-v1",
+  "splits": {
+    "test": [
+      "2025-01-01T00:00:00Z",
+      "2026-09-01T00:00:00Z"
+    ],
+    "train": [
+      "2020-01-01T00:00:00Z",
+      "2024-01-01T00:00:00Z"
+    ],
+    "validation": [
+      "2024-01-01T00:00:00Z",
+      "2025-01-01T00:00:00Z"
+    ]
+  },
+  "verification_test": "tests/acceptance/test_stage2_dataset.py::test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog"
+}

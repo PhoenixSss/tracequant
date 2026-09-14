@@ -36,13 +36,25 @@ STAGE2_DATA_TYPE_FUNDING: Final = "funding"
 STAGE2_MANIFEST_FILENAME: Final = "stage2_source_manifest.json"
 STAGE2_COVERAGE_FILENAME: Final = "stage2_coverage.json"
 STAGE2_INSTRUMENT_SNAPSHOT_FILENAME: Final = "stage2_instrument_snapshot.json"
+STAGE2_DIGEST_FILENAME: Final = "stage2_dataset_digest.json"
+STAGE2_ACCEPTANCE_SCHEMA: Final = "tracequant-stage2-acceptance-v1"
 STAGE2_PUBLIC_DATA_ORIGIN: Final = "https://data.binance.vision"
 STAGE2_KLINE_ROOT: Final = "data/futures/um/monthly/klines"
 STAGE2_MARK_ROOT: Final = "data/futures/um/monthly/markPriceKlines"
 STAGE2_FUNDING_ROOT: Final = "data/futures/um/monthly/fundingRate"
+STAGE2_INDEX_ROOT: Final = "data/futures/um/monthly/indexPriceKlines"
 STAGE2_MARK_INTERVAL: Final = "15m"
+STAGE2_INDEX_INTERVAL: Final = "15m"
 STAGE2_FUNDING_STREAM_ID: Final = "stage2-funding"
 STAGE2_MARK_MAX_AGE_MS: Final = 15 * 60 * 1000
+STAGE2_EXPECTED_SOURCE_COUNT: Final = 800
+STAGE2_INCLUDE_INDEX_PRICE: Final = False
+STAGE2_NAUTILUS_TAIL_ENABLED: Final = False
+STAGE2_CROSSCHECK_START_ISO: Final = "2026-08-25T00:00:00Z"
+STAGE2_CROSSCHECK_END_ISO: Final = "2026-09-01T00:00:00Z"
+STAGE2_GENERATION_COMMAND: Final = (
+    "uv run --frozen python -m tracequant.integrations.nautilus.stage2_btceth"
+)
 MS_NS: Final = 1_000_000
 
 STAGE2_INSTRUMENT_SYMBOLS: Final = {
@@ -248,7 +260,7 @@ class Stage2SeriesCoverage:
     source_checksum: str
 
     def to_json_dict(self) -> dict[str, str | int]:
-        return {
+        payload: dict[str, str | int] = {
             "instrument_id": self.instrument_id,
             "data_type": self.data_type,
             "bar_interval": self.bar_interval,
@@ -259,7 +271,13 @@ class Stage2SeriesCoverage:
             "out_of_order_count": self.out_of_order_count,
             "gap_count": self.gap_count,
             "source_checksum": self.source_checksum,
+            "source_sha256": self.source_checksum,
         }
+        if self.bar_interval:
+            payload["bar_type"] = stage2_bar_type_str(
+                self.instrument_id, self.bar_interval
+            )
+        return payload
 
 
 @dataclass(frozen=True)
@@ -267,10 +285,42 @@ class Stage2CoverageReport:
     dataset_id: str
     series: tuple[Stage2SeriesCoverage, ...]
 
-    def to_json_dict(self) -> dict[str, object]:
-        return {
+    def to_json_dict(self, catalog_path: Path | None = None) -> dict[str, object]:
+        series = []
+        for item in self.series:
+            entry: dict[str, object] = dict(item.to_json_dict())
+            entry["dataset_id"] = self.dataset_id
+            if catalog_path is not None:
+                entry["catalog_path"] = str(catalog_path)
+            series.append(entry)
+        payload: dict[str, object] = {
             "dataset_id": self.dataset_id,
-            "series": [item.to_json_dict() for item in self.series],
+            "series": series,
+        }
+        if catalog_path is not None:
+            payload["catalog_path"] = str(catalog_path)
+        return payload
+
+
+@dataclass(frozen=True)
+class Stage2SourceSpec:
+    relative_path: str
+    source_url: str
+    checksum_url: str
+    instrument_id: str
+    data_type: str
+    year: int
+    month: int
+
+    def to_json_dict(self) -> dict[str, str | int]:
+        return {
+            "relative_path": self.relative_path,
+            "source_url": self.source_url,
+            "checksum_url": self.checksum_url,
+            "instrument_id": self.instrument_id,
+            "data_type": self.data_type,
+            "year": self.year,
+            "month": self.month,
         }
 
 
@@ -919,6 +969,295 @@ def combined_source_checksum(digests: tuple[str, ...]) -> str:
     for item in digests:
         digest.update(f"{item}\n".encode())
     return digest.hexdigest()
+
+
+def stage2_month_keys() -> tuple[tuple[int, int], ...]:
+    start, end = stage2_window()
+    return _month_keys(start, end)
+
+
+def expected_stage2_source_specs() -> tuple[Stage2SourceSpec, ...]:
+    specs: list[Stage2SourceSpec] = []
+    months = stage2_month_keys()
+    for instrument_id in STAGE2_INSTRUMENT_IDS:
+        symbol = STAGE2_INSTRUMENT_SYMBOLS[instrument_id]
+        for interval in STAGE2_BAR_INTERVALS:
+            for year, month in months:
+                specs.append(
+                    _source_spec(
+                        STAGE2_KLINE_ROOT,
+                        symbol,
+                        interval,
+                        year,
+                        month,
+                        instrument_id=instrument_id,
+                        data_type=STAGE2_DATA_TYPE_BARS,
+                    )
+                )
+        for year, month in months:
+            specs.append(
+                _source_spec(
+                    STAGE2_MARK_ROOT,
+                    symbol,
+                    STAGE2_MARK_INTERVAL,
+                    year,
+                    month,
+                    instrument_id=instrument_id,
+                    data_type=STAGE2_DATA_TYPE_MARK,
+                )
+            )
+        for year, month in months:
+            name = f"{symbol}-fundingRate-{year:04d}-{month:02d}.zip"
+            relative = f"{STAGE2_FUNDING_ROOT}/{symbol}/{name}"
+            source_url = f"{STAGE2_PUBLIC_DATA_ORIGIN}/{relative}"
+            specs.append(
+                Stage2SourceSpec(
+                    relative_path=relative,
+                    source_url=source_url,
+                    checksum_url=f"{source_url}.CHECKSUM",
+                    instrument_id=instrument_id,
+                    data_type=STAGE2_DATA_TYPE_FUNDING,
+                    year=year,
+                    month=month,
+                )
+            )
+    if len(specs) != STAGE2_EXPECTED_SOURCE_COUNT:
+        raise Stage2DataError("expected source inventory is not 800 objects")
+    return tuple(specs)
+
+
+def expected_source_inventory_digest() -> str:
+    payload = [item.to_json_dict() for item in expected_stage2_source_specs()]
+    return _canonical_digest(payload)
+
+
+def source_manifest_digest(manifest: Stage2SourceManifest) -> str:
+    payload = [
+        {
+            "checksum_url": item.checksum_url,
+            "data_type": item.data_type,
+            "end_ns": item.end_ns,
+            "instrument_id": item.instrument_id,
+            "rows": item.rows,
+            "sha256": item.sha256,
+            "source_url": item.source_url,
+            "start_ns": item.start_ns,
+        }
+        for item in manifest.sources
+    ]
+    return _canonical_digest(payload)
+
+
+def require_complete_source_inventory(source_urls: Sequence[str]) -> None:
+    expected = tuple(spec.source_url for spec in expected_stage2_source_specs())
+    if len(source_urls) != len(set(source_urls)):
+        raise Stage2DataError("source manifest contains duplicate objects")
+    if tuple(sorted(source_urls)) != tuple(sorted(expected)):
+        raise Stage2DataError(
+            "source manifest is missing months, has duplicate objects, or drifted"
+        )
+
+
+def require_tail_disabled() -> None:
+    if STAGE2_NAUTILUS_TAIL_ENABLED:
+        raise Stage2DataError("nautilus tail must stay disabled")
+
+
+def stage2_index_coverage_conclusion() -> dict[str, object]:
+    if STAGE2_INCLUDE_INDEX_PRICE:
+        raise Stage2DataError("index price must not be included in the first catalog")
+    months = stage2_month_keys()
+    _require_continuous_months(months)
+    objects: list[dict[str, str | int]] = []
+    for instrument_id in STAGE2_INSTRUMENT_IDS:
+        symbol = STAGE2_INSTRUMENT_SYMBOLS[instrument_id]
+        for year, month in months:
+            name = f"{symbol}-{STAGE2_INDEX_INTERVAL}-{year:04d}-{month:02d}.zip"
+            relative = f"{STAGE2_INDEX_ROOT}/{symbol}/{STAGE2_INDEX_INTERVAL}/{name}"
+            source_url = f"{STAGE2_PUBLIC_DATA_ORIGIN}/{relative}"
+            objects.append(
+                {
+                    "checksum_url": f"{source_url}.CHECKSUM",
+                    "instrument_id": instrument_id,
+                    "month": month,
+                    "source_url": source_url,
+                    "year": year,
+                }
+            )
+    return {
+        "checksum_available": True,
+        "continuous_months": True,
+        "downloaded": False,
+        "include_index_price": False,
+        "interval": STAGE2_INDEX_INTERVAL,
+        "month_count": len(months),
+        "object_count": len(objects),
+        "objects": objects,
+        "written_to_catalog": False,
+    }
+
+
+def coverage_summary(
+    report: Stage2CoverageReport,
+) -> tuple[dict[str, str | int], ...]:
+    for item in report.series:
+        if item.duplicate_count or item.out_of_order_count:
+            raise Stage2DataError(
+                "coverage report contains duplicate or out-of-order rows"
+            )
+        if item.gap_count:
+            raise Stage2DataError("coverage report contains an unexplained gap")
+    summary: list[dict[str, str | int]] = []
+    for item in report.series:
+        entry: dict[str, str | int] = {
+            "data_type": item.data_type,
+            "dataset_id": report.dataset_id,
+            "duplicate_count": item.duplicate_count,
+            "first_ts_event": item.first_ts_event,
+            "gap_count": item.gap_count,
+            "instrument_id": item.instrument_id,
+            "last_ts_event": item.last_ts_event,
+            "out_of_order_count": item.out_of_order_count,
+            "row_count": item.row_count,
+            "source_sha256": item.source_checksum,
+        }
+        if item.bar_interval:
+            entry["bar_type"] = stage2_bar_type_str(
+                item.instrument_id, item.bar_interval
+            )
+        summary.append(entry)
+    return tuple(summary)
+
+
+def dataset_digest_payload(
+    *,
+    manifest: Stage2SourceManifest,
+    coverage: Stage2CoverageReport,
+    runtime_identity: str,
+) -> dict[str, object]:
+    return {
+        "coverage": coverage_summary(coverage),
+        "dataset_id": manifest.dataset_id,
+        "nautilus_version": manifest.nautilus_version,
+        "runtime_identity": runtime_identity,
+        "source_manifest_digest": source_manifest_digest(manifest),
+    }
+
+
+def dataset_digest(
+    *,
+    manifest: Stage2SourceManifest,
+    coverage: Stage2CoverageReport,
+    runtime_identity: str,
+) -> str:
+    return _canonical_digest(
+        dataset_digest_payload(
+            manifest=manifest,
+            coverage=coverage,
+            runtime_identity=runtime_identity,
+        )
+    )
+
+
+def build_stage2_acceptance_record(
+    *,
+    manifest: Stage2SourceManifest,
+    coverage: Stage2CoverageReport,
+    runtime_identity: str,
+    crosscheck: Mapping[str, object],
+    homology: Mapping[str, object],
+) -> dict[str, object]:
+    require_tail_disabled()
+    record: dict[str, object] = {
+        "coverage_summary": list(coverage_summary(coverage)),
+        "crosscheck": dict(crosscheck),
+        "dataset_digest": dataset_digest(
+            manifest=manifest,
+            coverage=coverage,
+            runtime_identity=runtime_identity,
+        ),
+        "dataset_id": STAGE2_DATASET_ID,
+        "expected_source_count": STAGE2_EXPECTED_SOURCE_COUNT,
+        "expected_source_inventory_digest": expected_source_inventory_digest(),
+        "generation_command": STAGE2_GENERATION_COMMAND,
+        "homology": dict(homology),
+        "include_index_price": STAGE2_INCLUDE_INDEX_PRICE,
+        "index_coverage": stage2_index_coverage_conclusion(),
+        "nautilus_tail_enabled": STAGE2_NAUTILUS_TAIL_ENABLED,
+        "nautilus_version": STAGE2_NAUTILUS_VERSION,
+        "runtime_identity": runtime_identity,
+        "schema": STAGE2_ACCEPTANCE_SCHEMA,
+        "source_manifest_digest": source_manifest_digest(manifest),
+        "splits": {
+            "test": ["2025-01-01T00:00:00Z", STAGE2_WINDOW_END_ISO],
+            "train": [STAGE2_WINDOW_START_ISO, "2024-01-01T00:00:00Z"],
+            "validation": ["2024-01-01T00:00:00Z", "2025-01-01T00:00:00Z"],
+        },
+        "verification_test": (
+            "tests/acceptance/test_stage2_dataset.py::"
+            "test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog"
+        ),
+    }
+    require_no_local_absolute_paths(record)
+    return record
+
+
+def require_no_local_absolute_paths(payload: object) -> None:
+    if isinstance(payload, Mapping):
+        for value in payload.values():
+            require_no_local_absolute_paths(value)
+        return
+    if isinstance(payload, (list, tuple)):
+        for value in payload:
+            require_no_local_absolute_paths(value)
+        return
+    if (
+        isinstance(payload, str)
+        and payload.startswith("/")
+        and not payload.startswith(("http://", "https://"))
+    ):
+        raise Stage2DataError("acceptance record must not contain local absolute paths")
+
+
+def _source_spec(
+    root: str,
+    symbol: str,
+    interval: str,
+    year: int,
+    month: int,
+    *,
+    instrument_id: str,
+    data_type: str,
+) -> Stage2SourceSpec:
+    name = f"{symbol}-{interval}-{year:04d}-{month:02d}.zip"
+    relative = f"{root}/{symbol}/{interval}/{name}"
+    source_url = f"{STAGE2_PUBLIC_DATA_ORIGIN}/{relative}"
+    return Stage2SourceSpec(
+        relative_path=relative,
+        source_url=source_url,
+        checksum_url=f"{source_url}.CHECKSUM",
+        instrument_id=instrument_id,
+        data_type=data_type,
+        year=year,
+        month=month,
+    )
+
+
+def _canonical_digest(payload: object) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _require_continuous_months(months: Sequence[tuple[int, int]]) -> None:
+    if not months:
+        raise Stage2DataError("index month objects are not continuous")
+    previous = months[0]
+    for year, month in months[1:]:
+        expected_year = previous[0] + (1 if previous[1] == 12 else 0)
+        expected_month = 1 if previous[1] == 12 else previous[1] + 1
+        if (year, month) != (expected_year, expected_month):
+            raise Stage2DataError("index month objects are not continuous")
+        previous = (year, month)
 
 
 def _require_locked_identity(
