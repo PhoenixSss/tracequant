@@ -37,6 +37,7 @@ from tracequant.source_data.stage2_btceth import (
     Stage2KlineRow,
     Stage2SeriesCoverage,
     Stage2SourceManifest,
+    Stage2SourceObject,
     build_source_object,
     combined_source_checksum,
     discover_stage2_kline_archives,
@@ -177,15 +178,70 @@ def prepare_stage2_bar_catalog(
         instrument_snapshot_path=instrument_snapshot_path,
         fetched_at=fetched_at,
     )
-    archives = discover_stage2_kline_archives(config)
+    source_objects, prepared = _load_validated_stage2_series(config)
     catalog = ParquetDataCatalog(str(config.catalog_path))
     catalog.write_instruments(list(native))
-    source_objects = []
     coverage_series: list[Stage2SeriesCoverage] = []
+    for instrument_id, interval, bars, series_coverage in prepared:
+        catalog.write_bars(list(bars))
+        queried = tuple(
+            catalog.query_bars(
+                identifiers=[stage2_bar_type_str(instrument_id, interval)]
+            )
+        )
+        _assert_round_trip(bars, queried)
+        coverage_series.append(series_coverage)
+    manifest = Stage2SourceManifest(
+        schema=STAGE2_SOURCE_SCHEMA,
+        dataset_id=config.dataset_id,
+        nautilus_version=config.nautilus_version,
+        sources=tuple(source_objects),
+    )
+    report = Stage2CoverageReport(
+        dataset_id=config.dataset_id,
+        series=tuple(coverage_series),
+    )
+    snapshot_payload = instrument_snapshot_payload(native, fetched_at=observed_at)
+    write_json(config.catalog_path / STAGE2_MANIFEST_FILENAME, manifest.to_json_dict())
+    write_json(config.catalog_path / STAGE2_COVERAGE_FILENAME, report.to_json_dict())
+    write_json(
+        config.catalog_path / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
+        snapshot_payload,
+    )
+    write_json(_default_instrument_snapshot_path(config), snapshot_payload)
+    if snapshot_checksum != _snapshot_checksum(
+        [instrument.to_dict() for instrument in native]
+    ):
+        raise Stage2DataError("instrument snapshot checksum does not match")
+    return manifest, report
+
+
+def query_stage2_bars(catalog_path: Path, bar_type: str) -> tuple[Bar, ...]:
+    if not catalog_path.is_absolute():
+        raise Stage2DataError("catalog_path must be an absolute path")
+    if not catalog_path.is_dir():
+        raise Stage2DataError("catalog_path must be an existing directory")
+    catalog = ParquetDataCatalog(str(catalog_path))
+    return tuple(catalog.query_bars(identifiers=[bar_type]))
+
+
+def _default_instrument_snapshot_path(config: Stage2DatasetConfig) -> Path:
+    return config.raw_root / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME
+
+
+def _load_validated_stage2_series(
+    config: Stage2DatasetConfig,
+) -> tuple[
+    list[Stage2SourceObject],
+    list[tuple[str, str, tuple[Bar, ...], Stage2SeriesCoverage]],
+]:
+    archives = discover_stage2_kline_archives(config)
     grouped: dict[tuple[str, str], list[Stage2KlineArchive]] = {}
     for archive in archives:
         key = (archive.instrument_id, archive.interval)
         grouped.setdefault(key, []).append(archive)
+    source_objects: list[Stage2SourceObject] = []
+    prepared: list[tuple[str, str, tuple[Bar, ...], Stage2SeriesCoverage]] = []
     for instrument_id in config.instrument_ids:
         for interval in config.bar_intervals:
             series_archives = grouped[(instrument_id, interval)]
@@ -212,44 +268,8 @@ def prepare_stage2_bar_catalog(
             _assert_bars_match_rows(
                 bars, series_rows, instrument_id=instrument_id, interval=interval
             )
-            catalog.write_bars(list(bars))
-            queried = tuple(
-                catalog.query_bars(
-                    identifiers=[stage2_bar_type_str(instrument_id, interval)]
-                )
-            )
-            _assert_round_trip(bars, queried)
-            coverage_series.append(series_coverage)
-    manifest = Stage2SourceManifest(
-        schema=STAGE2_SOURCE_SCHEMA,
-        dataset_id=config.dataset_id,
-        nautilus_version=config.nautilus_version,
-        sources=tuple(source_objects),
-    )
-    report = Stage2CoverageReport(
-        dataset_id=config.dataset_id,
-        series=tuple(coverage_series),
-    )
-    write_json(config.catalog_path / STAGE2_MANIFEST_FILENAME, manifest.to_json_dict())
-    write_json(config.catalog_path / STAGE2_COVERAGE_FILENAME, report.to_json_dict())
-    write_json(
-        config.catalog_path / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
-        instrument_snapshot_payload(native, fetched_at=observed_at),
-    )
-    if snapshot_checksum != _snapshot_checksum(
-        [instrument.to_dict() for instrument in native]
-    ):
-        raise Stage2DataError("instrument snapshot checksum does not match")
-    return manifest, report
-
-
-def query_stage2_bars(catalog_path: Path, bar_type: str) -> tuple[Bar, ...]:
-    if not catalog_path.is_absolute():
-        raise Stage2DataError("catalog_path must be an absolute path")
-    if not catalog_path.is_dir():
-        raise Stage2DataError("catalog_path must be an existing directory")
-    catalog = ParquetDataCatalog(str(catalog_path))
-    return tuple(catalog.query_bars(identifiers=[bar_type]))
+            prepared.append((instrument_id, interval, bars, series_coverage))
+    return source_objects, prepared
 
 
 def _resolve_instruments(
@@ -269,7 +289,7 @@ def _resolve_instruments(
         return native, observed_at, checksum
     snapshot = instrument_snapshot_path
     if snapshot is None:
-        snapshot = config.raw_root / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME
+        snapshot = _default_instrument_snapshot_path(config)
         if not snapshot.is_file():
             snapshot = None
     if snapshot is not None:

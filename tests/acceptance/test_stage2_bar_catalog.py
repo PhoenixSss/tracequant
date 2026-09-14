@@ -31,6 +31,7 @@ from tracequant.source_data.stage2_btceth import (
     STAGE2_BAR_INTERVALS,
     STAGE2_DATASET_ID,
     STAGE2_INSTRUMENT_IDS,
+    STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
     STAGE2_INTERVAL_MS,
     STAGE2_KLINE_ROOT,
     STAGE2_WINDOW_END_ISO,
@@ -294,6 +295,45 @@ def test_stage2_bars_round_trip_through_nautilus_catalog(tmp_path: Path) -> None
     )
 
 
+def test_prepare_reuses_frozen_instrument_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw_root = tmp_path / "raw"
+    catalog_path = tmp_path / "catalog"
+    raw_root.mkdir()
+    catalog_path.mkdir()
+    _write_all_series(raw_root)
+    config_path = _write_config(tmp_path / "dataset.toml", raw_root, catalog_path)
+    fetch_calls = {"count": 0}
+    frozen = _stage2_instruments()
+
+    def fake_fetch() -> tuple[tuple[CryptoPerpetual, CryptoPerpetual], datetime]:
+        fetch_calls["count"] += 1
+        return frozen, FETCHED_AT
+
+    monkeypatch.setattr(
+        "tracequant.integrations.nautilus.stage2_btceth.fetch_stage2_instruments",
+        fake_fetch,
+    )
+    prepare_stage2_bar_catalog(config_path, repository_root=REPOSITORY_ROOT)
+    snapshot_path = raw_root / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME
+    assert fetch_calls["count"] == 1
+    assert snapshot_path.is_file()
+    assert (catalog_path / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME).is_file()
+
+    catalog_path_replay = tmp_path / "catalog-replay"
+    catalog_path_replay.mkdir()
+    replay_config = _write_config(
+        tmp_path / "dataset-replay.toml", raw_root, catalog_path_replay
+    )
+    prepare_stage2_bar_catalog(replay_config, repository_root=REPOSITORY_ROOT)
+    assert fetch_calls["count"] == 1
+    queried = query_stage2_bars(
+        catalog_path_replay, stage2_bar_type_str("BTCUSDT-PERP.BINANCE", "15m")
+    )
+    assert len(queried) == 3
+
+
 def test_header_and_headerless_fixtures_share_fixed_schema() -> None:
     prices = SERIES_PRICES[("BTCUSDT-PERP.BINANCE", "1h")]
     rows = [_row_values(open_time, "1h", prices) for open_time in _open_times("1h")]
@@ -391,6 +431,8 @@ def test_checksum_mismatch_rejects_catalog_write(tmp_path: Path) -> None:
             instruments=_stage2_instruments(),
             fetched_at=FETCHED_AT,
         )
+    assert list(catalog_path.iterdir()) == []
+    assert not (raw_root / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME).exists()
 
 
 @pytest.mark.parametrize(
