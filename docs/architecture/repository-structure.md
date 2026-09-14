@@ -74,6 +74,10 @@ src/tracequant/
     __init__.py
     stage1_btcusdt.py
     stage2_btceth.py
+  research/
+    __init__.py
+    source_schema.py
+    views.py
   integrations/
     __init__.py
     nautilus/
@@ -99,12 +103,13 @@ offline MA-cross backtest live in use-case modules beside that seam; they are
 not a generic adapter, trading domain, or import-time runtime wrapper.
 
 `integrations/nautilus/strategies/` now holds the stage 1 MA-cross Strategy.
-Later scoped Issues may add these remaining product boundaries only when
-implementing the corresponding capability:
+`tracequant.research` owns read-only Polars views and time splits over the
+stage 2 Nautilus catalog. Later scoped Issues may add these remaining product
+boundaries only when implementing the corresponding capability:
 
 ```text
 src/tracequant/
-  research/                    read-only views, features, labels, and models
+  research/                    features, labels, and models beyond read-only views
   integrations/nautilus/
     configuration/             concrete Nautilus runtime configuration
   operations/                  admission, observation, alerts, and release

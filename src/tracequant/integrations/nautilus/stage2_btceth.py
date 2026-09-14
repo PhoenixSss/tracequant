@@ -15,7 +15,15 @@ from nautilus_trader.adapters.binance import (
     BinanceProductType,
     load_binance_instruments,
 )
-from nautilus_trader.model import Bar, BarType, CryptoPerpetual, Price, Quantity
+from nautilus_trader.indicators import SimpleMovingAverage
+from nautilus_trader.model import (
+    Bar,
+    BarType,
+    CryptoPerpetual,
+    MarkPriceUpdate,
+    Price,
+    Quantity,
+)
 from nautilus_trader.persistence import ParquetDataCatalog
 
 from tracequant.integrations.nautilus import (
@@ -216,13 +224,134 @@ def prepare_stage2_bar_catalog(
     return manifest, report
 
 
-def query_stage2_bars(catalog_path: Path, bar_type: str) -> tuple[Bar, ...]:
+def query_stage2_bars(
+    catalog_path: Path,
+    bar_type: str,
+    *,
+    start_ns: int | None = None,
+    end_ns: int | None = None,
+) -> tuple[Bar, ...]:
+    catalog = _require_catalog(catalog_path)
+    return tuple(catalog.query_bars(identifiers=[bar_type], start=start_ns, end=end_ns))
+
+
+def query_stage2_mark_prices(
+    catalog_path: Path,
+    instrument_id: str,
+    *,
+    start_ns: int | None = None,
+    end_ns: int | None = None,
+) -> tuple[MarkPriceUpdate, ...]:
+    catalog = _require_catalog(catalog_path)
+    return tuple(
+        catalog.query_mark_price_updates(
+            instrument_ids=[instrument_id],
+            start=start_ns,
+            end=end_ns,
+        )
+    )
+
+
+def project_stage2_bars(
+    catalog_path: Path,
+    bar_type: str,
+    *,
+    start_ns: int,
+    end_ns_exclusive: int,
+) -> tuple[dict[str, str | int], ...]:
+    bars = query_stage2_bars(
+        catalog_path,
+        bar_type,
+        start_ns=start_ns,
+        end_ns=_inclusive_end(start_ns, end_ns_exclusive),
+    )
+    records = tuple(_bar_projection(bar) for bar in bars)
+    if not records:
+        raise Stage2DataError("catalog query returned no bars")
+    return records
+
+
+def project_stage2_mark_prices(
+    catalog_path: Path,
+    instrument_id: str,
+    *,
+    start_ns: int,
+    end_ns_exclusive: int,
+) -> tuple[dict[str, str | int], ...]:
+    marks = query_stage2_mark_prices(
+        catalog_path,
+        instrument_id,
+        start_ns=start_ns,
+        end_ns=_inclusive_end(start_ns, end_ns_exclusive),
+    )
+    records = tuple(_mark_projection(mark) for mark in marks)
+    if not records:
+        raise Stage2DataError("catalog query returned no mark prices")
+    return records
+
+
+def nautilus_close_sma(
+    bars: Sequence[Bar],
+    period: int,
+) -> tuple[float | None, ...]:
+    if period <= 0:
+        raise Stage2DataError("sma period must be positive")
+    indicator = SimpleMovingAverage(period)
+    values: list[float | None] = []
+    for bar in bars:
+        indicator.handle_bar(bar)
+        values.append(float(indicator.value) if indicator.initialized else None)
+    return tuple(values)
+
+
+def stage2_price_spec(catalog_path: Path, instrument_id: str) -> tuple[int, str]:
+    catalog = _require_catalog(catalog_path)
+    matches = [
+        instrument
+        for instrument in catalog.instruments(instrument_ids=[instrument_id])
+        if str(instrument.id) == instrument_id
+    ]
+    if len(matches) != 1:
+        raise Stage2DataError("instrument identity does not match")
+    instrument = matches[0]
+    return int(instrument.price_precision), str(instrument.price_increment)
+
+
+def _require_catalog(catalog_path: Path) -> ParquetDataCatalog:
     if not catalog_path.is_absolute():
         raise Stage2DataError("catalog_path must be an absolute path")
     if not catalog_path.is_dir():
         raise Stage2DataError("catalog_path must be an existing directory")
-    catalog = ParquetDataCatalog(str(catalog_path))
-    return tuple(catalog.query_bars(identifiers=[bar_type]))
+    return ParquetDataCatalog(str(catalog_path))
+
+
+def _inclusive_end(start_ns: int, end_ns_exclusive: int) -> int:
+    if end_ns_exclusive <= start_ns:
+        raise Stage2DataError("query window is inverted")
+    return end_ns_exclusive - 1
+
+
+def _bar_projection(bar: Bar) -> dict[str, str | int]:
+    return {
+        "bar_type": str(bar.bar_type),
+        "instrument_id": str(bar.bar_type.instrument_id),
+        "open": str(bar.open),
+        "high": str(bar.high),
+        "low": str(bar.low),
+        "close": str(bar.close),
+        "volume": str(bar.volume),
+        "ts_event": int(bar.ts_event),
+        "ts_init": int(bar.ts_init),
+    }
+
+
+def _mark_projection(mark: MarkPriceUpdate) -> dict[str, str | int]:
+    return {
+        "instrument_id": str(mark.instrument_id),
+        "value": str(mark.value),
+        "ts_event": int(mark.ts_event),
+        "ts_init": int(mark.ts_init),
+    }
 
 
 def _default_instrument_snapshot_path(config: Stage2DatasetConfig) -> Path:

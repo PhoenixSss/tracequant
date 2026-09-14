@@ -11,8 +11,8 @@ product surface described here.
 - CPython: `3.13` (`>=3.13,<3.14`)
 - uv: `0.12.1`
 - build backend: `uv_build>=0.12.1,<0.13.0`
-- runtime dependency: exact official PyPI distribution
-  `nautilus-trader==2.0.0rc4`
+- runtime dependency: exact official PyPI distributions
+  `nautilus-trader==2.0.0rc4` and `polars==1.44.2`
 - upstream release: `v2.0.0rc4`, commit
   `a0400251110653b6d8ae6a9b5b89c4543fa85a2d`
 - source-build policy: `uv.toml` rejects builds of `nautilus-trader`
@@ -26,13 +26,15 @@ for NautilusTrader.
 
 `tracequant.integrations.nautilus` owns explicit distribution/import identity
 queries, the stage 1 BTCUSDT 1h historical Bar path selected as `USE_NAUTILUS`,
-and the stage 1 Nautilus-native MA-cross offline backtest. The catalog path
-requests native Nautilus bars through the locked Binance public data client,
-records source provenance, and writes/reads `ParquetDataCatalog`. The backtest
-reads that catalog, runs one long-only SMA crossover Strategy, and writes
-order, fill, position, account, and summary reports. `tracequant.source_data`
-owns the frozen window, checksum, and provenance identity; it does not import
-`nautilus_trader`.
+the stage 2 BTC/ETH catalog path, and the stage 1 Nautilus-native MA-cross
+offline backtest. The catalog path requests native Nautilus bars through the
+locked Binance public data client, records source provenance, and writes/reads
+`ParquetDataCatalog`. The backtest reads that catalog, runs one long-only SMA
+crossover Strategy, and writes order, fill, position, account, and summary
+reports. `tracequant.source_data` owns the frozen window, checksum, and
+provenance identity; it does not import `nautilus_trader`.
+`tracequant.research` projects catalog Bars and mark prices into read-only
+Polars views with fixed time splits; it does not import `nautilus_trader`.
 
 Importing TraceQuant performs no I/O, environment read, directory creation,
 client construction, background startup, or global singleton initialization.
