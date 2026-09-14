@@ -270,6 +270,10 @@ def millis_to_nanos(value: int) -> int:
     return value * MS_NS
 
 
+def datetime_to_nanos(value: datetime) -> int:
+    return millis_to_nanos(unix_millis(require_utc(value)))
+
+
 def stage2_window() -> tuple[datetime, datetime]:
     return parse_utc(STAGE2_WINDOW_START_ISO), parse_utc(STAGE2_WINDOW_END_ISO)
 
@@ -557,6 +561,28 @@ def build_source_object(
         end_ns=last,
         rows=len(rows),
     )
+
+
+def require_stage2_catalog_identity(catalog_path: Path) -> None:
+    if not catalog_path.is_absolute():
+        raise Stage2DataError("catalog_path must be an absolute path")
+    if not catalog_path.is_dir():
+        raise Stage2DataError("catalog_path must be an existing directory")
+    manifest_path = catalog_path / STAGE2_MANIFEST_FILENAME
+    if not manifest_path.is_file():
+        raise Stage2DataError("catalog identity does not match")
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise Stage2DataError("catalog identity does not match") from exc
+    if not isinstance(payload, dict):
+        raise Stage2DataError("catalog identity does not match")
+    if payload.get("schema") != STAGE2_SOURCE_SCHEMA:
+        raise Stage2DataError("catalog identity does not match")
+    if payload.get("dataset_id") != STAGE2_DATASET_ID:
+        raise Stage2DataError("catalog identity does not match")
+    if payload.get("nautilus_version") != STAGE2_NAUTILUS_VERSION:
+        raise Stage2DataError("catalog identity does not match")
 
 
 def write_json(path: Path, payload: Mapping[str, object]) -> None:

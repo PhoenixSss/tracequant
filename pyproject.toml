@@ -12,6 +12,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "nautilus-trader==2.0.0rc4",
+    "polars==1.44.2",
 ]
 
 [dependency-groups]
