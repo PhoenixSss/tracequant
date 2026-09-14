@@ -10,6 +10,7 @@ import polars as pl
 from tracequant.integrations.nautilus.stage2_btceth import (
     project_stage2_bars,
     project_stage2_mark_prices,
+    query_stage2_funding_files,
 )
 from tracequant.research.source_schema import (
     require_monotonic_unique_timestamps,
@@ -80,6 +81,45 @@ def load_mark_prices(
         },
         empty="catalog query returned no mark prices",
     )
+
+
+def load_funding(
+    catalog_path: Path,
+    instrument_id: str,
+    start: datetime,
+    end: datetime,
+) -> pl.LazyFrame:
+    catalog = Path(catalog_path)
+    if instrument_id not in STAGE2_INSTRUMENT_IDS:
+        raise Stage2DataError("instrument is not a stage 2 target")
+    require_stage2_catalog_identity(catalog)
+    start_ns, end_ns = validate_query_window(start, end)
+    files = query_stage2_funding_files(
+        catalog,
+        instrument_id,
+        start_ns=start_ns,
+        end_ns=end_ns - 1,
+    )
+    if not files:
+        raise Stage2DataError("catalog query returned no funding files")
+    frame = (
+        pl.scan_parquet([str(path) for path in files])
+        .filter(
+            (pl.col("instrument_id") == instrument_id)
+            & (pl.col("ts_event") >= start_ns)
+            & (pl.col("ts_event") < end_ns)
+        )
+        .collect()
+    )
+    if frame.height == 0:
+        raise Stage2DataError("catalog query returned no funding")
+    require_monotonic_unique_timestamps(
+        [int(value) for value in frame.get_column("ts_event").to_list()]
+    )
+    for dtype in frame.schema.values():
+        if dtype in {pl.Float32, pl.Float64}:
+            raise Stage2DataError("research view must not use floating-point prices")
+    return frame.lazy()
 
 
 def sma_close(frame: pl.DataFrame, period: int) -> tuple[Decimal | None, ...]:
