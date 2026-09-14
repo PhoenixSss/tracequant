@@ -1,0 +1,755 @@
+from __future__ import annotations
+
+import csv
+import hashlib
+import io
+import json
+import tomllib
+import zipfile
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import Final
+
+STAGE2_CONFIG_SCHEMA: Final = "tracequant-stage2-dataset-v1"
+STAGE2_SOURCE_SCHEMA: Final = "tracequant-stage2-source-v1"
+STAGE2_DATASET_ID: Final = "binance-usdm-btceth-202001-202608-r1"
+STAGE2_NAUTILUS_VERSION: Final = "2.0.0rc4"
+STAGE2_ENVIRONMENT: Final = "offline"
+STAGE2_SOURCE: Final = "binance-public-data"
+STAGE2_MARKET: Final = "futures/um"
+STAGE2_ARCHIVE_FREQUENCY: Final = "monthly"
+STAGE2_WINDOW_START_ISO: Final = "2020-01-01T00:00:00Z"
+STAGE2_WINDOW_END_ISO: Final = "2026-09-01T00:00:00Z"
+STAGE2_INSTRUMENT_IDS: Final = (
+    "BTCUSDT-PERP.BINANCE",
+    "ETHUSDT-PERP.BINANCE",
+)
+STAGE2_BAR_INTERVALS: Final = ("15m", "1h", "4h")
+STAGE2_BAR_AGGREGATION: Final = "LAST-EXTERNAL"
+STAGE2_SOURCE_KIND: Final = "binance_public_data"
+STAGE2_DATA_TYPE_BARS: Final = "bars"
+STAGE2_MANIFEST_FILENAME: Final = "stage2_source_manifest.json"
+STAGE2_COVERAGE_FILENAME: Final = "stage2_coverage.json"
+STAGE2_INSTRUMENT_SNAPSHOT_FILENAME: Final = "stage2_instrument_snapshot.json"
+STAGE2_PUBLIC_DATA_ORIGIN: Final = "https://data.binance.vision"
+STAGE2_KLINE_ROOT: Final = "data/futures/um/monthly/klines"
+MS_NS: Final = 1_000_000
+
+STAGE2_INSTRUMENT_SYMBOLS: Final = {
+    "BTCUSDT-PERP.BINANCE": "BTCUSDT",
+    "ETHUSDT-PERP.BINANCE": "ETHUSDT",
+}
+STAGE2_INTERVAL_MS: Final = {
+    "15m": 15 * 60 * 1000,
+    "1h": 60 * 60 * 1000,
+    "4h": 4 * 60 * 60 * 1000,
+}
+STAGE2_INTERVAL_BAR_SPEC: Final = {
+    "15m": "15-MINUTE",
+    "1h": "1-HOUR",
+    "4h": "4-HOUR",
+}
+_CANONICAL_KLINE_FIELDS: Final = (
+    "open_time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "close_time",
+    "quote_volume",
+    "count",
+    "taker_buy_volume",
+    "taker_buy_quote_volume",
+    "ignore",
+)
+_HEADER_ALIASES: Final = {
+    "open_time": "open_time",
+    "open": "open",
+    "high": "high",
+    "low": "low",
+    "close": "close",
+    "volume": "volume",
+    "close_time": "close_time",
+    "quote_volume": "quote_volume",
+    "quote_asset_volume": "quote_volume",
+    "count": "count",
+    "number_of_trades": "count",
+    "taker_buy_volume": "taker_buy_volume",
+    "taker_buy_base_asset_volume": "taker_buy_volume",
+    "taker_buy_quote_volume": "taker_buy_quote_volume",
+    "taker_buy_quote_asset_volume": "taker_buy_quote_volume",
+    "ignore": "ignore",
+}
+_ALLOWED_CONFIG_KEYS: Final = {
+    "schema",
+    "dataset_id",
+    "nautilus_version",
+    "environment",
+    "source",
+    "market",
+    "archive_frequency",
+    "window_start",
+    "window_end",
+    "instrument_ids",
+    "bar_intervals",
+    "bar_aggregation",
+    "raw_root",
+    "catalog_path",
+}
+_HEX_DIGITS: Final = "0123456789abcdefABCDEF"
+
+
+class Stage2DataError(ValueError):
+    """Raised when stage 2 source identity, config, or kline integrity is invalid."""
+
+
+@dataclass(frozen=True)
+class Stage2DatasetConfig:
+    schema: str
+    dataset_id: str
+    nautilus_version: str
+    environment: str
+    source: str
+    market: str
+    archive_frequency: str
+    window_start: datetime
+    window_end: datetime
+    instrument_ids: tuple[str, ...]
+    bar_intervals: tuple[str, ...]
+    bar_aggregation: str
+    raw_root: Path
+    catalog_path: Path
+
+
+@dataclass(frozen=True)
+class Stage2KlineRow:
+    open_time: str
+    open: str
+    high: str
+    low: str
+    close: str
+    volume: str
+    close_time: str
+    quote_volume: str
+    count: str
+    taker_buy_volume: str
+    taker_buy_quote_volume: str
+    ignore: str
+
+
+@dataclass(frozen=True)
+class Stage2KlineArchive:
+    instrument_id: str
+    interval: str
+    symbol: str
+    year: int
+    month: int
+    zip_path: Path
+    checksum_path: Path
+    source_url: str
+    checksum_url: str
+
+
+@dataclass(frozen=True)
+class Stage2SourceObject:
+    path: str
+    source_url: str
+    sha256: str
+    checksum_url: str
+    source_kind: str
+    instrument_id: str
+    data_type: str
+    start_ns: int
+    end_ns: int
+    rows: int
+
+    def to_json_dict(self) -> dict[str, str | int]:
+        return {
+            "path": self.path,
+            "source_url": self.source_url,
+            "sha256": self.sha256,
+            "checksum_url": self.checksum_url,
+            "source_kind": self.source_kind,
+            "instrument_id": self.instrument_id,
+            "data_type": self.data_type,
+            "start_ns": self.start_ns,
+            "end_ns": self.end_ns,
+            "rows": self.rows,
+        }
+
+
+@dataclass(frozen=True)
+class Stage2SourceManifest:
+    schema: str
+    dataset_id: str
+    nautilus_version: str
+    sources: tuple[Stage2SourceObject, ...]
+
+    def to_json_dict(self) -> dict[str, object]:
+        return {
+            "schema": self.schema,
+            "dataset_id": self.dataset_id,
+            "nautilus_version": self.nautilus_version,
+            "sources": [item.to_json_dict() for item in self.sources],
+        }
+
+
+@dataclass(frozen=True)
+class Stage2SeriesCoverage:
+    instrument_id: str
+    bar_interval: str
+    row_count: int
+    first_ts_event: int
+    last_ts_event: int
+    duplicate_count: int
+    out_of_order_count: int
+    gap_count: int
+    source_checksum: str
+
+    def to_json_dict(self) -> dict[str, str | int]:
+        return {
+            "instrument_id": self.instrument_id,
+            "bar_interval": self.bar_interval,
+            "row_count": self.row_count,
+            "first_ts_event": self.first_ts_event,
+            "last_ts_event": self.last_ts_event,
+            "duplicate_count": self.duplicate_count,
+            "out_of_order_count": self.out_of_order_count,
+            "gap_count": self.gap_count,
+            "source_checksum": self.source_checksum,
+        }
+
+
+@dataclass(frozen=True)
+class Stage2CoverageReport:
+    dataset_id: str
+    series: tuple[Stage2SeriesCoverage, ...]
+
+    def to_json_dict(self) -> dict[str, object]:
+        return {
+            "dataset_id": self.dataset_id,
+            "series": [item.to_json_dict() for item in self.series],
+        }
+
+
+def parse_utc(value: str) -> datetime:
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        raise Stage2DataError("timestamp must be timezone-aware")
+    return parsed.astimezone(UTC)
+
+
+def isoformat_utc(value: datetime) -> str:
+    return require_utc(value).isoformat().replace("+00:00", "Z")
+
+
+def require_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        raise Stage2DataError("datetime must be timezone-aware")
+    return value.astimezone(UTC)
+
+
+def unix_millis(value: datetime) -> int:
+    utc = require_utc(value)
+    seconds = int(
+        (utc.replace(microsecond=0) - datetime(1970, 1, 1, tzinfo=UTC)).total_seconds()
+    )
+    return seconds * 1000 + utc.microsecond // 1000
+
+
+def millis_to_nanos(value: int) -> int:
+    if value < 0:
+        raise Stage2DataError("timestamp must be non-negative")
+    return value * MS_NS
+
+
+def stage2_window() -> tuple[datetime, datetime]:
+    return parse_utc(STAGE2_WINDOW_START_ISO), parse_utc(STAGE2_WINDOW_END_ISO)
+
+
+def stage2_bar_type_str(instrument_id: str, interval: str) -> str:
+    try:
+        spec = STAGE2_INTERVAL_BAR_SPEC[interval]
+    except KeyError as exc:
+        raise Stage2DataError("bar interval is not a stage 2 target") from exc
+    if instrument_id not in STAGE2_INSTRUMENT_SYMBOLS:
+        raise Stage2DataError("instrument is not a stage 2 target")
+    return f"{instrument_id}-{spec}-{STAGE2_BAR_AGGREGATION}"
+
+
+def load_stage2_config(path: Path, *, repository_root: Path) -> Stage2DatasetConfig:
+    if not path.is_file():
+        raise Stage2DataError("stage 2 config path must be an existing file")
+    try:
+        payload = tomllib.loads(path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as exc:
+        raise Stage2DataError("stage 2 config is not valid TOML") from exc
+    unknown = set(payload) - _ALLOWED_CONFIG_KEYS
+    if unknown:
+        raise Stage2DataError("stage 2 config contains unknown fields")
+    missing = _ALLOWED_CONFIG_KEYS - set(payload)
+    if missing:
+        raise Stage2DataError("stage 2 config is missing required fields")
+    instrument_ids = _require_str_tuple(payload, "instrument_ids")
+    bar_intervals = _require_str_tuple(payload, "bar_intervals")
+    window_start = parse_utc(_require_str(payload, "window_start"))
+    window_end = parse_utc(_require_str(payload, "window_end"))
+    locked_start, locked_end = stage2_window()
+    config = Stage2DatasetConfig(
+        schema=_require_str(payload, "schema"),
+        dataset_id=_require_str(payload, "dataset_id"),
+        nautilus_version=_require_str(payload, "nautilus_version"),
+        environment=_require_str(payload, "environment"),
+        source=_require_str(payload, "source"),
+        market=_require_str(payload, "market"),
+        archive_frequency=_require_str(payload, "archive_frequency"),
+        window_start=window_start,
+        window_end=window_end,
+        instrument_ids=instrument_ids,
+        bar_intervals=bar_intervals,
+        bar_aggregation=_require_str(payload, "bar_aggregation"),
+        raw_root=_require_external_dir(
+            _require_str(payload, "raw_root"),
+            repository_root=repository_root,
+            field="raw_root",
+        ),
+        catalog_path=_require_external_dir(
+            _require_str(payload, "catalog_path"),
+            repository_root=repository_root,
+            field="catalog_path",
+        ),
+    )
+    _require_locked_identity(config, locked_start=locked_start, locked_end=locked_end)
+    if any(config.catalog_path.iterdir()):
+        raise Stage2DataError("catalog target already exists and must not be mutated")
+    return config
+
+
+def discover_stage2_kline_archives(
+    config: Stage2DatasetConfig,
+) -> tuple[Stage2KlineArchive, ...]:
+    archives: list[Stage2KlineArchive] = []
+    for instrument_id in config.instrument_ids:
+        symbol = STAGE2_INSTRUMENT_SYMBOLS[instrument_id]
+        for interval in config.bar_intervals:
+            found = 0
+            for year, month in _month_keys(config.window_start, config.window_end):
+                name = f"{symbol}-{interval}-{year:04d}-{month:02d}.zip"
+                zip_path = (
+                    config.raw_root / STAGE2_KLINE_ROOT / symbol / interval / name
+                )
+                if not zip_path.exists():
+                    continue
+                checksum_path = Path(f"{zip_path}.CHECKSUM")
+                if not checksum_path.is_file():
+                    raise Stage2DataError("official checksum file is missing")
+                relative = f"{STAGE2_KLINE_ROOT}/{symbol}/{interval}/{name}"
+                source_url = f"{STAGE2_PUBLIC_DATA_ORIGIN}/{relative}"
+                archives.append(
+                    Stage2KlineArchive(
+                        instrument_id=instrument_id,
+                        interval=interval,
+                        symbol=symbol,
+                        year=year,
+                        month=month,
+                        zip_path=zip_path,
+                        checksum_path=checksum_path,
+                        source_url=source_url,
+                        checksum_url=f"{source_url}.CHECKSUM",
+                    )
+                )
+                found += 1
+            if found == 0:
+                raise Stage2DataError("stage 2 kline source archive is missing")
+    return tuple(archives)
+
+
+def read_verified_kline_archive(
+    archive: Stage2KlineArchive,
+    *,
+    window_start: datetime,
+    window_end: datetime,
+) -> tuple[tuple[Stage2KlineRow, ...], str]:
+    digest = verify_zip_checksum(archive.zip_path, archive.checksum_path)
+    csv_name = f"{archive.symbol}-{archive.interval}-{archive.year:04d}-{archive.month:02d}.csv"
+    try:
+        with zipfile.ZipFile(archive.zip_path) as bundle:
+            names = bundle.namelist()
+            if names != [csv_name]:
+                raise Stage2DataError(
+                    "kline zip contents do not match the official CSV"
+                )
+            payload = bundle.read(csv_name)
+    except zipfile.BadZipFile as exc:
+        raise Stage2DataError("kline zip is invalid") from exc
+    rows = parse_kline_csv(payload)
+    if not rows:
+        raise Stage2DataError("kline csv has no records")
+    month_start = datetime(archive.year, archive.month, 1, tzinfo=UTC)
+    if archive.month == 12:
+        month_end = datetime(archive.year + 1, 1, 1, tzinfo=UTC)
+    else:
+        month_end = datetime(archive.year, archive.month + 1, 1, tzinfo=UTC)
+    month_start_ms = unix_millis(month_start)
+    month_end_ms = unix_millis(month_end)
+    window_start_ms = unix_millis(window_start)
+    window_end_ms = unix_millis(window_end)
+    interval_ms = STAGE2_INTERVAL_MS[archive.interval]
+    for row in rows:
+        _validate_kline_row_values(
+            row,
+            interval_ms=interval_ms,
+            window_start_ms=window_start_ms,
+            window_end_ms=window_end_ms,
+        )
+        open_time = _require_int_string(row.open_time, field="open_time")
+        if open_time < month_start_ms or open_time >= month_end_ms:
+            raise Stage2DataError("kline record is outside the archive month")
+    return rows, digest
+
+
+def verify_zip_checksum(zip_path: Path, checksum_path: Path) -> str:
+    expected = _parse_checksum_file(checksum_path, zip_path.name)
+    digest = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+    if digest.lower() != expected.lower():
+        raise Stage2DataError("checksum does not match the official source record")
+    return digest.lower()
+
+
+def parse_kline_csv(payload: bytes) -> tuple[Stage2KlineRow, ...]:
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise Stage2DataError("kline csv is not valid UTF-8") from exc
+    reader = csv.reader(io.StringIO(text))
+    try:
+        first = next(reader)
+    except StopIteration as exc:
+        raise Stage2DataError("kline csv is empty") from exc
+    if not first:
+        raise Stage2DataError("kline csv has an empty record")
+    if _is_int_string(first[0].strip()):
+        rows = [first, *reader]
+        field_order = list(_CANONICAL_KLINE_FIELDS)
+    else:
+        field_order = _map_header(first)
+        rows = list(reader)
+    parsed: list[Stage2KlineRow] = []
+    for raw in rows:
+        if len(raw) != 12:
+            raise Stage2DataError("kline csv column count is not the fixed schema")
+        values = {field: raw[index].strip() for index, field in enumerate(field_order)}
+        parsed.append(
+            Stage2KlineRow(
+                open_time=values["open_time"],
+                open=values["open"],
+                high=values["high"],
+                low=values["low"],
+                close=values["close"],
+                volume=values["volume"],
+                close_time=values["close_time"],
+                quote_volume=values["quote_volume"],
+                count=values["count"],
+                taker_buy_volume=values["taker_buy_volume"],
+                taker_buy_quote_volume=values["taker_buy_quote_volume"],
+                ignore=values["ignore"],
+            )
+        )
+    return tuple(parsed)
+
+
+def validate_kline_row(
+    row: Stage2KlineRow,
+    *,
+    interval: str,
+    window_start: datetime,
+    window_end: datetime,
+) -> None:
+    if interval not in STAGE2_INTERVAL_MS:
+        raise Stage2DataError("bar interval is not a stage 2 target")
+    _validate_kline_row_values(
+        row,
+        interval_ms=STAGE2_INTERVAL_MS[interval],
+        window_start_ms=unix_millis(window_start),
+        window_end_ms=unix_millis(window_end),
+    )
+
+
+def validate_kline_series(
+    rows: Sequence[Stage2KlineRow],
+    *,
+    instrument_id: str,
+    interval: str,
+    source_checksum: str,
+) -> Stage2SeriesCoverage:
+    if instrument_id not in STAGE2_INSTRUMENT_SYMBOLS:
+        raise Stage2DataError("instrument is not a stage 2 target")
+    if interval not in STAGE2_INTERVAL_MS:
+        raise Stage2DataError("bar interval is not a stage 2 target")
+    if not rows:
+        raise Stage2DataError("kline series is empty")
+    interval_ms = STAGE2_INTERVAL_MS[interval]
+    seen: set[int] = set()
+    duplicate_count = 0
+    out_of_order_count = 0
+    gap_count = 0
+    previous_open: int | None = None
+    first_ts = 0
+    last_ts = 0
+    for index, row in enumerate(rows):
+        open_time = _require_int_string(row.open_time, field="open_time")
+        close_time = _require_int_string(row.close_time, field="close_time")
+        ts_event = millis_to_nanos(close_time)
+        if index == 0:
+            first_ts = ts_event
+        last_ts = ts_event
+        if open_time in seen:
+            duplicate_count += 1
+        seen.add(open_time)
+        if previous_open is not None:
+            if open_time < previous_open:
+                out_of_order_count += 1
+            elif open_time - previous_open != interval_ms:
+                gap_count += 1
+        previous_open = open_time
+    if duplicate_count:
+        raise Stage2DataError("kline series contains duplicate event times")
+    if out_of_order_count:
+        raise Stage2DataError("kline series is out of order")
+    if gap_count:
+        raise Stage2DataError("kline series contains a gap")
+    return Stage2SeriesCoverage(
+        instrument_id=instrument_id,
+        bar_interval=interval,
+        row_count=len(rows),
+        first_ts_event=first_ts,
+        last_ts_event=last_ts,
+        duplicate_count=duplicate_count,
+        out_of_order_count=out_of_order_count,
+        gap_count=gap_count,
+        source_checksum=source_checksum,
+    )
+
+
+def build_source_object(
+    archive: Stage2KlineArchive,
+    rows: tuple[Stage2KlineRow, ...],
+    sha256: str,
+) -> Stage2SourceObject:
+    first = millis_to_nanos(_require_int_string(rows[0].close_time, field="close_time"))
+    last = millis_to_nanos(_require_int_string(rows[-1].close_time, field="close_time"))
+    return Stage2SourceObject(
+        path=str(archive.zip_path),
+        source_url=archive.source_url,
+        sha256=sha256,
+        checksum_url=archive.checksum_url,
+        source_kind=STAGE2_SOURCE_KIND,
+        instrument_id=archive.instrument_id,
+        data_type=STAGE2_DATA_TYPE_BARS,
+        start_ns=first,
+        end_ns=last,
+        rows=len(rows),
+    )
+
+
+def write_json(path: Path, payload: Mapping[str, object]) -> None:
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def combined_source_checksum(digests: tuple[str, ...]) -> str:
+    digest = hashlib.sha256()
+    for item in digests:
+        digest.update(f"{item}\n".encode())
+    return digest.hexdigest()
+
+
+def _require_locked_identity(
+    config: Stage2DatasetConfig,
+    *,
+    locked_start: datetime,
+    locked_end: datetime,
+) -> None:
+    if config.schema != STAGE2_CONFIG_SCHEMA:
+        raise Stage2DataError("dataset schema identity does not match")
+    if config.dataset_id != STAGE2_DATASET_ID:
+        raise Stage2DataError("dataset identity does not match")
+    if config.nautilus_version != STAGE2_NAUTILUS_VERSION:
+        raise Stage2DataError("nautilus version identity does not match")
+    if config.environment != STAGE2_ENVIRONMENT:
+        raise Stage2DataError("environment identity does not match")
+    if config.source != STAGE2_SOURCE:
+        raise Stage2DataError("source identity does not match")
+    if config.market != STAGE2_MARKET:
+        raise Stage2DataError("market identity does not match")
+    if config.archive_frequency != STAGE2_ARCHIVE_FREQUENCY:
+        raise Stage2DataError("archive frequency identity does not match")
+    if config.window_start != locked_start or config.window_end != locked_end:
+        raise Stage2DataError("dataset window identity does not match")
+    if config.instrument_ids != STAGE2_INSTRUMENT_IDS:
+        raise Stage2DataError("instrument identity does not match")
+    if config.bar_intervals != STAGE2_BAR_INTERVALS:
+        raise Stage2DataError("bar interval identity does not match")
+    if config.bar_aggregation != STAGE2_BAR_AGGREGATION:
+        raise Stage2DataError("bar aggregation identity does not match")
+
+
+def _require_external_dir(value: str, *, repository_root: Path, field: str) -> Path:
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        raise Stage2DataError(f"{field} must be an absolute path")
+    resolved = candidate.resolve()
+    repo = repository_root.resolve()
+    if resolved == repo or resolved.is_relative_to(repo):
+        raise Stage2DataError(f"{field} must be outside the repository")
+    if not resolved.is_dir():
+        raise Stage2DataError(f"{field} must be an existing directory")
+    return resolved
+
+
+def _require_str(payload: dict[str, object], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value:
+        raise Stage2DataError(f"config field {key} must be a non-empty string")
+    return value
+
+
+def _require_str_tuple(payload: dict[str, object], key: str) -> tuple[str, ...]:
+    value = payload.get(key)
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(item, str) and item for item in value)
+    ):
+        raise Stage2DataError(f"config field {key} must be a non-empty string array")
+    return tuple(value)
+
+
+def _month_keys(
+    window_start: datetime, window_end: datetime
+) -> tuple[tuple[int, int], ...]:
+    start = require_utc(window_start).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    end = require_utc(window_end)
+    months: list[tuple[int, int]] = []
+    cursor = start
+    while cursor < end:
+        months.append((cursor.year, cursor.month))
+        year = cursor.year + (1 if cursor.month == 12 else 0)
+        month = 1 if cursor.month == 12 else cursor.month + 1
+        cursor = datetime(year, month, 1, tzinfo=UTC)
+    return tuple(months)
+
+
+def _parse_checksum_file(path: Path, zip_name: str) -> str:
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise Stage2DataError("official checksum file is empty")
+    first = text.splitlines()[0].split()
+    if not first or not _is_sha256_string(first[0]):
+        raise Stage2DataError("official checksum file is invalid")
+    if len(first) > 1 and first[1].lstrip("*") not in {zip_name, ""}:
+        raise Stage2DataError("official checksum file name does not match")
+    return first[0]
+
+
+def _map_header(fields: list[str]) -> list[str]:
+    mapped: list[str] = []
+    seen: set[str] = set()
+    for field in fields:
+        normalized = field.strip().lower().replace(" ", "_")
+        canonical = _HEADER_ALIASES.get(normalized)
+        if canonical is None:
+            raise Stage2DataError("kline csv header is not a known official schema")
+        if canonical in seen:
+            raise Stage2DataError("kline csv header maps to duplicate columns")
+        seen.add(canonical)
+        mapped.append(canonical)
+    if tuple(mapped) != _CANONICAL_KLINE_FIELDS and seen != set(
+        _CANONICAL_KLINE_FIELDS
+    ):
+        raise Stage2DataError("kline csv header is not the fixed schema")
+    if len(mapped) != 12:
+        raise Stage2DataError("kline csv column count is not the fixed schema")
+    if set(mapped) != set(_CANONICAL_KLINE_FIELDS):
+        raise Stage2DataError("kline csv header is not the fixed schema")
+    return mapped
+
+
+def _validate_kline_row_values(
+    row: Stage2KlineRow,
+    *,
+    interval_ms: int,
+    window_start_ms: int,
+    window_end_ms: int,
+) -> None:
+    open_time = _require_int_string(row.open_time, field="open_time")
+    close_time = _require_int_string(row.close_time, field="close_time")
+    if close_time != open_time + interval_ms - 1:
+        raise Stage2DataError("kline close time does not match the interval")
+    if open_time < window_start_ms or close_time >= window_end_ms:
+        raise Stage2DataError("kline record is outside the declared window")
+    open_px = _require_decimal_string(row.open, field="open")
+    high_px = _require_decimal_string(row.high, field="high")
+    low_px = _require_decimal_string(row.low, field="low")
+    close_px = _require_decimal_string(row.close, field="close")
+    volume = _require_decimal_string(row.volume, field="volume")
+    _require_decimal_string(row.quote_volume, field="quote_volume")
+    _require_int_string(row.count, field="count")
+    _require_decimal_string(row.taker_buy_volume, field="taker_buy_volume")
+    _require_decimal_string(row.taker_buy_quote_volume, field="taker_buy_quote_volume")
+    _require_int_string(row.ignore, field="ignore")
+    if high_px < low_px or high_px < open_px or high_px < close_px:
+        raise Stage2DataError("kline OHLC relationship is illegal")
+    if low_px > open_px or low_px > close_px:
+        raise Stage2DataError("kline OHLC relationship is illegal")
+    if volume < 0:
+        raise Stage2DataError("kline volume is negative")
+
+
+def _require_int_string(value: str, *, field: str) -> int:
+    if not _is_int_string(value):
+        raise Stage2DataError(f"kline field {field} is not a valid integer")
+    return int(value)
+
+
+def _require_decimal_string(value: str, *, field: str) -> Decimal:
+    negative = value.startswith("-")
+    unsigned = value[1:] if negative else value
+    if not _is_decimal_string(unsigned):
+        raise Stage2DataError(f"kline field {field} is not a valid number")
+    if negative and field == "volume":
+        raise Stage2DataError("kline volume is negative")
+    try:
+        return Decimal(value)
+    except InvalidOperation as exc:
+        raise Stage2DataError(f"kline field {field} is not a valid number") from exc
+
+
+def _is_int_string(value: str) -> bool:
+    if value == "0":
+        return True
+    return bool(value) and value[0] != "0" and value.isdigit()
+
+
+def _is_decimal_string(value: str) -> bool:
+    if "." not in value:
+        return _is_int_string(value)
+    whole, fraction = value.split(".", 1)
+    if not fraction or not fraction.isdigit():
+        return False
+    return _is_int_string(whole)
+
+
+def _is_sha256_string(value: str) -> bool:
+    return len(value) == 64 and all(char in _HEX_DIGITS for char in value)

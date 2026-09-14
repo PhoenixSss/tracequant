@@ -210,10 +210,12 @@ def test_candidate_tree_matches_the_approved_product_and_lck_layout() -> None:
         Path("src/tracequant/integrations/nautilus/__init__.py"),
         Path("src/tracequant/integrations/nautilus/stage1_backtest.py"),
         Path("src/tracequant/integrations/nautilus/stage1_btcusdt.py"),
+        Path("src/tracequant/integrations/nautilus/stage2_btceth.py"),
         Path("src/tracequant/integrations/nautilus/strategies/__init__.py"),
         Path("src/tracequant/integrations/nautilus/strategies/stage1_ma_cross.py"),
         Path("src/tracequant/source_data/__init__.py"),
         Path("src/tracequant/source_data/stage1_btcusdt.py"),
+        Path("src/tracequant/source_data/stage2_btceth.py"),
     }
     assert all(
         path.is_relative_to(Path("src/tracequant"))

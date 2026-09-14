@@ -1,0 +1,20 @@
+schema = "tracequant-stage2-dataset-v1"
+dataset_id = "binance-usdm-btceth-202001-202608-r1"
+nautilus_version = "2.0.0rc4"
+environment = "offline"
+
+source = "binance-public-data"
+market = "futures/um"
+archive_frequency = "monthly"
+window_start = "2020-01-01T00:00:00Z"
+window_end = "2026-09-01T00:00:00Z"
+
+instrument_ids = [
+  "BTCUSDT-PERP.BINANCE",
+  "ETHUSDT-PERP.BINANCE",
+]
+bar_intervals = ["15m", "1h", "4h"]
+bar_aggregation = "LAST-EXTERNAL"
+
+raw_root = "/absolute/external/raw-root"
+catalog_path = "/absolute/external/catalog-root/binance-usdm-btceth-202001-202608-r1"

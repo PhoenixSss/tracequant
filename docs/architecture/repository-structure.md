@@ -73,12 +73,14 @@ src/tracequant/
   source_data/
     __init__.py
     stage1_btcusdt.py
+    stage2_btceth.py
   integrations/
     __init__.py
     nautilus/
       __init__.py
       stage1_btcusdt.py
       stage1_backtest.py
+      stage2_btceth.py
       strategies/
         __init__.py
         stage1_ma_cross.py
@@ -92,9 +94,9 @@ belong in this repository.
 
 `tracequant.integrations.nautilus` is the only production boundary permitted to
 import `nautilus_trader`. Identity queries remain explicit and side-effect free.
-Stage 1 catalog ingest and the offline MA-cross backtest live in use-case
-modules beside that seam; they are not a generic adapter, trading domain, or
-import-time runtime wrapper.
+Stage 1 catalog ingest, the stage 2 BTC/ETH public-data bar catalog, and the
+offline MA-cross backtest live in use-case modules beside that seam; they are
+not a generic adapter, trading domain, or import-time runtime wrapper.
 
 `integrations/nautilus/strategies/` now holds the stage 1 MA-cross Strategy.
 Later scoped Issues may add these remaining product boundaries only when
