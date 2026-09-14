@@ -52,6 +52,13 @@ Run the stage 1 backtest acceptance test:
 uv run --frozen pytest tests/acceptance/test_stage1_backtest.py::test_stage1_native_strategy_completes_offline_backtest
 ```
 
+## Stage 2 implementation baseline
+
+Stage 1 behavior is unchanged. The current Stage 2 implementation baseline is
+the approved [Nautilus-homologous data and research
+requirements](docs/product/stage-2-data-and-research-requirements.md). The
+product remains `OFFLINE_BACKTEST_ONLY` and `LIVE_NOT_APPROVED`.
+
 ## LCK: an engineering capability within TraceQuant
 
 While building and maintaining TraceQuant, the project is developing the Local

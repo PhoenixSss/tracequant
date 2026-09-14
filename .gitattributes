@@ -7,5 +7,6 @@
 *.json text eol=lf
 *.md text eol=lf
 docs/research/foundation-selection/*.md -whitespace
+docs/product/stage-2-data-and-research-requirements.md -whitespace
 *.sh text eol=lf
 *.ps1 text eol=crlf
