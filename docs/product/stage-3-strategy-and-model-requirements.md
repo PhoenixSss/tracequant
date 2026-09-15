@@ -209,7 +209,8 @@ funding 输入固定为已验收数据集内 native `FundingRateUpdate` 记录�
 2. **provenance 记录（不得静默）**：同一次正式运行必须读取 catalog 与 instrument
    snapshot 中两个 instrument 的 `maker_fee` / `taker_fee` 实际取值（含 `null` 或缺失），
    与冻结 base 值比对，并把实际取值与比对结论记入该次运行的 evaluation manifest 与
-   tracked Stage 3 acceptance record。记录值与 base 不一致**不是**运行失败条件（§3.3
+   tracked Stage 3 acceptance record（§9 已把该 fee provenance 明确列为 tracked record 的
+   允许字段）。记录值与 base 不一致**不是**运行失败条件（§3.3
    已声明 base 费率不代表交易所实际费率），但静默忽略该字段、或静默采用 snapshot 值
    作为有效费率，都是运行失败。该字段的身份一致性仍由 §2.2 的 catalog identity 门禁
    独立保证，不因本条的显式绑定而放宽；
@@ -437,9 +438,41 @@ early stopping        = 不启用
 不引入 XGBoost、scikit-learn、pandas、PyTorch、GPU/CUDA、Optuna、MLflow 或服务型
 组件。
 
-具体数值超参数（如树数量、学习率、叶子数）由**首个 artifact revision** 固定并写入
-manifest；所有 fold 与所有策略变体必须使用完全相同的超参数与 seed 集合，唯一允许的差异
-是训练窗口。任何超参数变化都产生新 artifact revision，不覆盖既有证据。
+**训练参数冻结与 revision/digest 身份。** v0.1 不枚举具体数值超参数。**首个正式 artifact
+revision**（即 2022 development fold artifact）必须在**任何**正式 artifact 训练或正式
+evaluation 之前——包含 2022 development fold 与 `rebuild-oos` 的任一正式分区——一次性冻结
+一份**完整 effective training parameter map** 及其 identity；该冻结先于任何训练发生，不得
+由任一 fold 的评估结果或传统策略结果反向决定。
+
+- **完整 effective parameter map**：本次训练实际生效的全部 LightGBM 参数键值，必须包含
+  `num_boost_round`、目标函数与 metric 相关设置、`deterministic`、`force_row_wise`、
+  `num_threads`、全部 seed 字段，以及任何以默认值生效的键。默认值必须**显式展开**写入该
+  map，不得以「未设置」形式参与 identity。
+- **identity**：`training_parameter_revision`（该 map 的显式 revision 标识）与
+  `training_parameter_digest`（对键排序、值规范化后的该 map 序列化计算出的 digest）。
+  两者在冻结时写入 external evidence root 中的参数冻结记录，并写入每个 fold artifact 的
+  manifest（§6.2）。
+- **冻结时点**：在 2022 development fold 训练之前冻结，且早于任何正式 evaluation；冻结后
+  不得就地修改；任何变化只能作为新 revision。
+- **跨 fold 一致性**：2022、2023、2024 与 final test/OOS 的四个 fold artifact 必须携带
+  **完全相同**的 `training_parameter_revision` 与 `training_parameter_digest`；唯一允许的
+  差异是训练窗口。evaluation（§7.1）与 `rebuild-oos`（§9）必须核验该一致性。
+
+以下情形一律**运行失败**，不得以「不覆盖既有证据」为由放过：
+
+1. **结果驱动调参**：依据任一 fold 的 evaluation 结果、传统策略基线结果或其他 evaluation
+   输出选择或修改参数——包括按 fold 选择 `num_boost_round`、启用早停（本节的 `early
+   stopping = 不启用` 已禁用）或按结果选择 seed；
+2. **fold 间参数漂移**：任一 fold artifact 的 `training_parameter_revision` /
+   `training_parameter_digest` 与参数冻结记录或其余 fold artifact 不一致；
+3. **同一 acceptance record 混用 revision**：被 tracked Stage 3 acceptance record（§9）
+   引用的 artifact 集合中出现多于一个 parameter revision/digest。
+
+参数变化（含 `num_boost_round`、任一 seed 字段或任何 effective 键）的唯一合法路径是产生
+**新的** `training_parameter_revision` 与 digest，并在**新的空 evidence partitions** 中重跑
+**整套 fold matrix**（2022、2023、2024 与 final test/OOS 全部 fold）；不得只重训部分 fold，
+也不得复用任一旧 revision 的 artifact 或 evaluation 结果。旧 revision 的证据保留，但不得与
+新 revision 混用。所有 fold 与所有策略变体必须使用完全相同的参数与 seed 集合。
 
 ### 6.2 artifact manifest 必要字段
 
@@ -455,7 +488,10 @@ manifest；所有 fold 与所有策略变体必须使用完全相同的超参数
 - `train_start`（**声明起点**）、`train_end`、首个完整训练行 `train_first_row_ts`、
   purge 边界、evaluation 窗口，以及该窗口的角色
   （`development` / `validation` / `final_test`）；
-- LightGBM 参数、全部 seed、LightGBM 版本；
+- LightGBM 版本，以及 §6.1 冻结的**完整 effective training parameter map**（含
+  `num_boost_round`，默认值已显式展开）、全部 seed 和该 map 的
+  `training_parameter_revision` 与 `training_parameter_digest`；同一 Stage 3 acceptance
+  record 引用的全部 fold artifact 必须携带同一组 revision/digest；
 - Python、Polars、Nautilus 版本；
 - Git SHA 与完整 `uv.lock` checksum（provenance，§6.3）；
 - 相关 producer / consumer code digest、模型运行依赖子集 digest；
@@ -488,12 +524,13 @@ artifact identity 由稳定 manifest 字段与 model checksum 推导；`created_
   显式 external `evidence_root`，不进入 Git，不覆盖非空目标，不提供 `latest` alias。
 - 模型使用 LightGBM 原生可加载格式（例如 `model.txt`）。**禁止** pickle、joblib 和任何
   执行 Python 对象反序列化的格式。
-- Loader 必须依次核验：manifest schema/digest → Stage 2 输入身份 → 运行兼容
-  code/dependency/runtime digest → model checksum → Booster feature names 与数量 →
-  预测输出有限性。
+- Loader 必须依次核验：manifest schema/digest → Stage 2 输入身份 → 训练参数
+  `training_parameter_revision` / `training_parameter_digest`（与参数冻结记录及同一次
+  evaluation 的其他 fold artifact 一致）→ 运行兼容 code/dependency/runtime digest →
+  model checksum → Booster feature names 与数量 → 预测输出有限性。
 - 以下情形必须 fail closed：manifest 或 model checksum 被篡改、错误 dataset/runtime/
-  compatibility digest、缺失/额外/重排 feature、Booster feature mismatch、非有限预测、
-  损坏文件、目标分区非空。
+  compatibility digest、参数 revision/digest 缺失或与冻结记录和其他 fold artifact 不一致、
+  缺失/额外/重排 feature、Booster feature mismatch、非有限预测、损坏文件、目标分区非空。
 - 加载与 import 不执行 I/O、不启动客户端、线程或后台服务。
 
 ### 6.5 确定性边界
@@ -547,9 +584,17 @@ artifact identity 由稳定 manifest 字段与 model checksum 推导；`created_
 fold 通过已交付训练能力生成独立、不可变、与该训练窗口绑定的 LightGBM artifact；
 evaluation 不复制训练实现，也不选择 `latest` artifact。
 
-final test 之前必须冻结 feature schema、model 参数与 seed、base cost threshold、
-sizing、account 与 execution config digest。最终 test 结果不得用于重新训练、调整阈值
-或选择参数；任何后续变化产生新的 artifact / evaluation revision，不覆盖既有证据。
+四个 fold artifact 必须携带 §6.1 冻结的**同一** `training_parameter_revision` 与
+`training_parameter_digest`：数值型参数在 2022 development fold 训练前已一次性冻结，因此
+「final test 之前」**不是**模型参数的冻结时点，也不得被当作放宽 fold 一致性的理由。依据
+fold 或传统策略结果调参、fold 间 parameter revision/digest 漂移、或在同一 acceptance
+record 中混用 revision，都按 §6.1 的失败语义导致**运行失败**；任何参数变化都要求整套 fold
+matrix 在新的空 evidence partitions 中重跑。evaluation 在进入任一 fold 前核验该一致性，
+不匹配即失败。
+
+final test 之前还必须另行冻结 feature schema、base cost threshold、sizing、account 与
+execution config digest。最终 test 结果不得用于重新训练、调整阈值或选择参数；任何后续
+变化产生新的 artifact / evaluation revision，不覆盖既有证据。
 
 ### 7.2 与 Stage 2 canonical split 的关系
 
@@ -680,9 +725,16 @@ fee 或 funding ledger，也不得另行计算账户余额。
   方式是人工修复后向新的空分区重跑。
 - 生成紧凑 tracked Stage 3 acceptance record，路径固定为
   `docs/product/stage3-btceth-oos-acceptance.json`，schema 固定为
-  `tracequant-stage3-acceptance-v1`。该记录只保存 schema、输入/artifact/config/decision/
-  scenario/run/result digests、窗口及角色、指标摘要、重建命令模板和 external evidence
-  相对文件名；不提交模型、完整报告、catalog、本机绝对路径或 secret。
+  `tracequant-stage3-acceptance-v1`。该记录的字段集合是**封闭的**，且明确包含 §3.4 point 2
+  要求的 fee provenance：schema、输入/artifact/config/decision/scenario/run/result
+  digests、`training_parameter_revision` 与 `training_parameter_digest`（§6.1）、两个
+  instrument 的 snapshot `maker_fee` / `taker_fee` 实际取值（含 `null` 或缺失）与比对结论、
+  窗口及角色、指标摘要、重建命令模板和 external evidence 相对文件名；不提交模型、完整报告、
+  catalog、本机绝对路径或 secret。把 snapshot fee 实际取值与比对结论写入本记录是 §3.4 与
+  §14 的显式要求，不构成对本条封闭列举的违反。
+- 该 record 引用的全部 fold artifact 必须来自**同一** parameter revision/digest；
+  `rebuild-oos` 在写出 record 前必须核验该一致性，不一致即整体失败，不得生成或更新
+  acceptance record（§6.1）。
 - 该入口是**一个确定性产品用例**，不得包含 scheduler、DAG、任务队列、并发 worker、
   watcher、插件发现、自动重试、断点续跑、自动发布、自动模型选择或 Demo 晋级。
 
@@ -709,6 +761,8 @@ fee 或 funding ledger，也不得另行计算账户余额。
 | prediction parity 公差（同环境） | `atol = 1e-12`、`rtol = 1e-9` |
 | 跨环境 prediction 公差 | `atol = 1e-9`、`rtol = 1e-6` |
 | LightGBM | `4.7.0`，CPU，单线程，`deterministic=true`，`force_row_wise=true` |
+| `training_parameter_revision` / `training_parameter_digest` | 任一正式训练/evaluation 前冻结的完整 effective parameter map（含 `num_boost_round`，默认值已展开）；四个 fold artifact 必须一致（§6.1） |
+| 参数变化的重跑范围 | 整套 fold matrix（2022/2023/2024/final test），于新的空 evidence partitions（§6.1、§7.1） |
 | 传统 base run 窗口 | `[2022-01-01, 2023-01-01)` |
 | 模型代表性窗口 | `[2022-01-01, 2023-01-01)` |
 | 代表性窗口 artifact 训练窗口 | `[2020-01-01, 2022-01-01)` |
@@ -723,9 +777,9 @@ fee 或 funding ledger，也不得另行计算账户余额。
 | --- | --- |
 | 输入绑定与因果 feature/label | `tests/acceptance/test_stage3_features.py::test_stage3_features_are_bound_to_accepted_catalog_and_causal` |
 | 传统动量基线 | `tests/acceptance/test_stage3_momentum.py::test_stage3_momentum_runs_from_stage2_catalog_with_nautilus_accounting` |
-| LightGBM artifact 合同 | `tests/acceptance/test_stage3_artifacts.py::test_stage3_lightgbm_artifact_round_trips_with_locked_identity` |
+| LightGBM artifact 合同（含训练参数 revision/digest） | `tests/acceptance/test_stage3_artifacts.py::test_stage3_lightgbm_artifact_round_trips_with_locked_identity` |
 | 模型 Strategy 接入 | `tests/acceptance/test_stage3_model_strategy.py::test_stage3_lightgbm_strategy_predicts_and_trades_through_nautilus` |
-| expanding-window 与 sensitivity | `tests/acceptance/test_stage3_evaluation.py::test_stage3_evaluation_compares_both_strategies_with_accounting_only_sensitivity` |
+| expanding-window 与 sensitivity（含跨 fold parameter revision/digest 一致性） | `tests/acceptance/test_stage3_evaluation.py::test_stage3_evaluation_compares_both_strategies_with_accounting_only_sensitivity` |
 | `rebuild-oos` 与 tracked record | `tests/acceptance/test_stage3_oos.py::test_stage3_oos_rebuild_compares_both_strategies_from_one_catalog` |
 
 测试 fixture 只证明行为与失败边界，不得冒充正式 2020–2026 研究证据。
@@ -775,6 +829,11 @@ fee 或 funding ledger，也不得另行计算账户余额。
     zero/base/2x funding 的 0x/1x/2x 账务影响
 [ ] 模型 artifact 绑定数据、feature schema、label、训练/purge/evaluation 窗口、代码
     provenance 与运行兼容 digest、model checksum，且 loader 对篡改与 schema mismatch fail closed
+[ ] 数值型超参数由首个正式 artifact revision 在任何正式训练/evaluation 前一次性冻结为完整
+    effective parameter map（含 `num_boost_round`，默认值已展开）及其 revision/digest，
+    并写入每个 fold artifact manifest 与 tracked record；四个 fold artifact 的 parameter
+    revision/digest 完全一致；结果驱动调参、fold 间漂移、同一 acceptance record 混用 revision
+    均失败，任何参数变化要求整套 fold matrix 在新的空 evidence partitions 中重跑
 [ ] expanding-window 的 2022/2023 development、2024 validation、final test/OOS 按固定边界执行
 [ ] final test/OOS 执行 accounting-only zero/2x fee 与 zero/2x funding 场景，decisions 与 base 逐条一致
 [ ] 研究输出包含收益、回撤、风险调整指标、交易数、换手、commission、funding、分标的/
