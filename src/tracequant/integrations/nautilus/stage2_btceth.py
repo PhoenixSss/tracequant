@@ -1199,6 +1199,10 @@ def prepare_stage2_dataset(
     checksum_probe: Callable[[str], bool] | None = None,
 ) -> dict[str, object]:
     require_tail_disabled()
+    if (crosscheck_bars is None) != (crosscheck_funding is None):
+        raise Stage2DataError(
+            "cross-check bars and funding must be both injected or both fetched"
+        )
     index_coverage = stage2_index_coverage_conclusion(checksum_probe=checksum_probe)
     if index_coverage["checksum_available"] is not True:
         raise Stage2DataError("index checksum availability is incomplete")

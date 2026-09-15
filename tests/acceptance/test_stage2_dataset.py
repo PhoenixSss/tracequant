@@ -903,6 +903,29 @@ def test_dataset_prepare_rejects_missing_index_before_catalog_write(
     assert list(catalog_path.iterdir()) == []
 
 
+@pytest.mark.parametrize("injected_side", ["bars", "funding"])
+def test_dataset_prepare_rejects_asymmetric_crosscheck_injection(
+    tmp_path: Path,
+    injected_side: str,
+) -> None:
+    crosscheck_bars: dict[str, tuple[Bar, ...]] | None = (
+        {} if injected_side == "bars" else None
+    )
+    crosscheck_funding: dict[str, tuple[FundingRateUpdate, ...]] | None = (
+        {} if injected_side == "funding" else None
+    )
+    with pytest.raises(
+        Stage2DataError,
+        match="cross-check bars and funding must be both injected or both fetched",
+    ):
+        prepare_stage2_dataset(
+            tmp_path / "unused.toml",
+            repository_root=REPOSITORY_ROOT,
+            crosscheck_bars=crosscheck_bars,
+            crosscheck_funding=crosscheck_funding,
+        )
+
+
 def test_index_continuity_uses_month_templates(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "tracequant.source_data.stage2_btceth.stage2_month_keys",
