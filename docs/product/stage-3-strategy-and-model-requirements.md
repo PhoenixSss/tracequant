@@ -9,6 +9,7 @@
 | 固定运行时 | NautilusTrader `2.0.0rc4` / `a0400251110653b6d8ae6a9b5b89c4543fa85a2d` |
 | 固定输入数据集 | `binance-usdm-btceth-202001-202608-r1`（Stage 2 已验收） |
 | 上位计划 | [TraceQuant 分阶段推进计划](<../research/foundation-selection/TraceQuant 分阶段推进计划.md>) 第 4、8 节 |
+| 上位 Feature | `#358`「建立阶段 3 策略与模型可信闭环」 |
 | 输入基线 | [阶段 2：Nautilus 同源数据详细需求](stage-2-data-and-research-requirements.md) v0.4 |
 
 ## 1. 目标与边界
@@ -61,6 +62,13 @@ warm-up、LightGBM、artifact、窗口角色、accounting-only sensitivity、终
 Stage 3 的每个正式消费者（研究 loader、训练、两个 Strategy、评估、`rebuild-oos`）都必须
 核验上表的**全部**字段，外加外部 catalog 的 instrument 定义与 runtime identity。
 
+上表冻结的是 snapshot 文件的完整 checksum，但 tracked 验收记录**不记录** snapshot 内
+instrument 的 `maker_fee` / `taker_fee` 取值。这两个字段因此不是本文档冻结的身份数值，
+也不能充当有效费率的期望值来源：Stage 3 必须在每次正式运行中读取并记录它们的实际取值
+（含 `null` 或缺失），并按 §3.4 显式绑定进入回测的有效费率。两件事必须分开理解——
+snapshot 的 fee 字段仍参与 §2.2 的 catalog identity 逐字段比对（**身份**问题），而
+**有效费率**只由 §3.4 的显式绑定决定。
+
 ### 2.2 普通 catalog identity 不等于完整数据集验收
 
 既有 `require_stage2_catalog_identity(catalog_path)`（RC4 阶段 2 loader 使用的入口）只
@@ -111,10 +119,18 @@ funding_as_of_max_age = 8h
 
 `mark_as_of_max_age` 取 15m，与 Stage 2 的 15m mark 周期和
 `mark_max_age_at_funding = 15m` 一致。边界必须按“不超过”实现：在冻结源映射下 1h 决策
-时刻为 `HH:59:59.999Z`，上述两个 expected mark gap 所影响的决策
-（`2020-01-19T13:59:59.999Z`、`2023-11-10T03:59:59.999Z`）其最近 mark 的年龄恰好为
-15m。若实现使用严格 `<`，这两个已记录、已批准的缺口会在训练与评估中被误判为数据异常，
-因此该边界是合同的一部分，而不是实现细节。
+时刻为 `HH:59:59.999Z`，而 `2023-11-10` 缺口缺失的源 open time `03:45` 其
+`ts_event = 03:59:59.999Z` 正好与该小时的决策时刻重合且该行不存在，因此决策
+`2023-11-10T03:59:59.999Z` 的最近可用 mark 是 `03:44:59.999Z`，年龄**恰好 15m**。若
+实现使用严格 `<`，这个已记录、已批准的缺口会在训练与评估中被误判为数据异常，因此该
+边界是合同的一部分，而不是实现细节。
+
+`2020-01-19` 缺口**不参与**该边界论证，也不改变任何 1h 决策的 as-of 年龄：它缺失的源
+open time 是 `13:15`，其 `ts_event = 13:29:59.999Z` 与任何 1h 决策时刻都不重合，且
+`13:45` 的 mark 存在，所以决策 `2020-01-19T13:59:59.999Z` 的最近 mark 年龄为 **0**。
+该缺口只需要在序列完整性检查中作为 expected 例外被 allow-list（本节首段），不得据此
+声称它受 `mark_as_of_max_age` 的 `<=` 边界保护，也不得为它写出「年龄恰为 15m」或
+「严格 `<` 下必须失败」的断言。
 
 `funding_as_of_max_age` 取 8h，等于 Binance USD-M funding 结算周期；源 `calc_time`
 的毫秒级偏移（Stage 2 已记录）不改变该结论。
@@ -178,21 +194,31 @@ funding 输入固定为已验收数据集内 native `FundingRateUpdate` 记录�
 `maker_fee` / `taker_fee`）。以下做法被禁止：
 
 - 依赖 `BacktestVenueConfig.fee_model=None` 或任何 venue 级默认 fee model；
-- 依赖**未经核验**的 instrument snapshot 默认值，即直接采用 catalog/snapshot 里的
-  fee 字段而不与 base 冻结值比对；
+- 把 catalog / instrument snapshot 里的 fee 字段直接当作有效费率，或依赖
+  `CryptoPerpetual` 未显式赋值的 `None` 默认值；
 - 用「正式窗口没有成交所以 commission 为零」代替费率接线证明。
 
 因此正式运行必须同时满足：
 
-1. **构造/核验**：进入回测的 instrument 其 `maker_fee` / `taker_fee` 精确等于
-   `0.0002` / `0.0004`。若 catalog 或 instrument snapshot 的 fee 字段与冻结 base 值
-   不一致，运行 fail closed，不得静默采用 snapshot 值，也不得静默修正为 base 值；
-2. **逐 fill 核验**：每个实际 market（taker）fill 的 `commission` 等于
+1. **显式绑定**：进入回测的 instrument 定义，其 `maker_fee` / `taker_fee` 必须由
+   Stage 3 在 instrument 装配阶段**显式写入** §3.3 的冻结 base 值
+   （`0.0002` / `0.0004`），不得继承 catalog / snapshot 的 fee 字段。装配完成后必须从
+   进入回测的 instrument 定义**回读**这两个字段并断言其精确等于冻结 base 值，断言
+   失败即运行失败。该显式绑定是有效费率的唯一来源，也是本阶段不依赖任何 snapshot
+   默认值的具体机制；
+2. **provenance 记录（不得静默）**：同一次正式运行必须读取 catalog 与 instrument
+   snapshot 中两个 instrument 的 `maker_fee` / `taker_fee` 实际取值（含 `null` 或缺失），
+   与冻结 base 值比对，并把实际取值与比对结论记入该次运行的 evaluation manifest 与
+   tracked Stage 3 acceptance record。记录值与 base 不一致**不是**运行失败条件（§3.3
+   已声明 base 费率不代表交易所实际费率），但静默忽略该字段、或静默采用 snapshot 值
+   作为有效费率，都是运行失败。该字段的身份一致性仍由 §2.2 的 catalog identity 门禁
+   独立保证，不因本条的显式绑定而放宽；
+3. **逐 fill 核验**：每个实际 market（taker）fill 的 `commission` 等于
    `filled_qty x avg_px x base_taker_fee`（在结算货币精度内）。任一 fill 不满足即
    运行失败；
-3. **确定性 fixture 证明**：一个保证发生 taker fill 的确定性 accounting fixture 必须
-   证明 zero / base / 2x fee 三个场景的 commission 分别为实际 commission 的
-   `0x / 1x / 2x`。该 fixture 是费率接线正确性的**唯一**证据来源。
+4. **确定性 fixture 证明**：§3.7 的 F-fee fixture 必须证明 zero / base / 2x fee 三个
+   场景的 commission 分别为实际 commission 的 `0x / 1x / 2x`。该 fixture 是费率接线
+   正确性的**唯一**证据来源。
 
 正式研究窗口若无成交，commission 可以为零，但该状态必须与「费率未绑定/接线失败」
 明确区分：无成交时 fee sensitivity 必须标记为**无信息量**（§8.3），不能作为费率接线
@@ -223,6 +249,32 @@ funding **不进入**该阈值：funding 由持仓方向与结算时刻共同决
 - 允许保留由 Nautilus 最后可用 mark 估值的 position，但必须记录：instrument、
   quantity、mark 价格、unrealized PnL、估值时刻。
 - 剩余 position 的估值必须来自 Nautilus，不得由研究侧另行估值。
+
+### 3.7 确定性 accounting fixture（费率与 funding 接线）
+
+下列两个 fixture 是运行接线正确性的唯一证据来源（§8.3）。二者都必须确定性、可在无外网
+条件下重复执行，并复用与正式运行相同的 instrument 装配与 Nautilus 账务路径；它们只证明
+行为与失败边界，不冒充正式 2020–2026 研究证据（§11）。
+
+**F-fee（强制成交）**：保证发生一次 market（taker）fill。
+
+- 输入：显式绑定了 §3.3 base 费率的 instrument、足以成交的显式行情输入，以及
+  zero / base / 2x 三组 fee 场景输入（派生规则见 §8.2）。
+- 断言：确实发生 taker fill；base 场景的 `commission` 等于
+  `filled_qty x avg_px x base_taker_fee`（在结算货币精度内）；zero / 2x 场景的
+  `commission` 分别是 base 的 `0x` / `2x`。
+- 失败语义：未发生 fill、base commission 与冻结费率不符、或 zero/2x 不按倍数缩放，
+  即运行失败。
+
+**F-funding（跨 funding event 持仓）**：在至少一个 funding 结算事件上保持 open position。
+
+- 输入：一个在其 `next_funding_ns` 前后都保持 open 的 position，以及该标的冻结
+  `FundingRateUpdate` 的 `rate`（base 倍数为 1，§3.3）。
+- 断言：base 场景在该结算事件上产生**非零** funding 账务影响，且该影响由 Nautilus 从
+  Position / Account 事件产生，不由研究侧另行计算；zero / 2x funding 场景对同一
+  position 与同一 rate 输入产生 base 的 `0x` / `2x`。
+- 失败语义：position 跨越结算事件而 base funding 影响为零、或 zero/2x 不按倍数缩放，
+  即运行失败，且该状态**不得**标记为「无信息量」（§8.3）。
 
 ## 4. Feature 与 Label 合同
 
@@ -345,9 +397,9 @@ label_end_ts        = decision_ts + 4h
 
 - 信号输入：每个标的 1h closed Bar 的 24h return（即 `ret_24h`）。
 - 规则：`ret_24h > +0.5%` 为 long，`ret_24h < -0.5%` 为 short，其余为 flat。
-- 参数（24h、`+/-0.5%`）进入 typed config 与 manifest，但本阶段不执行任何参数搜索，
-  也不按收益调整。
-- 无需训练，因此不产生 model artifact。
+- 参数（24h、`+/-0.5%`）进入 typed config，并记录在 §9 的 evaluation manifest /
+  tracked Stage 3 acceptance record 中；本阶段不执行任何参数搜索，也不按收益调整。
+- 无需训练，因此不产生 model artifact，也没有 §6.2 的 artifact manifest。
 - 与模型策略一样受 §4.2 的 warm-up 与 readiness 约束：即使策略只需要 24h lookback，
   正式窗口仍按 168h context 口径加载并执行同样的 readiness 失败语义。
 
@@ -511,9 +563,16 @@ test       = [2025-01-01T00:00:00Z, 2026-09-01T00:00:00Z)
 
 Stage 3 的 fold 角色与 Stage 2 的 split 是**两套不同语义**：
 
-- Stage 3 的 2022 / 2023 development folds 与 2024 validation fold 在时间上**落在
-  Stage 2 canonical `train` split 之内**；它们是模型训练的 expanding-window 评估角色，
-  不是 Stage 2 的 canonical 窗口角色。
+- Stage 3 的 2022 / 2023 development folds 在时间上**整体落在 Stage 2 canonical `train`
+  split 之内**（训练窗口与 evaluation 窗口都是）；它们是模型训练的 expanding-window
+  评估角色，不是 Stage 2 的 canonical 窗口角色。
+- Stage 3 的 2024 validation fold 与 Stage 2 split 的关系是**时间一致、角色语义不同**，
+  与 final test/OOS 同类：其训练窗口 `[2020-01-01T00:00:00Z, 2024-01-01T00:00:00Z)`
+  等于 Stage 2 `train`，而 **evaluation 窗口
+  `[2024-01-01T00:00:00Z, 2025-01-01T00:00:00Z)` 等于 Stage 2 canonical `validation`
+  split**，不是 Stage 2 `train` 的子集。该 fold 因此既不改变 Stage 2 split，也不得被
+  当作 canonical 窗口，更不得因为 evaluation 落在 Stage 2 `validation` 区间内而把它
+  按 `train` 区间处理。
 - Stage 3 的 final test/OOS `[2025-01-01T00:00:00Z, 2026-09-01T00:00:00Z)` 与 Stage 2
   canonical `test` split 时间一致，两者的角色语义仍然不同。
 
@@ -588,7 +647,9 @@ fee 或 funding ledger，也不得另行计算账户余额。
 - 随后分别重放**完全相同**的 target decisions，执行四个场景：zero fee、2x fee、
   zero funding、2x funding。
 - 场景数值由 base 冻结值显式派生：zero fee = `0 / 0`，2x fee = `0.0004 / 0.0008`，
-  zero funding = rate `x 0`，2x funding = rate `x 2`。
+  zero funding = rate `x 0`，2x funding = rate `x 2`。fee 场景经由 §3.4 的同一条显式
+  绑定路径注入，funding 场景经由 §3.3 的 `base_funding_multiplier` 派生；两者都不得
+  依赖 catalog / snapshot 的 fee 字段或 venue 默认值。
 - 场景输入只在内存中构造，并携带显式 `scenario_digest`；不得修改或写回 canonical
   catalog，也不得改变 artifact 的 canonical feature input identity。
 - 场景不得重新计算 feature、prediction、cost threshold 或 decisions。orders、fills、
@@ -602,8 +663,8 @@ fee 或 funding ledger，也不得另行计算账户余额。
   场景必须标记为**无信息量**。
 - 无信息量标记与「费率/ funding 接线失败」必须是两个不同且可验证的状态：前者是研究
   结论的限定，后者是运行失败。
-- 场景接线正确性的证据只能来自 §3.4 的强制成交 fixture 和跨 funding event 的持仓
-  fixture，不能来自正式窗口的零 commission 或零 funding 结果。
+- 场景接线正确性的证据只能来自 §3.7 的强制成交 fixture（F-fee）和跨 funding event 的
+  持仓 fixture（F-funding），不能来自正式窗口的零 commission 或零 funding 结果。
 
 ## 9. `rebuild-oos` 有限入口
 
@@ -634,6 +695,7 @@ fee 或 funding ledger，也不得另行计算账户余额。
 | 账务输入 | 15m mark + funding（`FundingRateUpdate`） |
 | 起始余额 | `100000` USDT |
 | maker / taker | `0.0002` / `0.0004`（market order 按 taker） |
+| 有效费率来源 | Stage 3 装配时显式写入 base 值；snapshot fee 字段仅作 provenance 并记录差异（§3.4） |
 | 目标名义金额 | `10000` USDT / 标的 / 方向 |
 | position mode / leverage | `NETTING` / `1x` |
 | `base_round_trip_cost_threshold` | `0.0008`（`= 2 x 0.0004`） |
@@ -707,8 +769,10 @@ fee 或 funding ledger，也不得另行计算账户余额。
 [ ] 正式窗口加载足够的 pre-start context，起点前只 warm up、不交易；首个可交易 decision
     不 ready 时整体失败
 [ ] 两个策略产生同一 catalog、同一 Nautilus account 与 execution 语义下的 base 结果
-[ ] 每个实际 base taker fill 的 commission 与冻结费率一致；强制成交 fixture 证明
-    zero/base/2x fee 的 0x/1x/2x commission
+[ ] 有效费率由 Stage 3 显式绑定为 base 冻结值，snapshot fee 字段的实际取值与比对结论
+    被记录而非静默使用；每个实际 base taker fill 的 commission 与冻结费率一致；§3.7 的
+    F-fee / F-funding fixture 分别证明 zero/base/2x fee 的 0x/1x/2x commission 与
+    zero/base/2x funding 的 0x/1x/2x 账务影响
 [ ] 模型 artifact 绑定数据、feature schema、label、训练/purge/evaluation 窗口、代码
     provenance 与运行兼容 digest、model checksum，且 loader 对篡改与 schema mismatch fail closed
 [ ] expanding-window 的 2022/2023 development、2024 validation、final test/OOS 按固定边界执行
