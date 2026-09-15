@@ -3,7 +3,7 @@
 | 字段 | 值 |
 | --- | --- |
 | 文档状态 | 待维护者批准的实施基线 |
-| 文档版本 | `0.3` |
+| 文档版本 | `0.4` |
 | 日期 | `2026-09-14` |
 | 产品状态 | `OFFLINE_BACKTEST_ONLY`、`LIVE_NOT_APPROVED` |
 | 固定运行时 | NautilusTrader `2.0.0rc4` / `a0400251110653b6d8ae6a9b5b89c4543fa85a2d` |
@@ -417,8 +417,12 @@ test:       [validation_end, dataset_end)
 
 1. 两者使用同一个 `catalog_path`、instrument identity、data type、Bar type 和时间窗口；
 2. 研究视图是对 catalog 原生数据的只读投影，不是导入前数据的持久化副本；
-3. 价格、数量、时间戳和 funding rate 在 source -> native -> catalog -> research round-trip
-   中精确相等；
+3. Bar 的价格、数量和时间戳在 source -> native -> catalog -> research round-trip 中精确
+   相等；首个固定数据集对完整 funding 历史验证 source inventory、映射前字段，以及
+   catalog、research 和 BacktestNode 的记录数与时间范围一致。Funding rate、interval、
+   timestamp 的精确持久化与账户 exactly-once 语义由 `ST2-TEST-003`（Task #350）的代表性
+   native round-trip 和持仓测试覆盖，不要求对完整历史逐事件重跑账户结算，也不以聚合余额
+   变化替代 source completeness；
 4. `BacktestNode` 实际加载的记录数和时间范围与研究查询一致。
 
 必须有以下自动化测试：

@@ -109,6 +109,9 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 ACCEPTANCE_RECORD = (
     REPOSITORY_ROOT / "docs/product/stage2-btceth-dataset-acceptance.json"
 )
+REQUIREMENTS_DOCUMENT = (
+    REPOSITORY_ROOT / "docs/product/stage-2-data-and-research-requirements.md"
+)
 FETCHED_AT = datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
 BTC = "BTCUSDT-PERP.BINANCE"
 ETH = "ETHUSDT-PERP.BINANCE"
@@ -919,6 +922,19 @@ def test_expected_source_inventory_is_800_complete_months() -> None:
             f"https://data.binance.vision/{STAGE2_INDEX_ROOT}/"
         )
         assert str(item["checksum_url"]).endswith(".CHECKSUM")
+
+
+def test_stage2_v04_documents_the_approved_dataset_evidence_boundaries() -> None:
+    document = REQUIREMENTS_DOCUMENT.read_text(encoding="utf-8")
+    normalized = " ".join(document.split())
+
+    assert "| 文档版本 | `0.4` |" in document
+    assert "18 个 daily 对象作为 `supplemental_sources`" in document
+    assert "`/fapi/v1/fundingRate` REST 端点" in document
+    assert "Funding rate、interval、 timestamp 的精确持久化" in normalized
+    assert "`ST2-TEST-003`（Task #350）的代表性" in normalized
+    assert "不要求对完整历史逐事件重跑账户结算" in normalized
+    assert "不以聚合余额 变化替代 source completeness" in normalized
 
 
 @pytest.mark.parametrize("defect", ["duplicate", "reversed"])
