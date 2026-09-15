@@ -11,6 +11,7 @@ from tracequant.integrations.nautilus.stage2_btceth import (
     project_stage2_bars,
     project_stage2_mark_prices,
     query_stage2_funding_files,
+    require_stage2_catalog_identity,
 )
 from tracequant.research.source_schema import (
     require_monotonic_unique_timestamps,
@@ -21,7 +22,6 @@ from tracequant.source_data.stage2_btceth import (
     STAGE2_INSTRUMENT_IDS,
     Stage2DataError,
     datetime_to_nanos,
-    require_stage2_catalog_identity,
     require_utc,
     stage2_bar_type_str,
 )

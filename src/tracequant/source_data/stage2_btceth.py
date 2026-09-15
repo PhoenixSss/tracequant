@@ -1077,7 +1077,7 @@ def build_funding_source_object(
     )
 
 
-def require_stage2_catalog_identity(catalog_path: Path) -> None:
+def require_stage2_manifest_identity(catalog_path: Path) -> None:
     if not catalog_path.is_absolute():
         raise Stage2DataError("catalog_path must be an absolute path")
     if not catalog_path.is_dir():

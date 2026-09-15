@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ast
+import json
 import tomllib
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -22,6 +24,7 @@ from nautilus_trader.model import (
 from nautilus_trader.persistence import ParquetDataCatalog
 
 from tracequant.integrations.nautilus.stage2_btceth import (
+    instrument_snapshot_payload,
     nautilus_close_sma,
     query_stage2_bars,
     query_stage2_mark_prices,
@@ -81,7 +84,14 @@ FORBIDDEN_RESEARCH_PACKAGES = {
 }
 
 
-def _instrument(instrument_id: str, symbol: str, base: str) -> CryptoPerpetual:
+def _instrument(
+    instrument_id: str,
+    symbol: str,
+    base: str,
+    *,
+    price_precision: int = 2,
+    price_increment: str = "0.01",
+) -> CryptoPerpetual:
     usdt = Currency.from_str("USDT")
     return CryptoPerpetual(
         instrument_id=InstrumentId.from_str(instrument_id),
@@ -90,9 +100,9 @@ def _instrument(instrument_id: str, symbol: str, base: str) -> CryptoPerpetual:
         quote_currency=usdt,
         settlement_currency=usdt,
         is_inverse=False,
-        price_precision=2,
+        price_precision=price_precision,
         size_precision=3,
-        price_increment=Price.from_str("0.01"),
+        price_increment=Price.from_str(price_increment),
         size_increment=Quantity.from_str("0.001"),
         ts_event=0,
         ts_init=0,
@@ -146,15 +156,19 @@ def _bar_at(
 
 
 def _write_manifest(catalog_path: Path, **overrides: object) -> None:
-    snapshot = {
-        "checksum_sha256": "1" * 64,
-        "fetched_at": "2026-09-14T12:00:00Z",
-    }
+    snapshot = instrument_snapshot_payload(
+        [
+            _instrument(BTC, "BTCUSDT", "BTC"),
+            _instrument(ETH, "ETHUSDT", "ETH"),
+        ],
+        fetched_at=parse_utc("2026-09-14T12:00:00Z"),
+    )
     payload: dict[str, object] = {
         "schema": STAGE2_SOURCE_SCHEMA,
         "dataset_id": STAGE2_DATASET_ID,
         "instrument_snapshot": {
-            **snapshot,
+            "checksum_sha256": snapshot["checksum_sha256"],
+            "fetched_at": snapshot["fetched_at"],
             "filename": STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
         },
         "nautilus_version": STAGE2_NAUTILUS_VERSION,
@@ -165,12 +179,18 @@ def _write_manifest(catalog_path: Path, **overrides: object) -> None:
     write_json(catalog_path / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME, snapshot)
 
 
-def _write_research_catalog(root: Path) -> tuple[Path, str]:
+def _write_research_catalog(
+    root: Path,
+    *,
+    instruments: Sequence[CryptoPerpetual] | None = None,
+) -> tuple[Path, str]:
     catalog_path = root / "catalog"
     catalog_path.mkdir()
     catalog = ParquetDataCatalog(str(catalog_path))
     catalog.write_instruments(
-        [
+        list(instruments)
+        if instruments is not None
+        else [
             _instrument(BTC, "BTCUSDT", "BTC"),
             _instrument(ETH, "ETHUSDT", "ETH"),
         ]
@@ -427,6 +447,43 @@ def test_loader_rejects_empty_identity_window_and_future_reads(tmp_path: Path) -
     with pytest.raises(Stage2DataError, match="decision timestamp"):
         require_as_of(decision_time=decision, data_end=train_end)
     require_feature_as_of(frame, decision_time=train_end)
+
+
+def test_catalog_identity_binds_snapshot_payload_to_catalog_instruments(
+    tmp_path: Path,
+) -> None:
+    catalog_path, bar_type = _write_research_catalog(tmp_path)
+    train_start, train_end = split_window("train")
+    snapshot_path = catalog_path / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME
+
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    snapshot.pop("instruments")
+    write_json(snapshot_path, snapshot)
+    with pytest.raises(Stage2DataError, match="snapshot has no instruments"):
+        load_bars(catalog_path, bar_type, train_start, train_end)
+
+    divergent_root = tmp_path / "divergent"
+    divergent_root.mkdir()
+    divergent_catalog_path, divergent_bar_type = _write_research_catalog(
+        divergent_root,
+        instruments=[
+            _instrument(
+                BTC,
+                "BTCUSDT",
+                "BTC",
+                price_precision=3,
+                price_increment="0.001",
+            ),
+            _instrument(ETH, "ETHUSDT", "ETH"),
+        ],
+    )
+    with pytest.raises(Stage2DataError, match="definitions do not match"):
+        load_bars(
+            divergent_catalog_path,
+            divergent_bar_type,
+            train_start,
+            train_end,
+        )
 
 
 def test_loader_rejects_reversed_or_duplicate_projections(

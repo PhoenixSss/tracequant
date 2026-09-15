@@ -112,6 +112,7 @@ from tracequant.source_data.stage2_btceth import (
     read_verified_kline_archive,
     require_complete_source_inventory,
     require_recent_mark_for_funding,
+    require_stage2_manifest_identity,
     require_tail_disabled,
     require_utc,
     stage2_bar_type_str,
@@ -260,6 +261,36 @@ def instruments_from_snapshot(
         raise Stage2DataError("instrument snapshot checksum does not match")
     fetched_at = parse_utc(_require_snapshot_str(payload, "fetched_at"))
     return instruments, fetched_at, checksum
+
+
+def require_stage2_catalog_identity(catalog_path: Path) -> None:
+    require_stage2_manifest_identity(catalog_path)
+    snapshot_path = catalog_path / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME
+    snapshot_instruments, _fetched_at, _checksum = instruments_from_snapshot(
+        snapshot_path
+    )
+    _require_stage2_instruments(snapshot_instruments)
+
+    catalog = _require_catalog(catalog_path)
+    catalog_instruments = tuple(
+        _require_crypto_perpetual(instrument) for instrument in catalog.instruments()
+    )
+    snapshot_by_id = {
+        str(instrument.id): instrument.to_dict() for instrument in snapshot_instruments
+    }
+    catalog_by_id = {
+        str(instrument.id): instrument.to_dict() for instrument in catalog_instruments
+    }
+    if (
+        len(snapshot_by_id) != len(snapshot_instruments)
+        or len(catalog_by_id) != len(catalog_instruments)
+        or tuple(snapshot_by_id) != STAGE2_INSTRUMENT_IDS
+        or set(catalog_by_id) != set(STAGE2_INSTRUMENT_IDS)
+        or catalog_by_id != snapshot_by_id
+    ):
+        raise Stage2DataError(
+            "catalog instrument definitions do not match the frozen snapshot"
+        )
 
 
 def build_stage2_binance_instrument_client_config(
@@ -457,6 +488,7 @@ def query_stage2_bars(
     start_ns: int | None = None,
     end_ns: int | None = None,
 ) -> tuple[Bar, ...]:
+    require_stage2_catalog_identity(catalog_path)
     catalog = _require_catalog(catalog_path)
     return tuple(catalog.query_bars(identifiers=[bar_type], start=start_ns, end=end_ns))
 
@@ -468,6 +500,7 @@ def query_stage2_mark_prices(
     start_ns: int | None = None,
     end_ns: int | None = None,
 ) -> tuple[MarkPriceUpdate, ...]:
+    require_stage2_catalog_identity(catalog_path)
     catalog = _require_catalog(catalog_path)
     return tuple(
         catalog.query_mark_price_updates(
@@ -525,6 +558,7 @@ def query_stage2_funding_files(
 ) -> tuple[Path, ...]:
     if instrument_id not in STAGE2_INSTRUMENT_IDS:
         raise Stage2DataError("instrument is not a stage 2 target")
+    require_stage2_catalog_identity(catalog_path)
     catalog = _require_catalog(catalog_path)
     files = catalog.query_files(
         "funding_rate_update",
@@ -569,6 +603,7 @@ def nautilus_close_sma(
 
 
 def stage2_price_spec(catalog_path: Path, instrument_id: str) -> tuple[int, str]:
+    require_stage2_catalog_identity(catalog_path)
     catalog = _require_catalog(catalog_path)
     matches = [
         instrument
@@ -1247,6 +1282,7 @@ def load_stage2_backtest_bars(
     start: datetime,
     end: datetime,
 ) -> tuple[Bar, ...]:
+    require_stage2_catalog_identity(catalog_path)
     recorder = _RecordBars(bar_type)
     _run_recording_backtest(
         catalog_path,
@@ -1271,6 +1307,7 @@ def load_stage2_backtest_funding(
     end: datetime,
     require_records: bool = True,
 ) -> tuple[FundingRateUpdate, ...]:
+    require_stage2_catalog_identity(catalog_path)
     recorder = _RecordFunding()
     recorder.instrument_id = instrument_id
     recorder.bar_type = bar_type
