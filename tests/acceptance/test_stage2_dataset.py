@@ -138,11 +138,6 @@ ACCEPTANCE_KEYS = {
     "splits",
     "verification_test",
 }
-DEFERRED_TRACKED_ACCEPTANCE_KEYS = {
-    "instrument_snapshot",
-    "market_data_manifest_digest",
-    "sma_parity",
-}
 SERIES_PRICES = {
     (BTC, "15m"): ("100.00", "101.00", "99.50", "100.50", "1.000"),
     (BTC, "1h"): ("200.00", "201.00", "199.50", "200.50", "2.000"),
@@ -831,7 +826,7 @@ def test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog(
 
     tracked = json.loads(ACCEPTANCE_RECORD.read_text(encoding="utf-8"))
     require_no_local_absolute_paths(tracked)
-    assert ACCEPTANCE_KEYS - DEFERRED_TRACKED_ACCEPTANCE_KEYS <= set(tracked)
+    assert ACCEPTANCE_KEYS <= set(tracked)
     assert tracked["dataset_id"] == STAGE2_DATASET_ID
     assert tracked["expected_source_count"] == 800
     assert (
@@ -845,22 +840,11 @@ def test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog(
     assert tracked["crosscheck"]["start"] == STAGE2_CROSSCHECK_START_ISO
     assert tracked["crosscheck"]["end"] == STAGE2_CROSSCHECK_END_ISO
     assert tracked["crosscheck"]["written_to_catalog"] is False
-    # A repaired-head run against the external catalog upgrades the tracked receipt;
-    # until then it remains the honest pre-remediation artifact rather than fixture data.
-    if DEFERRED_TRACKED_ACCEPTANCE_KEYS <= set(tracked):
-        require_complete_acceptance_record(
-            tracked,
-            require_gap_fill_sources=True,
-            require_live_crosscheck=True,
-        )
-    else:
-        assert DEFERRED_TRACKED_ACCEPTANCE_KEYS.isdisjoint(tracked)
-        with pytest.raises(Stage2DataError, match="instrument snapshot locator"):
-            require_complete_acceptance_record(
-                tracked,
-                require_gap_fill_sources=True,
-                require_live_crosscheck=True,
-            )
+    require_complete_acceptance_record(
+        tracked,
+        require_gap_fill_sources=True,
+        require_live_crosscheck=True,
+    )
     mismatched_snapshot = json.loads(json.dumps(record))
     mismatched_snapshot["instrument_snapshot"]["checksum_sha256"] = "2" * 64
     with pytest.raises(Stage2DataError, match="source manifest identity"):
@@ -1129,5 +1113,23 @@ def test_crosscheck_mismatch_and_empty_window_fail(
         crosscheck_stage2_catalog(
             catalog_path,
             nautilus_bars={BTC: bars[BTC][:1], ETH: ()},
+            nautilus_funding={BTC: funding[BTC], ETH: funding[ETH]},
+        )
+    first = bars[BTC][0]
+    divergent_open = Bar(
+        bar_type=first.bar_type,
+        open=Price.from_str(str(Decimal(str(first.open)) + Decimal("0.01"))),
+        high=first.high,
+        low=first.low,
+        close=first.close,
+        volume=first.volume,
+        ts_event=first.ts_event,
+        ts_init=first.ts_init,
+    )
+    divergent_btc = (divergent_open, *bars[BTC][1:])
+    with pytest.raises(Stage2DataError, match="price"):
+        crosscheck_stage2_catalog(
+            catalog_path,
+            nautilus_bars={BTC: divergent_btc, ETH: bars[ETH]},
             nautilus_funding={BTC: funding[BTC], ETH: funding[ETH]},
         )

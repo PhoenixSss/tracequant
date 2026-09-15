@@ -2,6 +2,7 @@
   "catalog_evidence": {
     "coverage_filename": "stage2_coverage.json",
     "dataset_digest_filename": "stage2_dataset_digest.json",
+    "instrument_snapshot_filename": "stage2_instrument_snapshot.json",
     "source_manifest_filename": "stage2_source_manifest.json",
     "source_object_count": 800,
     "supplemental_source_count": 18
@@ -175,7 +176,7 @@
     "start": "2026-08-25T00:00:00Z",
     "written_to_catalog": false
   },
-  "dataset_digest": "50232aecf29931541c3d5eefdd28eec8013226b745bff531867b218761137507",
+  "dataset_digest": "e17c6294e0a0e6714e56a44624ade37cff46125c46d8b0ee81ede6093711579c",
   "dataset_id": "binance-usdm-btceth-202001-202608-r1",
   "expected_source_count": 800,
   "expected_source_inventory_digest": "0d5c8b384098ba7730d814739b4c4549e7bcf01a12c9c69eec614e6fbb0dc816",
@@ -1417,11 +1418,69 @@
     ],
     "written_to_catalog": false
   },
+  "instrument_snapshot": {
+    "checksum_sha256": "dd7fab59448a3b530ab70871ec57c375f6758e409004f9673d9d0cac7ee630bd",
+    "fetched_at": "2026-09-15T03:08:10.006744Z",
+    "filename": "stage2_instrument_snapshot.json"
+  },
+  "market_data_manifest_digest": "a0d9a36bb65ec7c2ec41f47cdf6ba7d20f57ad28d8d3494a69624c60d6d0a110",
   "nautilus_tail_enabled": false,
   "nautilus_version": "2.0.0rc4",
   "runtime_identity": "2.0.0rc4+a0400251110653b6d8ae6a9b5b89c4543fa85a2d",
   "schema": "tracequant-stage2-acceptance-v1",
-  "source_manifest_digest": "a0d9a36bb65ec7c2ec41f47cdf6ba7d20f57ad28d8d3494a69624c60d6d0a110",
+  "sma_parity": {
+    "end": "2020-01-02T00:00:00Z",
+    "interval": "15m",
+    "passed": true,
+    "series": [
+      {
+        "bar_type": "BTCUSDT-PERP.BINANCE-15-MINUTE-LAST-EXTERNAL",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "periods": [
+          {
+            "compared_points": 87,
+            "max_absolute_error": "0.01",
+            "passed": true,
+            "period": 10,
+            "price_tick": "0.10"
+          },
+          {
+            "compared_points": 77,
+            "max_absolute_error": "0",
+            "passed": true,
+            "period": 20,
+            "price_tick": "0.10"
+          }
+        ],
+        "price_precision": 2,
+        "row_count": 96
+      },
+      {
+        "bar_type": "ETHUSDT-PERP.BINANCE-15-MINUTE-LAST-EXTERNAL",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "periods": [
+          {
+            "compared_points": 87,
+            "max_absolute_error": "0.01",
+            "passed": true,
+            "period": 10,
+            "price_tick": "0.01"
+          },
+          {
+            "compared_points": 77,
+            "max_absolute_error": "0",
+            "passed": true,
+            "period": 20,
+            "price_tick": "0.01"
+          }
+        ],
+        "price_precision": 2,
+        "row_count": 96
+      }
+    ],
+    "start": "2020-01-01T00:00:00Z"
+  },
+  "source_manifest_digest": "de86d44c73117e17af2bbcb655cf1c8d4290043fa8854636cc0e4e592a1dc790",
   "splits": {
     "test": [
       "2025-01-01T00:00:00Z",

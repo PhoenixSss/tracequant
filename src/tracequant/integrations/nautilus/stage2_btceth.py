@@ -1498,7 +1498,24 @@ def _assert_crosscheck_bars(
             raise Stage2DataError("nautilus cross-check instrument does not match")
         if int(catalog_bar.ts_event) != int(nautilus_bar.ts_event):
             raise Stage2DataError("nautilus cross-check timestamp does not match")
-        if str(catalog_bar.close) != str(nautilus_bar.close):
+        catalog_prices = (
+            catalog_bar.open,
+            catalog_bar.high,
+            catalog_bar.low,
+            catalog_bar.close,
+        )
+        nautilus_prices = (
+            nautilus_bar.open,
+            nautilus_bar.high,
+            nautilus_bar.low,
+            nautilus_bar.close,
+        )
+        if any(
+            Decimal(str(catalog_price)) != Decimal(str(nautilus_price))
+            for catalog_price, nautilus_price in zip(
+                catalog_prices, nautilus_prices, strict=True
+            )
+        ):
             raise Stage2DataError("nautilus cross-check price does not match")
 
 
