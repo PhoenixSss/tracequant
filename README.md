@@ -7,11 +7,16 @@ establishes package ownership, and provides mechanical guards for that boundary.
 The repository also includes the approved Local Control Kernel (LCK) engineering
 tooling under `tools/lck/`; LCK is not part of the TraceQuant product runtime.
 
-Stage 1 currently implements one selected BTCUSDT 1h historical Bar path into
-Nautilus `ParquetDataCatalog` and one Nautilus-native SMA crossover offline
-backtest. There is no Demo mode or Live mode in this tree. The project is
-`OFFLINE_BACKTEST_ONLY` and `LIVE_NOT_APPROVED`; live trading cannot be enabled
-by configuration.
+Stages 1 and 2 are complete. Stage 1 implements one selected BTCUSDT 1h
+historical Bar path into Nautilus `ParquetDataCatalog` and one Nautilus-native
+SMA crossover offline backtest. Stage 2 imports the accepted BTC/ETH
+`binance-usdm-btceth-202001-202608-r1` dataset — 15m/1h/4h Bars, 15m mark price,
+and funding — into one Nautilus catalog, and serves both the read-only Polars
+research views and `BacktestNode` from that same catalog. Stage 3 is not
+implemented: this tree contains no feature or label contract, no model
+artifact, and no momentum or LightGBM strategy. There is no Demo mode or Live
+mode in this tree. The project remains `OFFLINE_BACKTEST_ONLY` and
+`LIVE_NOT_APPROVED`; live trading cannot be enabled by configuration.
 
 ## Bootstrap environment
 
@@ -51,6 +56,29 @@ Run the stage 1 backtest acceptance test:
 ```bash
 uv run --frozen pytest tests/acceptance/test_stage1_backtest.py::test_stage1_native_strategy_completes_offline_backtest
 ```
+
+## Current stage status
+
+The repository is between stages. Stage 1 and stage 2 capabilities are
+implemented and accepted; stage 3 is specified but not implemented.
+
+| Stage | Status | Where it lives |
+| --- | --- | --- |
+| Stage 1: minimal offline loop | complete | [stage 1 backtest](#stage-1-offline-backtest) above |
+| Stage 2: Nautilus-homologous data | complete and accepted | [stage 2 requirements](docs/product/stage-2-data-and-research-requirements.md) |
+| Stage 3: strategy and model loop | specified only, not implemented | [stage 3 requirements](docs/product/stage-3-strategy-and-model-requirements.md) |
+
+The accepted stage 2 dataset identity is tracked in
+[`docs/product/stage2-btceth-dataset-acceptance.json`](docs/product/stage2-btceth-dataset-acceptance.json).
+Its tracked `acceptance_digest`, `dataset_digest`, `source_manifest_digest`,
+`market_data_manifest_digest`, instrument snapshot checksum, and
+`runtime_identity` are the frozen input identity for every later stage. A
+successful ordinary catalog identity check is not by itself proof that a
+catalog is that accepted dataset.
+
+Both statuses above stay offline: `OFFLINE_BACKTEST_ONLY` and
+`LIVE_NOT_APPROVED`. Reaching the end of stage 3 requires no profit threshold
+and grants no Demo admission.
 
 ## LCK: an engineering capability within TraceQuant
 
