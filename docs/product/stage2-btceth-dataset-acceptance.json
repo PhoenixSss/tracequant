@@ -1,4 +1,5 @@
 {
+  "acceptance_digest": "5909c878a81f0cdea85a8b8f86efd36d9c9bad5b3f3fb4c0f9960bb0551609cd",
   "catalog_evidence": {
     "coverage_filename": "stage2_coverage.json",
     "dataset_digest_filename": "stage2_dataset_digest.json",
@@ -180,37 +181,6 @@
   "dataset_id": "binance-usdm-btceth-202001-202608-r1",
   "expected_source_count": 800,
   "expected_source_inventory_digest": "0d5c8b384098ba7730d814739b4c4549e7bcf01a12c9c69eec614e6fbb0dc816",
-  "funding_settlement": {
-    "passed": true,
-    "series": [
-      {
-        "account_event_delta": 14608,
-        "balance_delta": "-36143.23314545",
-        "catalog_event_count": 7305,
-        "delivered_event_count": 7305,
-        "instrument_id": "BTCUSDT-PERP.BINANCE",
-        "iteration_delta": 7305,
-        "passed": true,
-        "position_count": 1,
-        "position_open_ts_event": 1577841299999000000,
-        "settlement_count": 7304,
-        "settlement_eligible_event_count": 7304
-      },
-      {
-        "account_event_delta": 14608,
-        "balance_delta": "-1738.89259446",
-        "catalog_event_count": 7305,
-        "delivered_event_count": 7305,
-        "instrument_id": "ETHUSDT-PERP.BINANCE",
-        "iteration_delta": 7305,
-        "passed": true,
-        "position_count": 1,
-        "position_open_ts_event": 1577837699999000000,
-        "settlement_count": 7304,
-        "settlement_eligible_event_count": 7304
-      }
-    ]
-  },
   "generation_command": "uv run --frozen python -m tracequant.integrations.nautilus.stage2_btceth",
   "homology": {
     "test:BTCUSDT-PERP.BINANCE:bars": {
@@ -1458,7 +1428,7 @@
   "nautilus_tail_enabled": false,
   "nautilus_version": "2.0.0rc4",
   "runtime_identity": "2.0.0rc4+a0400251110653b6d8ae6a9b5b89c4543fa85a2d",
-  "schema": "tracequant-stage2-acceptance-v1",
+  "schema": "tracequant-stage2-acceptance-v2",
   "sma_parity": {
     "end": "2020-01-02T00:00:00Z",
     "interval": "15m",

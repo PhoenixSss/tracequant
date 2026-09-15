@@ -5,34 +5,21 @@ import hashlib
 import io
 import json
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from nautilus_trader.backtest import (
-    BacktestDataConfig,
-    BacktestEngineConfig,
-    BacktestNode,
-    BacktestRunConfig,
-    BacktestVenueConfig,
-)
-from nautilus_trader.common import LoggerConfig, LogLevel
 from nautilus_trader.model import (
-    AccountType,
     Bar,
     CryptoPerpetual,
     Currency,
     FundingRateUpdate,
     InstrumentId,
-    OmsType,
-    OrderSide,
     Price,
     Quantity,
     Symbol,
-    TraderId,
 )
-from nautilus_trader.trading import Strategy, StrategyConfig
 
 from tracequant.integrations.nautilus import UPSTREAM_RELEASE_IDENTITY
 from tracequant.integrations.nautilus.stage2_btceth import (
@@ -47,7 +34,6 @@ from tracequant.integrations.nautilus.stage2_btceth import (
     prepare_stage2_dataset,
     query_stage2_bars,
     require_no_index_or_1m_reference,
-    stage2_bar_type,
     stage2_price_spec,
     stage2_sma_parity,
 )
@@ -119,6 +105,7 @@ START_MS = 1577836800000
 BAR_COUNT_15M = 30
 CROSSCHECK_START = parse_utc(STAGE2_CROSSCHECK_START_ISO)
 ACCEPTANCE_KEYS = {
+    "acceptance_digest",
     "catalog_evidence",
     "coverage_summary",
     "crosscheck",
@@ -126,7 +113,6 @@ ACCEPTANCE_KEYS = {
     "dataset_id",
     "expected_source_count",
     "expected_source_inventory_digest",
-    "funding_settlement",
     "generation_command",
     "homology",
     "include_index_price",
@@ -497,6 +483,8 @@ def _allow_sparse_archive_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
         instrument_id: str,
         interval: str,
         source_checksum: str,
+        window_start: datetime | None = None,
+        window_end: datetime | None = None,
     ) -> Stage2SeriesCoverage:
         return Stage2SeriesCoverage(
             instrument_id=instrument_id,
@@ -516,6 +504,8 @@ def _allow_sparse_archive_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
         *,
         instrument_id: str,
         source_checksum: str,
+        window_start: datetime | None = None,
+        window_end: datetime | None = None,
     ) -> Stage2SeriesCoverage:
         coverage = _kline_coverage(
             rows,
@@ -541,6 +531,8 @@ def _allow_sparse_archive_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
         *,
         instrument_id: str,
         source_checksum: str,
+        window_start: datetime | None = None,
+        window_end: datetime | None = None,
     ) -> Stage2SeriesCoverage:
         return Stage2SeriesCoverage(
             instrument_id=instrument_id,
@@ -576,88 +568,6 @@ def _prepare_catalog(
     )
     assert written == catalog_path
     return catalog_path, manifest, coverage
-
-
-class _OpenLong(Strategy):
-    def __init__(self) -> None:
-        super().__init__(
-            StrategyConfig(oms_type=OmsType.NETTING, use_uuid_client_order_ids=False)
-        )
-        self._instrument_id = InstrumentId.from_str(BTC)
-        self._bar_type = stage2_bar_type(BTC, STAGE2_MARK_INTERVAL)
-        self._opened = False
-        self.funding_seen: list[tuple[int, str]] = []
-
-    def on_start(self) -> None:
-        self.subscribe_bars(self._bar_type)
-        self.subscribe_mark_prices(self._instrument_id)
-        self.subscribe_funding_rates(self._instrument_id)
-
-    def on_bar(self, bar: Bar) -> None:
-        if self._opened:
-            return
-        self.submit_order(
-            self.order_factory.market(
-                self._instrument_id, OrderSide.BUY, Quantity.from_str("1.000")
-            )
-        )
-        self._opened = True
-
-    def on_funding_rate(self, event: FundingRateUpdate) -> None:
-        self.funding_seen.append((int(event.ts_event), str(event.rate)))
-
-
-def _run_settlement(
-    catalog_path: Path, strategy: Strategy, *, include_funding: bool
-) -> dict[str, str]:
-    usdt = Currency.from_str("USDT")
-    venue = BacktestVenueConfig(
-        name="BINANCE",
-        oms_type=OmsType.NETTING,
-        account_type=AccountType.MARGIN,
-        starting_balances=["100000 USDT"],
-        base_currency=usdt,
-        default_leverage=Decimal("1"),
-        bar_execution=True,
-        use_random_ids=False,
-    )
-    engine_cfg = BacktestEngineConfig(
-        trader_id=TraderId.from_str("TRACEQUANT-001"),
-        bypass_logging=True,
-        run_analysis=False,
-        logging=LoggerConfig(bypass_logging=True, stdout_level=LogLevel.OFF),
-    )
-    data = [
-        BacktestDataConfig(
-            data_type="Bar",
-            catalog_path=str(catalog_path),
-            bar_types=[stage2_bar_type_str(BTC, STAGE2_MARK_INTERVAL)],
-        ),
-        BacktestDataConfig(
-            data_type="MarkPriceUpdate",
-            catalog_path=str(catalog_path),
-            instrument_id=InstrumentId.from_str(BTC),
-        ),
-    ]
-    if include_funding:
-        data.append(
-            BacktestDataConfig(
-                data_type="FundingRateUpdate",
-                catalog_path=str(catalog_path),
-                instrument_id=InstrumentId.from_str(BTC),
-            )
-        )
-    run_cfg = BacktestRunConfig(
-        venues=[venue],
-        data=data,
-        engine=engine_cfg,
-        dispose_on_completion=True,
-    )
-    node = BacktestNode([run_cfg])
-    node.build()
-    node.add_strategy(run_cfg.id, strategy)
-    results = node.run()
-    return dict(results[0].summary)
 
 
 def test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog(
@@ -719,19 +629,7 @@ def test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog(
         == set(STAGE2_SMA_PARITY_PERIODS)
         for item in sma_parity["series"]
     )
-    settlement = record["funding_settlement"]
-    assert isinstance(settlement, dict)
-    assert settlement["passed"] is True
-    assert {item["instrument_id"] for item in settlement["series"]} == set(
-        STAGE2_INSTRUMENT_IDS
-    )
-    assert all(
-        item["delivered_event_count"] == item["catalog_event_count"]
-        and item["iteration_delta"] == item["catalog_event_count"]
-        and item["position_count"] == 1
-        and item["settlement_count"] == item["settlement_eligible_event_count"]
-        for item in settlement["series"]
-    )
+    assert "funding_settlement" not in record
     require_no_index_or_1m_reference(catalog_path)
     require_tail_disabled()
     assert STAGE2_NAUTILUS_TAIL_ENABLED is False
@@ -847,18 +745,6 @@ def test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog(
         tick=Decimal(tick),
     )
 
-    long_off = _OpenLong()
-    long_on = _OpenLong()
-    without = _run_settlement(catalog_path, long_off, include_funding=False)
-    with_funding = _run_settlement(catalog_path, long_on, include_funding=True)
-    assert long_on.funding_seen
-    assert Decimal(
-        with_funding["account.BINANCE.balance.USDT.total"].split()[0]
-    ) != Decimal(without["account.BINANCE.balance.USDT.total"].split()[0])
-    assert int(with_funding["iterations"]) == int(without["iterations"]) + len(
-        long_on.funding_seen
-    )
-
     tracked = json.loads(ACCEPTANCE_RECORD.read_text(encoding="utf-8"))
     require_no_local_absolute_paths(tracked)
     assert ACCEPTANCE_KEYS <= set(tracked)
@@ -888,11 +774,22 @@ def test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog(
     failed_parity["sma_parity"]["passed"] = False
     with pytest.raises(Stage2DataError, match="SMA parity"):
         require_complete_acceptance_record(failed_parity)
-    failed_settlement = json.loads(json.dumps(record))
-    failed_settlement["funding_settlement"]["series"][0]["settlement_count"] -= 1
-    with pytest.raises(Stage2DataError, match="funding settlement"):
-        require_complete_acceptance_record(failed_settlement)
-
+    mismatched_crosscheck = json.loads(json.dumps(record))
+    mismatched_crosscheck["crosscheck"]["compared_records"] += 1
+    with pytest.raises(Stage2DataError, match="cross-check count"):
+        require_complete_acceptance_record(mismatched_crosscheck)
+    mismatched_homology = json.loads(json.dumps(record))
+    mismatched_homology["homology"][f"train:{BTC}:bars"]["row_count"] += 1
+    with pytest.raises(Stage2DataError, match="homology does not match"):
+        require_complete_acceptance_record(mismatched_homology)
+    mismatched_index = json.loads(json.dumps(record))
+    mismatched_index["index_coverage"]["checksum_available"] = False
+    with pytest.raises(Stage2DataError, match="index coverage"):
+        require_complete_acceptance_record(mismatched_index)
+    unbound_evidence = json.loads(json.dumps(record))
+    unbound_evidence["crosscheck"]["source"] = "changed-without-new-digest"
+    with pytest.raises(Stage2DataError, match="record digest"):
+        require_complete_acceptance_record(unbound_evidence)
     written_coverage = json.loads(
         (catalog_path / "stage2_coverage.json").read_text(encoding="utf-8")
     )
@@ -1143,6 +1040,50 @@ def test_cross_month_funding_gap_fails() -> None:
             rows,
             instrument_id=BTC,
             source_checksum="abc",
+        )
+
+
+@pytest.mark.parametrize("remove", ["leading", "trailing"])
+def test_complete_kline_and_mark_series_reject_missing_dataset_edges(
+    remove: str,
+) -> None:
+    window_start = parse_utc(STAGE2_WINDOW_START_ISO)
+    window_end = window_start + timedelta(minutes=45)
+    rows = _kline_rows(BTC, "15m", 3, unix_millis(window_start))
+    incomplete = rows[1:] if remove == "leading" else rows[:-1]
+    for validator in (validate_kline_series, validate_mark_series):
+        kwargs: dict[str, object] = {
+            "instrument_id": BTC,
+            "source_checksum": "abc",
+            "window_start": window_start,
+            "window_end": window_end,
+        }
+        if validator is validate_kline_series:
+            kwargs["interval"] = "15m"
+        with pytest.raises(Stage2DataError, match="declared window"):
+            validator(incomplete, **kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("remove", ["leading", "trailing"])
+def test_complete_funding_series_rejects_missing_dataset_edges(remove: str) -> None:
+    window_start = parse_utc(STAGE2_WINDOW_START_ISO)
+    window_end = window_start + timedelta(hours=24)
+    rows = tuple(
+        Stage2FundingRow(
+            str(unix_millis(window_start + timedelta(hours=offset))),
+            "8",
+            "0.0001",
+        )
+        for offset in (0, 8, 16)
+    )
+    incomplete = rows[1:] if remove == "leading" else rows[:-1]
+    with pytest.raises(Stage2DataError, match="declared window"):
+        validate_funding_series(
+            incomplete,
+            instrument_id=BTC,
+            source_checksum="abc",
+            window_start=window_start,
+            window_end=window_end,
         )
 
 

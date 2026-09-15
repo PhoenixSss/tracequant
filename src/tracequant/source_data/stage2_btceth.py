@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 STAGE2_CONFIG_SCHEMA: Final = "tracequant-stage2-dataset-v1"
 STAGE2_SOURCE_SCHEMA: Final = "tracequant-stage2-source-v1"
@@ -39,7 +39,7 @@ STAGE2_MANIFEST_FILENAME: Final = "stage2_source_manifest.json"
 STAGE2_COVERAGE_FILENAME: Final = "stage2_coverage.json"
 STAGE2_INSTRUMENT_SNAPSHOT_FILENAME: Final = "stage2_instrument_snapshot.json"
 STAGE2_DIGEST_FILENAME: Final = "stage2_dataset_digest.json"
-STAGE2_ACCEPTANCE_SCHEMA: Final = "tracequant-stage2-acceptance-v1"
+STAGE2_ACCEPTANCE_SCHEMA: Final = "tracequant-stage2-acceptance-v2"
 STAGE2_PUBLIC_DATA_ORIGIN: Final = "https://data.binance.vision"
 STAGE2_KLINE_ROOT: Final = "data/futures/um/monthly/klines"
 STAGE2_MARK_ROOT: Final = "data/futures/um/monthly/markPriceKlines"
@@ -801,6 +801,8 @@ def validate_funding_series(
     *,
     instrument_id: str,
     source_checksum: str,
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
 ) -> Stage2SeriesCoverage:
     if instrument_id not in STAGE2_INSTRUMENT_SYMBOLS:
         raise Stage2DataError("instrument is not a stage 2 target")
@@ -840,6 +842,20 @@ def validate_funding_series(
         raise Stage2DataError("funding series is out of order")
     if gap_count:
         raise Stage2DataError("funding series contains a gap")
+    if (window_start is None) != (window_end is None):
+        raise Stage2DataError("funding coverage window is incomplete")
+    if window_start is not None and window_end is not None:
+        expected_start = unix_millis(window_start)
+        expected_end = unix_millis(window_end)
+        first_time = _require_int_string(rows[0].calc_time, field="calc_time")
+        last_time = _require_int_string(rows[-1].calc_time, field="calc_time")
+        last_interval_ms = funding_interval_minutes(rows[-1]) * 60 * 1000
+        if (
+            abs(first_time - expected_start) > STAGE2_FUNDING_SCHEDULE_TOLERANCE_MS
+            or abs(last_time + last_interval_ms - expected_end)
+            > STAGE2_FUNDING_SCHEDULE_TOLERANCE_MS
+        ):
+            raise Stage2DataError("funding series does not cover the declared window")
     return Stage2SeriesCoverage(
         instrument_id=instrument_id,
         data_type=STAGE2_DATA_TYPE_FUNDING,
@@ -860,12 +876,16 @@ def validate_mark_series(
     *,
     instrument_id: str,
     source_checksum: str,
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
 ) -> Stage2SeriesCoverage:
     coverage = validate_kline_series(
         rows,
         instrument_id=instrument_id,
         interval=STAGE2_MARK_INTERVAL,
         source_checksum=source_checksum,
+        window_start=window_start,
+        window_end=window_end,
         _allowed_gaps=STAGE2_MARK_ALLOWED_GAPS,
     )
     return Stage2SeriesCoverage(
@@ -977,6 +997,8 @@ def validate_kline_series(
     instrument_id: str,
     interval: str,
     source_checksum: str,
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
     _allowed_gaps: tuple[tuple[int, int], ...] = (),
 ) -> Stage2SeriesCoverage:
     if instrument_id not in STAGE2_INSTRUMENT_SYMBOLS:
@@ -1018,6 +1040,15 @@ def validate_kline_series(
         raise Stage2DataError("kline series is out of order")
     if unexplained_gap_count:
         raise Stage2DataError("kline series contains a gap")
+    if (window_start is None) != (window_end is None):
+        raise Stage2DataError("kline coverage window is incomplete")
+    if window_start is not None and window_end is not None:
+        expected_start = unix_millis(window_start)
+        expected_end = unix_millis(window_end)
+        first_open = _require_int_string(rows[0].open_time, field="open_time")
+        last_open = _require_int_string(rows[-1].open_time, field="open_time")
+        if first_open != expected_start or last_open + interval_ms != expected_end:
+            raise Stage2DataError("kline series does not cover the declared window")
     return Stage2SeriesCoverage(
         instrument_id=instrument_id,
         data_type=STAGE2_DATA_TYPE_BARS,
@@ -1395,6 +1426,12 @@ def dataset_digest(
     )
 
 
+def acceptance_record_digest(record: Mapping[str, object]) -> str:
+    return _canonical_digest(
+        {key: value for key, value in record.items() if key != "acceptance_digest"}
+    )
+
+
 def build_stage2_acceptance_record(
     *,
     manifest: Stage2SourceManifest,
@@ -1403,7 +1440,6 @@ def build_stage2_acceptance_record(
     crosscheck: Mapping[str, object],
     homology: Mapping[str, object],
     sma_parity: Mapping[str, object],
-    funding_settlement: Mapping[str, object] | None = None,
     checksum_probe: Callable[[str], bool] | None = None,
     index_coverage: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
@@ -1440,7 +1476,6 @@ def build_stage2_acceptance_record(
         "expected_source_count": STAGE2_EXPECTED_SOURCE_COUNT,
         "expected_source_inventory_digest": expected_source_inventory_digest(),
         "generation_command": STAGE2_GENERATION_COMMAND,
-        "funding_settlement": dict(funding_settlement or {}),
         "homology": dict(homology),
         "instrument_snapshot": manifest.instrument_snapshot_identity(),
         "market_data_manifest_digest": market_data_manifest_digest(manifest),
@@ -1462,6 +1497,7 @@ def build_stage2_acceptance_record(
             "test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog"
         ),
     }
+    record["acceptance_digest"] = acceptance_record_digest(record)
     require_complete_acceptance_record(record)
     require_no_local_absolute_paths(record)
     return record
@@ -1473,6 +1509,32 @@ def require_complete_acceptance_record(
     require_gap_fill_sources: bool = False,
     require_live_crosscheck: bool = False,
 ) -> None:
+    expected_keys = {
+        "acceptance_digest",
+        "catalog_evidence",
+        "coverage_summary",
+        "crosscheck",
+        "dataset_digest",
+        "dataset_id",
+        "expected_source_count",
+        "expected_source_inventory_digest",
+        "generation_command",
+        "homology",
+        "include_index_price",
+        "index_coverage",
+        "instrument_snapshot",
+        "market_data_manifest_digest",
+        "nautilus_tail_enabled",
+        "nautilus_version",
+        "runtime_identity",
+        "schema",
+        "sma_parity",
+        "source_manifest_digest",
+        "splits",
+        "verification_test",
+    }
+    if set(record) != expected_keys:
+        raise Stage2DataError("acceptance record fields do not match the schema")
     if record.get("schema") != STAGE2_ACCEPTANCE_SCHEMA:
         raise Stage2DataError("acceptance record schema does not match")
     if record.get("dataset_id") != STAGE2_DATASET_ID:
@@ -1483,9 +1545,46 @@ def require_complete_acceptance_record(
         expected_source_inventory_digest()
     ):
         raise Stage2DataError("acceptance record source inventory does not match")
+    if record.get("generation_command") != STAGE2_GENERATION_COMMAND:
+        raise Stage2DataError("acceptance record generation command does not match")
+    if record.get("nautilus_version") != STAGE2_NAUTILUS_VERSION:
+        raise Stage2DataError("acceptance record Nautilus identity does not match")
+    if record.get("verification_test") != (
+        "tests/acceptance/test_stage2_dataset.py::"
+        "test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog"
+    ):
+        raise Stage2DataError("acceptance record verification test does not match")
+    if record.get("include_index_price") is not False:
+        raise Stage2DataError("acceptance record index policy does not match")
+    if record.get("nautilus_tail_enabled") is not False:
+        raise Stage2DataError("acceptance record tail policy does not match")
+    expected_splits = {
+        "test": ["2025-01-01T00:00:00Z", STAGE2_WINDOW_END_ISO],
+        "train": [STAGE2_WINDOW_START_ISO, "2024-01-01T00:00:00Z"],
+        "validation": ["2024-01-01T00:00:00Z", "2025-01-01T00:00:00Z"],
+    }
+    if record.get("splits") != expected_splits:
+        raise Stage2DataError("acceptance record splits do not match")
+    index_coverage = record.get("index_coverage")
+    expected_index_coverage = stage2_index_coverage_conclusion(
+        checksum_probe=lambda _url: True
+    )
+    if index_coverage != expected_index_coverage:
+        raise Stage2DataError("acceptance record index coverage does not match")
     evidence = record.get("catalog_evidence")
     if not isinstance(evidence, Mapping):
         raise Stage2DataError("acceptance record catalog evidence is missing")
+    if set(evidence) != {
+        "coverage_filename",
+        "dataset_digest_filename",
+        "instrument_snapshot_filename",
+        "source_manifest_filename",
+        "source_object_count",
+        "supplemental_source_count",
+    }:
+        raise Stage2DataError(
+            "acceptance record catalog evidence schema does not match"
+        )
     if evidence.get("source_manifest_filename") != STAGE2_MANIFEST_FILENAME:
         raise Stage2DataError("acceptance record source manifest locator is missing")
     if evidence.get("coverage_filename") != STAGE2_COVERAGE_FILENAME:
@@ -1521,6 +1620,10 @@ def require_complete_acceptance_record(
     instrument_snapshot = record.get("instrument_snapshot")
     if not isinstance(instrument_snapshot, Mapping):
         raise Stage2DataError("acceptance record instrument snapshot is missing")
+    if set(instrument_snapshot) != {"checksum_sha256", "fetched_at", "filename"}:
+        raise Stage2DataError(
+            "acceptance record instrument snapshot schema does not match"
+        )
     if instrument_snapshot.get("filename") != STAGE2_INSTRUMENT_SNAPSHOT_FILENAME:
         raise Stage2DataError(
             "acceptance record instrument snapshot locator is missing"
@@ -1567,6 +1670,8 @@ def require_complete_acceptance_record(
     sma_parity = record.get("sma_parity")
     if not isinstance(sma_parity, Mapping) or sma_parity.get("passed") is not True:
         raise Stage2DataError("acceptance record SMA parity is missing")
+    if set(sma_parity) != {"end", "interval", "passed", "series", "start"}:
+        raise Stage2DataError("acceptance record SMA parity schema does not match")
     if (
         sma_parity.get("start") != STAGE2_SMA_PARITY_START_ISO
         or sma_parity.get("end") != STAGE2_SMA_PARITY_END_ISO
@@ -1582,77 +1687,69 @@ def require_complete_acceptance_record(
     for item in sma_series:
         if not isinstance(item, Mapping):
             raise Stage2DataError("acceptance record SMA parity series is invalid")
+        if set(item) != {
+            "bar_type",
+            "instrument_id",
+            "periods",
+            "price_precision",
+            "row_count",
+        }:
+            raise Stage2DataError("acceptance record SMA parity schema does not match")
         instrument_id = item.get("instrument_id")
-        if not isinstance(instrument_id, str):
+        row_count = item.get("row_count")
+        if (
+            not isinstance(instrument_id, str)
+            or instrument_id not in STAGE2_INSTRUMENT_IDS
+            or item.get("bar_type")
+            != stage2_bar_type_str(instrument_id, STAGE2_SMA_PARITY_INTERVAL)
+            or not isinstance(row_count, int)
+            or row_count <= max(STAGE2_SMA_PARITY_PERIODS)
+            or not isinstance(item.get("price_precision"), int)
+            or item["price_precision"] < 0
+        ):
             raise Stage2DataError("acceptance record SMA parity instrument is invalid")
         results = item.get("periods")
         if not isinstance(results, list) or {
             result.get("period") for result in results if isinstance(result, Mapping)
         } != set(STAGE2_SMA_PARITY_PERIODS):
             raise Stage2DataError("acceptance record SMA parity periods are incomplete")
-        if any(
-            not isinstance(result, Mapping)
-            or result.get("passed") is not True
-            or not isinstance(result.get("compared_points"), int)
-            or result["compared_points"] <= 0
-            for result in results
-        ):
-            raise Stage2DataError("acceptance record SMA parity contains failures")
+        for result in results:
+            if not isinstance(result, Mapping):
+                raise Stage2DataError("acceptance record SMA parity contains failures")
+            if set(result) != {
+                "compared_points",
+                "max_absolute_error",
+                "passed",
+                "period",
+                "price_tick",
+            }:
+                raise Stage2DataError(
+                    "acceptance record SMA parity schema does not match"
+                )
+            period = result.get("period")
+            compared_points = result.get("compared_points")
+            try:
+                error = Decimal(str(result.get("max_absolute_error")))
+                price_tick = Decimal(str(result.get("price_tick")))
+            except InvalidOperation as exc:
+                raise Stage2DataError(
+                    "acceptance record SMA parity contains failures"
+                ) from exc
+            if (
+                result.get("passed") is not True
+                or not isinstance(period, int)
+                or not isinstance(compared_points, int)
+                or compared_points != row_count - period + 1
+                or not error.is_finite()
+                or error < 0
+                or not price_tick.is_finite()
+                or price_tick <= 0
+                or error > price_tick
+            ):
+                raise Stage2DataError("acceptance record SMA parity contains failures")
         observed_sma.add(instrument_id)
     if observed_sma != set(STAGE2_INSTRUMENT_IDS):
         raise Stage2DataError("acceptance record SMA parity instruments are incomplete")
-
-    funding_settlement = record.get("funding_settlement")
-    if (
-        not isinstance(funding_settlement, Mapping)
-        or funding_settlement.get("passed") is not True
-    ):
-        raise Stage2DataError("acceptance record funding settlement is missing")
-    settlement_series = funding_settlement.get("series")
-    if not isinstance(settlement_series, list) or len(settlement_series) != len(
-        STAGE2_INSTRUMENT_IDS
-    ):
-        raise Stage2DataError("acceptance record funding settlement is incomplete")
-    observed_settlement: set[str] = set()
-    settlement_counts: dict[str, int] = {}
-    for item in settlement_series:
-        if not isinstance(item, Mapping):
-            raise Stage2DataError("acceptance record funding settlement is invalid")
-        instrument_id = item.get("instrument_id")
-        catalog_count = item.get("catalog_event_count")
-        eligible_count = item.get("settlement_eligible_event_count")
-        balance_delta = item.get("balance_delta")
-        try:
-            parsed_balance_delta = (
-                Decimal(balance_delta) if isinstance(balance_delta, str) else Decimal(0)
-            )
-        except InvalidOperation:
-            parsed_balance_delta = Decimal(0)
-        if (
-            not isinstance(instrument_id, str)
-            or not isinstance(catalog_count, int)
-            or catalog_count <= 0
-            or not isinstance(eligible_count, int)
-            or eligible_count <= 0
-            or item.get("delivered_event_count") != catalog_count
-            or item.get("iteration_delta") != catalog_count
-            or item.get("settlement_count") != eligible_count
-            or item.get("account_event_delta") != eligible_count * 2
-            or item.get("position_count") != 1
-            or not isinstance(item.get("position_open_ts_event"), int)
-            or not parsed_balance_delta.is_finite()
-            or parsed_balance_delta == 0
-            or item.get("passed") is not True
-        ):
-            raise Stage2DataError(
-                "acceptance record funding settlement contains failures"
-            )
-        observed_settlement.add(instrument_id)
-        settlement_counts[instrument_id] = catalog_count
-    if observed_settlement != set(STAGE2_INSTRUMENT_IDS):
-        raise Stage2DataError(
-            "acceptance record funding settlement instruments are incomplete"
-        )
 
     coverage = record.get("coverage_summary")
     if not isinstance(coverage, list) or len(coverage) != 10:
@@ -1670,19 +1767,37 @@ def require_complete_acceptance_record(
         for instrument_id in STAGE2_INSTRUMENT_IDS
     )
     observed_coverage: set[tuple[object, object, object]] = set()
+    coverage_by_series: dict[tuple[str, str], Mapping[str, object]] = {}
     for item in coverage:
         if not isinstance(item, Mapping):
             raise Stage2DataError("acceptance record coverage entry is invalid")
+        expected_coverage_keys = {
+            "data_type",
+            "dataset_id",
+            "duplicate_count",
+            "first_ts_event",
+            "gap_count",
+            "gap_explanation",
+            "instrument_id",
+            "last_ts_event",
+            "out_of_order_count",
+            "row_count",
+            "source_sha256",
+        }
+        if item.get("data_type") != STAGE2_DATA_TYPE_FUNDING:
+            expected_coverage_keys.add("bar_type")
+        if set(item) != expected_coverage_keys:
+            raise Stage2DataError("acceptance record coverage schema does not match")
+        if item.get("dataset_id") != STAGE2_DATASET_ID:
+            raise Stage2DataError("acceptance record coverage dataset does not match")
         if not isinstance(item.get("row_count"), int) or item["row_count"] <= 0:
             raise Stage2DataError("acceptance record coverage is empty")
-        coverage_instrument = item.get("instrument_id")
-        if item.get("data_type") == STAGE2_DATA_TYPE_FUNDING and (
-            not isinstance(coverage_instrument, str)
-            or settlement_counts.get(coverage_instrument) != item.get("row_count")
+        if (
+            not isinstance(item.get("first_ts_event"), int)
+            or not isinstance(item.get("last_ts_event"), int)
+            or item["first_ts_event"] > item["last_ts_event"]
         ):
-            raise Stage2DataError(
-                "acceptance record funding settlement does not cover the catalog"
-            )
+            raise Stage2DataError("acceptance record coverage range is invalid")
         if any(item.get(key) != 0 for key in ("duplicate_count", "out_of_order_count")):
             raise Stage2DataError("acceptance record coverage contains failures")
         if item.get("gap_count") != 0 and not (
@@ -1705,12 +1820,28 @@ def require_complete_acceptance_record(
                 item.get("bar_type", ""),
             )
         )
+        data_type = item.get("data_type")
+        instrument_id = item.get("instrument_id")
+        if isinstance(data_type, str) and isinstance(instrument_id, str):
+            if data_type == STAGE2_DATA_TYPE_FUNDING or item.get(
+                "bar_type"
+            ) == stage2_bar_type_str(instrument_id, "1h"):
+                coverage_by_series[(instrument_id, data_type)] = item
     if observed_coverage != expected_coverage:
         raise Stage2DataError("acceptance record coverage identities are incomplete")
 
     crosscheck = record.get("crosscheck")
     if not isinstance(crosscheck, Mapping):
         raise Stage2DataError("acceptance record cross-check is missing")
+    if set(crosscheck) != {
+        "compared_records",
+        "end",
+        "series",
+        "source",
+        "start",
+        "written_to_catalog",
+    }:
+        raise Stage2DataError("acceptance record cross-check schema does not match")
     if (
         not isinstance(crosscheck.get("compared_records"), int)
         or crosscheck["compared_records"] <= 0
@@ -1721,11 +1852,17 @@ def require_complete_acceptance_record(
         raise Stage2DataError("acceptance record cross-check series are incomplete")
     if any(
         not isinstance(item, Mapping)
+        or set(item) != {"data_type", "instrument_id", "row_count"}
         or not isinstance(item.get("row_count"), int)
         or item["row_count"] <= 0
         for item in crosscheck_series
     ):
         raise Stage2DataError("acceptance record cross-check series are empty")
+    compared_records = sum(
+        item["row_count"] for item in crosscheck_series if isinstance(item, Mapping)
+    )
+    if crosscheck.get("compared_records") != compared_records:
+        raise Stage2DataError("acceptance record cross-check count does not match")
     observed_crosscheck = {
         (item.get("data_type"), item.get("instrument_id"))
         for item in crosscheck_series
@@ -1759,13 +1896,81 @@ def require_complete_acceptance_record(
     }
     if not isinstance(homology, Mapping) or set(homology) != expected_homology:
         raise Stage2DataError("acceptance record homology is incomplete")
-    if any(
-        not isinstance(item, Mapping)
-        or not isinstance(item.get("row_count"), int)
-        or item["row_count"] <= 0
-        for item in homology.values()
+    validated_homology: dict[str, Mapping[str, object]] = {}
+    for split in ("train", "validation", "test"):
+        for instrument_id in STAGE2_INSTRUMENT_IDS:
+            for data_type in (STAGE2_DATA_TYPE_BARS, STAGE2_DATA_TYPE_FUNDING):
+                key = f"{split}:{instrument_id}:{data_type}"
+                item = homology[key]
+                expected_bar_type = (
+                    stage2_bar_type_str(instrument_id, "1h")
+                    if data_type == STAGE2_DATA_TYPE_BARS
+                    else None
+                )
+                if (
+                    not isinstance(item, Mapping)
+                    or set(item)
+                    != {
+                        "data_type",
+                        "dataset_id",
+                        "first_ts_event",
+                        "instrument_id",
+                        "last_ts_event",
+                        "row_count",
+                        *(
+                            {"bar_type"}
+                            if data_type == STAGE2_DATA_TYPE_BARS
+                            else set()
+                        ),
+                    }
+                    or item.get("dataset_id") != STAGE2_DATASET_ID
+                    or item.get("instrument_id") != instrument_id
+                    or item.get("data_type") != data_type
+                    or (
+                        data_type == STAGE2_DATA_TYPE_BARS
+                        and item.get("bar_type") != expected_bar_type
+                    )
+                    or not isinstance(item.get("row_count"), int)
+                    or item["row_count"] <= 0
+                    or not isinstance(item.get("first_ts_event"), int)
+                    or not isinstance(item.get("last_ts_event"), int)
+                    or item["first_ts_event"] > item["last_ts_event"]
+                ):
+                    raise Stage2DataError(
+                        "acceptance record homology contains invalid windows"
+                    )
+                validated_homology[key] = item
+
+    for instrument_id in STAGE2_INSTRUMENT_IDS:
+        for data_type in (STAGE2_DATA_TYPE_BARS, STAGE2_DATA_TYPE_FUNDING):
+            windows = [
+                validated_homology[f"{split}:{instrument_id}:{data_type}"]
+                for split in ("train", "validation", "test")
+            ]
+            coverage_item = coverage_by_series[(instrument_id, data_type)]
+            if (
+                sum(cast(int, item["row_count"]) for item in windows)
+                != coverage_item.get("row_count")
+                or windows[0]["first_ts_event"] != coverage_item.get("first_ts_event")
+                or windows[-1]["last_ts_event"] != coverage_item.get("last_ts_event")
+                or any(
+                    cast(int, left["last_ts_event"])
+                    >= cast(int, right["first_ts_event"])
+                    for left, right in zip(windows, windows[1:])
+                )
+            ):
+                raise Stage2DataError(
+                    "acceptance record homology does not match catalog coverage"
+                )
+
+    acceptance_digest = record.get("acceptance_digest")
+    if (
+        not isinstance(acceptance_digest, str)
+        or not _is_sha256_string(acceptance_digest)
+        or acceptance_digest == "0" * 64
+        or acceptance_digest != acceptance_record_digest(record)
     ):
-        raise Stage2DataError("acceptance record homology contains empty windows")
+        raise Stage2DataError("acceptance record digest does not match")
 
 
 def require_no_local_absolute_paths(payload: object) -> None:
