@@ -2,12 +2,18 @@
 
 | 字段 | 值 |
 | --- | --- |
-| 文档状态 | 待维护者批准的实施基线 |
+| 文档状态 | 已批准并完成的实施基线（阶段 2 已验收） |
 | 文档版本 | `0.4` |
 | 日期 | `2026-09-14` |
 | 产品状态 | `OFFLINE_BACKTEST_ONLY`、`LIVE_NOT_APPROVED` |
 | 固定运行时 | NautilusTrader `2.0.0rc4` / `a0400251110653b6d8ae6a9b5b89c4543fa85a2d` |
+| 输入数据集 | `binance-usdm-btceth-202001-202608-r1`（已验收，见 `stage2-btceth-dataset-acceptance.json`） |
 | 上位计划 | [TraceQuant 分阶段推进计划](<../research/foundation-selection/TraceQuant 分阶段推进计划.md>) |
+
+阶段 2 已按本文档 §10 的退出条件完成验收，冻结的数据身份、数据内容、时间切分和
+acceptance digest 不再变更。后续阶段在本文档之上追加需求，不回写本文档的数据合同；
+阶段 3 的策略与模型需求见
+[阶段 3：策略与模型实施基线](stage-3-strategy-and-model-requirements.md) v0.1。
 
 ## 1. 目标
 
