@@ -3,7 +3,7 @@
 | 字段 | 值 |
 | --- | --- |
 | 文档状态 | 待维护者批准的实施基线 |
-| 文档版本 | `0.3` |
+| 文档版本 | `0.4` |
 | 日期 | `2026-09-14` |
 | 产品状态 | `OFFLINE_BACKTEST_ONLY`、`LIVE_NOT_APPROVED` |
 | 固定运行时 | NautilusTrader `2.0.0rc4` / `a0400251110653b6d8ae6a9b5b89c4543fa85a2d` |
@@ -128,6 +128,11 @@ Nautilus historical request 只允许用于：
 归档数据与尾部数据允许保留一个小型重叠窗口用于比对，但同一时间戳只能选择一个 canonical
 记录写入 catalog；来源和选择边界必须写入 manifest。
 
+固定七日 cross-check 的 1h Bar 通过 Nautilus rc4 Binance adapter 请求。rc4 adapter 对
+USD-M 历史 funding 请求返回空集合，因此同一窗口的 funding 对照通过 Binance 官方
+`/fapi/v1/fundingRate` REST 端点读取，再转换为 `FundingRateUpdate` 后比较 instrument、
+时间戳和 rate。该 REST 响应只用于交叉验证，不写入 canonical catalog，也不作为尾部补数。
+
 Binance 说明归档文件可能因修正而在日后更新。因此 manifest 保存本次实际下载的 URL 和官方
 checksum；同一路径的 checksum 后续发生变化时视为新的源版本，不覆盖已经验收的数据集。
 
@@ -232,6 +237,17 @@ test       = [2025-01-01, 2026-09-01)
 该配置共包含 `2 symbols x 5 series x 80 months = 800` 个数据 ZIP，以及对应 checksum。
 五类序列是 15m/1h/4h Bar、15m mark 和 funding。核查时 ZIP 总量约 42 MiB；该大小只作
 容量预估，不进入数据身份。Index coverage 核查不计入数据集文件数。
+
+`binance-usdm-btceth-202001-202608-r1` 的 monthly 15m mark 归档存在已由对应官方 daily
+ZIP 与 `.CHECKSUM` 复核的缺失区间。首个数据集额外固定 18 个 daily mark 来源对象：其中 16 个用于补齐
+monthly 归档在 `2021-07-01`、`2021-07-24..27`、`2022-07-31`、`2022-10-02`、
+`2023-02-24` 和 `2026-06-29` 的缺失记录；daily 与 monthly 重叠记录必须逐字段一致，否则
+验收失败。两个来源都缺少 `2020-01-19T13:15Z` 和 `2023-11-10T03:45Z` 这两个 15 分钟
+mark 区间，且两个区间内均无 funding 事件。这两处是该数据集唯一允许的、按精确前后时间戳
+识别的 mark gap；任何其他 Bar、mark 或 funding gap 均失败。800 个 monthly 对象保持主来源
+清单。另两个 `2019-12-31` daily 对象只为数据集左边界的首个 funding 提供前置 mark 新鲜度
+证据，不写入 canonical catalog。18 个 daily 对象作为 `supplemental_sources` 单独进入 source
+manifest 和数据集 digest。
 
 首个数据集还冻结以下映射：
 
@@ -401,8 +417,12 @@ test:       [validation_end, dataset_end)
 
 1. 两者使用同一个 `catalog_path`、instrument identity、data type、Bar type 和时间窗口；
 2. 研究视图是对 catalog 原生数据的只读投影，不是导入前数据的持久化副本；
-3. 价格、数量、时间戳和 funding rate 在 source -> native -> catalog -> research round-trip
-   中精确相等；
+3. Bar 的价格、数量和时间戳在 source -> native -> catalog -> research round-trip 中精确
+   相等；首个固定数据集对完整 funding 历史验证 source inventory、映射前字段，以及
+   catalog、research 和 BacktestNode 的记录数与时间范围一致。Funding rate、interval、
+   timestamp 的精确持久化与账户 exactly-once 语义由 `ST2-TEST-003`（Task #350）的代表性
+   native round-trip 和持仓测试覆盖，不要求对完整历史逐事件重跑账户结算，也不以聚合余额
+   变化替代 source completeness；
 4. `BacktestNode` 实际加载的记录数和时间范围与研究查询一致。
 
 必须有以下自动化测试：

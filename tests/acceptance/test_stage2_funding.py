@@ -51,6 +51,7 @@ from tracequant.source_data.stage2_btceth import (
     STAGE2_FUNDING_ROOT,
     STAGE2_INSTRUMENT_IDS,
     STAGE2_INTERVAL_MS,
+    STAGE2_MARK_ALLOWED_GAPS,
     STAGE2_MARK_INTERVAL,
     STAGE2_MARK_ROOT,
     STAGE2_WINDOW_END_ISO,
@@ -484,6 +485,12 @@ def test_header_and_headerless_funding_share_fixed_schema() -> None:
     assert headerless[1].funding_interval_hours == "4"
 
 
+def test_official_scientific_notation_funding_rate_is_valid() -> None:
+    window_start, window_end = stage2_window()
+    row = Stage2FundingRow("1578124800000", "8", "8.4E-7")
+    validate_funding_row(row, window_start=window_start, window_end=window_end)
+
+
 def test_checksum_mismatch_rejects_mark_funding_write(tmp_path: Path) -> None:
     raw_root = tmp_path / "raw"
     catalog_path = tmp_path / "catalog"
@@ -582,6 +589,30 @@ def test_missing_stale_or_future_mark_fails_funding_coverage() -> None:
     early = Stage2FundingRow(str(START_MS + 15 * 60 * 1000), "8", "0.0001")
     with pytest.raises(Stage2DataError, match="recent mark"):
         require_recent_mark_for_funding(future_only, [early])
+
+
+@pytest.mark.parametrize("previous_open,next_open", STAGE2_MARK_ALLOWED_GAPS)
+@pytest.mark.parametrize(
+    "funding_offset",
+    (
+        STAGE2_INTERVAL_MS[STAGE2_MARK_INTERVAL],
+        2 * STAGE2_INTERVAL_MS[STAGE2_MARK_INTERVAL] - 1,
+    ),
+)
+def test_funding_event_overlapping_allowed_mark_gap_fails(
+    previous_open: int,
+    next_open: int,
+    funding_offset: int,
+) -> None:
+    prices = MARK_PRICES[BTC]
+    marks = [
+        _kline_row(previous_open, prices),
+        _kline_row(next_open, prices),
+    ]
+    overlapping = Stage2FundingRow(str(previous_open + funding_offset), "8", "0.0001")
+
+    with pytest.raises(Stage2DataError, match="overlaps an allowed mark gap"):
+        require_recent_mark_for_funding(marks, [overlapping])
 
 
 def test_marks_are_built_from_close_and_close_time() -> None:
