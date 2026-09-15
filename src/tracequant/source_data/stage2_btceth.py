@@ -1403,6 +1403,7 @@ def build_stage2_acceptance_record(
     crosscheck: Mapping[str, object],
     homology: Mapping[str, object],
     sma_parity: Mapping[str, object],
+    funding_settlement: Mapping[str, object] | None = None,
     checksum_probe: Callable[[str], bool] | None = None,
     index_coverage: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
@@ -1439,6 +1440,7 @@ def build_stage2_acceptance_record(
         "expected_source_count": STAGE2_EXPECTED_SOURCE_COUNT,
         "expected_source_inventory_digest": expected_source_inventory_digest(),
         "generation_command": STAGE2_GENERATION_COMMAND,
+        "funding_settlement": dict(funding_settlement or {}),
         "homology": dict(homology),
         "instrument_snapshot": manifest.instrument_snapshot_identity(),
         "market_data_manifest_digest": market_data_manifest_digest(manifest),
@@ -1600,6 +1602,58 @@ def require_complete_acceptance_record(
     if observed_sma != set(STAGE2_INSTRUMENT_IDS):
         raise Stage2DataError("acceptance record SMA parity instruments are incomplete")
 
+    funding_settlement = record.get("funding_settlement")
+    if (
+        not isinstance(funding_settlement, Mapping)
+        or funding_settlement.get("passed") is not True
+    ):
+        raise Stage2DataError("acceptance record funding settlement is missing")
+    settlement_series = funding_settlement.get("series")
+    if not isinstance(settlement_series, list) or len(settlement_series) != len(
+        STAGE2_INSTRUMENT_IDS
+    ):
+        raise Stage2DataError("acceptance record funding settlement is incomplete")
+    observed_settlement: set[str] = set()
+    settlement_counts: dict[str, int] = {}
+    for item in settlement_series:
+        if not isinstance(item, Mapping):
+            raise Stage2DataError("acceptance record funding settlement is invalid")
+        instrument_id = item.get("instrument_id")
+        catalog_count = item.get("catalog_event_count")
+        eligible_count = item.get("settlement_eligible_event_count")
+        balance_delta = item.get("balance_delta")
+        try:
+            parsed_balance_delta = (
+                Decimal(balance_delta) if isinstance(balance_delta, str) else Decimal(0)
+            )
+        except InvalidOperation:
+            parsed_balance_delta = Decimal(0)
+        if (
+            not isinstance(instrument_id, str)
+            or not isinstance(catalog_count, int)
+            or catalog_count <= 0
+            or not isinstance(eligible_count, int)
+            or eligible_count <= 0
+            or item.get("delivered_event_count") != catalog_count
+            or item.get("iteration_delta") != catalog_count
+            or item.get("settlement_count") != eligible_count
+            or item.get("account_event_delta") != eligible_count * 2
+            or item.get("position_count") != 1
+            or not isinstance(item.get("position_open_ts_event"), int)
+            or not parsed_balance_delta.is_finite()
+            or parsed_balance_delta == 0
+            or item.get("passed") is not True
+        ):
+            raise Stage2DataError(
+                "acceptance record funding settlement contains failures"
+            )
+        observed_settlement.add(instrument_id)
+        settlement_counts[instrument_id] = catalog_count
+    if observed_settlement != set(STAGE2_INSTRUMENT_IDS):
+        raise Stage2DataError(
+            "acceptance record funding settlement instruments are incomplete"
+        )
+
     coverage = record.get("coverage_summary")
     if not isinstance(coverage, list) or len(coverage) != 10:
         raise Stage2DataError("acceptance record coverage is incomplete")
@@ -1621,6 +1675,14 @@ def require_complete_acceptance_record(
             raise Stage2DataError("acceptance record coverage entry is invalid")
         if not isinstance(item.get("row_count"), int) or item["row_count"] <= 0:
             raise Stage2DataError("acceptance record coverage is empty")
+        coverage_instrument = item.get("instrument_id")
+        if item.get("data_type") == STAGE2_DATA_TYPE_FUNDING and (
+            not isinstance(coverage_instrument, str)
+            or settlement_counts.get(coverage_instrument) != item.get("row_count")
+        ):
+            raise Stage2DataError(
+                "acceptance record funding settlement does not cover the catalog"
+            )
         if any(item.get(key) != 0 for key in ("duplicate_count", "out_of_order_count")):
             raise Stage2DataError("acceptance record coverage contains failures")
         if item.get("gap_count") != 0 and not (

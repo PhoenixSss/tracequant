@@ -48,6 +48,8 @@ from nautilus_trader.model import (
     InstrumentId,
     MarkPriceUpdate,
     OmsType,
+    OrderFilled,
+    OrderSide,
     Price,
     Quantity,
     TraderId,
@@ -83,6 +85,8 @@ from tracequant.source_data.stage2_btceth import (
     STAGE2_SMA_PARITY_PERIODS,
     STAGE2_SMA_PARITY_START_ISO,
     STAGE2_SOURCE_SCHEMA,
+    STAGE2_WINDOW_END_ISO,
+    STAGE2_WINDOW_START_ISO,
     Stage2CoverageReport,
     Stage2DataError,
     Stage2DatasetConfig,
@@ -768,6 +772,7 @@ def _load_validated_stage2_mark_funding(
             )
             mark_rows.extend(mark_chunk)
             mark_digests.append(digest)
+        _require_mark_source_order(mark_rows)
         by_open_time = {int(row.open_time): row for row in mark_rows}
         for fill_archive in fill_grouped.get(instrument_id, []):
             fill_rows, digest = read_verified_kline_archive(
@@ -783,6 +788,7 @@ def _load_validated_stage2_mark_funding(
                     data_type=STAGE2_DATA_TYPE_MARK,
                 )
             )
+            _require_mark_source_order(fill_rows)
             for row in fill_rows:
                 open_time = int(row.open_time)
                 if open_time < unix_millis(config.window_start):
@@ -845,6 +851,19 @@ def _load_validated_stage2_mark_funding(
         fundings,
         coverage_series,
     )
+
+
+def _require_mark_source_order(rows: Sequence[Stage2KlineRow]) -> None:
+    seen: set[int] = set()
+    previous: int | None = None
+    for row in rows:
+        open_time = int(row.open_time)
+        if open_time in seen:
+            raise Stage2DataError("mark source contains duplicate event times")
+        if previous is not None and open_time < previous:
+            raise Stage2DataError("mark source is out of order")
+        seen.add(open_time)
+        previous = open_time
 
 
 def _resolve_instruments(
@@ -1220,11 +1239,13 @@ def prepare_stage2_dataset(
     if homology is None:
         homology = _stage2_split_homology(catalog_path)
     sma_parity = _stage2_sma_parity_evidence(catalog_path)
+    funding_settlement = _stage2_funding_settlement_evidence(catalog_path)
     record = build_stage2_acceptance_record(
         manifest=manifest,
         coverage=coverage,
         runtime_identity=UPSTREAM_RELEASE_IDENTITY,
         crosscheck=crosscheck,
+        funding_settlement=funding_settlement,
         homology=homology,
         sma_parity=sma_parity,
         index_coverage=index_coverage,
@@ -1711,6 +1732,172 @@ def _stage2_sma_parity_evidence(catalog_path: Path) -> dict[str, object]:
         "series": series,
         "start": STAGE2_SMA_PARITY_START_ISO,
     }
+
+
+class _HoldForFundingSettlement(Strategy):
+    def __init__(self, spec: tuple[str, Decimal]) -> None:
+        super().__init__(
+            StrategyConfig(oms_type=OmsType.NETTING, use_uuid_client_order_ids=False)
+        )
+        instrument_id, price_increment = spec
+        self._instrument_id = InstrumentId.from_str(instrument_id)
+        self._bar_type = stage2_bar_type(instrument_id, STAGE2_SMA_PARITY_INTERVAL)
+        self._price_increment = price_increment
+        self._submitted = False
+        self.position_open_ts_event: int | None = None
+        self.funding_seen: list[tuple[int, Decimal, int | None]] = []
+
+    def on_start(self) -> None:
+        self.subscribe_bars(self._bar_type)
+        self.subscribe_mark_prices(self._instrument_id)
+        self.subscribe_funding_rates(self._instrument_id)
+
+    def on_bar(self, bar: Bar) -> None:
+        if self._submitted or Decimal(str(bar.close)) % self._price_increment != 0:
+            return
+        self.submit_order(
+            self.order_factory.market(
+                self._instrument_id, OrderSide.BUY, Quantity.from_str("1.000")
+            )
+        )
+        self._submitted = True
+
+    def on_order_filled(self, event: OrderFilled) -> None:
+        self.position_open_ts_event = int(event.ts_event)
+
+    def on_funding_rate(self, event: FundingRateUpdate) -> None:
+        self.funding_seen.append(
+            (int(event.ts_event), Decimal(str(event.rate)), event.interval)
+        )
+
+
+def _run_funding_settlement_backtest(
+    catalog_path: Path,
+    instrument_id: str,
+    strategy: _HoldForFundingSettlement,
+    *,
+    include_funding: bool,
+) -> dict[str, str]:
+    data = [
+        BacktestDataConfig(
+            data_type="Bar",
+            catalog_path=str(catalog_path),
+            bar_types=[stage2_bar_type_str(instrument_id, STAGE2_SMA_PARITY_INTERVAL)],
+        ),
+        BacktestDataConfig(
+            data_type="MarkPriceUpdate",
+            catalog_path=str(catalog_path),
+            instrument_id=InstrumentId.from_str(instrument_id),
+        ),
+    ]
+    if include_funding:
+        data.append(stage2_funding_backtest_data_config(catalog_path, instrument_id))
+    venue = BacktestVenueConfig(
+        name="BINANCE",
+        oms_type=OmsType.NETTING,
+        account_type=AccountType.MARGIN,
+        starting_balances=["100000 USDT"],
+        base_currency=Currency.from_str("USDT"),
+        default_leverage=Decimal("1"),
+        bar_execution=True,
+        use_random_ids=False,
+    )
+    engine = BacktestEngineConfig(
+        trader_id=TraderId.from_str("TRACEQUANT-001"),
+        bypass_logging=True,
+        run_analysis=False,
+        logging=LoggerConfig(bypass_logging=True, stdout_level=LogLevel.OFF),
+    )
+    run = BacktestRunConfig(
+        venues=[venue],
+        data=data,
+        engine=engine,
+        dispose_on_completion=True,
+    )
+    node = BacktestNode([run])
+    node.build()
+    node.add_strategy(run.id, strategy)
+    results = node.run()
+    return dict(results[0].summary)
+
+
+def _stage2_funding_settlement_evidence(catalog_path: Path) -> dict[str, object]:
+    from tracequant.research.views import load_funding
+
+    start = parse_utc(STAGE2_WINDOW_START_ISO)
+    end = parse_utc(STAGE2_WINDOW_END_ISO)
+    series: list[dict[str, object]] = []
+    for instrument_id in STAGE2_INSTRUMENT_IDS:
+        frame = load_funding(catalog_path, instrument_id, start, end).collect()
+        expected = [
+            (
+                int(row["ts_event"]),
+                Decimal(str(row["rate"])),
+                int(row["interval"]),
+            )
+            for row in frame.iter_rows(named=True)
+        ]
+        _precision, price_increment = stage2_price_spec(catalog_path, instrument_id)
+        strategy_spec = (instrument_id, Decimal(price_increment))
+        without_strategy = _HoldForFundingSettlement(strategy_spec)
+        with_strategy = _HoldForFundingSettlement(strategy_spec)
+        without = _run_funding_settlement_backtest(
+            catalog_path,
+            instrument_id,
+            without_strategy,
+            include_funding=False,
+        )
+        with_funding = _run_funding_settlement_backtest(
+            catalog_path,
+            instrument_id,
+            with_strategy,
+            include_funding=True,
+        )
+        opened_at = with_strategy.position_open_ts_event
+        if opened_at is None or without_strategy.position_open_ts_event != opened_at:
+            raise Stage2DataError(
+                "funding settlement position was not opened consistently"
+            )
+        if with_strategy.funding_seen != expected:
+            raise Stage2DataError(
+                "funding settlement delivery is missing or duplicated"
+            )
+        eligible_count = sum(
+            ts_event > opened_at for ts_event, _rate, _interval in expected
+        )
+        iteration_delta = int(with_funding["iterations"]) - int(without["iterations"])
+        account_event_delta = int(with_funding["account.BINANCE.event_count"]) - int(
+            without["account.BINANCE.event_count"]
+        )
+        balance_delta = Decimal(
+            with_funding["account.BINANCE.balance.USDT.total"].split()[0]
+        ) - Decimal(without["account.BINANCE.balance.USDT.total"].split()[0])
+        if (
+            not expected
+            or eligible_count <= 0
+            or int(without["positions.open"]) != 1
+            or int(with_funding["positions.open"]) != 1
+            or iteration_delta != len(expected)
+            or account_event_delta != eligible_count * 2
+            or balance_delta == 0
+        ):
+            raise Stage2DataError("funding settlement exactly-once comparison failed")
+        series.append(
+            {
+                "account_event_delta": account_event_delta,
+                "balance_delta": str(balance_delta),
+                "catalog_event_count": len(expected),
+                "delivered_event_count": len(with_strategy.funding_seen),
+                "instrument_id": instrument_id,
+                "iteration_delta": iteration_delta,
+                "passed": True,
+                "position_count": 1,
+                "position_open_ts_event": opened_at,
+                "settlement_count": account_event_delta // 2,
+                "settlement_eligible_event_count": eligible_count,
+            }
+        )
+    return {"passed": True, "series": series}
 
 
 def fetch_stage2_nautilus_crosscheck() -> tuple[

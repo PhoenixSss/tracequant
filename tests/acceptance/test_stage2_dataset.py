@@ -123,6 +123,7 @@ ACCEPTANCE_KEYS = {
     "dataset_id",
     "expected_source_count",
     "expected_source_inventory_digest",
+    "funding_settlement",
     "generation_command",
     "homology",
     "include_index_price",
@@ -295,6 +296,24 @@ def _write_mark_zip(
     _write_zip(
         zip_path,
         payload,
+        header=None,
+        csv_name=f"{symbol}-{STAGE2_MARK_INTERVAL}-{year:04d}-{month:02d}.csv",
+    )
+
+
+def _rewrite_mark_zip(
+    raw_root: Path,
+    instrument_id: str,
+    *,
+    year: int,
+    month: int,
+    rows: list[list[str]],
+) -> None:
+    symbol = "BTCUSDT" if instrument_id.startswith("BTC") else "ETHUSDT"
+    name = f"{symbol}-{STAGE2_MARK_INTERVAL}-{year:04d}-{month:02d}.zip"
+    _write_zip(
+        raw_root / STAGE2_MARK_ROOT / symbol / STAGE2_MARK_INTERVAL / name,
+        rows,
         header=None,
         csv_name=f"{symbol}-{STAGE2_MARK_INTERVAL}-{year:04d}-{month:02d}.csv",
     )
@@ -697,6 +716,19 @@ def test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog(
         == set(STAGE2_SMA_PARITY_PERIODS)
         for item in sma_parity["series"]
     )
+    settlement = record["funding_settlement"]
+    assert isinstance(settlement, dict)
+    assert settlement["passed"] is True
+    assert {item["instrument_id"] for item in settlement["series"]} == set(
+        STAGE2_INSTRUMENT_IDS
+    )
+    assert all(
+        item["delivered_event_count"] == item["catalog_event_count"]
+        and item["iteration_delta"] == item["catalog_event_count"]
+        and item["position_count"] == 1
+        and item["settlement_count"] == item["settlement_eligible_event_count"]
+        for item in settlement["series"]
+    )
     require_no_index_or_1m_reference(catalog_path)
     require_tail_disabled()
     assert STAGE2_NAUTILUS_TAIL_ENABLED is False
@@ -853,6 +885,10 @@ def test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog(
     failed_parity["sma_parity"]["passed"] = False
     with pytest.raises(Stage2DataError, match="SMA parity"):
         require_complete_acceptance_record(failed_parity)
+    failed_settlement = json.loads(json.dumps(record))
+    failed_settlement["funding_settlement"]["series"][0]["settlement_count"] -= 1
+    with pytest.raises(Stage2DataError, match="funding settlement"):
+        require_complete_acceptance_record(failed_settlement)
 
     written_coverage = json.loads(
         (catalog_path / "stage2_coverage.json").read_text(encoding="utf-8")
@@ -883,6 +919,34 @@ def test_expected_source_inventory_is_800_complete_months() -> None:
             f"https://data.binance.vision/{STAGE2_INDEX_ROOT}/"
         )
         assert str(item["checksum_url"]).endswith(".CHECKSUM")
+
+
+@pytest.mark.parametrize("defect", ["duplicate", "reversed"])
+def test_dataset_prepare_rejects_mark_source_defects_before_merge(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    defect: str,
+) -> None:
+    _allow_sparse_archive_fixture(monkeypatch)
+    config_path, _catalog_path, raw_root = _write_config(tmp_path)
+    rows = [
+        _row_values(open_time, STAGE2_MARK_INTERVAL, MARK_PRICES[BTC])
+        for open_time in _open_times(STAGE2_MARK_INTERVAL, start_ms=START_MS)
+    ]
+    if defect == "duplicate":
+        rows.insert(1, rows[0])
+        expected = "duplicate"
+    else:
+        rows[0], rows[1] = rows[1], rows[0]
+        expected = "out of order"
+    _rewrite_mark_zip(raw_root, BTC, year=2020, month=1, rows=rows)
+    with pytest.raises(Stage2DataError, match=expected):
+        prepare_stage2_combined_catalog(
+            config_path,
+            repository_root=REPOSITORY_ROOT,
+            instruments=_stage2_instruments(),
+            fetched_at=FETCHED_AT,
+        )
 
 
 def test_index_checksum_probe_changes_conclusion() -> None:
