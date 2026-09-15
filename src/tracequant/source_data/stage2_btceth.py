@@ -907,15 +907,20 @@ def require_recent_mark_for_funding(
     marks: Sequence[Stage2KlineRow],
     fundings: Sequence[Stage2FundingRow],
 ) -> None:
+    missing_mark_intervals = tuple(
+        (previous_open + STAGE2_INTERVAL_MS[STAGE2_MARK_INTERVAL], next_open)
+        for previous_open, next_open in STAGE2_MARK_ALLOWED_GAPS
+    )
     mark_times = tuple(
         millis_to_nanos(_require_int_string(row.close_time, field="close_time"))
         for row in marks
     )
     max_age_ns = STAGE2_MARK_MAX_AGE_MS * MS_NS
     for funding in fundings:
-        funding_ts = millis_to_nanos(
-            _require_int_string(funding.calc_time, field="calc_time")
-        )
+        funding_time = _require_int_string(funding.calc_time, field="calc_time")
+        if any(start <= funding_time < end for start, end in missing_mark_intervals):
+            raise Stage2DataError("funding event overlaps an allowed mark gap")
+        funding_ts = millis_to_nanos(funding_time)
         prior = tuple(ts for ts in mark_times if ts <= funding_ts)
         if not prior:
             raise Stage2DataError("funding event is missing a recent mark")
