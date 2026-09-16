@@ -1198,14 +1198,18 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
     agent_skill = (root / ".agents/skills/task-delivery-runner/SKILL.md").read_text(
         encoding="utf-8"
     )
+    initial_delivery = (
+        root / ".agents/skills/task-delivery-runner/references/initial-delivery.md"
+    ).read_text(encoding="utf-8")
     claude_skill = (root / ".claude/skills/task-delivery-runner/SKILL.md").read_text(
         encoding="utf-8"
     )
     assert ".agents/skills/task-delivery-runner/SKILL.md" in claude_skill
     assert len(claude_skill.splitlines()) < 15
-    assert "uv run --frozen python -m tools.lck delivery prepare" in agent_skill
-    assert "uv run --frozen python -m tools.lck delivery complete" in agent_skill
-    initial_section = agent_skill.split("## Review remediation", 1)[0]
+    assert "references/initial-delivery.md" in agent_skill
+    assert "uv run --frozen python -m tools.lck delivery prepare" in initial_delivery
+    assert "uv run --frozen python -m tools.lck delivery complete" in initial_delivery
+    initial_section = f"{agent_skill}\n{initial_delivery}"
     for direct_write in ("git commit", "git push", "gh pr create"):
         assert direct_write not in initial_section
     target = tmp_path / "tests" / "tools" / "lck" / "test_delivery.py"

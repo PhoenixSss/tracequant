@@ -15,8 +15,22 @@ def _skill(name: str) -> str:
     return (ROOT / ".agents" / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
 
 
+def _skill_package(name: str) -> str:
+    skill_root = ROOT / ".agents" / "skills" / name
+    return "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(skill_root.rglob("*.md"))
+    )
+
+
+def _description(text: str) -> str:
+    for line in text.splitlines():
+        if line.startswith("description: "):
+            return line.removeprefix("description: ")
+    raise AssertionError("Skill has no description")
+
+
 def test_lifecycle_commands_use_the_locked_project_python() -> None:
-    combined = "\n".join(_skill(name) for name in SKILLS)
+    combined = "\n".join(_skill_package(name) for name in SKILLS)
     assert f"{LOCKED_PYTHON} -m tools.lck delivery prepare" in combined
     assert f"{LOCKED_PYTHON} -m tools.lck review prepare" in combined
     assert f"{LOCKED_PYTHON} -m tools.lck merge preflight" in combined
@@ -112,3 +126,81 @@ def test_path_audit_reports_clean_canonical_skills_and_adapters() -> None:
     report, returncode = audit(ROOT)
     assert returncode == 0, report["violations"]
     assert report["status"] == "pass"
+
+
+def test_workflow_skills_follow_astra_content_guidance() -> None:
+    descriptions = {
+        "task-delivery-runner": (
+            "Deliver a maintainer-specified ready leaf Issue, or remediate its latest "
+            "failed Independent Review when the maintainer supplies the failed Review ID."
+        ),
+        "task-pr-review-runner": (
+            "Independently review the current open PR for a maintainer-specified leaf "
+            "Issue in a fresh session."
+        ),
+        "task-closeout": (
+            "Complete post-merge closeout for a maintainer-specified leaf Issue after "
+            "the maintainer says its PR was manually Squash Merged."
+        ),
+        "feature-completion-audit": (
+            "Independently audit whether a maintainer-specified open Feature is complete "
+            "on current main before manual Feature closeout."
+        ),
+    }
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+
+    for name, expected_description in descriptions.items():
+        canonical = _skill(name)
+        adapter = (ROOT / ".claude" / "skills" / name / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        assert _description(canonical) == expected_description
+        assert _description(adapter) == expected_description
+        assert f".agents/skills/{name}/SKILL.md" in adapter
+
+    for intent, skill in (
+        ("implementing an Issue", "task-delivery-runner"),
+        ("reviewing a PR", "task-pr-review-runner"),
+        ("closing out a manually merged PR", "task-closeout"),
+        ("auditing Feature completion", "feature-completion-audit"),
+    ):
+        assert f"{intent}: `.agents/skills/{skill}/SKILL.md`" in agents
+
+    delivery_root = _skill("task-delivery-runner")
+    initial_path = (
+        ROOT
+        / ".agents"
+        / "skills"
+        / "task-delivery-runner"
+        / "references"
+        / "initial-delivery.md"
+    )
+    remediation_path = initial_path.with_name("remediation.md")
+    initial = initial_path.read_text(encoding="utf-8")
+    remediation = remediation_path.read_text(encoding="utf-8")
+    assert (
+        "Choose exactly one branch and read only its linked instructions"
+        in delivery_root
+    )
+    assert "references/initial-delivery.md" in delivery_root
+    assert "references/remediation.md" in delivery_root
+    assert "references/remediation.md" not in initial
+    assert "references/initial-delivery.md" not in remediation
+    assert "READY_FOR_REVIEW" in initial
+    assert "READY_FOR_NEW_REVIEW" in remediation
+    assert "remediation no-change" in remediation
+
+    assert "unresolved diagnostic concern remains, proceed" in agents
+    assert "directly to LCK Delivery Complete" in agents
+    assert "Broaden or repeat validation only after" in agents
+    assert "Long-operation wait and progress contract" not in delivery_root
+
+    review = _skill("task-pr-review-runner")
+    closeout = _skill("task-closeout")
+    feature = _skill("feature-completion-audit")
+    assert "implementation-read-only" in review
+    assert "READY_FOR_HUMAN_MERGE" in review
+    assert "This Skill never merges" in closeout
+    assert "Feature 已完成，可以由维护者人工收尾" in feature
+    assert "Feature 尚未完成，需要补充或修复 Task" in feature
+    assert "证据不足，暂不能判定 Feature 完成" in feature

@@ -1,6 +1,6 @@
 ---
 name: feature-completion-audit
-description: Claude adapter for the canonical read-only LCK feature audit procedure.
+description: Independently audit whether a maintainer-specified open Feature is complete on current main before manual Feature closeout.
 ---
 
 # Claude adapter
