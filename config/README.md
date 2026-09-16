@@ -22,7 +22,9 @@ must require absolute paths outside the repository. The stage 2 bar dataset
 requires existing absolute `raw_root` and `catalog_path` values. Stage 3 feature
 loading requires explicit `catalog_path`, `evidence_root`, and `run_root` values
 plus the complete accepted Stage 2 identity; its config path is supplied only
-through `TRACEQUANT_STAGE3_CONFIG`. Later capabilities may also require
+through `TRACEQUANT_STAGE3_CONFIG`. Neither output root may be the catalog, live
+inside it, or contain it, so derived feature/label data can never be written back
+into the sole Nautilus catalog. Later capabilities may also require
 `catalog_root`, `cache_root`, `audit_root`, and `environment_root`. Catalog and cache access
 must also require an explicit environment, mode, schema identity, and the exact
 Nautilus runtime identity

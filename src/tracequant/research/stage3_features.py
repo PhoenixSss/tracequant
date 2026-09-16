@@ -22,11 +22,16 @@ from tracequant.research.views import load_bars, load_funding, load_mark_prices
 from tracequant.source_data.stage2_btceth import (
     STAGE2_ACCEPTANCE_SCHEMA,
     STAGE2_COVERAGE_FILENAME,
+    STAGE2_DATA_TYPE_BARS,
+    STAGE2_DATA_TYPE_FUNDING,
+    STAGE2_DATA_TYPE_MARK,
     STAGE2_DATASET_ID,
     STAGE2_DIGEST_FILENAME,
     STAGE2_INSTRUMENT_IDS,
     STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
+    STAGE2_INTERVAL_MS,
     STAGE2_MANIFEST_FILENAME,
+    STAGE2_MARK_ALLOWED_GAPS,
     STAGE2_NAUTILUS_VERSION,
     STAGE2_SOURCE_SCHEMA,
     STAGE2_WINDOW_END_ISO,
@@ -64,8 +69,14 @@ MARK_MAX_AGE_NS: Final = 15 * 60 * 1_000_000_000
 FUNDING_MAX_AGE_NS: Final = 8 * HOUR_NS
 FEATURE_LOOKBACK_HOURS: Final = 168
 LABEL_HORIZON_HOURS: Final = 4
+FUNDING_WINDOW_HOURS: Final = 24
 FEATURE_ATOL: Final = 1e-12
 FEATURE_RTOL: Final = 1e-9
+
+MS_NS: Final = 1_000_000
+# Stage 2 source timestamps are millisecond-quantized, so an accepted series may
+# sit at most one millisecond away from its declared grid.
+SERIES_GRID_TOLERANCE_NS: Final = MS_NS
 
 FEATURE_NAMES: Final = (
     "ret_1h",
@@ -216,6 +227,18 @@ def feature_schema_digest() -> str:
     return _canonical_digest(feature_schema_payload())
 
 
+def mark_allowed_gap_ns() -> tuple[tuple[int, int], ...]:
+    """The two accepted mark omissions on the nanosecond decision timeline.
+
+    The accepted mark series is the only series allowed to omit intervals, and
+    only the omissions recorded by the locked Stage 2 allow-list.
+    """
+    return tuple(
+        ((previous_open + STAGE2_INTERVAL_MS["15m"]) * MS_NS, next_open * MS_NS)
+        for previous_open, next_open in STAGE2_MARK_ALLOWED_GAPS
+    )
+
+
 @dataclass(frozen=True)
 class Stage3Config:
     schema: str
@@ -242,6 +265,43 @@ class AcceptedStage2Catalog:
     instrument_snapshot_checksum: str
     runtime_identity: str
     coverage: tuple[Mapping[str, object], ...]
+
+
+@dataclass(frozen=True)
+class AcceptedSeriesCoverage:
+    """One accepted Stage 2 series reduced to the grid it must be consumed on."""
+
+    description: str
+    first_ts_event: int
+    cadence_ns: int
+    last_index: int
+    allowed_gap_indices: frozenset[int]
+
+    def grid_index(self, ts_event: int) -> int:
+        offset = ts_event - self.first_ts_event
+        index = (2 * offset + self.cadence_ns) // (2 * self.cadence_ns)
+        if (
+            abs(offset - index * self.cadence_ns) > SERIES_GRID_TOLERANCE_NS
+            or not 0 <= index <= self.last_index
+        ):
+            raise Stage3DataError(
+                f"{self.description} is not on the accepted coverage grid"
+            )
+        return index
+
+    def first_eligible_index(self, window_start_ns: int) -> int:
+        offset = window_start_ns - self.first_ts_event
+        index = max(0, -(-offset // self.cadence_ns))
+        while index in self.allowed_gap_indices and index <= self.last_index:
+            index += 1
+        return index
+
+    def last_eligible_index(self, window_end_ns: int) -> int:
+        offset = window_end_ns - 1 - self.first_ts_event
+        index = min(self.last_index, offset // self.cadence_ns)
+        while index in self.allowed_gap_indices and index >= 0:
+            index -= 1
+        return index
 
 
 @dataclass(frozen=True)
@@ -332,6 +392,7 @@ def load_stage3_config(path: Path, *, repository_root: Path) -> Stage3Config:
     _require_locked_config(config)
     if not config.catalog_path.is_dir():
         raise Stage3DataError("catalog_path must be an existing directory")
+    _require_disjoint_output_roots(config)
     _require_matching_partition(config.evidence_root, config)
     _require_matching_partition(config.run_root, config)
     return config
@@ -424,13 +485,20 @@ class IncrementalFeatureState:
         self._last_mark_ts: int | None = None
         self._last_funding_ts: int | None = None
 
+    @property
+    def retained_event_counts(self) -> tuple[int, int]:
+        """Retained (mark, funding) events; both stay bounded by the lookbacks."""
+        return (len(self._marks), len(self._funding))
+
     def push_mark(self, event: MarkProjection) -> None:
         self._require_instrument(event.instrument_id)
         value = _finite_positive(event.value, "mark value")
         self._last_mark_ts = _require_next_timestamp(
             event.ts_event, self._last_mark_ts, "mark"
         )
-        self._marks.append((event.ts_event, value))
+        # Only the newest mark can be the as-of value of a later decision, so no
+        # earlier mark can affect any future row.
+        self._marks[:] = ((event.ts_event, value),)
 
     def push_funding(self, event: FundingProjection) -> None:
         self._require_instrument(event.instrument_id)
@@ -440,10 +508,22 @@ class IncrementalFeatureState:
         )
         self._funding.append((event.ts_event, value))
 
+    def _prune_funding(self, decision_ts: int) -> None:
+        if len(self._funding) < 2:
+            return
+        funding_floor = decision_ts - FUNDING_WINDOW_HOURS * HOUR_NS
+        # Events at or before the floor can no longer enter any later 24h sum.
+        # The newest event is kept whatever its age so that a stopped series is
+        # reported as stale rather than as absent.
+        self._funding = [
+            item for item in self._funding[:-1] if item[0] > funding_floor
+        ] + [self._funding[-1]]
+
     def push_bar(
         self, bar: BarProjection, *, tradable: bool = False
     ) -> FeatureObservation:
         self._require_instrument(bar.instrument_id)
+        self._prune_funding(bar.ts_event)
         if (
             self._last_bar_ts is not None
             and bar.ts_event - self._last_bar_ts != HOUR_NS
@@ -501,7 +581,7 @@ class IncrementalFeatureState:
         funding_ts, funding = self._latest_as_of(self._funding, decision_ts, "funding")
         if decision_ts - funding_ts > FUNDING_MAX_AGE_NS:
             raise Stage3DataError("latest funding is stale at the decision timestamp")
-        funding_floor = decision_ts - 24 * HOUR_NS
+        funding_floor = decision_ts - FUNDING_WINDOW_HOURS * HOUR_NS
         funding_sum = sum(
             rate
             for ts_event, rate in self._funding
@@ -670,7 +750,9 @@ def load_accepted_feature_window(
 ) -> dict[str, tuple[FeatureObservation, ...]]:
     if mode not in {"training", "evaluation"}:
         raise Stage3DataError("stage 3 feature mode is invalid")
-    bind_accepted_stage2_catalog(config, acceptance_record_path=acceptance_record_path)
+    accepted = bind_accepted_stage2_catalog(
+        config, acceptance_record_path=acceptance_record_path
+    )
     start_utc = require_utc(start)
     end_utc = require_utc(end)
     decision_start_utc = require_utc(decision_start)
@@ -684,6 +766,10 @@ def load_accepted_feature_window(
     dataset_end = parse_utc(STAGE2_WINDOW_END_ISO)
     label_end = min(end_utc + timedelta(hours=LABEL_HORIZON_HOURS), dataset_end)
     auxiliary_start = max(start_utc - timedelta(hours=8), dataset_start)
+    start_ns = datetime_to_nanos(start_utc)
+    end_ns = datetime_to_nanos(end_utc)
+    label_end_ns = datetime_to_nanos(label_end)
+    auxiliary_start_ns = datetime_to_nanos(auxiliary_start)
     results: dict[str, tuple[FeatureObservation, ...]] = {}
     for instrument_id in STAGE2_INSTRUMENT_IDS:
         bar_type = stage2_bar_type_str(instrument_id, "1h")
@@ -695,14 +781,40 @@ def load_accepted_feature_window(
             config.catalog_path, instrument_id, auxiliary_start, end_utc
         ).collect()
         all_bars = _bars_from_frame(bars_frame)
-        decision_end_ns = datetime_to_nanos(end_utc)
-        decision_bars = tuple(
-            item for item in all_bars if item.ts_event < decision_end_ns
+        marks = _marks_from_frame(marks_frame)
+        funding = _funding_from_frame(funding_frame)
+        _require_accepted_catalog_series(
+            accepted,
+            data_type=STAGE2_DATA_TYPE_BARS,
+            instrument_id=instrument_id,
+            bar_type=bar_type,
+            observed=tuple(item.ts_event for item in all_bars),
+            window_start_ns=start_ns,
+            window_end_ns=label_end_ns,
         )
+        _require_accepted_catalog_series(
+            accepted,
+            data_type=STAGE2_DATA_TYPE_MARK,
+            instrument_id=instrument_id,
+            bar_type=stage2_bar_type_str(instrument_id, "15m"),
+            observed=tuple(item.ts_event for item in marks),
+            window_start_ns=auxiliary_start_ns,
+            window_end_ns=end_ns,
+        )
+        _require_accepted_catalog_series(
+            accepted,
+            data_type=STAGE2_DATA_TYPE_FUNDING,
+            instrument_id=instrument_id,
+            bar_type=None,
+            observed=tuple(item.ts_event for item in funding),
+            window_start_ns=auxiliary_start_ns,
+            window_end_ns=end_ns,
+        )
+        decision_bars = tuple(item for item in all_bars if item.ts_event < end_ns)
         rows = build_feature_rows(
             decision_bars,
-            _marks_from_frame(marks_frame),
-            _funding_from_frame(funding_frame),
+            marks,
+            funding,
             decision_start_ts=(
                 datetime_to_nanos(decision_start_utc) if mode == "evaluation" else None
             ),
@@ -750,6 +862,158 @@ def _attach_labels(
             )
         )
     return tuple(labeled)
+
+
+def _coverage_int(entry: Mapping[str, object], key: str, description: str) -> int:
+    value = entry.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise Stage3DataError(f"{description} accepted coverage {key} is invalid")
+    return value
+
+
+def _accepted_series_coverage(
+    entry: Mapping[str, object], *, description: str
+) -> AcceptedSeriesCoverage:
+    first = _coverage_int(entry, "first_ts_event", description)
+    last = _coverage_int(entry, "last_ts_event", description)
+    rows = _coverage_int(entry, "row_count", description)
+    gaps = _coverage_int(entry, "gap_count", description)
+    slots = rows - 1 + gaps
+    if rows <= 0 or gaps < 0 or slots <= 0 or last <= first:
+        raise Stage3DataError(f"{description} accepted coverage is invalid")
+    span = last - first
+    mean_step = (span + slots // 2) // slots
+    cadence = ((mean_step + MS_NS // 2) // MS_NS) * MS_NS
+    if cadence <= 0 or abs(span - cadence * slots) > slots * MS_NS:
+        raise Stage3DataError(
+            f"{description} accepted coverage cadence is not a fixed interval"
+        )
+    series = AcceptedSeriesCoverage(
+        description=description,
+        first_ts_event=first,
+        cadence_ns=cadence,
+        last_index=slots,
+        allowed_gap_indices=frozenset(),
+    )
+    if entry.get("data_type") == STAGE2_DATA_TYPE_MARK:
+        if gaps != len(mark_allowed_gap_ns()):
+            raise Stage3DataError(
+                f"{description} accepted mark gaps do not match the locked allow-list"
+            )
+        intervals = mark_allowed_gap_ns()
+    elif gaps:
+        raise Stage3DataError(
+            f"{description} accepted coverage declares an unapproved gap"
+        )
+    else:
+        intervals = ()
+    allowed: set[int] = set()
+    for start_ns, end_ns in intervals:
+        start_index = series.grid_index(start_ns)
+        if end_ns - start_ns != cadence or series.grid_index(end_ns) != start_index + 1:
+            raise Stage3DataError(
+                f"{description} accepted gap does not match the accepted cadence"
+            )
+        allowed.add(start_index)
+    return replace(series, allowed_gap_indices=frozenset(allowed))
+
+
+def _require_coverage_entry(
+    coverage: Sequence[Mapping[str, object]],
+    *,
+    data_type: str,
+    instrument_id: str,
+    bar_type: str | None,
+) -> Mapping[str, object]:
+    matches = tuple(
+        item
+        for item in coverage
+        if item.get("data_type") == data_type
+        and item.get("instrument_id") == instrument_id
+        and item.get("bar_type") == bar_type
+    )
+    if len(matches) != 1:
+        raise Stage3DataError(
+            f"accepted coverage does not contain one {data_type} series "
+            f"for {instrument_id}"
+        )
+    return matches[0]
+
+
+def _require_series_matches_coverage(
+    series: AcceptedSeriesCoverage,
+    observed: Sequence[int],
+    *,
+    window_start_ns: int,
+    window_end_ns: int,
+) -> None:
+    """Bind the series actually read from the catalog to the accepted coverage.
+
+    The sidecar declarations alone cannot prove that the queried rows are the
+    accepted rows, so every observed event must land on the accepted grid and
+    every omitted interval must be an interval the accepted coverage approves.
+    """
+    if not observed:
+        raise Stage3DataError(
+            f"{series.description} is missing from the accepted catalog"
+        )
+    previous: int | None = None
+    first_index = 0
+    last_index = 0
+    for ts_event in observed:
+        index = series.grid_index(ts_event)
+        if index in series.allowed_gap_indices:
+            raise Stage3DataError(
+                f"{series.description} contains a record the accepted coverage omits"
+            )
+        if previous is None:
+            first_index = index
+        else:
+            if index <= previous:
+                raise Stage3DataError(
+                    f"{series.description} contains duplicate or out-of-order "
+                    "timestamps"
+                )
+            for missing in range(previous + 1, index):
+                if missing not in series.allowed_gap_indices:
+                    raise Stage3DataError(
+                        f"{series.description} contains a gap that the accepted "
+                        "coverage does not approve"
+                    )
+        previous = index
+        last_index = index
+    if first_index != series.first_eligible_index(
+        window_start_ns
+    ) or last_index != series.last_eligible_index(window_end_ns):
+        raise Stage3DataError(
+            f"{series.description} does not cover the accepted query window"
+        )
+
+
+def _require_accepted_catalog_series(
+    accepted: AcceptedStage2Catalog,
+    *,
+    data_type: str,
+    instrument_id: str,
+    bar_type: str | None,
+    observed: Sequence[int],
+    window_start_ns: int,
+    window_end_ns: int,
+) -> None:
+    entry = _require_coverage_entry(
+        accepted.coverage,
+        data_type=data_type,
+        instrument_id=instrument_id,
+        bar_type=bar_type,
+    )
+    _require_series_matches_coverage(
+        _accepted_series_coverage(
+            entry, description=f"{instrument_id} {bar_type or data_type}"
+        ),
+        observed,
+        window_start_ns=window_start_ns,
+        window_end_ns=window_end_ns,
+    )
 
 
 def _require_projection_order(
@@ -848,6 +1112,18 @@ def _require_locked_config(config: Stage3Config) -> None:
         if getattr(config, key) != value:
             raise Stage3DataError(
                 f"stage 3 config {key} conflicts with the locked identity"
+            )
+
+
+def _require_disjoint_output_roots(config: Stage3Config) -> None:
+    catalog = config.catalog_path
+    for key, root in (
+        ("evidence_root", config.evidence_root),
+        ("run_root", config.run_root),
+    ):
+        if root == catalog or catalog in root.parents or root in catalog.parents:
+            raise Stage3DataError(
+                f"stage 3 config {key} must not overlap the Nautilus catalog"
             )
 
 

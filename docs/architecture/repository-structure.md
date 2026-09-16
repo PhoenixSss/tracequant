@@ -115,7 +115,9 @@ Stage 3 causal feature/label contract over the stage 2 Nautilus catalog. That ca
 requirements that consumers bind to are in
 `docs/product/stage-3-strategy-and-model-requirements.md`. A successful
 ordinary catalog identity check does not by itself prove that a catalog is that
-accepted dataset.
+accepted dataset: sidecar declarations only bind identity, so the formal loader
+also binds the bar/mark/funding rows it actually reads to the accepted coverage
+grid, accepting omissions only where that coverage records an explained gap.
 
 Later scoped Issues may add these remaining product boundaries only when
 implementing the corresponding capability, in that Issue's scope and against
