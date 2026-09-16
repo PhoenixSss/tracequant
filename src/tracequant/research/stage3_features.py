@@ -27,6 +27,7 @@ from tracequant.source_data.stage2_btceth import (
     STAGE2_DATA_TYPE_MARK,
     STAGE2_DATASET_ID,
     STAGE2_DIGEST_FILENAME,
+    STAGE2_FUNDING_SCHEDULE_TOLERANCE_MS,
     STAGE2_INSTRUMENT_IDS,
     STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
     STAGE2_INTERVAL_MS,
@@ -74,9 +75,18 @@ FEATURE_ATOL: Final = 1e-12
 FEATURE_RTOL: Final = 1e-9
 
 MS_NS: Final = 1_000_000
-# Stage 2 source timestamps are millisecond-quantized, so an accepted series may
-# sit at most one millisecond away from its declared grid.
+# Accepted bar and mark series are derived from ``close_time``, which Stage 2
+# quantizes to the millisecond, so they sit at most one millisecond away from
+# their declared grid.
 SERIES_GRID_TOLERANCE_NS: Final = MS_NS
+# Accepted funding is the one series Stage 2 does not derive from ``close_time``:
+# the producer writes the source ``calc_time`` as the event timestamp unchanged
+# and accepts any series whose settlements stay inside its own written schedule
+# tolerance of the nominal interval. A consumed funding event may therefore
+# legitimately sit far outside the millisecond close_time grid, and the consumer
+# must not be stricter than the producer that accepted the data. Funding is bound
+# to the accepted grid at the producer's written tolerance instead.
+FUNDING_GRID_TOLERANCE_NS: Final = STAGE2_FUNDING_SCHEDULE_TOLERANCE_MS * MS_NS
 # An accepted bar closes one millisecond before the next bar opens, so the event
 # timestamp an accepted series is gridded on is its close_time and the open_time
 # an allow-list is written in is not itself a grid timestamp.
@@ -289,6 +299,7 @@ class AcceptedSeriesCoverage:
     description: str
     first_ts_event: int
     cadence_ns: int
+    grid_tolerance_ns: int
     last_index: int
     allowed_gap_indices: frozenset[int]
 
@@ -296,7 +307,7 @@ class AcceptedSeriesCoverage:
         offset = ts_event - self.first_ts_event
         index = (2 * offset + self.cadence_ns) // (2 * self.cadence_ns)
         if (
-            abs(offset - index * self.cadence_ns) > SERIES_GRID_TOLERANCE_NS
+            abs(offset - index * self.cadence_ns) > self.grid_tolerance_ns
             or not 0 <= index <= self.last_index
         ):
             raise Stage3DataError(
@@ -788,13 +799,22 @@ def load_accepted_feature_window(
     results: dict[str, tuple[FeatureObservation, ...]] = {}
     for instrument_id in STAGE2_INSTRUMENT_IDS:
         bar_type = stage2_bar_type_str(instrument_id, "1h")
-        bars_frame = load_bars(config.catalog_path, bar_type, start_utc, label_end)
-        marks_frame = load_mark_prices(
-            config.catalog_path, instrument_id, auxiliary_start, end_utc
-        )
-        funding_frame = load_funding(
-            config.catalog_path, instrument_id, auxiliary_start, end_utc
-        ).collect()
+        try:
+            bars_frame = load_bars(config.catalog_path, bar_type, start_utc, label_end)
+            marks_frame = load_mark_prices(
+                config.catalog_path, instrument_id, auxiliary_start, end_utc
+            )
+            funding_frame = load_funding(
+                config.catalog_path, instrument_id, auxiliary_start, end_utc
+            ).collect()
+        except Stage2DataError as exc:
+            # ``views`` reports every rejected read with the Stage 2 error type,
+            # including a query window outside the declared dataset window. This
+            # module has one failure contract, so callers that catch only
+            # ``Stage3DataError`` must not see a Stage 2 escape.
+            raise Stage3DataError(
+                f"accepted catalog read failed for {instrument_id}: {exc}"
+            ) from exc
         all_bars = _bars_from_frame(bars_frame)
         marks = _marks_from_frame(marks_frame)
         funding = _funding_from_frame(funding_frame)
@@ -903,14 +923,20 @@ def _accepted_series_coverage(
         raise Stage3DataError(
             f"{description} accepted coverage cadence is not a fixed interval"
         )
+    data_type = entry.get("data_type")
     series = AcceptedSeriesCoverage(
         description=description,
         first_ts_event=first,
         cadence_ns=cadence,
+        grid_tolerance_ns=(
+            FUNDING_GRID_TOLERANCE_NS
+            if data_type == STAGE2_DATA_TYPE_FUNDING
+            else SERIES_GRID_TOLERANCE_NS
+        ),
         last_index=slots,
         allowed_gap_indices=frozenset(),
     )
-    if entry.get("data_type") == STAGE2_DATA_TYPE_MARK:
+    if data_type == STAGE2_DATA_TYPE_MARK:
         if gaps != len(mark_allowed_gap_ns()):
             raise Stage3DataError(
                 f"{description} accepted mark gaps do not match the locked allow-list"

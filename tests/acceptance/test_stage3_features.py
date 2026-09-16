@@ -74,6 +74,7 @@ from tracequant.source_data.stage2_btceth import (
     STAGE2_DIGEST_FILENAME,
     STAGE2_EXPECTED_SOURCE_COUNT,
     STAGE2_EXPECTED_SUPPLEMENTAL_SOURCE_COUNT,
+    STAGE2_FUNDING_SCHEDULE_TOLERANCE_MS,
     STAGE2_FUNDING_STREAM_ID,
     STAGE2_INSTRUMENT_IDS,
     STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
@@ -288,6 +289,7 @@ def _build_accepted_catalog(
     missing_funding: frozenset[int] = frozenset(),
     include_approved_gap: bool = False,
     truncate_marks: bool = False,
+    funding_offset_ms: int = 0,
 ) -> tuple[Path, Path, dict[str, object], dict[str, object]]:
     """Write a deterministic Stage 2-shaped accepted catalog under ``root``.
 
@@ -297,6 +299,13 @@ def _build_accepted_catalog(
     production payload builder, and the series sit on the accepted grids. Only
     the source-object identities are fixture-local, because the accepted
     800-object manifest lives outside this repository.
+
+    ``funding_offset_ms`` shifts every written funding event off its accepted
+    grid slot by that many milliseconds. Accepted funding carries the source
+    ``calc_time`` unchanged, so the real series is not schedule-aligned and sits
+    a few milliseconds off the close_time-anchored grid; the tracked coverage
+    records the same shape at its tail. The declared coverage is the tracked
+    record either way, so the offset only moves the rows the consumer reads.
     """
     tracked = cast(
         dict[str, object],
@@ -378,11 +387,14 @@ def _build_accepted_catalog(
                         interval=480,
                         next_funding_ns=ts_event,
                     )
-                    for ts_event in _grid(
-                        DATASET_START_NS,
-                        FUNDING_INTERVAL_NS,
-                        decision_end_ns,
-                        missing_funding,
+                    for ts_event in (
+                        slot + funding_offset_ms * MS_NS
+                        for slot in _grid(
+                            DATASET_START_NS,
+                            FUNDING_INTERVAL_NS,
+                            decision_end_ns,
+                            missing_funding,
+                        )
                     )
                 ),
             )
@@ -976,15 +988,87 @@ def test_mark_allowed_gap_events_are_indexed_on_the_close_time_grid() -> None:
     ) // QUARTER_HOUR_NS == omitted_index - 1
 
 
+def test_accepted_funding_is_bound_at_the_producer_schedule_tolerance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Accepted funding is not schedule-aligned and must not be rejected for it.
+
+    Stage 2 writes the source ``calc_time`` as the funding event timestamp and
+    accepts any series whose settlements stay inside its own written schedule
+    tolerance of the nominal interval, so the consumed series is not on the
+    millisecond close_time grid the bar and mark series are derived on. The
+    tracked coverage records that shape at its tail, so requiring the close_time
+    grid would reject the one accepted catalog.
+    """
+    within_path, within_record, record, snapshot = _build_accepted_catalog(
+        tmp_path / "funding-offset", funding_offset_ms=3
+    )
+    template = _bind_fixture_identity(monkeypatch, record, snapshot)
+    window = load_accepted_feature_window(
+        _accepted_config(template, within_path, tmp_path / "funding-offset"),
+        acceptance_record_path=within_record,
+        start=DATASET_START,
+        end=EVALUATION_END,
+        decision_start=EVALUATION_START,
+        mode="evaluation",
+    )
+    assert set(window) == set(STAGE2_INSTRUMENT_IDS)
+    assert any(item.status == "ready" for item in window[BTC])
+
+    # The bound is the producer's written schedule tolerance, not an unbounded
+    # exemption: funding further off the accepted grid still fails closed.
+    outside_path, outside_record, _, _ = _build_accepted_catalog(
+        tmp_path / "funding-outside",
+        funding_offset_ms=STAGE2_FUNDING_SCHEDULE_TOLERANCE_MS + 1,
+    )
+    with pytest.raises(Stage3DataError, match="accepted coverage grid"):
+        load_accepted_feature_window(
+            _accepted_config(template, outside_path, tmp_path / "funding-outside"),
+            acceptance_record_path=outside_record,
+            start=DATASET_START,
+            end=EVALUATION_END,
+            decision_start=EVALUATION_START,
+            mode="evaluation",
+        )
+
+
+def test_out_of_window_read_reports_the_stage3_error_contract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A rejected read must not surface the Stage 2 error type.
+
+    ``views`` rejects a query window outside the declared dataset window with
+    ``Stage2DataError``. Callers of this module catch ``Stage3DataError``, so an
+    escaping Stage 2 type would leave an out-of-window request uncaught even
+    though the read does fail closed.
+    """
+    catalog_path, record_path, record, snapshot = _build_accepted_catalog(
+        tmp_path / "outside-window"
+    )
+    template = _bind_fixture_identity(monkeypatch, record, snapshot)
+    with pytest.raises(Stage3DataError, match="outside the declared window"):
+        load_accepted_feature_window(
+            _accepted_config(template, catalog_path, tmp_path / "outside-window"),
+            acceptance_record_path=record_path,
+            start=DATASET_START - timedelta(days=1),
+            end=EVALUATION_END,
+            decision_start=EVALUATION_START,
+            mode="evaluation",
+        )
+
+
 def test_feature_schema_digest_is_stable_and_sensitive() -> None:
     payload = feature_schema_payload()
     assert FEATURE_SCHEMA_DIGEST == (
         "ee2416993244e3f56622da41bcebe47980fc1b959013c22222a806b664eb359e"
     )
     assert feature_schema_digest() == FEATURE_SCHEMA_DIGEST
+    # Sensitivity has to be asserted through the digest itself: comparing a
+    # mutated copy against the payload it was copied from holds by construction
+    # and would keep holding for a digest that ignored the field entirely.
     changed = dict(payload)
     changed["mark_as_of_max_age_ns"] = MARK_MAX_AGE_NS - 1
-    assert changed != payload
+    assert stage3._canonical_digest(changed) != FEATURE_SCHEMA_DIGEST
 
 
 def test_stage3_typed_config_has_no_implicit_path_or_identity_defaults(
