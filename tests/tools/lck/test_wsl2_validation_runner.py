@@ -730,6 +730,18 @@ def test_workflow_review_records_claude_skill_path_when_provided(
     )
 
 
+def test_fixed_profile_accepts_claude_skill_path_value(tmp_path: Path) -> None:
+    repo = _copy_runner_repo(tmp_path)
+    bin_dir = _write_fake_tools(tmp_path, repo)
+    adapter = ".claude/skills/task-delivery-runner/SKILL.md"
+
+    result = _run(repo, bin_dir, "targeted", "--skill-path", adapter)
+
+    assert result.returncode == 0, result.stderr
+    stored = json.loads((repo / json.loads(result.stdout)["result_path"]).read_text())
+    assert stored["integrity"]["skill"] == resolve_skill_package(repo, adapter)
+
+
 def test_validation_skill_path_outside_allowed_roots_fails(tmp_path: Path) -> None:
     """--skill-path outside .agents/skills/ or .claude/skills/ is rejected."""
     repo = _copy_runner_repo(tmp_path)

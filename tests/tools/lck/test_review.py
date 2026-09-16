@@ -998,7 +998,11 @@ def test_review_validation_artifacts_are_preserved_outside_review_clone(
     (output_dir / "pytest.log").write_text("pass\n", encoding="utf-8")
 
     class ValidationRunner:
+        def __init__(self) -> None:
+            self.commands: list[tuple[str, ...]] = []
+
         def run(self, argv: Any, *, command_id: str, **_: Any) -> CommandResult:
+            self.commands.append(tuple(str(item) for item in argv))
             payload = {
                 "status": "pass",
                 "output_dir": ".agents/validation.local/run",
@@ -1018,8 +1022,10 @@ def test_review_validation_artifacts_are_preserved_outside_review_clone(
             )
 
     resolver = cast(Any, StaticResolver(repo_root, _review_state()))
-    resolver.runner = ValidationRunner()
-    validation = lck_validation.ReviewValidationGate(resolver).run(
+    runner = ValidationRunner()
+    resolver.runner = runner
+    adapter = ".claude/skills/task-pr-review-runner/SKILL.md"
+    validation = lck_validation.ReviewValidationGate(resolver, skill_path=adapter).run(
         review_root, SHA, SHA
     )
 
@@ -1038,6 +1044,7 @@ def test_review_validation_artifacts_are_preserved_outside_review_clone(
     assert evidence["validated_base_sha"] == SHA
     assert evidence["commands"][0]["status"] == "pass"
     assert not (source_agents / "validation.local").exists()
+    assert runner.commands[0][-2:] == ("--skill-path", adapter)
 
 
 def test_review_validation_failure_is_persisted_before_prepare_stops(

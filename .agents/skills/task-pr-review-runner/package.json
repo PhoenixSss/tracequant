@@ -1,10 +1,10 @@
 {
   "entrypoint": ".agents/skills/task-pr-review-runner/SKILL.md",
   "files": {
-    ".agents/policies/command-execution.md": "9d14dacf10e113c2ae18f79114603ab3118d387e92191b1895489c8242e79463",
+    ".agents/policies/command-execution.md": "bfbc4f0be6f0e428f153a91008ca96c3407271ce1774706e089a80ebb824e09e",
     ".agents/policies/context-retrieval.md": "d0b1a54716a5c6e0c23c1ebebad3e8c1b15f1f34ec9732dda8d1f75f0776b336",
     ".agents/policies/workflow-evidence.md": "b1690e6a7bf298fdb72961ba00b79baa9942179cd5b2188e36a1a0cadc426854",
-    ".agents/skills/task-pr-review-runner/SKILL.md": "38102cc4da621f51b594c32d68cff71fe137649d3eeab9a308f1c62bdf135dd9",
+    ".agents/skills/task-pr-review-runner/SKILL.md": "00e8ff28bfd1b0669e2f1874362d6b118f48a7ab6c38d8de4b2966b1b6fc10fd",
     "AGENTS.md": "9b9b63b3774120212fae6369621cbdc0fa9964ee9d30f0429dbe421336c9c26d",
     "docs/workflows/lck/review-and-remediation.md": "983cd5adb02693e1347dd8df28a580179666113b0108afcb24f5c6415b6ca09e"
   },

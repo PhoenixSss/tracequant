@@ -170,6 +170,53 @@ def test_formal_validation_records_effective_instruction_package(
     assert identity == resolve_skill_package(repo, f".agents/skills/{name}/SKILL.md")
 
 
+def test_formal_validation_records_actual_claude_adapter_package(
+    tmp_path: Path,
+) -> None:
+    repo = _write_repo(tmp_path)
+    bin_dir = _write_fake_tools(tmp_path)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    adapter = ".claude/skills/task-delivery-runner/SKILL.md"
+
+    result = _run(
+        repo,
+        env,
+        "--phase",
+        "delivery",
+        "--skill-path",
+        adapter,
+    )
+
+    assert result.returncode == 0, result.stderr
+    identity = json.loads(result.stdout)["execution_identity"]["skill"]
+    assert identity == resolve_skill_package(repo, adapter)
+    assert adapter in identity["inventory"]
+    assert ".agents/skills/task-delivery-runner/SKILL.md" in identity["inventory"]
+    assert ".claude/settings.json" in identity["inventory"]
+
+
+def test_formal_validation_rejects_caller_skill_from_another_phase(
+    tmp_path: Path,
+) -> None:
+    repo = _write_repo(tmp_path)
+    bin_dir = _write_fake_tools(tmp_path)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+
+    result = _run(
+        repo,
+        env,
+        "--phase",
+        "delivery",
+        "--skill-path",
+        ".claude/skills/task-pr-review-runner/SKILL.md",
+    )
+
+    assert result.returncode != 0
+    assert "caller Skill does not match validation phase" in result.stderr
+
+
 @pytest.mark.parametrize("when", ["before", "during"])
 def test_formal_validation_fails_on_instruction_drift(
     tmp_path: Path, when: str

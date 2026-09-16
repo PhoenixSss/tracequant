@@ -42,6 +42,7 @@ Otherwise complete the actual repair:
 ```bash
 uv run --frozen python -m tools.lck remediation complete <TASK> \
   --review-id <FAILED_REVIEW_ID> \
+  --skill-path <CALLER_SKILL_PATH> \
   --commit-message "<scoped repair commit message>" \
   --summary "<repair summary>" \
   --risks "<risks or limitations>"

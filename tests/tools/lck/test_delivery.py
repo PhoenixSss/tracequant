@@ -444,12 +444,14 @@ def test_formal_validation_gate_requires_structured_pass(tmp_path: Path) -> None
     resolver = lck_state.LiveStateResolver(
         tmp_path, runner=cast(Any, runner), repository="owner/repo"
     )
+    adapter = ".claude/skills/task-delivery-runner/SKILL.md"
 
-    payload = lck_validation.FormalValidationGate(resolver).run(SHA)
+    payload = lck_validation.FormalValidationGate(resolver, skill_path=adapter).run(SHA)
 
     assert payload["status"] == "pass"
     assert "--phase" in runner.commands[0]
     assert "delivery" in runner.commands[0]
+    assert runner.commands[0][-2:] == ("--skill-path", adapter)
 
 
 @pytest.mark.parametrize(("status", "returncode"), [("fail", 1), ("pass", 1)])
@@ -939,8 +941,16 @@ Verification test: tests/tools/lck/test_delivery.py::test_task_160_critical_outc
         if command and command[0] == "uv":
             return self._result(command_id, command, stdout="1 passed")
         if command_id == "lck-formal-delivery-validation":
+            skill_path = command[command.index("--skill-path") + 1]
             return self._result(
-                command_id, command, stdout=json.dumps({"status": "pass"})
+                command_id,
+                command,
+                stdout=json.dumps(
+                    {
+                        "status": "pass",
+                        "execution_identity": {"skill": {"path": skill_path}},
+                    }
+                ),
             )
 
         if args[:1] == ["fetch"]:
@@ -1235,6 +1245,8 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
             "delivery",
             "complete",
             "160",
+            "--skill-path",
+            ".claude/skills/task-delivery-runner/SKILL.md",
             "--commit-message",
             "Implement LCK Delivery cutover",
             "--summary",
@@ -1265,6 +1277,17 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
     assert runner.open_pr is True
     assert "lck-critical-outcome" in runner.command_ids
     assert "lck-formal-delivery-validation" in runner.command_ids
+    formal_command = runner.commands[
+        runner.command_ids.index("lck-formal-delivery-validation")
+    ]
+    assert formal_command[-2:] == (
+        "--skill-path",
+        ".claude/skills/task-delivery-runner/SKILL.md",
+    )
+    assert (
+        receipt["audit"]["validation"]["execution_identity"]["skill"]["path"]
+        == ".claude/skills/task-delivery-runner/SKILL.md"
+    )
     assert "lck-commit-current-tree" in runner.command_ids
     assert "lck-push-task-branch" in runner.command_ids
     assert any(

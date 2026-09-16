@@ -13,7 +13,8 @@ Use the repository Validation Runner:
 
 ```bash
 uv run --frozen python -m tools.lck.validation_runner run \
-  --phase feature-audit --include-skill-validators --require-skill-validator
+  --phase feature-audit --skill-path <CALLER_SKILL_PATH> \
+  --include-skill-validators --require-skill-validator
 ```
 
 Record the actual invoking Skill package identity, Evidence/Validation Runner,

@@ -44,11 +44,13 @@ def _build_parser() -> argparse.ArgumentParser:
     complete.add_argument("--commit-message", required=True)
     complete.add_argument("--summary", required=True)
     complete.add_argument("--risks", default="")
+    complete.add_argument("--skill-path")
 
     review = commands.add_parser("review")
     review_commands = review.add_subparsers(dest="review_command", required=True)
     review_prepare = review_commands.add_parser("prepare")
     review_prepare.add_argument("task", type=int)
+    review_prepare.add_argument("--skill-path")
     review_complete = review_commands.add_parser("complete")
     review_complete.add_argument("task", type=int)
     review_complete.add_argument("--review-id", required=True)
@@ -74,6 +76,7 @@ def _build_parser() -> argparse.ArgumentParser:
     remediation_complete.add_argument("--commit-message", required=True)
     remediation_complete.add_argument("--summary", required=True)
     remediation_complete.add_argument("--risks", default="")
+    remediation_complete.add_argument("--skill-path")
 
     merge = commands.add_parser("merge")
     merge_commands = merge.add_subparsers(dest="merge_command", required=True)
@@ -140,7 +143,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             handler = DeliveryPreparer(resolver)
             return emit_success(handler.prepare(task_number))
         if args.command == "delivery" and args.delivery_command == "complete":
-            handler = DeliveryCompleter(resolver)
+            handler = (
+                DeliveryCompleter(resolver)
+                if args.skill_path is None
+                else DeliveryCompleter(resolver, skill_path=args.skill_path)
+            )
             return emit_success(
                 handler.complete(
                     task_number,
@@ -150,7 +157,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
         if args.command == "review" and args.review_command == "prepare":
-            handler = ReviewPreparer(resolver)
+            handler = (
+                ReviewPreparer(resolver)
+                if args.skill_path is None
+                else ReviewPreparer(resolver, skill_path=args.skill_path)
+            )
             return emit_success(handler.prepare(task_number))
         if args.command == "review" and args.review_command == "complete":
             handler = ReviewCompleter(resolver)
@@ -182,7 +193,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
         if args.command == "remediation" and args.remediation_command == "complete":
-            handler = RemediationCompleter(resolver)
+            handler = (
+                RemediationCompleter(resolver)
+                if args.skill_path is None
+                else RemediationCompleter(resolver, skill_path=args.skill_path)
+            )
             return emit_success(
                 handler.complete(
                     task_number,

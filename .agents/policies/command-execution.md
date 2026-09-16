@@ -25,6 +25,14 @@ uv run --frozen python -m tools.lck <phase> <operation> <task>
 uv run --frozen python -m tools.lck.wsl2_validation_runner <named-profile> <fixed-args>
 ```
 
+Formal validation-bearing entry points accept `--skill-path
+<CALLER_SKILL_PATH>`. Supply the repo-relative `SKILL.md` entrypoint actually
+loaded for the invocation: the canonical `.agents/skills/...` path for a direct
+canonical invocation or the `.claude/skills/...` path when a Claude adapter led
+to the command. LCK validates that the entrypoint matches the workflow phase and
+binds the complete canonical/adapter/permissions package. This argument records
+instruction identity only; it grants no authority.
+
 Run them from the current repository root on the WSL2 Linux filesystem. Do not
 wrap them in `bash -c`, `sh -c`, command substitution, pipelines, redirection,
 or a generic shell string.

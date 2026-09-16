@@ -33,8 +33,11 @@ from .state import (
 class FormalValidationGate:
     """Run the repository-owned deterministic Delivery validation plan."""
 
-    def __init__(self, resolver: LiveStateResolver) -> None:
+    def __init__(
+        self, resolver: LiveStateResolver, *, skill_path: str | None = None
+    ) -> None:
         self.resolver = resolver
+        self.skill_path = skill_path
         self.last_payload: dict[str, Any] | None = None
 
     def run(self, base_sha: str) -> dict[str, Any]:
@@ -44,21 +47,24 @@ class FormalValidationGate:
         reporter = ProgressReporter("workflow-validation")
         reporter.started("formal-validation")
         try:
+            argv = [
+                sys.executable,
+                "-m",
+                "tools.lck.validation_runner",
+                "run",
+                "--repo-root",
+                str(self.resolver.repo_root),
+                "--phase",
+                "delivery",
+                "--base-sha",
+                base_sha,
+                "--include-skill-validators",
+                "--require-skill-validator",
+            ]
+            if self.skill_path is not None:
+                argv.extend(["--skill-path", self.skill_path])
             result = self.resolver.runner.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "tools.lck.validation_runner",
-                    "run",
-                    "--repo-root",
-                    str(self.resolver.repo_root),
-                    "--phase",
-                    "delivery",
-                    "--base-sha",
-                    base_sha,
-                    "--include-skill-validators",
-                    "--require-skill-validator",
-                ],
+                argv,
                 command_id="lck-formal-delivery-validation",
                 validation=True,
                 progress=lambda: reporter.heartbeat(
@@ -98,8 +104,11 @@ class FormalValidationGate:
 class ReviewValidationGate:
     """Run current Review validation inside the isolated reviewed clone."""
 
-    def __init__(self, resolver: LiveStateResolver) -> None:
+    def __init__(
+        self, resolver: LiveStateResolver, *, skill_path: str | None = None
+    ) -> None:
         self.resolver = resolver
+        self.skill_path = skill_path
 
     def _persist_validation_artifacts(
         self,
@@ -231,21 +240,24 @@ class ReviewValidationGate:
         reporter = ProgressReporter("review-prepare")
         reporter.started("formal-validation")
         try:
+            argv = [
+                sys.executable,
+                "-m",
+                "tools.lck.validation_runner",
+                "run",
+                "--repo-root",
+                str(review_root),
+                "--phase",
+                "review",
+                "--base-sha",
+                base_sha,
+                "--include-skill-validators",
+                "--require-skill-validator",
+            ]
+            if self.skill_path is not None:
+                argv.extend(["--skill-path", self.skill_path])
             result = self.resolver.runner.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "tools.lck.validation_runner",
-                    "run",
-                    "--repo-root",
-                    str(review_root),
-                    "--phase",
-                    "review",
-                    "--base-sha",
-                    base_sha,
-                    "--include-skill-validators",
-                    "--require-skill-validator",
-                ],
+                argv,
                 command_id="lck-formal-review-validation",
                 cwd=review_root,
                 validation=True,

@@ -277,6 +277,7 @@ class DeliveryCompleter:
         profile_resolver: ProfileResolver | None = None,
         require_existing_open_pr: bool = False,
         candidate_recorder: Callable[[str, str], None] | None = None,
+        skill_path: str | None = None,
         services: Sequence[Any] = (),
     ) -> None:
         self.resolver = resolver
@@ -291,7 +292,9 @@ class DeliveryCompleter:
             registry=self.policy_registry,
             profile_resolver=self.profile_resolver,
         )
-        self.formal_validation = formal_validation or FormalValidationGate(resolver)
+        self.formal_validation = formal_validation or FormalValidationGate(
+            resolver, skill_path=skill_path
+        )
         self.commit_effect = commit_effect or CommitCurrentTreeEffect(resolver)
         self.remote_effect = remote_effect or EnsureRemoteBranchEffect(resolver)
         self.pr_effect = pr_effect or EnsureOpenPrEffect(resolver)

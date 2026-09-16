@@ -209,11 +209,14 @@ def _run_validation(
         "feature-audit": "feature-completion-audit",
     }
     skill_name = names[args.phase]
-    skill_path = f".agents/skills/{skill_name}/SKILL.md"
+    canonical_skill_path = f".agents/skills/{skill_name}/SKILL.md"
+    skill_path = args.skill_path or canonical_skill_path
     try:
         skill_identity = resolve_skill_package(repo_root, skill_path)
     except (SkillPackageError, OSError) as exc:
         raise WorkflowToolError(str(exc)) from exc
+    if skill_identity["canonical_path"] != canonical_skill_path:
+        raise WorkflowToolError("caller Skill does not match validation phase")
     skill_validator = _discover_skill_validator(args.skill_validator)
     plan, limitations = _build_plan(
         repo_root,
@@ -230,6 +233,8 @@ def _run_validation(
     plan_identity = {
         "phase": args.phase,
         "base_sha": args.base_sha,
+        "skill_path": skill_path,
+        "skill_package_sha256": skill_identity["package_sha256"],
         "commands": [
             {
                 "command_id": item.command_id,
@@ -342,6 +347,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--phase",
         choices=("delivery", "review", "closeout", "feature-audit"),
         required=True,
+    )
+    run.add_argument(
+        "--skill-path",
+        help="repo-relative path to the actual calling Skill's SKILL.md",
     )
     run.add_argument("--skill-validator", help="path to quick_validate.py")
     run.add_argument(

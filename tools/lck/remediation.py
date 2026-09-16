@@ -560,6 +560,7 @@ class RemediationCompleter:
         checks_gate: DeliveryChecksGate | None = None,
         policy_registry: ProfilePolicyRegistry | None = None,
         profile_resolver: ProfileResolver | None = None,
+        skill_path: str | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
@@ -573,6 +574,7 @@ class RemediationCompleter:
         )
         self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
+        self.skill_path = skill_path
         self.last_snapshot: OperationSnapshot | None = None
         self.last_critical_outcome: dict[str, Any] | None = None
         self.last_profile_evidence: ProfileEvidenceEnvelope | None = None
@@ -753,6 +755,7 @@ class RemediationCompleter:
             profile_resolver=self.profile_resolver,
             require_existing_open_pr=True,
             candidate_recorder=record_candidate,
+            skill_path=self.skill_path,
         )
         try:
             delivery = delivery_completer.complete(

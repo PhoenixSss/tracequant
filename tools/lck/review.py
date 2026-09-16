@@ -147,6 +147,7 @@ class ReviewPreparer:
         store: ReviewInvocationStore | None = None,
         policy_registry: ProfilePolicyRegistry | None = None,
         profile_resolver: ProfileResolver | None = None,
+        skill_path: str | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
@@ -160,7 +161,9 @@ class ReviewPreparer:
             registry=self.policy_registry,
             profile_resolver=self.profile_resolver,
         )
-        self.validation = validation or ReviewValidationGate(resolver)
+        self.validation = validation or ReviewValidationGate(
+            resolver, skill_path=skill_path
+        )
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
         self.workspace = workspace or ReviewWorkspaceManager(resolver)
         self.store = store or ReviewInvocationStore(resolver.repo_root)

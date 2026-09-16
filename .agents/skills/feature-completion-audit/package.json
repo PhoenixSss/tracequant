@@ -1,7 +1,7 @@
 {
   "entrypoint": ".agents/skills/feature-completion-audit/SKILL.md",
   "files": {
-    ".agents/policies/command-execution.md": "9d14dacf10e113c2ae18f79114603ab3118d387e92191b1895489c8242e79463",
+    ".agents/policies/command-execution.md": "bfbc4f0be6f0e428f153a91008ca96c3407271ce1774706e089a80ebb824e09e",
     ".agents/policies/context-retrieval.md": "d0b1a54716a5c6e0c23c1ebebad3e8c1b15f1f34ec9732dda8d1f75f0776b336",
     ".agents/policies/workflow-evidence.md": "b1690e6a7bf298fdb72961ba00b79baa9942179cd5b2188e36a1a0cadc426854",
     ".agents/skills/feature-completion-audit/SKILL.md": "c0f801f57c474a2485eb5aabfc9c28e6e063ba6e8e61f045edbb7c935ed4b2cc",
@@ -9,7 +9,7 @@
     ".agents/skills/feature-completion-audit/references/phase-2.md": "43d90ac5d7b5972153dcc4c3fc276d83a947baacb21efcddf897c9dbdb38ad4c",
     ".agents/skills/feature-completion-audit/references/phase-3.md": "e4a207e8d15435454a304838ebff6bb05f184397b5599fbe7c05b63e3130be89",
     ".agents/skills/feature-completion-audit/references/phase-4.md": "2369c27b77ed4abbb914f658d142ac2f88ba99d1a438168c356608188ef8fcd2",
-    ".agents/skills/feature-completion-audit/references/phase-5.md": "af3b62c90cfcb584f57c0c389f3122ea5d9886bcd17c12abf9c86184437ee3b2",
+    ".agents/skills/feature-completion-audit/references/phase-5.md": "9d4392eb5923c0abd20a03a8aab0b5e6770aa428634241d42865b80e3eda7d70",
     ".agents/skills/feature-completion-audit/references/phase-6.md": "fd232c771b3cc6d795a1667f4482b847e777e7372cfadef4fe9030497d1d337f",
     "AGENTS.md": "9b9b63b3774120212fae6369621cbdc0fa9964ee9d30f0429dbe421336c9c26d",
     "docs/workflows/lck/lifecycle.md": "4b50e99f3bcf3ebde0f811fc6e4fa083e8a3bb86d4fc646bcf0a649ed4b45809"

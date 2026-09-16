@@ -707,9 +707,11 @@ def test_remediation_complete_can_resume_committed_new_head_and_requires_re_revi
         ),
     )
 
+    delivery_init: dict[str, Any] = {}
+
     class FakeDeliveryCompleter:
-        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
-            pass
+        def __init__(self, *_args: Any, **kwargs: Any) -> None:
+            delivery_init.update(kwargs)
 
         def complete(
             self, *_args: Any, **_kwargs: Any
@@ -718,7 +720,10 @@ def test_remediation_complete_can_resume_committed_new_head_and_requires_re_revi
 
     monkeypatch.setattr(lck_remediation, "DeliveryCompleter", FakeDeliveryCompleter)
 
-    result = lck_remediation.RemediationCompleter(resolver, store=store).complete(
+    adapter = ".claude/skills/task-delivery-runner/SKILL.md"
+    result = lck_remediation.RemediationCompleter(
+        resolver, store=store, skill_path=adapter
+    ).complete(
         159,
         review_id,
         commit_message="Repair review finding",
@@ -731,6 +736,7 @@ def test_remediation_complete_can_resume_committed_new_head_and_requires_re_revi
         in result.to_dict()["deferred_review_acceptance"]
     )
     assert result.to_dict()["automatic_review"] is False
+    assert delivery_init["skill_path"] == adapter
     required = store.read_review_required(159)
     assert required is not None
     assert required["remediated_head"] == repaired_head

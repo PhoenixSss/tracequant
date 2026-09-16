@@ -19,6 +19,7 @@ bounded `tests/.../test_*.py::test_*` Verification test.
 
 ```bash
 uv run --frozen python -m tools.lck delivery complete <TASK> \
+  --skill-path <CALLER_SKILL_PATH> \
   --commit-message "<scoped commit message>" \
   --summary "<implementation summary>" \
   --risks "<risks or limitations>"

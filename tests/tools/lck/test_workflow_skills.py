@@ -41,7 +41,8 @@ def test_feature_audit_documents_complete_locked_module_commands() -> None:
     ) in feature
     assert (
         f"{LOCKED_PYTHON} -m tools.lck.validation_runner run \\\n"
-        "  --phase feature-audit --include-skill-validators "
+        "  --phase feature-audit --skill-path <CALLER_SKILL_PATH> \\\n"
+        "  --include-skill-validators "
         "--require-skill-validator"
     ) in feature
     assert (

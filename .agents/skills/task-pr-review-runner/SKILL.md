@@ -22,7 +22,8 @@ Resolve the leaf number from maintainer intent; it is the only target key passed
 to LCK. Delivery handoffs and historical PR/base/head/checks are not authority.
 
 ```bash
-uv run --frozen python -m tools.lck review prepare <TASK>
+uv run --frozen python -m tools.lck review prepare <TASK> \
+  --skill-path <CALLER_SKILL_PATH>
 ```
 
 Proceed only on `READY_FOR_SEMANTIC_REVIEW`. Use the returned `review_id`, Task

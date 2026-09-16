@@ -789,15 +789,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             if SHA_PATTERN.fullmatch(normalized_base) is None:
                 parser.error("--base-sha must be a full 40-character Git SHA")
             return _run_profile(args.profile, normalized_base, args.skill_path)
-        # Count positional (non-option) arguments; allow --skill-path
-        positional = [
-            a for a in raw_argv if not a.startswith("-") and a not in ("--skill-path",)
-        ]
-        if len(positional) != 1:
-            parser.error(
-                "fixed profiles accept exactly one profile argument; "
-                "trailing arguments are not accepted"
-            )
         return _run_profile(args.profile, skill_path=args.skill_path)
     except KeyboardInterrupt:
         print(

@@ -1,7 +1,7 @@
 {
   "entrypoint": ".agents/skills/task-closeout/SKILL.md",
   "files": {
-    ".agents/policies/command-execution.md": "9d14dacf10e113c2ae18f79114603ab3118d387e92191b1895489c8242e79463",
+    ".agents/policies/command-execution.md": "bfbc4f0be6f0e428f153a91008ca96c3407271ce1774706e089a80ebb824e09e",
     ".agents/policies/context-retrieval.md": "d0b1a54716a5c6e0c23c1ebebad3e8c1b15f1f34ec9732dda8d1f75f0776b336",
     ".agents/policies/workflow-evidence.md": "b1690e6a7bf298fdb72961ba00b79baa9942179cd5b2188e36a1a0cadc426854",
     ".agents/skills/task-closeout/SKILL.md": "195b0a3c736c05d26d157e6649419f72e3d72cf07f849149b4d1316ac0767141",

@@ -1,12 +1,12 @@
 {
   "entrypoint": ".agents/skills/task-delivery-runner/SKILL.md",
   "files": {
-    ".agents/policies/command-execution.md": "9d14dacf10e113c2ae18f79114603ab3118d387e92191b1895489c8242e79463",
+    ".agents/policies/command-execution.md": "bfbc4f0be6f0e428f153a91008ca96c3407271ce1774706e089a80ebb824e09e",
     ".agents/policies/context-retrieval.md": "d0b1a54716a5c6e0c23c1ebebad3e8c1b15f1f34ec9732dda8d1f75f0776b336",
     ".agents/policies/workflow-evidence.md": "b1690e6a7bf298fdb72961ba00b79baa9942179cd5b2188e36a1a0cadc426854",
     ".agents/skills/task-delivery-runner/SKILL.md": "0d29ddff1f1831faf7345793ee77132ab6dd5477a15db5ca502f56a894f10662",
-    ".agents/skills/task-delivery-runner/references/initial-delivery.md": "36bf8f058f14ecc156e6b1646c4765e72a7bb957c982fa0a22d9a758921e9e21",
-    ".agents/skills/task-delivery-runner/references/remediation.md": "f8c52ac05fe03ce2592c1979826743afe59b8b49ffa2196f72ff84289dd1df4e",
+    ".agents/skills/task-delivery-runner/references/initial-delivery.md": "3ce02a261372c0d011b1a4b5f216877ca41206e945646e26b98127add4c5704f",
+    ".agents/skills/task-delivery-runner/references/remediation.md": "541e0e18c3090562466c56a2643d87300304e18296d3d19f85c720647b14112b",
     "AGENTS.md": "9b9b63b3774120212fae6369621cbdc0fa9964ee9d30f0429dbe421336c9c26d",
     "docs/workflows/lck/lifecycle.md": "4b50e99f3bcf3ebde0f811fc6e4fa083e8a3bb86d4fc646bcf0a649ed4b45809",
     "docs/workflows/lck/review-and-remediation.md": "983cd5adb02693e1347dd8df28a580179666113b0108afcb24f5c6415b6ca09e"
