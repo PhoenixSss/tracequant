@@ -1,6 +1,6 @@
 ---
 name: task-closeout
-description: Claude adapter for the canonical LCK post-merge closeout procedure.
+description: Complete post-merge closeout for a maintainer-specified leaf Issue after the maintainer says its PR was manually Squash Merged.
 ---
 
 # Claude adapter

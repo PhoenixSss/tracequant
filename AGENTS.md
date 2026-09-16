@@ -43,8 +43,11 @@ maintainer alone authorizes merge and explicit remediation after Review FAIL.
   lifecycle authority or a product persistence root.
 - Unknown identity, stale state, incomplete evidence, or conflicting authority
   fails closed.
-- Run the repository's locked pytest, Ruff, formatting, and mypy checks before
-  delivery completion.
+- During implementation, run the smallest change-relevant targeted feedback. Once it
+  passes and no concrete failure or unresolved diagnostic concern remains, proceed
+  directly to LCK Delivery Complete; LCK owns the locked pytest, Ruff, formatting,
+  and mypy plan. Broaden or repeat validation only after a failure, a new finding, or
+  an explicit maintainer request.
 
 Detailed lifecycle semantics live in `docs/workflows/lck/lifecycle.md` and
 `docs/workflows/lck/review-and-remediation.md`. Do not duplicate them here.
