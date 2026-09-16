@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -77,7 +77,9 @@ from tracequant.source_data.stage2_btceth import (
     STAGE2_FUNDING_STREAM_ID,
     STAGE2_INSTRUMENT_IDS,
     STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
+    STAGE2_INTERVAL_MS,
     STAGE2_MANIFEST_FILENAME,
+    STAGE2_MARK_ALLOWED_GAPS,
     STAGE2_NAUTILUS_VERSION,
     STAGE2_SOURCE_SCHEMA,
     STAGE2_WINDOW_START_ISO,
@@ -114,10 +116,11 @@ BAR_ORIGIN_NS = DATASET_START_NS + HOUR_NS - MS_NS
 MARK_ORIGIN_NS = DATASET_START_NS + QUARTER_HOUR_NS - MS_NS
 EVALUATION_START = DATASET_START + timedelta(hours=168)
 EVALUATION_END = DATASET_START + timedelta(days=19)
-# 2020-01-19T13:14:59.999Z is the first of the two mark intervals the accepted
-# coverage records as an explained omission.
+# The accepted coverage records two explained mark omissions as open_time
+# intervals; the row each one omits is the bar that closes at
+# 2020-01-19T13:29:59.999Z on the close_time-anchored accepted grid.
 APPROVED_MARK_GAP_INDEX = (
-    mark_allowed_gap_ns()[0][0] - MS_NS - MARK_ORIGIN_NS
+    mark_allowed_gap_ns()[0][0] - MARK_ORIGIN_NS
 ) // QUARTER_HOUR_NS
 
 
@@ -784,25 +787,40 @@ def test_stage3_features_are_bound_to_accepted_catalog_and_causal(
     assert cast(int, excluded.label_end_ts) >= datetime_to_nanos(training_boundary)
 
     # --- non-tautological batch/runtime parity -------------------------------
-    loaded = feature_frame(ready)
-    reference = _reference_features(
-        load_bars(
-            catalog_path,
-            stage2_bar_type_str(BTC, "1h"),
-            DATASET_START,
-            EVALUATION_END + timedelta(hours=LABEL_HORIZON_HOURS),
-        ),
-        load_mark_prices(catalog_path, BTC, DATASET_START, EVALUATION_END),
-        load_funding(catalog_path, BTC, DATASET_START, EVALUATION_END).collect(),
-        instrument_code=0.0,
-    ).filter(pl.col("decision_ts") <= loaded["decision_ts"].max())
-    combined = loaded.join(reference, on="decision_ts", how="inner", suffix="_ref")
-    # Guard against a vacuously green comparison over an empty ready set.
-    assert combined.height == loaded.height == len(ready) > 100
-    for name in FEATURE_NAMES:
-        assert combined[name].to_list() == pytest.approx(
-            combined[f"{name}_ref"].to_list(), abs=FEATURE_ATOL, rel=FEATURE_RTOL
+    # AC4 names both instruments, so each one is compared against its own
+    # independent Polars recomputation instead of a BTC-only reference.
+    for instrument_id, instrument_code in zip(
+        STAGE2_INSTRUMENT_IDS, (0.0, 1.0), strict=True
+    ):
+        instrument_ready = tuple(
+            item for item in window[instrument_id] if item.status == "ready"
         )
+        loaded = feature_frame(instrument_ready)
+        reference = _reference_features(
+            load_bars(
+                catalog_path,
+                stage2_bar_type_str(instrument_id, "1h"),
+                DATASET_START,
+                EVALUATION_END + timedelta(hours=LABEL_HORIZON_HOURS),
+            ),
+            load_mark_prices(
+                catalog_path, instrument_id, DATASET_START, EVALUATION_END
+            ),
+            load_funding(
+                catalog_path, instrument_id, DATASET_START, EVALUATION_END
+            ).collect(),
+            instrument_code=instrument_code,
+        ).filter(pl.col("decision_ts") <= loaded["decision_ts"].max())
+        combined = loaded.join(reference, on="decision_ts", how="inner", suffix="_ref")
+        # Guard against a vacuously green comparison over an empty ready set.
+        assert combined.height == loaded.height == len(instrument_ready) > 100
+        assert combined["instrument_code"].to_list() == pytest.approx(
+            [instrument_code] * combined.height
+        )
+        for name in FEATURE_NAMES:
+            assert combined[name].to_list() == pytest.approx(
+                combined[f"{name}_ref"].to_list(), abs=FEATURE_ATOL, rel=FEATURE_RTOL
+            )
 
     # --- sidecar declarations must agree with the tracked acceptance --------
     coverage_file = catalog_path / STAGE2_COVERAGE_FILENAME
@@ -925,6 +943,39 @@ def _check_sidecar_rejected(
         path.write_text(original, encoding="utf-8")
 
 
+def test_mark_allowed_gap_events_are_indexed_on_the_close_time_grid() -> None:
+    """The locked mark allow-list must be indexed on the accepted event grid.
+
+    ``validate_kline_series`` derives ``ts_event`` from ``close_time``, and a bar
+    closes one millisecond before the next one opens, so the open_time endpoints
+    of the locked allow-list are not grid timestamps. Indexing them directly
+    shifts each approved omission onto the previous row, which the accepted
+    catalog presents, and inverts which sequence the coverage check accepts.
+    """
+    interval_ms = STAGE2_INTERVAL_MS["15m"]
+    allowed = mark_allowed_gap_ns()
+    assert len(allowed) == len(STAGE2_MARK_ALLOWED_GAPS)
+    for (previous_open, next_open), (omitted_ns, following_ns) in zip(
+        STAGE2_MARK_ALLOWED_GAPS, allowed, strict=True
+    ):
+        # Each locked pair omits exactly the one bar opened in between.
+        omitted_open_ms = previous_open + interval_ms
+        assert next_open - omitted_open_ms == interval_ms
+        assert omitted_ns == (omitted_open_ms + interval_ms - 1) * MS_NS
+        assert following_ns == (next_open + interval_ms - 1) * MS_NS
+        # Both sit exactly on the accepted mark grid, one cadence apart.
+        assert (omitted_ns - MARK_ORIGIN_NS) % QUARTER_HOUR_NS == 0
+        assert (following_ns - MARK_ORIGIN_NS) % QUARTER_HOUR_NS == 0
+        assert following_ns - omitted_ns == QUARTER_HOUR_NS
+    omitted_index = (allowed[0][0] - MARK_ORIGIN_NS) // QUARTER_HOUR_NS
+    assert omitted_index == APPROVED_MARK_GAP_INDEX
+    # The grid point one cadence earlier is a row the accepted catalog presents,
+    # so the omission must never be indexed onto it.
+    assert (
+        allowed[0][0] - MS_NS - MARK_ORIGIN_NS
+    ) // QUARTER_HOUR_NS == omitted_index - 1
+
+
 def test_feature_schema_digest_is_stable_and_sensitive() -> None:
     payload = feature_schema_payload()
     assert FEATURE_SCHEMA_DIGEST == (
@@ -1028,6 +1079,92 @@ def test_typed_config_rejects_output_roots_overlapping_the_catalog(
         load_stage3_config(config_path, repository_root=REPOSITORY_ROOT)
 
 
+def _typed_config_values(catalog: Path, evidence: Path, run: Path) -> dict[str, str]:
+    return {
+        "schema": STAGE3_CONFIG_SCHEMA,
+        "dataset_id": STAGE2_DATASET_ID,
+        "acceptance_digest": STAGE2_ACCEPTANCE_DIGEST,
+        "dataset_digest": STAGE2_DATASET_DIGEST,
+        "source_manifest_digest": STAGE2_SOURCE_MANIFEST_DIGEST,
+        "market_data_manifest_digest": STAGE2_MARKET_DATA_MANIFEST_DIGEST,
+        "instrument_snapshot_checksum": STAGE2_INSTRUMENT_SNAPSHOT_CHECKSUM,
+        "runtime_identity": UPSTREAM_RELEASE_IDENTITY,
+        "catalog_path": str(catalog),
+        "evidence_root": str(evidence),
+        "run_root": str(run),
+    }
+
+
+def test_typed_config_fails_closed_on_every_enumerated_ac8_branch(
+    tmp_path: Path,
+) -> None:
+    """AC8 names these fail-closed branches; each one is asserted, not assumed."""
+    catalog = tmp_path / "catalog"
+    catalog.mkdir()
+    evidence = tmp_path / "evidence"
+    run = tmp_path / "runs"
+    base = _typed_config_values(catalog, evidence, run)
+    config_path = tmp_path / "stage3.toml"
+
+    def write(values: Mapping[str, str]) -> Path:
+        config_path.write_text(
+            "\n".join(f'{key} = "{value}"' for key, value in values.items()),
+            encoding="utf-8",
+        )
+        return config_path
+
+    def rejected(values: Mapping[str, str], match: str) -> None:
+        with pytest.raises(Stage3DataError, match=match):
+            load_stage3_config(write(values), repository_root=REPOSITORY_ROOT)
+
+    # The baseline is accepted, so each rejection below is attributable to its
+    # own override rather than to a malformed fixture.
+    baseline = load_stage3_config(write(base), repository_root=REPOSITORY_ROOT)
+    assert baseline.catalog_path == catalog
+    assert baseline.evidence_root == evidence
+
+    # Unknown and missing fields are both schema drift.
+    rejected({**base, "unexpected_key": "x"}, "fields do not match the schema")
+    rejected(
+        {key: value for key, value in base.items() if key != "run_root"},
+        "fields do not match the schema",
+    )
+
+    # An absolute path is still refused inside the repository, and an unpinned
+    # `latest` alias is refused even outside it.
+    rejected(
+        {**base, "run_root": str(REPOSITORY_ROOT / "stage3-runs")},
+        "must not be inside the repository",
+    )
+    rejected(
+        {**base, "run_root": str(tmp_path / "latest" / "runs")},
+        "must not use a latest alias",
+    )
+
+    # A config value that conflicts with the locked accepted identity fails.
+    rejected(
+        {**base, "instrument_snapshot_checksum": "0" * 64},
+        "conflicts with the locked identity",
+    )
+
+    # An existing output partition must carry the exact locked identity. An empty
+    # directory is not a partition, so it must hold a row to reach the check.
+    evidence.mkdir()
+    (evidence / "stale-output.parquet").write_bytes(b"")
+    rejected(base, "has no locked identity")
+    (evidence / "stage3_partition_identity.json").write_text(
+        json.dumps(
+            {
+                "acceptance_digest": STAGE2_ACCEPTANCE_DIGEST,
+                "dataset_id": STAGE2_DATASET_ID,
+                "runtime_identity": "conflicting-runtime-identity",
+            }
+        ),
+        encoding="utf-8",
+    )
+    rejected(base, "identity does not match")
+
+
 def test_incremental_feature_state_stays_bounded_by_the_lookbacks() -> None:
     hours = 24 * 30
     bars = tuple(_bar(index) for index in range(hours + 169))
@@ -1071,6 +1208,37 @@ def test_label_boundary_uses_four_distinct_future_bars() -> None:
     del broken[170]
     with pytest.raises(Stage3DataError, match="gap"):
         build_feature_rows(tuple(broken), marks, funding)
+
+
+def test_zero_volume_bars_are_accepted_input_not_malformed() -> None:
+    """The Task enumerates NaN/Inf/duplicate/order/missing; zero volume is legal."""
+    bars = [_bar(index) for index in range(173)]
+    flat = bars[100]
+    bars[100] = BarProjection(
+        instrument_id=flat.instrument_id,
+        open=flat.open,
+        high=flat.high,
+        low=flat.low,
+        close=flat.close,
+        volume="0.00000000",
+        ts_event=flat.ts_event,
+    )
+    marks, funding = _events(len(bars))
+    assert build_feature_rows(tuple(bars), marks, funding)[168].status == "ready"
+
+    # A negative volume remains a malformed projection.
+    negative = list(bars)
+    negative[100] = BarProjection(
+        instrument_id=flat.instrument_id,
+        open=flat.open,
+        high=flat.high,
+        low=flat.low,
+        close=flat.close,
+        volume="-1",
+        ts_event=flat.ts_event,
+    )
+    with pytest.raises(Stage3DataError, match="must not be negative"):
+        build_feature_rows(tuple(negative), marks, funding)
 
 
 def test_timestamps_are_integer_nanoseconds() -> None:

@@ -77,6 +77,10 @@ MS_NS: Final = 1_000_000
 # Stage 2 source timestamps are millisecond-quantized, so an accepted series may
 # sit at most one millisecond away from its declared grid.
 SERIES_GRID_TOLERANCE_NS: Final = MS_NS
+# An accepted bar closes one millisecond before the next bar opens, so the event
+# timestamp an accepted series is gridded on is its close_time and the open_time
+# an allow-list is written in is not itself a grid timestamp.
+STAGE2_CLOSE_OFFSET_MS: Final = 1
 
 FEATURE_NAMES: Final = (
     "ret_1h",
@@ -231,10 +235,21 @@ def mark_allowed_gap_ns() -> tuple[tuple[int, int], ...]:
     """The two accepted mark omissions on the nanosecond decision timeline.
 
     The accepted mark series is the only series allowed to omit intervals, and
-    only the omissions recorded by the locked Stage 2 allow-list.
+    only the omissions recorded by the locked Stage 2 allow-list. That allow-list
+    is written in millisecond ``(previous_open, next_open)`` open_time pairs, so
+    each omission is the 15m bar opening at ``previous_open + 15m``. Accepted
+    series are gridded on event timestamps, which are close_time derived, so the
+    omitted bar's timestamp is its close (``next_open - 1ms``) and the bar that
+    follows it lands one cadence later. Both returned timestamps therefore sit
+    exactly on the accepted grid, one cadence apart; the open_time endpoints are
+    not grid timestamps and must not be indexed as if they were.
     """
+    interval_ms = STAGE2_INTERVAL_MS["15m"]
     return tuple(
-        ((previous_open + STAGE2_INTERVAL_MS["15m"]) * MS_NS, next_open * MS_NS)
+        (
+            (previous_open + 2 * interval_ms - STAGE2_CLOSE_OFFSET_MS) * MS_NS,
+            (next_open + interval_ms - STAGE2_CLOSE_OFFSET_MS) * MS_NS,
+        )
         for previous_open, next_open in STAGE2_MARK_ALLOWED_GAPS
     )
 
@@ -538,7 +553,7 @@ class IncrementalFeatureState:
         high = _finite_positive(bar.high, "bar high")
         low = _finite_positive(bar.low, "bar low")
         close = _finite_positive(bar.close, "bar close")
-        volume = _finite_positive(bar.volume, "bar volume")
+        volume = _finite_non_negative(bar.volume, "bar volume")
         if high < max(opened, close) or low > min(opened, close) or low > high:
             raise Stage3DataError("bar OHLC projection is invalid")
         self._bars.append((bar.ts_event, opened, high, low, close, volume))
@@ -1065,6 +1080,14 @@ def _finite_positive(value: str | Decimal, field: str) -> float:
     converted = _finite_float(value, field)
     if converted <= 0.0:
         raise Stage3DataError(f"{field} must be positive")
+    return converted
+
+
+def _finite_non_negative(value: str | Decimal, field: str) -> float:
+    """A finite value that may legitimately be zero, such as a bar's volume."""
+    converted = _finite_float(value, field)
+    if converted < 0.0:
+        raise Stage3DataError(f"{field} must not be negative")
     return converted
 
 
