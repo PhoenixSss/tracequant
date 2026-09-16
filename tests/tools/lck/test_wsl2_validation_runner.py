@@ -9,6 +9,9 @@ import sys
 import time
 from pathlib import Path
 
+from tests.tools.lck.skill_package_support import copy_instruction_packages
+from tools.lck.skill_package import resolve_skill_package
+
 ROOT = Path(__file__).parents[3]
 SCRIPT = ROOT / "tools" / "lck" / "wsl2_validation_runner.py"
 SPEC = ROOT / "tools" / "lck" / "config" / "validation_profiles.json"
@@ -22,6 +25,7 @@ IDENTITY_RELATIVE_PATHS = (
     ".codex/rules/tracequant-wsl-validation.rules",
     "tools/lck/validation_runner.py",
     "tools/lck/common.py",
+    "tools/lck/skill_package.py",
 )
 REMOVED_TRUSTED_ENV_KEYS = (
     "WORKFLOW_TRUSTED_RUNNER_SHA",
@@ -65,6 +69,9 @@ def _copy_runner_repo(tmp_path: Path, *, name: str = "repo") -> Path:
         repo / "tools" / "lck" / WORKFLOW_VALIDATION.name,
     )
     shutil.copy2(WORKFLOW_COMMON, repo / "tools" / "lck" / WORKFLOW_COMMON.name)
+    shutil.copy2(
+        ROOT / "tools/lck/skill_package.py", repo / "tools/lck/skill_package.py"
+    )
     (repo / ".gitignore").write_text(
         ".agents/validation.local/\n.agents/evidence.local/\n.workflow.local/\n",
         encoding="utf-8",
@@ -75,18 +82,7 @@ def _copy_runner_repo(tmp_path: Path, *, name: str = "repo") -> Path:
         encoding="utf-8",
     )
     (repo / "tests").mkdir()
-    for skill_dir in (".agents", ".claude"):
-        for skill in (
-            "task-delivery-runner",
-            "task-pr-review-runner",
-            "task-closeout",
-            "feature-completion-audit",
-        ):
-            target = repo / skill_dir / "skills" / skill
-            target.mkdir(parents=True, exist_ok=True)
-            (target / "SKILL.md").write_text(
-                f"---\nname: {skill}\n---\n", encoding="utf-8"
-            )
+    copy_instruction_packages(repo)
     (repo / ".github" / "workflows" / "ci.yml").write_text(
         """name: CI
 jobs:
@@ -727,6 +723,11 @@ def test_workflow_review_records_claude_skill_path_when_provided(
 
     expected_hash = hashlib.sha256((repo / claude_skill).read_bytes()).hexdigest()
     assert stored["integrity"]["skill"]["sha256"] == expected_hash
+    assert stored["integrity"]["skill"] == resolve_skill_package(repo, claude_skill)
+    assert (
+        ".agents/skills/task-pr-review-runner/SKILL.md"
+        in stored["integrity"]["skill"]["inventory"]
+    )
 
 
 def test_validation_skill_path_outside_allowed_roots_fails(tmp_path: Path) -> None:

@@ -306,16 +306,30 @@ def test_typed_leaf_profiles_share_the_restored_kernel() -> None:
 
 
 def test_agent_assets_have_one_canonical_source_and_thin_adapters() -> None:
+    from tools.lck.skill_package import resolve_skill_package
+
     for skill in SKILLS:
         canonical = ROOT / ".agents" / "skills" / skill / "SKILL.md"
         adapter = ROOT / ".claude" / "skills" / skill / "SKILL.md"
         assert canonical.is_file()
         adapter_text = adapter.read_text(encoding="utf-8")
         assert canonical.relative_to(ROOT).as_posix() in adapter_text
-        assert len(adapter_text.splitlines()) < 15
-        assert "uv run --frozen python -m tools.lck" in canonical.read_text(
-            encoding="utf-8"
+        canonical_package = resolve_skill_package(
+            ROOT, canonical.relative_to(ROOT).as_posix()
         )
+        adapter_package = resolve_skill_package(
+            ROOT, adapter.relative_to(ROOT).as_posix()
+        )
+        assert (
+            adapter_package["canonical_package_sha256"]
+            == canonical_package["package_sha256"]
+        )
+        procedure = "\n".join(
+            (ROOT / path).read_text(encoding="utf-8")
+            for path in canonical_package["inventory"]
+            if path.startswith(f".agents/skills/{skill}/") and path.endswith(".md")
+        )
+        assert "uv run --frozen python -m tools.lck" in procedure
 
 
 def test_restoration_manifest_records_source_objects_and_decisions() -> None:

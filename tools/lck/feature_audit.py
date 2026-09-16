@@ -353,7 +353,15 @@ def _runner_source(
     runner: CommandRunner,
     warnings: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    from .skill_package import SkillPackageError, resolve_skill_package
+
     script = Path(__file__).resolve()
+    try:
+        skill_identity = resolve_skill_package(
+            script.parents[2], ".agents/skills/feature-completion-audit/SKILL.md"
+        )
+    except (SkillPackageError, OSError) as exc:
+        raise WorkflowToolError(str(exc)) from exc
     digest = sha256_bytes(script.read_bytes())
     commit = _git_value(
         runner,
@@ -371,6 +379,7 @@ def _runner_source(
         "path": "tools/lck/feature_audit.py",
         "source_sha": commit if is_sha(commit) else None,
         "content_sha256": digest,
+        "skill": skill_identity,
     }
 
 

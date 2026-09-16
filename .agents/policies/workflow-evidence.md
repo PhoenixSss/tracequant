@@ -85,7 +85,9 @@ version.
 
 Every result artifact records, when applicable:
 
-- Skill name/path and content SHA-256;
+- Skill name/path and content SHA-256 plus the effective instruction package
+  inventory and digest, including canonical supporting instructions/shared owners
+  and any Claude adapter chain; see `docs/workflows/lck/agent-skills.md`;
 - Runner, profile specification, Rules, and implementation content SHA-256;
 - profile/schema/Runner versions;
 - repository head and clean/dirty state;

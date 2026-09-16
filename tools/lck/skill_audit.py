@@ -8,13 +8,10 @@ import json
 from pathlib import Path
 from typing import Final
 
-SCHEMA_VERSION: Final = 7
-SKILLS: Final = (
-    "task-delivery-runner",
-    "task-pr-review-runner",
-    "task-closeout",
-    "feature-completion-audit",
-)
+from .skill_package import SKILLS as SKILLS
+from .skill_package import SkillPackageError, resolve_skill_package
+
+SCHEMA_VERSION: Final = 8
 REQUIRED: Final = {
     "task-delivery-runner": ("delivery prepare", "delivery complete"),
     "task-pr-review-runner": ("review prepare", "review complete"),
@@ -57,7 +54,21 @@ def audit(repo_root: Path) -> tuple[dict[str, object], int]:
             violations.append(f"missing adapter Skill {adapter_relative}")
             continue
 
-        canonical = canonical_path.read_text(encoding="utf-8")
+        try:
+            canonical_identity = resolve_skill_package(
+                repo_root, canonical_relative.as_posix()
+            )
+            adapter_identity = resolve_skill_package(
+                repo_root, adapter_relative.as_posix()
+            )
+        except (SkillPackageError, OSError) as exc:
+            violations.append(f"{name}: {exc}")
+            continue
+        canonical = "\n".join(
+            (repo_root / path).read_text(encoding="utf-8")
+            for path in canonical_identity["inventory"]
+            if path.startswith(f".agents/skills/{name}/") and path.endswith(".md")
+        )
         adapter = adapter_path.read_text(encoding="utf-8")
         missing = [token for token in REQUIRED[name] if token not in canonical]
         forbidden = [token for token in FORBIDDEN if token in canonical]
@@ -69,19 +80,24 @@ def audit(repo_root: Path) -> tuple[dict[str, object], int]:
             violations.append(f"{canonical_relative}: forbidden {', '.join(forbidden)}")
 
         canonical_ref = canonical_relative.as_posix()
-        adapter_ok = canonical_ref in adapter and len(adapter.splitlines()) < 15
+        adapter_ok = (
+            adapter_identity["canonical_package_sha256"]
+            == canonical_identity["package_sha256"]
+        )
         if not adapter_ok:
             violations.append(f"{adapter_relative}: not a thin canonical adapter")
 
         canonical_results[name] = {
             "path": canonical_ref,
-            "sha256": _sha256(canonical),
+            "sha256": canonical_identity["sha256"],
+            "instruction_package": canonical_identity,
             "missing_contract_tokens": missing,
             "forbidden_paths": forbidden,
         }
         adapter_results[name] = {
             "path": adapter_relative.as_posix(),
             "sha256": _sha256(adapter),
+            "instruction_package": adapter_identity,
             "canonical_reference": canonical_ref,
             "thin": adapter_ok,
         }

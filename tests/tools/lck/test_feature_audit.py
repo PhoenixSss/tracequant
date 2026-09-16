@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from tools.lck.skill_package import resolve_skill_package
+
 SCRIPT = Path(__file__).parents[3] / "tools" / "lck" / "feature_audit.py"
 PYTHON = os.environ.get("WORKFLOW_TEST_PYTHON", sys.executable)
 
@@ -418,6 +420,9 @@ def test_feature_snapshot_collects_direct_child_and_pr_evidence(tmp_path: Path) 
     value = json.loads(result.stdout)
     assert value["operation"] == "feature-audit-snapshot"
     assert value["gates"]["formal_blockers"]["status"] == "pass"
+    assert value["execution_context"]["runner"]["skill"] == resolve_skill_package(
+        SCRIPT.parents[2], ".agents/skills/feature-completion-audit/SKILL.md"
+    )
     child = value["observed"]["direct_children"]["items"][0]
     assert child["relationship_evidence"]["parent"]["number"] == 62
     assert child["pull_request_evidence"]["items"][0]["number"] == 67

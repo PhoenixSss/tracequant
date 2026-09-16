@@ -1,9 +1,8 @@
 ---
 name: feature-completion-audit
-description: Claude adapter for the canonical read-only LCK feature audit procedure.
+description: Audit completion of one specified open Feature before maintainer closeout.
 ---
 
-# Claude adapter
-
-Follow `.agents/skills/feature-completion-audit/SKILL.md` as the canonical
-procedure. Claude-specific permissions do not grant lifecycle write authority.
+Follow `.agents/skills/feature-completion-audit/SKILL.md` as the canonical procedure.
+Claude permissions come from `.claude/settings.json`; they do not change
+LCK authority or fail-closed behavior. Load only the selected canonical route.

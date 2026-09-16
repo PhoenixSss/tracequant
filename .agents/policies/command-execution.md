@@ -10,6 +10,12 @@ Read the optional ignored `.agents/execution-profile.local.toml` when present.
 It may route only exact documented Runner invocations. Repository Rules and the
 Runner still validate full argv, cwd, repository, profile, and identity.
 
+## Launcher preflight
+
+Before the first LCK command, verify `command -v uv`, `uv --version`, and
+`uv run --frozen python --version`. Failure is an environment/launcher failure,
+not a Delivery/Review verdict and must not be converted into `STOP_REQUIRED`.
+
 ## Deterministic workflow commands
 
 Normal lifecycle and validation commands are:
@@ -28,7 +34,9 @@ formal workflow validation) use a fixed 30-second wait window for the first
 wait and every subsequent still-running poll. A process that exits earlier is
 returned immediately; the 30-second value is a maximum wait window, not a
 minimum runtime. Adaptive polling intervals are not part of the workflow
-contract.
+contract. Structured stderr progress is bounded, non-authoritative observability:
+use it to describe the operation/stage, never eligibility, freshness, verdicts,
+retry or lifecycle results. Final stdout JSON is the machine-parseable result.
 
 The local profile may choose:
 
@@ -82,8 +90,10 @@ Before retrying, classify the failure:
   failure;
 - `contract-invalid`: wrong argv, cwd, repository, profile, schema, or identity.
 
-Only `sandbox-denied` or `credential-isolated` may justify an exact-context
-retry. Do not retry a real command failure with broader permissions. Do not use
+A missing or unparseable tool result permits at most one identical bounded
+retry in the same execution context. This is not permission to retry a valid STOP,
+non-pass admission or command failure. Only `sandbox-denied` or
+`credential-isolated` may justify changing execution context for an exact retry. Do not retry a real command failure with broader permissions. Do not use
 an equivalent direct command chain as fallback.
 
 ## Allowed local writes

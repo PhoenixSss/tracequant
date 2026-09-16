@@ -1202,7 +1202,12 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
         encoding="utf-8"
     )
     assert ".agents/skills/task-delivery-runner/SKILL.md" in claude_skill
-    assert len(claude_skill.splitlines()) < 15
+    from tools.lck.skill_package import resolve_skill_package
+
+    identity = resolve_skill_package(
+        root, ".claude/skills/task-delivery-runner/SKILL.md"
+    )
+    assert identity["canonical_path"] == ".agents/skills/task-delivery-runner/SKILL.md"
     assert "uv run --frozen python -m tools.lck delivery prepare" in agent_skill
     assert "uv run --frozen python -m tools.lck delivery complete" in agent_skill
     initial_section = agent_skill.split("## Review remediation", 1)[0]

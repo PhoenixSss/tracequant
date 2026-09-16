@@ -45,8 +45,9 @@ Claude Code 对应 Skill：
 PR #N 已人工合并，请完成 closeout
 ```
 
-- 每个 Skill 保留自足的 executable procedure；生命周期语义按需从上述 shared
-  docs 读取最小必要 section。
+- Delivery 根入口按 Initial Delivery / explicit Remediation 选择一个 supporting
+  instruction；Feature audit 按当前 Phase 1–6 逐步读取。Review 和 Closeout 保持线性。
+  每个分支只加载当前需要的规范；生命周期语义按需读取最小必要 section。
 
 ## Runner 与证据
 
@@ -77,6 +78,28 @@ SHA-256 由以下只读审计统一验证：
 ```bash
 uv run --frozen python -m tools.lck.skill_audit
 ```
+
+每个 canonical Skill 的 `package.json` 声明 root、supporting instructions、直接引用的
+shared owner 文件及逐文件 SHA-256，并声明 context-loading routes。路径必须是规范的
+仓库内 POSIX 相对路径，禁止 traversal、symlink、未声明 reference、缺失文件和 digest
+不符。inventory 限制为 32 文件、单文件 256 KiB、总计 1 MiB。shared owner 文件完整
+哈希，但其中指向其它业务或生命周期文档的导航不是递归加载命令。
+
+`tools/lck/skill_package.py` 是 audit 和两个 Validation Runner 共用的身份解析器。
+`instruction_package.inventory` / validation `execution_identity.skill.inventory`
+保存排序后的文件哈希；`canonical_package_sha256` 绑定 canonical inventory 与 manifest，
+`package_sha256` 额外绑定实际 Claude adapter 和 permissions（适用时）。SHA-256 使用
+UTF-8 JSON（sort_keys、紧凑 separators）生成，因此与绝对工作区路径无关。单文件
+`path` / `sha256` 保留兼容用途，不能替代包级身份。验证开始和结束都检查完整性；LCK
+Receipt 保留 formal validation payload，所以自然包含同一身份，无新增 authorization gate。
+
+编辑规范文件时，同步更新所有引用它的 manifest 中对应 SHA-256；增加 supporting file
+还须加入 route 并从根或当前分支显式链接。审计只读，不会自动重写 manifest 使失败变通过。
+identity 是可重现的字节证据，不是信任签名、lifecycle authority 或实际上下文读取日志。
+包级哈希覆盖所有可选分支；`selected_instructions` 只选择当前分支，不要求模型读取其它分支。
+
+设计依据：[OpenAI skills / prompts 指导](https://developers.openai.com/blog/rethinking-skills-and-prompts-for-gpt-6-astra)：
+精确使用条件、按需加载多分支说明，并为简单流程保留单一入口。
 
 审计输出只覆盖 `canonical_skills` 与 `adapters`。已退役 Legacy Skill 不再位于
 active discovery namespace，也不再作为 current routing、失败回退或 competing

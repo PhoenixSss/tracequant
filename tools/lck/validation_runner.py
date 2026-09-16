@@ -32,6 +32,7 @@ from .common import (
     sha256_json,
     stderr_tail,
 )
+from .skill_package import SkillPackageError, resolve_skill_package
 
 SCHEMA_VERSION: Final = 1
 OUTPUT_DIR: Final = ".agents/validation.local"
@@ -199,6 +200,20 @@ def _run_validation(
     args: argparse.Namespace, repo_root: Path
 ) -> tuple[dict[str, Any], int]:
     runner = CommandRunner(repo_root)
+    # Formal LCK receipts retain this payload, so identity must bind the same
+    # package consumed by Skill audit and the external validation front door.
+    names = {
+        "delivery": "task-delivery-runner",
+        "review": "task-pr-review-runner",
+        "closeout": "task-closeout",
+        "feature-audit": "feature-completion-audit",
+    }
+    skill_name = names[args.phase]
+    skill_path = f".agents/skills/{skill_name}/SKILL.md"
+    try:
+        skill_identity = resolve_skill_package(repo_root, skill_path)
+    except (SkillPackageError, OSError) as exc:
+        raise WorkflowToolError(str(exc)) from exc
     skill_validator = _discover_skill_validator(args.skill_validator)
     plan, limitations = _build_plan(
         repo_root,
@@ -278,6 +293,13 @@ def _run_validation(
             )
         results.append(entry)
 
+    try:
+        resolve_skill_package(
+            repo_root, skill_path, expected_sha256=skill_identity["package_sha256"]
+        )
+    except (SkillPackageError, OSError) as exc:
+        overall = False
+        limitations.append(f"instruction identity changed during validation: {exc}")
     if overall:
         progress.completed("validation")
     else:
@@ -300,6 +322,10 @@ def _run_validation(
         "execution_identity": {
             "path": "tools/lck/validation_runner.py",
             "content_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "skill": skill_identity,
+            "skill_package_resolver_sha256": hashlib.sha256(
+                Path(__file__).with_name("skill_package.py").read_bytes()
+            ).hexdigest(),
         },
     }
     return output, 0 if overall else 1

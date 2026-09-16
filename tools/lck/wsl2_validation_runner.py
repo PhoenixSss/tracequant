@@ -23,6 +23,7 @@ if __package__ in {None, ""}:  # Support the documented direct-file fallback.
     __package__ = "tools.lck"
 
 from .common import build_workflow_env
+from .skill_package import SkillPackageError, resolve_skill_package
 
 SCHEMA_VERSION: Final = 1
 RUNNER_VERSION: Final = "1.2.0"
@@ -33,6 +34,7 @@ RULES_PATH: Final = ".codex/rules/tracequant-wsl-validation.rules"
 CI_WORKFLOW_PATH: Final = ".github/workflows/ci.yml"
 WORKFLOW_VALIDATION_PATH: Final = "tools/lck/validation_runner.py"
 COMMON_TOOL_PATH: Final = "tools/lck/common.py"
+SKILL_PACKAGE_PATH: Final = "tools/lck/skill_package.py"
 STDIO_LIMIT_BYTES: Final = 4096
 SENSITIVE_PATTERNS: Final = (
     re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
@@ -49,6 +51,7 @@ IDENTITY_PATHS: Final = (
     RULES_PATH,
     WORKFLOW_VALIDATION_PATH,
     COMMON_TOOL_PATH,
+    SKILL_PACKAGE_PATH,
 )
 COMMAND_ID_PATTERN: Final = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?")
 SHA_PATTERN: Final = re.compile(r"^[0-9a-f]{40}$")
@@ -242,7 +245,7 @@ def _resolve_skill_identity(
     repo_root: Path,
     profile_name: str,
     caller_skill_path: str | None,
-) -> dict[str, str] | None:
+) -> dict[str, Any] | None:
     """Resolve the actual Skill identity for this Runner invocation.
 
     When *caller_skill_path* is provided the Runner validates it, re-hashes the
@@ -254,6 +257,7 @@ def _resolve_skill_identity(
         "workflow-review": ".agents/skills/task-pr-review-runner/SKILL.md",
         "workflow-closeout": ".agents/skills/task-closeout/SKILL.md",
     }
+    relative_path: str | None
 
     if caller_skill_path is not None:
         normalized = caller_skill_path.replace("\\", "/")
@@ -270,14 +274,21 @@ def _resolve_skill_identity(
                 f"--skill-path must start with one of {ALLOWED_SKILL_ROOTS}: "
                 f"{caller_skill_path!r}"
             )
-        payload = _read_current_file(repo_root, normalized)
-        return {"path": normalized, "sha256": _sha256_bytes(payload)}
-
-    relative_path = mapping.get(profile_name)
+        relative_path = normalized
+        expected = mapping.get(profile_name)
+        if (
+            expected is not None
+            and normalized.split("/")[-2] != expected.split("/")[-2]
+        ):
+            raise RunnerError("caller Skill does not match validation profile")
+    else:
+        relative_path = mapping.get(profile_name)
     if relative_path is None:
         return None
-    payload = _read_current_file(repo_root, relative_path)
-    return {"path": relative_path, "sha256": _sha256_bytes(payload)}
+    try:
+        return resolve_skill_package(repo_root, relative_path)
+    except (SkillPackageError, OSError) as exc:
+        raise RunnerError(str(exc)) from exc
 
 
 def _run_quiet(
@@ -663,6 +674,7 @@ def _run_profile(
     if timeout_seconds <= 0 or timeout_seconds > 3600:
         raise RunnerError("profile timeout_seconds is outside the allowed range")
     repository_state = _verify_profile_preconditions(repo_root, profile)
+    skill_identity = _resolve_skill_identity(repo_root, profile_name, skill_path)
     output_root = _assert_output_root(repo_root)
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:12]
     run_dir = output_root / run_id
@@ -683,6 +695,8 @@ def _run_profile(
     except KeyboardInterrupt:
         status = "interrupted"
     duration_ms = max(0, round((datetime.now(UTC) - started_at).total_seconds() * 1000))
+    if _resolve_skill_identity(repo_root, profile_name, skill_path) != skill_identity:
+        raise RunnerError("instruction package changed during validation")
     result_document: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "runner_version": RUNNER_VERSION,
@@ -714,7 +728,8 @@ def _run_profile(
             "rules_sha256": content_hashes[RULES_PATH],
             "workflow_validation_path": WORKFLOW_VALIDATION_PATH,
             "workflow_validation_sha256": content_hashes[WORKFLOW_VALIDATION_PATH],
-            "skill": _resolve_skill_identity(repo_root, profile_name, skill_path),
+            "skill": skill_identity,
+            "skill_package_resolver_sha256": content_hashes[SKILL_PACKAGE_PATH],
         },
     }
     result_path = run_dir / "result.json"

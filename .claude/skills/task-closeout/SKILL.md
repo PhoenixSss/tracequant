@@ -1,9 +1,8 @@
 ---
 name: task-closeout
-description: Claude adapter for the canonical LCK post-merge closeout procedure.
+description: Close out a specified leaf Issue after the maintainer reports its PR manually Squash Merged.
 ---
 
-# Claude adapter
-
 Follow `.agents/skills/task-closeout/SKILL.md` as the canonical procedure.
-Claude-specific permissions do not grant merge authority or broaden cleanup.
+Claude permissions come from `.claude/settings.json`; they do not change
+LCK authority or fail-closed behavior. Load only the selected canonical route.

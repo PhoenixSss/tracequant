@@ -6,6 +6,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from tests.tools.lck.skill_package_support import copy_instruction_packages
+from tools.lck.skill_package import resolve_skill_package
+
 SCRIPT = Path(__file__).parents[3] / "tools" / "lck" / "validation_runner.py"
 PYTHON = os.environ.get("WORKFLOW_TEST_PYTHON", sys.executable)
 
@@ -27,8 +32,12 @@ def _write_fake_tools(tmp_path: Path, *, fail: str | None = None) -> Path:
     uv.write_text(
         f"""#!{PYTHON}
 import os, sys
+from pathlib import Path
 args=sys.argv[1:]
 key='-'.join(args)
+if os.environ.get('FAKE_INSTRUCTION_MUTATION'):
+    target=Path('.agents/skills/task-delivery-runner/references/remediation.md')
+    target.write_text(target.read_text()+'\\nChanged during validation.\\n')
 if os.environ.get('FAKE_PATH_OUTPUT'):
     print(r'C:/Users/Maple/secret/file.txt /home/maple/private/file.txt')
 fail=os.environ.get('FAKE_VALIDATION_FAIL')
@@ -76,6 +85,7 @@ def _write_repo(tmp_path: Path) -> Path:
     (repo / "tests").mkdir(parents=True)
     (repo / "src").mkdir()
     (repo / ".agents" / "skills" / "task-delivery-runner").mkdir(parents=True)
+    copy_instruction_packages(repo)
     (repo / ".gitignore").write_text(
         ".agents/validation.local/\n.agents/evidence.local/\n",
         encoding="utf-8",
@@ -129,10 +139,60 @@ def test_success_output_is_compact_and_logs_are_ignored(tmp_path: Path) -> None:
     assert value["failed"] == 0
     assert len(result.stdout) < 10000
     assert "12 passed" in json.dumps(value)
+    assert value["execution_identity"]["skill"] == resolve_skill_package(
+        repo, ".agents/skills/task-delivery-runner/SKILL.md"
+    )
     for command in value["commands"]:
         log = repo / command["log_path"]
         assert log.is_file()
         assert command["log_path"].startswith(".agents/validation.local/")
+
+
+@pytest.mark.parametrize(
+    "phase,name",
+    [
+        ("delivery", "task-delivery-runner"),
+        ("review", "task-pr-review-runner"),
+        ("closeout", "task-closeout"),
+        ("feature-audit", "feature-completion-audit"),
+    ],
+)
+def test_formal_validation_records_effective_instruction_package(
+    tmp_path: Path, phase: str, name: str
+) -> None:
+    repo = _write_repo(tmp_path)
+    bin_dir = _write_fake_tools(tmp_path)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    result = _run(repo, env, "--phase", phase)
+    assert result.returncode == 0, result.stderr
+    identity = json.loads(result.stdout)["execution_identity"]["skill"]
+    assert identity == resolve_skill_package(repo, f".agents/skills/{name}/SKILL.md")
+
+
+@pytest.mark.parametrize("when", ["before", "during"])
+def test_formal_validation_fails_on_instruction_drift(
+    tmp_path: Path, when: str
+) -> None:
+    repo = _write_repo(tmp_path)
+    bin_dir = _write_fake_tools(tmp_path)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    if when == "before":
+        (
+            repo / ".agents/skills/task-delivery-runner/references/remediation.md"
+        ).unlink()
+    else:
+        env["FAKE_INSTRUCTION_MUTATION"] = "1"
+    result = _run(repo, env, "--phase", "delivery")
+    assert result.returncode != 0
+    if when == "before":
+        assert "missing instruction file" in result.stderr
+        assert not (repo / ".agents/validation.local").exists()
+    else:
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "fail"
+        assert "instruction identity changed" in str(payload["limitations"])
 
 
 def test_progress_is_bounded_stderr_and_does_not_change_final_result(

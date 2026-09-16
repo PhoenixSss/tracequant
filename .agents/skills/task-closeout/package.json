@@ -1,0 +1,15 @@
+{
+  "entrypoint": ".agents/skills/task-closeout/SKILL.md",
+  "files": {
+    ".agents/policies/command-execution.md": "9d14dacf10e113c2ae18f79114603ab3118d387e92191b1895489c8242e79463",
+    ".agents/policies/context-retrieval.md": "d0b1a54716a5c6e0c23c1ebebad3e8c1b15f1f34ec9732dda8d1f75f0776b336",
+    ".agents/policies/workflow-evidence.md": "b1690e6a7bf298fdb72961ba00b79baa9942179cd5b2188e36a1a0cadc426854",
+    ".agents/skills/task-closeout/SKILL.md": "195b0a3c736c05d26d157e6649419f72e3d72cf07f849149b4d1316ac0767141",
+    "AGENTS.md": "9b9b63b3774120212fae6369621cbdc0fa9964ee9d30f0429dbe421336c9c26d",
+    "docs/workflows/lck/lifecycle.md": "4b50e99f3bcf3ebde0f811fc6e4fa083e8a3bb86d4fc646bcf0a649ed4b45809"
+  },
+  "routes": {
+    "closeout": []
+  },
+  "schema_version": 1
+}
