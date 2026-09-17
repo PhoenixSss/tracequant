@@ -1079,7 +1079,7 @@ def build_source_object(
     first = millis_to_nanos(_require_int_string(rows[0].close_time, field="close_time"))
     last = millis_to_nanos(_require_int_string(rows[-1].close_time, field="close_time"))
     return Stage2SourceObject(
-        path=str(archive.zip_path),
+        path=_portable_source_path(archive.source_url),
         source_url=archive.source_url,
         sha256=sha256,
         checksum_url=archive.checksum_url,
@@ -1100,7 +1100,7 @@ def build_funding_source_object(
     first = millis_to_nanos(_require_int_string(rows[0].calc_time, field="calc_time"))
     last = millis_to_nanos(_require_int_string(rows[-1].calc_time, field="calc_time"))
     return Stage2SourceObject(
-        path=str(archive.zip_path),
+        path=_portable_source_path(archive.source_url),
         source_url=archive.source_url,
         sha256=sha256,
         checksum_url=archive.checksum_url,
@@ -1111,6 +1111,16 @@ def build_funding_source_object(
         end_ns=last,
         rows=len(rows),
     )
+
+
+def _portable_source_path(source_url: str) -> str:
+    prefix = f"{STAGE2_PUBLIC_DATA_ORIGIN}/"
+    if not source_url.startswith(prefix):
+        raise Stage2DataError("source URL is outside the Stage 2 public-data origin")
+    relative = source_url.removeprefix(prefix)
+    if not relative or relative.startswith("/") or ".." in Path(relative).parts:
+        raise Stage2DataError("source URL does not contain a safe relative path")
+    return relative
 
 
 def require_stage2_manifest_identity(catalog_path: Path) -> None:

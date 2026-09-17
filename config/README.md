@@ -3,6 +3,12 @@
 Tracked, non-secret example schemas may live here. The stage 2 BTC/ETH bar
 dataset example is `stage2_btceth.example.toml`.
 
+The immutable publication locator for the accepted Stage 2 r1 catalog is
+`datasets/binance-usdm-btceth-202001-202608-r1.lock.json`. It binds a fixed
+GitHub Release tag and asset, archive size/hash, every extracted file, and all
+accepted dataset identities. It is independent of the historical acceptance
+record and never uses a `latest` alias or a machine-local path.
+
 Persistent state must never fall back into the checkout. Typed configuration
 must require absolute paths outside the repository. The stage 2 bar dataset
 requires existing absolute `raw_root` and `catalog_path` values. Later

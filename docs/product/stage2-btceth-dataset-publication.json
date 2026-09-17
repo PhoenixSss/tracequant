@@ -1,0 +1,100 @@
+{
+  "artifact_lock": {
+    "path": "config/datasets/binance-usdm-btceth-202001-202608-r1.lock.json",
+    "schema": "tracequant-stage2-artifact-lock-v1",
+    "sha256": "8afa251b2c5418ce14ac03d5bd983c553867409157f0c4acf488eebef6fdad67"
+  },
+  "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+  "identities": {
+    "acceptance_digest": "5909c878a81f0cdea85a8b8f86efd36d9c9bad5b3f3fb4c0f9960bb0551609cd",
+    "dataset_digest": "e17c6294e0a0e6714e56a44624ade37cff46125c46d8b0ee81ede6093711579c",
+    "instrument_snapshot_checksum": "dd7fab59448a3b530ab70871ec57c375f6758e409004f9673d9d0cac7ee630bd",
+    "market_data_manifest_digest": "a0d9a36bb65ec7c2ec41f47cdf6ba7d20f57ad28d8d3494a69624c60d6d0a110",
+    "runtime_identity": "2.0.0rc4+a0400251110653b6d8ae6a9b5b89c4543fa85a2d",
+    "source_manifest_digest": "de86d44c73117e17af2bbcb655cf1c8d4290043fa8854636cc0e4e592a1dc790"
+  },
+  "materialize_command_template": "uv run --frozen python -m tracequant.integrations.nautilus.stage2_artifact materialize --lock config/datasets/binance-usdm-btceth-202001-202608-r1.lock.json --staging-root ${ABSOLUTE_EXTERNAL_STAGING_ROOT} --catalog-path ${ABSOLUTE_EXTERNAL_CATALOG_PATH}",
+  "recovery": {
+    "acceptance_record_reissued": false,
+    "conclusion": "exact-rebuild-from-checksum-verified-public-sources",
+    "independent_backup": "verified-operator-managed-persistent-copy-outside-temporary-storage",
+    "instrument_snapshot": {
+      "locked_fetched_at": "2026-09-15T03:08:10.006744Z",
+      "method": "refetched-native-instruments; serialized-checksum-matched; locked-fetched-at-retained",
+      "rebuilt_at": "2026-09-17T07:33:08Z"
+    },
+    "original_catalog_recovered": false,
+    "portability_normalization": [
+      "source-manifest paths are source-origin-relative while URLs and checksums are unchanged",
+      "coverage omits optional catalog-path fields while the accepted coverage summary is unchanged"
+    ],
+    "primary_source_objects": 800,
+    "supplemental_source_objects": 18
+  },
+  "redistribution": {
+    "checked_at": "2026-09-17",
+    "conclusion": "acceptable-for-public-release",
+    "official_license": "MIT",
+    "official_source": "https://github.com/binance/binance-public-data",
+    "raw_archives_in_release": false
+  },
+  "release": {
+    "archive": {
+      "format": "tar+zstd",
+      "name": "binance-usdm-btceth-202001-202608-r1.catalog.tar.zst",
+      "sha256": "54094e48796c0829ad8a8484361eb1654c29346aeac87dfde7b7d9e34dc45ae4",
+      "size": 26319927
+    },
+    "file_manifest": {
+      "name": "binance-usdm-btceth-202001-202608-r1.catalog.files.json",
+      "sha256": "b4ea808e09cec123be9ad840319ddc79d46e5190bf320c28609a0eb89110fb23",
+      "size": 5111
+    },
+    "tag": "stage2-binance-usdm-btceth-202001-202608-r1",
+    "url": "https://github.com/PhoenixSss/tracequant/releases/tag/stage2-binance-usdm-btceth-202001-202608-r1"
+  },
+  "schema": "tracequant-stage2-publication-recovery-v1",
+  "validation": {
+    "fresh_external_roots": true,
+    "offline_verify": "pass",
+    "release_restore_count": 2,
+    "stage3_loader_smoke": {
+      "acceptance_record": "docs/product/stage2-btceth-dataset-acceptance.json",
+      "catalog_window": {
+        "BTCUSDT-PERP.BINANCE": {
+          "bars_1h": 24,
+          "funding": 3,
+          "mark_15m": 96
+        },
+        "ETHUSDT-PERP.BINANCE": {
+          "bars_1h": 24,
+          "funding": 3,
+          "mark_15m": 96
+        }
+      },
+      "entrypoint": "tracequant.research.stage3_features.load_accepted_feature_window",
+      "feature_window": {
+        "BTCUSDT-PERP.BINANCE": {
+          "feature_rows": 192,
+          "ready_rows": 24,
+          "tradable_rows": 24
+        },
+        "ETHUSDT-PERP.BINANCE": {
+          "feature_rows": 192,
+          "ready_rows": 24,
+          "tradable_rows": 24
+        }
+      },
+      "mode": "evaluation",
+      "pr_head": "fa76a7029f5b87d25f9f90544292968cb4e692fc",
+      "pr_url": "https://github.com/PhoenixSss/tracequant/pull/367",
+      "result": "pass",
+      "window": {
+        "decision_start": "2020-01-08T00:00:00Z",
+        "end": "2020-01-09T00:00:00Z",
+        "source_start": "2020-01-01T00:00:00Z"
+      }
+    },
+    "staging_deleted_between_restores": true
+  }
+}
