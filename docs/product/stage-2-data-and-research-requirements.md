@@ -317,6 +317,41 @@ Instrument 定义，最后才原子发布。目标已非空或 identity 不匹�
 修补。`verify` 完全离线。Release 是版本化恢复来源，但操作者仍负责在临时目录外保留至少一份
 独立备份或可恢复副本；Stage 3 的 `catalog_path` 始终指向解包后的唯一外部 Nautilus catalog。
 
+独立的灾备 source escrow 由
+`config/datasets/binance-usdm-btceth-202001-202608-r1.sources.lock.json` 定位，使用
+`stage2-binance-usdm-btceth-202001-202608-r1-sources` 固定 Release。它只包含 catalog source
+manifest 锁定的 800 个 monthly ZIP、18 个 daily mark gap-fill ZIP 及各自官方 `.CHECKSUM`；
+不包含 catalog、Instrument snapshot、交叉验证响应、派生数据或临时文件。取得和完全离线校验：
+
+```bash
+uv run --frozen python -m tracequant.integrations.nautilus.stage2_source_artifact materialize \
+  --lock config/datasets/binance-usdm-btceth-202001-202608-r1.sources.lock.json \
+  --staging-root /absolute/external/source-staging \
+  --raw-root /absolute/external/raw-root
+
+uv run --frozen python -m tracequant.integrations.nautilus.stage2_source_artifact verify \
+  --lock config/datasets/binance-usdm-btceth-202001-202608-r1.sources.lock.json \
+  --raw-root /absolute/external/raw-root
+```
+
+`materialize` 在解压前校验 archive size/hash，拒绝绝对路径、路径穿越、symlink、重复和未知
+成员；解压后逐个校验 1,636 个文件、818 个官方 checksum 与完整锁定 inventory，最后在目标
+文件系统内原子发布。非空目标、部分 inventory、identity/checksum 漂移或损坏 archive 均失败，
+不会覆盖、合并或就地修补。`verify` 不访问网络。若正式 catalog 丢失，可用恢复后的 raw root
+和显式外部空 catalog path 配置运行：
+
+```bash
+uv run --frozen python -m tracequant.integrations.nautilus.stage2_source_artifact rebuild-verify \
+  --lock config/datasets/binance-usdm-btceth-202001-202608-r1.sources.lock.json \
+  --config /absolute/stage2-rebuild.toml
+```
+
+该入口复用现有正式 Stage 2 生成路径，并要求冻结 Instrument snapshot（可用
+`--instrument-snapshot` 显式提供）或重新取得的原生 Instrument 定义命中锁定 checksum；最终六项
+r1 identity 必须全部一致。source escrow 仅用于灾难恢复，不改变已验收 r1 内容，也不是第二套
+研究、训练或回测数据源；正常 Stage 3 消费路径仍是上面的 #371 catalog artifact。操作者必须在
+GitHub Release 与临时 staging 之外持续保留至少一份经 hash 验证的独立副本。
+
 ## 4. 最小数据合同
 
 ### ST2-REQ-001：导入输入
