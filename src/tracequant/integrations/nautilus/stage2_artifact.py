@@ -255,7 +255,9 @@ def materialize_catalog(
     _require_safe_target(target)
     staging.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="stage2-materialize-", dir=staging))
+    publish: Path | None = None
     try:
+        publish = Path(tempfile.mkdtemp(prefix=".stage2-publish-", dir=target.parent))
         archive = work / lock.archive.name
         if archive_path is None:
             _download(lock.archive.url, archive)
@@ -265,13 +267,11 @@ def materialize_catalog(
                 raise Stage2ArtifactError("supplied archive is not a regular file")
             shutil.copyfile(supplied, archive)
         _verify_asset(archive, lock.archive)
-        extracted = work / "extracted"
+        extracted = publish / "extracted"
         extracted.mkdir()
         _extract_locked_archive(archive, extracted, lock)
         candidate = extracted / lock.archive_root
         verify_catalog(lock, candidate)
-        if target.exists():
-            target.rmdir()
         os.replace(candidate, target)
         return target
     except Stage2ArtifactError:
@@ -280,6 +280,8 @@ def materialize_catalog(
         raise Stage2ArtifactError("artifact materialization failed") from exc
     finally:
         shutil.rmtree(work, ignore_errors=True)
+        if publish is not None:
+            shutil.rmtree(publish, ignore_errors=True)
 
 
 def build_release_assets(

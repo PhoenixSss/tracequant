@@ -351,7 +351,7 @@ Nautilus `Price`、`Quantity` 和 rate。
   "nautilus_version": "2.0.0rc4",
   "sources": [
     {
-      "path": "/absolute/path/to/BTCUSDT-1h-2026-08.zip",
+      "path": "data/futures/um/monthly/klines/BTCUSDT/1h/BTCUSDT-1h-2026-08.zip",
       "source_url": "https://data.binance.vision/...",
       "sha256": "...",
       "checksum_url": "https://data.binance.vision/....CHECKSUM",
@@ -367,8 +367,10 @@ Nautilus `Price`、`Quantity` 和 rate。
 ```
 
 必要字段只有数据集身份、Nautilus 版本、来源位置、来源种类、官方 URL、checksum、类型、
-标的、时间范围和行数。Nautilus 尾部补数另记请求时间范围及其与归档的选择边界。不实现
-schema registry、发布事务、对象仓库、下载调度或自定义数据版本系统。
+标的、时间范围和行数。归档来源的 `path` 是相对于
+`https://data.binance.vision/` 来源根的可移植路径，不得写入下载机器的绝对路径。Nautilus
+尾部补数另记请求时间范围及其与归档的选择边界。不实现 schema registry、发布事务、对象
+仓库、下载调度或自定义数据版本系统。
 
 ### ST2-REQ-003：输入校验
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import tarfile
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -226,6 +227,49 @@ def test_stage2_artifact_materializes_only_the_locked_accepted_catalog(
     locked_file.write_bytes(locked_file.read_bytes() + b"drift")
     with pytest.raises(Stage2ArtifactError, match="size"):
         verify_catalog(lock, first)
+
+
+def test_stage2_artifact_publishes_from_target_filesystem_and_preserves_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive, _manifest, _lock_payload = _bundle(tmp_path, monkeypatch)
+    lock_path = tmp_path / "artifact.lock.json"
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    target_parent = tmp_path / "catalogs"
+    target_parent.mkdir()
+    target = target_parent / "installed"
+    original_replace = os.replace
+    published_from_target_filesystem = False
+
+    def require_target_filesystem(source: Path, destination: Path) -> None:
+        nonlocal published_from_target_filesystem
+        source_path = Path(source)
+        destination_path = Path(destination)
+        if destination_path == target:
+            assert target_parent in source_path.parents
+            assert staging not in source_path.parents
+            published_from_target_filesystem = True
+        original_replace(source_path, destination_path)
+
+    monkeypatch.setattr(os, "replace", require_target_filesystem)
+    materialize_catalog(lock_path, staging, target, archive_path=archive)
+    assert published_from_target_filesystem
+
+    preserved = target_parent / "preserved-empty-target"
+    preserved.mkdir()
+
+    def fail_publish(source: Path, destination: Path) -> None:
+        if Path(destination) == preserved:
+            raise OSError("simulated atomic publish failure")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_publish)
+    with pytest.raises(Stage2ArtifactError, match="materialization failed"):
+        materialize_catalog(lock_path, staging, preserved, archive_path=archive)
+    assert preserved.is_dir()
+    assert not any(preserved.iterdir())
 
 
 def test_stage2_artifact_rejects_symlink_paths_and_catalog_entries(
