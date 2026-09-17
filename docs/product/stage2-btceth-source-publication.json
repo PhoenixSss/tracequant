@@ -1,0 +1,61 @@
+{
+  "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+  "identities": {
+    "acceptance_digest": "5909c878a81f0cdea85a8b8f86efd36d9c9bad5b3f3fb4c0f9960bb0551609cd",
+    "dataset_digest": "e17c6294e0a0e6714e56a44624ade37cff46125c46d8b0ee81ede6093711579c",
+    "instrument_snapshot_checksum": "dd7fab59448a3b530ab70871ec57c375f6758e409004f9673d9d0cac7ee630bd",
+    "market_data_manifest_digest": "a0d9a36bb65ec7c2ec41f47cdf6ba7d20f57ad28d8d3494a69624c60d6d0a110",
+    "runtime_identity": "2.0.0rc4+a0400251110653b6d8ae6a9b5b89c4543fa85a2d",
+    "source_manifest_digest": "de86d44c73117e17af2bbcb655cf1c8d4290043fa8854636cc0e4e592a1dc790"
+  },
+  "materialize_command_template": "uv run --frozen python -m tracequant.integrations.nautilus.stage2_source_artifact materialize --lock config/datasets/binance-usdm-btceth-202001-202608-r1.sources.lock.json --staging-root ${ABSOLUTE_EXTERNAL_STAGING_ROOT} --raw-root ${ABSOLUTE_EXTERNAL_RAW_ROOT}",
+  "rebuild_command_template": "uv run --frozen python -m tracequant.integrations.nautilus.stage2_source_artifact rebuild-verify --lock config/datasets/binance-usdm-btceth-202001-202608-r1.sources.lock.json --config ${ABSOLUTE_STAGE2_CONFIG}",
+  "release": {
+    "archive": {
+      "format": "tar+zstd",
+      "name": "binance-usdm-btceth-202001-202608-r1.sources.tar.zst",
+      "sha256": "0b100f737b38b8f64ca88fa2b1e714fd9fcbd2568e8dc9dc232db5b2f105ac2b",
+      "size": 43643078
+    },
+    "file_manifest": {
+      "name": "binance-usdm-btceth-202001-202608-r1.sources.files.json",
+      "sha256": "7102e499a8575c29ae5503f53c50030b73353e5c0d14cdfc6acf20c656b57983",
+      "size": 996311
+    },
+    "tag": "stage2-binance-usdm-btceth-202001-202608-r1-sources",
+    "url": "https://github.com/PhoenixSss/tracequant/releases/tag/stage2-binance-usdm-btceth-202001-202608-r1-sources"
+  },
+  "retention": {
+    "independent_backup": "verified-operator-managed-persistent-copy-outside-release-and-temporary-storage",
+    "responsibility": "maintainers must retain at least one verified copy independent of the GitHub Release"
+  },
+  "schema": "tracequant-stage2-source-publication-recovery-v1",
+  "source": {
+    "file_count": 1636,
+    "license": "MIT",
+    "official_repository": "https://github.com/binance/binance-public-data",
+    "official_source": "https://data.binance.vision",
+    "primary_source_objects": 800,
+    "supplemental_source_objects": 18
+  },
+  "source_artifact_lock": {
+    "path": "config/datasets/binance-usdm-btceth-202001-202608-r1.sources.lock.json",
+    "schema": "tracequant-stage2-source-artifact-lock-v1",
+    "sha256": "cd0a4978a769aa6c2ca055364385ba8e459e2f05458a09e7cfe70dc5ee6e0af8"
+  },
+  "validation": {
+    "archive_and_file_hashes": "pass",
+    "catalog_rebuild_identity_match": true,
+    "fresh_external_roots": true,
+    "instrument_snapshot_recovery": {
+      "checksum_sha256": "dd7fab59448a3b530ab70871ec57c375f6758e409004f9673d9d0cac7ee630bd",
+      "locked_fetched_at": "2026-09-15T03:08:10.006744Z",
+      "method": "refetched-native-instruments; serialized-checksum-matched; locked-fetched-at-retained"
+    },
+    "offline_verify": "pass",
+    "official_checksum_count": 818,
+    "release_restore_count": 2,
+    "staging_deleted_between_restores": true
+  },
+  "verify_command_template": "uv run --frozen python -m tracequant.integrations.nautilus.stage2_source_artifact verify --lock config/datasets/binance-usdm-btceth-202001-202608-r1.sources.lock.json --raw-root ${ABSOLUTE_EXTERNAL_RAW_ROOT}"
+}
