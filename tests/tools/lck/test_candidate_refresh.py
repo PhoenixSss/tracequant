@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
 from tools.lck import models as lck_models
+from tools.lck import receipts as lck_receipts
 from tools.lck import refresh as lck_refresh
 from tools.lck import review_workspace as lck_review_workspace
 from tools.lck.common import CommandResult, CommandRunner
@@ -215,20 +217,46 @@ class _FailValidation:
 
 
 class _Snapshots:
-    def __init__(self, state: lck_models.LiveState) -> None:
+    def __init__(
+        self,
+        state: lck_models.LiveState,
+        root: Path,
+        *,
+        final_project_status: str = "Review",
+    ) -> None:
         self.state = state
+        self.root = root
+        self.final_project_status = final_project_status
+        self.calls = 0
 
     def acquire(
         self, _task: int, *, operation: str, include_required_checks: bool = False
     ) -> lck_models.OperationSnapshot:
+        self.calls += 1
+        state = self.state
+        if self.calls > 1:
+            head = _git(self.root, "rev-parse", "HEAD")
+            remote_head = _remote_head(self.root, state.target_branch)
+            issue = dict(state.issue or {})
+            issue["project_status"] = self.final_project_status
+            pr = dict(state.open_pr or {})
+            pr["headRefOid"] = remote_head
+            state = replace(
+                state,
+                issue=issue,
+                git={**state.git, "head_sha": head, "clean": True},
+                local_issue_head=head,
+                remote_issue_oid=remote_head,
+                open_pr=pr,
+            )
         return lck_models.OperationSnapshot(
             operation=operation,
-            state=self.state,
+            state=state,
             required_checks=(
                 {
                     "status": "pass",
                     "names": ["quality"],
-                    "source_sha": self.state.git["remote_main_sha"],
+                    "source_sha": state.git["remote_main_sha"],
                 }
                 if include_required_checks
                 else None
@@ -251,6 +279,8 @@ def _refresher(
     *,
     validation: Any | None = None,
     runner: _PrObservingRunner | None = None,
+    final_project_status: str = "Review",
+    real_snapshot: bool = False,
 ) -> tuple[_ControlledRefresher, _PrObservingRunner]:
     selected = runner or _PrObservingRunner(root, branch)
     resolver = StaticResolver(root, state)
@@ -259,7 +289,15 @@ def _refresher(
         cast(Any, resolver),
         formal_validation=cast(Any, validation or _PassValidation()),
     )
-    refresher.snapshots = cast(Any, _Snapshots(state))
+    if not real_snapshot:
+        refresher.snapshots = cast(
+            Any,
+            _Snapshots(
+                state,
+                root,
+                final_project_status=final_project_status,
+            ),
+        )
     return refresher, selected
 
 
@@ -274,6 +312,7 @@ def test_candidate_refresh_integrates_advanced_main_and_requires_fresh_review(
 
     assert result.status == "READY_FOR_FRESH_REVIEW"
     assert result.start_head_sha == start_head
+    assert result.old_base_sha == _git(root, "rev-parse", f"{start_head}^")
     assert result.frozen_main_sha == main_head
     assert result.head_sha != start_head
     assert _git(root, "rev-parse", "HEAD") == result.head_sha
@@ -290,6 +329,19 @@ def test_candidate_refresh_integrates_advanced_main_and_requires_fresh_review(
     assert required is not None
     assert required["refreshed_head"] == result.head_sha
     assert required["source_refresh_operation_id"] == result.operation_id
+    assert result.fresh_review_required is True
+
+    store = lck_receipts.AuditReceiptStore(root)
+    agent_view = lck_receipts._write_success_receipt(
+        result,
+        operation="refresh",
+        task_number=159,
+        operation_id=result.operation_id,
+        store=store,
+    )
+    receipt = store.read(agent_view["receipt_reference"])
+    assert agent_view["old_base_sha"] == result.old_base_sha
+    assert receipt["audit"]["old_base_sha"] == result.old_base_sha
 
 
 def test_refresh_already_current_is_a_noop(tmp_path: Path) -> None:
@@ -302,6 +354,75 @@ def test_refresh_already_current_is_a_noop(tmp_path: Path) -> None:
     assert result.head_sha == start_head
     assert _remote_head(root, branch) == start_head
     assert not any(command[:2] == ("git", "push") for command in runner.commands)
+
+
+def test_refresh_already_current_preserves_existing_fresh_review_boundary(
+    tmp_path: Path,
+) -> None:
+    root, branch, start_head, main_head = _repository(tmp_path, advance_main=False)
+    store = lck_review_workspace.ReviewInvocationStore(root)
+    operation_id = store.new_id()
+    store.write_refresh_review_required(159, operation_id, start_head)
+    refresher, runner = _refresher(root, branch, _state(branch, start_head, main_head))
+
+    result = refresher.refresh(159)
+    agent_view = lck_receipts._agent_view_for_result(result)
+
+    assert result.status == "ALREADY_CURRENT"
+    assert result.fresh_review_required is True
+    assert agent_view["fresh_review_required"] is True
+    assert (
+        agent_view["next_action"]
+        == "start a fresh independent Review in a new invocation"
+    )
+    assert store.read_review_required(159) is not None
+    assert not any(command[:2] == ("git", "push") for command in runner.commands)
+
+
+def test_refresh_front_door_uses_registered_operation_snapshot_profile(
+    tmp_path: Path,
+) -> None:
+    root, branch, start_head, main_head = _repository(tmp_path, advance_main=False)
+    refresher, _runner = _refresher(
+        root,
+        branch,
+        _state(branch, start_head, main_head),
+        real_snapshot=True,
+    )
+
+    result = refresher.refresh(159)
+
+    assert result.status == "ALREADY_CURRENT"
+    assert result.operation_snapshot.operation == "refresh"
+    assert result.operation_snapshot.fact_profile == "refresh"
+
+
+def test_refresh_post_push_drift_stops_with_boundary_and_updated_candidate(
+    tmp_path: Path,
+) -> None:
+    root, branch, start_head, main_head = _repository(tmp_path)
+    refresher, _runner = _refresher(
+        root,
+        branch,
+        _state(branch, start_head, main_head),
+        final_project_status="In Progress",
+    )
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="push completed but final identity verification failed",
+    ):
+        refresher.refresh(159)
+
+    new_head = _git(root, "rev-parse", "HEAD")
+    assert new_head != start_head
+    assert _remote_head(root, branch) == new_head
+    assert refresher.last_effects[0].effect == "refresh_remote_branch"
+    boundary = lck_review_workspace.ReviewInvocationStore(root).read_review_required(
+        159
+    )
+    assert boundary is not None
+    assert boundary["refreshed_head"] == new_head
 
 
 def test_refresh_conflict_restores_exact_original_state(tmp_path: Path) -> None:
@@ -418,9 +539,14 @@ def test_task_operation_lock_serializes_lifecycle_operations(tmp_path: Path) -> 
 
 def test_refresh_has_no_persistent_session_or_abort_surface() -> None:
     source = Path(lck_refresh.__file__).read_text(encoding="utf-8")
+    claude_adapter = (
+        Path(__file__).parents[3] / ".claude/skills/task-delivery-runner/SKILL.md"
+    ).read_text(encoding="utf-8")
     assert "RefreshPreparer" not in source
     assert "RefreshCompleter" not in source
     assert "RefreshAborter" not in source
     assert "write_refresh_session" not in source
     assert '["git", "push", "--force"' not in source
     assert '"--force-with-lease=' in source
+    assert "one-shot `refresh <TASK>`" in claude_adapter
+    assert "prepare/complete/abort Human boundaries" not in claude_adapter

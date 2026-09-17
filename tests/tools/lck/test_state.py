@@ -672,6 +672,11 @@ def test_authoritative_operation_resolver_queries_only_its_fact_profile(
             {"comments", "issue_closure", "workspace_inventory", "pr_history"},
         ),
         (
+            "refresh",
+            {"task_contract", "git", "local_task_branches", "open_pr"},
+            {"comments", "issue_closure", "checks", "pr_history"},
+        ),
+        (
             "merge-preflight",
             {"task_contract", "remote_task_branches", "checks", "mergeability"},
             {"comments", "issue_closure", "git", "pr_history"},

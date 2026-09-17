@@ -456,6 +456,7 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "operation_id": value.operation_id,
             "branch": value.branch,
             "pr_number": value.pr_number,
+            "old_base_sha": value.old_base_sha,
             "start_head_sha": value.start_head_sha,
             "frozen_main_sha": value.frozen_main_sha,
             "head_sha": value.head_sha,
@@ -464,12 +465,14 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "profile_evidence": _profile_evidence(value.profile_evidence),
             "validation": _validation_agent_view(value.validation),
             "effects": _effect_agent_view(value.effects),
-            "fresh_review_required": value.status == "READY_FOR_FRESH_REVIEW",
+            "fresh_review_required": value.fresh_review_required,
             "automatic_review": False,
             "automatic_merge": False,
             "human_boundary": "STOP — a fresh Independent Review must be started explicitly",
             "next_action": (
-                "stop; main is already contained in the Task head"
+                "start a fresh independent Review in a new invocation"
+                if value.fresh_review_required
+                else "stop; main is already contained in the Task head"
                 if value.status == "ALREADY_CURRENT"
                 else "start a fresh independent Review in a new invocation"
             ),

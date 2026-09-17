@@ -79,10 +79,12 @@ class RefreshResult:
     eligibility: PhaseDecision
     branch: str
     pr_number: int
+    old_base_sha: str
     start_head_sha: str
     frozen_main_sha: str
     head_sha: str
     validated_tree_oid: str
+    fresh_review_required: bool = False
     critical_outcome: Mapping[str, Any] | None = None
     profile_evidence: ProfileEvidenceEnvelope | None = None
     validation: Mapping[str, Any] | None = None
@@ -103,6 +105,7 @@ class RefreshResult:
             "issue_profile": _jsonable(self.state.issue_profile),
             "branch": self.branch,
             "pr_number": self.pr_number,
+            "old_base_sha": self.old_base_sha,
             "start_head_sha": self.start_head_sha,
             "frozen_main_sha": self.frozen_main_sha,
             "head_sha": self.head_sha,
@@ -114,7 +117,7 @@ class RefreshResult:
             "validation": _jsonable(self.validation),
             "effects": [effect.to_dict() for effect in self.effects],
             "operation_snapshot": self.operation_snapshot.to_dict(),
-            "fresh_review_required": self.status == "READY_FOR_FRESH_REVIEW",
+            "fresh_review_required": self.fresh_review_required,
             "automatic_review": False,
             "automatic_merge": False,
         }
@@ -415,6 +418,51 @@ class CandidateRefresher:
             },
         )
 
+    def _verify_final_state(
+        self,
+        task_number: int,
+        initial_snapshot: OperationSnapshot,
+        *,
+        pr_number: int,
+        branch: str,
+        frozen_main: str,
+        new_head: str,
+        validated_tree: str,
+    ) -> None:
+        final_snapshot = self.snapshots.acquire(task_number, operation="refresh")
+        final_state = final_snapshot.state
+        final_decision = self.eligibility.resolve(final_state, Phase.REFRESH)
+        initial_contract = initial_snapshot.state.leaf_contract or {}
+        final_contract = final_state.leaf_contract or {}
+        pr = final_state.open_pr
+        if (
+            not final_decision.eligible
+            or final_state.issue_number != task_number
+            or initial_contract.get("body_sha256") != final_contract.get("body_sha256")
+            or final_state.target_branch != branch
+            or final_state.git.get("branch") != branch
+            or _remote_main_sha(final_state.git) != frozen_main
+            or final_state.local_issue_head != new_head
+            or final_state.remote_issue_oid != new_head
+            or not isinstance(pr, Mapping)
+            or pr.get("number") != pr_number
+            or str(pr.get("state", "")).upper() != "OPEN"
+            or pr.get("isDraft") is not False
+            or pr.get("baseRefName") != BASE_BRANCH
+            or pr.get("baseRefOid") != frozen_main
+            or pr.get("headRefName") != branch
+            or pr.get("headRefOid") != new_head
+        ):
+            details = "; ".join(final_decision.reasons)
+            raise LckStopError(
+                "Candidate Refresh final Task/PR/workflow identity is not proven"
+                + (f": {details}" if details else "")
+            )
+        self._require_clean_branch(branch, new_head)
+        self.tree_effect.verify_tree_unchanged(
+            validated_tree, expected_head_sha=new_head
+        )
+
     def refresh(self, task_number: int) -> RefreshResult:
         operation_id = self.store.new_id()
         progress = ProgressReporter("refresh")
@@ -423,6 +471,7 @@ class CandidateRefresher:
         self.last_conflict_files = ()
         candidate_active = False
         boundary_written = False
+        remote_updated = False
         prior_boundary: Mapping[str, Any] | None = None
         branch = ""
         start_head = ""
@@ -431,7 +480,7 @@ class CandidateRefresher:
             progress.running("resolving-live-state")
             snapshot = self.snapshots.acquire(
                 task_number,
-                operation=Phase.REFRESH.value,
+                operation="refresh",
             )
             self.last_snapshot = snapshot
             state = snapshot.state
@@ -467,6 +516,18 @@ class CandidateRefresher:
                 )
             self._ensure_main_object(frozen_main)
 
+            merge_base_result = self._run(
+                ["git", "merge-base", start_head, frozen_main],
+                "lck-refresh-merge-base",
+            )
+            merge_base = merge_base_result.stdout.strip()
+            if merge_base_result.returncode != 0 or not is_sha(merge_base):
+                raise LckStopError(
+                    "Candidate Refresh cannot resolve an exact merge base"
+                )
+
+            prior_boundary = self.store.read_review_required(task_number)
+
             ancestor = self._run(
                 ["git", "merge-base", "--is-ancestor", frozen_main, start_head],
                 "lck-refresh-already-current",
@@ -483,24 +544,16 @@ class CandidateRefresher:
                     eligibility=decision,
                     branch=branch,
                     pr_number=pr_number,
+                    old_base_sha=merge_base,
                     start_head_sha=start_head,
                     frozen_main_sha=frozen_main,
                     head_sha=start_head,
                     validated_tree_oid=tree,
+                    fresh_review_required=prior_boundary is not None,
                 )
             if ancestor.returncode != 1:
                 raise LckStopError(
                     "cannot determine whether the Task branch contains current main"
-                )
-
-            merge_base_result = self._run(
-                ["git", "merge-base", start_head, frozen_main],
-                "lck-refresh-merge-base",
-            )
-            merge_base = merge_base_result.stdout.strip()
-            if merge_base_result.returncode != 0 or not is_sha(merge_base):
-                raise LckStopError(
-                    "Candidate Refresh cannot resolve an exact merge base"
                 )
 
             progress.running("rebasing-candidate")
@@ -572,7 +625,6 @@ class CandidateRefresher:
                 frozen_main=frozen_main,
             )
 
-            prior_boundary = self.store.read_review_required(task_number)
             self.store.write_refresh_review_required(
                 task_number, operation_id, new_head
             )
@@ -580,7 +632,24 @@ class CandidateRefresher:
             progress.running("exact-lease-push")
             pushed = self._push_exact_lease(branch, start_head, new_head)
             self.last_effects.append(pushed)
+            remote_updated = True
             candidate_active = False
+            progress.running("verifying-final-identity")
+            try:
+                self._verify_final_state(
+                    task_number,
+                    snapshot,
+                    pr_number=pr_number,
+                    branch=branch,
+                    frozen_main=frozen_main,
+                    new_head=new_head,
+                    validated_tree=validated_tree,
+                )
+            except BaseException as exc:
+                raise LckStopError(
+                    "Candidate Refresh push completed but final identity verification "
+                    f"failed; fresh Review remains required: {exc}"
+                ) from exc
             progress.completed("fresh-review-required")
             return RefreshResult(
                 task_number=task_number,
@@ -591,10 +660,12 @@ class CandidateRefresher:
                 eligibility=decision,
                 branch=branch,
                 pr_number=pr_number,
+                old_base_sha=merge_base,
                 start_head_sha=start_head,
                 frozen_main_sha=frozen_main,
                 head_sha=new_head,
                 validated_tree_oid=validated_tree,
+                fresh_review_required=True,
                 critical_outcome=critical,
                 profile_evidence=self.last_profile_evidence,
                 validation=validation,
@@ -602,7 +673,7 @@ class CandidateRefresher:
             )
         except BaseException:
             try:
-                if boundary_written:
+                if boundary_written and not remote_updated:
                     self.store.restore_review_required(task_number, prior_boundary)
                 if candidate_active and branch and is_sha(start_head):
                     self._restore_original(branch, start_head)
