@@ -17,4 +17,6 @@ bar_intervals = ["15m", "1h", "4h"]
 bar_aggregation = "LAST-EXTERNAL"
 
 raw_root = "/absolute/external/raw-root"
+# For normal consumers, materialize the tracked artifact lock into this path.
+# raw_root is needed only by the source reconstruction path, not by materialize/verify.
 catalog_path = "/absolute/external/catalog-root/binance-usdm-btceth-202001-202608-r1"

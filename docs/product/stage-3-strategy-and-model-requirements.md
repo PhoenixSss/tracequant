@@ -61,6 +61,12 @@ warm-up、LightGBM、artifact、窗口角色、accounting-only sensitivity、终
 
 Stage 3 的每个正式消费者（研究 loader、训练、两个 Strategy、评估、`rebuild-oos`）都必须
 核验上表的**全部**字段，外加外部 catalog 的 instrument 定义与 runtime identity。
+正式 catalog 必须先由仓库内
+`config/datasets/binance-usdm-btceth-202001-202608-r1.lock.json` 通过
+`tracequant.integrations.nautilus.stage2_artifact materialize` 安装到显式外部
+`catalog_path`，或对已安装目录运行同模块的离线 `verify`。该 artifact lock 只负责取得和
+逐文件验证已验收 Stage 2 输入，不替代本节要求的 Stage 3 完整 acceptance/coverage 门禁；
+Stage 3 也不得直接从 archive、下载 staging 或第二套数据路径读取。
 
 上表冻结的是 snapshot 文件的完整 checksum，但 tracked 验收记录**不记录** snapshot 内
 instrument 的 `maker_fee` / `taker_fee` 取值。这两个字段因此不是本文档冻结的身份数值，

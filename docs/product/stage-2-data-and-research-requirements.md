@@ -287,6 +287,36 @@ manifest 保存获取时间和序列化后 checksum。后续复现直接使用�
 字段名和类型必须完全一致；不能通过猜测列偏移静默容错。每个 funding 事件之前必须存在一条
 年龄不超过 15 分钟的 mark；否则 coverage 失败，不允许执行 funding-aware backtest。
 
+### 3.2 已验收 catalog 的发布、恢复与保留
+
+首个已验收 catalog 通过仓库内独立 artifact lock
+`config/datasets/binance-usdm-btceth-202001-202608-r1.lock.json` 定位。该 lock 与 tracked
+acceptance record 分离，绑定固定 GitHub Release tag、固定 `.catalog.tar.zst` asset、archive
+大小与 SHA-256、唯一解压根、逐文件路径/大小/SHA-256，以及完整 acceptance、dataset、source
+manifest、market-data manifest、Instrument snapshot 和 runtime identity；不得改用 `latest`
+或本机路径。`docs/product/stage2-btceth-dataset-publication.json` 单独记录恢复方法、Release
+identity、两次真实恢复和 Stage 3 正式 loader smoke，不包含 catalog bytes、raw 数据或本机路径。
+
+正常消费者不需要保留或重新下载 800+18 个 raw ZIP。使用 Stage 2 专用入口下载、校验并原子
+安装到显式仓库外路径：
+
+```bash
+uv run --frozen python -m tracequant.integrations.nautilus.stage2_artifact materialize \
+  --lock config/datasets/binance-usdm-btceth-202001-202608-r1.lock.json \
+  --staging-root /absolute/external/stage2-staging \
+  --catalog-path /absolute/external/catalog-root/binance-usdm-btceth-202001-202608-r1
+
+uv run --frozen python -m tracequant.integrations.nautilus.stage2_artifact verify \
+  --lock config/datasets/binance-usdm-btceth-202001-202608-r1.lock.json \
+  --catalog-path /absolute/external/catalog-root/binance-usdm-btceth-202001-202608-r1
+```
+
+materialize 在解压前验证 archive 大小和 hash，拒绝绝对路径、路径穿越、symlink、重复或未知
+成员；解压后验证逐文件 hash、四个 catalog evidence 文件、完整 Stage 2 identity 和原生
+Instrument 定义，最后才原子发布。目标已非空或 identity 不匹配时失败，不覆盖、合并或就地
+修补。`verify` 完全离线。Release 是版本化恢复来源，但操作者仍负责在临时目录外保留至少一份
+独立备份或可恢复副本；Stage 3 的 `catalog_path` 始终指向解包后的唯一外部 Nautilus catalog。
+
 ## 4. 最小数据合同
 
 ### ST2-REQ-001：导入输入
@@ -321,7 +351,7 @@ Nautilus `Price`、`Quantity` 和 rate。
   "nautilus_version": "2.0.0rc4",
   "sources": [
     {
-      "path": "/absolute/path/to/BTCUSDT-1h-2026-08.zip",
+      "path": "data/futures/um/monthly/klines/BTCUSDT/1h/BTCUSDT-1h-2026-08.zip",
       "source_url": "https://data.binance.vision/...",
       "sha256": "...",
       "checksum_url": "https://data.binance.vision/....CHECKSUM",
@@ -337,8 +367,10 @@ Nautilus `Price`、`Quantity` 和 rate。
 ```
 
 必要字段只有数据集身份、Nautilus 版本、来源位置、来源种类、官方 URL、checksum、类型、
-标的、时间范围和行数。Nautilus 尾部补数另记请求时间范围及其与归档的选择边界。不实现
-schema registry、发布事务、对象仓库、下载调度或自定义数据版本系统。
+标的、时间范围和行数。归档来源的 `path` 是相对于
+`https://data.binance.vision/` 来源根的可移植路径，不得写入下载机器的绝对路径。Nautilus
+尾部补数另记请求时间范围及其与归档的选择边界。不实现 schema registry、发布事务、对象
+仓库、下载调度或自定义数据版本系统。
 
 ### ST2-REQ-003：输入校验
 

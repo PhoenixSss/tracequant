@@ -76,6 +76,31 @@ Its tracked `acceptance_digest`, `dataset_digest`, `source_manifest_digest`,
 successful ordinary catalog identity check is not by itself proof that a
 catalog is that accepted dataset.
 
+The accepted catalog is published as the immutable Stage 2 r1 GitHub Release
+artifact bound by
+[`config/datasets/binance-usdm-btceth-202001-202608-r1.lock.json`](config/datasets/binance-usdm-btceth-202001-202608-r1.lock.json).
+The corresponding recovery, publication, and real-loader smoke evidence is
+tracked in
+[`docs/product/stage2-btceth-dataset-publication.json`](docs/product/stage2-btceth-dataset-publication.json).
+Materialize it only into an explicit external path:
+
+```bash
+uv run --frozen python -m tracequant.integrations.nautilus.stage2_artifact materialize \
+  --lock config/datasets/binance-usdm-btceth-202001-202608-r1.lock.json \
+  --staging-root /absolute/external/stage2-staging \
+  --catalog-path /absolute/external/catalog-root/binance-usdm-btceth-202001-202608-r1
+
+uv run --frozen python -m tracequant.integrations.nautilus.stage2_artifact verify \
+  --lock config/datasets/binance-usdm-btceth-202001-202608-r1.lock.json \
+  --catalog-path /absolute/external/catalog-root/binance-usdm-btceth-202001-202608-r1
+```
+
+The materializer verifies archive size/hash before extraction, rejects unsafe
+or unknown members, verifies every catalog file and the full Stage 2 identity,
+then atomically installs the catalog. It never overwrites or merges a non-empty
+target. Operators remain responsible for retaining an independent recoverable
+copy outside temporary directories.
+
 Both statuses above stay offline: `OFFLINE_BACKTEST_ONLY` and
 `LIVE_NOT_APPROVED`. Reaching the end of stage 3 requires no profit threshold
 and grants no Demo admission.

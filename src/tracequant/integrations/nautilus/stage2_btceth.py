@@ -1153,7 +1153,7 @@ def prepare_stage2_combined_catalog(
         )
         write_json(
             config.catalog_path / STAGE2_COVERAGE_FILENAME,
-            report.to_json_dict(catalog_path=config.catalog_path),
+            report.to_json_dict(),
         )
         write_json(
             config.catalog_path / STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,

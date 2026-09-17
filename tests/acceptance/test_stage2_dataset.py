@@ -793,10 +793,9 @@ def test_frozen_stage2_dataset_drives_research_and_backtest_from_one_catalog(
     written_coverage = json.loads(
         (catalog_path / "stage2_coverage.json").read_text(encoding="utf-8")
     )
-    assert written_coverage["catalog_path"] == str(catalog_path)
-    assert all(
-        item["catalog_path"] == str(catalog_path) for item in written_coverage["series"]
-    )
+    require_no_local_absolute_paths(written_coverage)
+    assert "catalog_path" not in written_coverage
+    assert all("catalog_path" not in item for item in written_coverage["series"])
 
 
 def test_expected_source_inventory_is_800_complete_months() -> None:

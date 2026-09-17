@@ -1,0 +1,122 @@
+{
+  "archive_root": "binance-usdm-btceth-202001-202608-r1",
+  "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+  "files": [
+    {
+      "path": "data/bars/BTCUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL/2020-01-01T00-59-59-999000000Z_2026-08-31T23-59-59-999000000Z.parquet",
+      "sha256": "51d87a68ed13f476e891cbf1cc301f3abcacce71a8fccfe6cbf7010810502d7f",
+      "size": 3750998
+    },
+    {
+      "path": "data/bars/BTCUSDT-PERP.BINANCE-15-MINUTE-LAST-EXTERNAL/2020-01-01T00-14-59-999000000Z_2026-08-31T23-59-59-999000000Z.parquet",
+      "sha256": "d2635f4ef00f97f90277bbbff86403382e42a04159cc22ef7d2aaa064655c884",
+      "size": 14701652
+    },
+    {
+      "path": "data/bars/BTCUSDT-PERP.BINANCE-4-HOUR-LAST-EXTERNAL/2020-01-01T03-59-59-999000000Z_2026-08-31T23-59-59-999000000Z.parquet",
+      "sha256": "f3098bbba5d04d55b7acefbd9a0041f0179b718999ae0604877ac60266b85323",
+      "size": 949394
+    },
+    {
+      "path": "data/bars/ETHUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL/2020-01-01T00-59-59-999000000Z_2026-08-31T23-59-59-999000000Z.parquet",
+      "sha256": "79a80ad85093e0a68a65647cf982edcf5b27eb99c39fb7dc30e667e771c3c60e",
+      "size": 3663236
+    },
+    {
+      "path": "data/bars/ETHUSDT-PERP.BINANCE-15-MINUTE-LAST-EXTERNAL/2020-01-01T00-14-59-999000000Z_2026-08-31T23-59-59-999000000Z.parquet",
+      "sha256": "5ee1bdaf6bf1153248481a962394194bd82ff95fd7e1e6bd54c22d229c8e0edd",
+      "size": 14271610
+    },
+    {
+      "path": "data/bars/ETHUSDT-PERP.BINANCE-4-HOUR-LAST-EXTERNAL/2020-01-01T03-59-59-999000000Z_2026-08-31T23-59-59-999000000Z.parquet",
+      "sha256": "92a71b0512111d6fd8ecefec4d7bf1226b2add0fedb1a33e8f386fe5181ca133",
+      "size": 932417
+    },
+    {
+      "path": "data/funding_rate_update/BTCUSDT-PERP.BINANCE/2020-01-01T00-00-00-000000000Z_2026-08-31T16-00-00-001000000Z.parquet",
+      "sha256": "585beec11a9c6871dea129d5e25986cc15bb739359e78144f269f65f47b9f003",
+      "size": 242031
+    },
+    {
+      "path": "data/funding_rate_update/ETHUSDT-PERP.BINANCE/2020-01-01T00-00-00-000000000Z_2026-08-31T16-00-00-001000000Z.parquet",
+      "sha256": "41e74728f06a8666f4866475a336a8b7abf0ff2538787921bf9a9ca05e024a79",
+      "size": 242088
+    },
+    {
+      "path": "data/instruments/BTCUSDT-PERP.BINANCE/1970-01-01T00-00-00-000000000Z_1970-01-01T00-00-00-000000000Z.parquet",
+      "sha256": "266cc1d0677f1bc6a0940a64c356a0243473076e0eadf8f65ac247210203b189",
+      "size": 7460
+    },
+    {
+      "path": "data/instruments/ETHUSDT-PERP.BINANCE/1970-01-01T00-00-00-000000000Z_1970-01-01T00-00-00-000000000Z.parquet",
+      "sha256": "c7b2749e8e0a4ffcd99fb75cd62c75f7c8c4d90c5dabc6569d6f5a9dcbaf3a2c",
+      "size": 7455
+    },
+    {
+      "path": "data/mark_prices/BTCUSDT-PERP.BINANCE/2020-01-01T00-14-59-999000000Z_2026-08-31T23-59-59-999000000Z.parquet",
+      "sha256": "58128ecc8a77a8a813e3fb9c9b14591266eda3c240283099a7656087185eabdc",
+      "size": 6371427
+    },
+    {
+      "path": "data/mark_prices/ETHUSDT-PERP.BINANCE/2020-01-01T00-14-59-999000000Z_2026-08-31T23-59-59-999000000Z.parquet",
+      "sha256": "0bf0ce8dcbb6d8690cc448f7d806a91b9e92ab07fc8a70090b4327a42c8fef7d",
+      "size": 6252575
+    },
+    {
+      "path": "live/stage2-funding/funding_rate_update/BTCUSDT-PERP.BINANCE/funding_rate_update_0.feather",
+      "sha256": "0895b39d22c65263c73aef7f88dd3de6cd30edf6243efaba663042a60f1a91a9",
+      "size": 9818504
+    },
+    {
+      "path": "live/stage2-funding/funding_rate_update/ETHUSDT-PERP.BINANCE/funding_rate_update_0.feather",
+      "sha256": "0c7bd748c3474f55c5cb551f158eb8a8514edc1c741bc18ac82a4ac77021ec30",
+      "size": 9818504
+    },
+    {
+      "path": "stage2_coverage.json",
+      "sha256": "b8cf61e0e71ca6a9914379810ee0f7167998cb7c8376d82675d0c353696713c4",
+      "size": 6739
+    },
+    {
+      "path": "stage2_dataset_digest.json",
+      "sha256": "5819501c4e95ef3f3061fe14bcb8fbaab49793b685b2c69a9fdecac1d4a767d1",
+      "size": 6059
+    },
+    {
+      "path": "stage2_instrument_snapshot.json",
+      "sha256": "b7cd3b5220e19b17f2eded89295e17a00ac6686f70cd7d6c19168b8ffbfac340",
+      "size": 1874
+    },
+    {
+      "path": "stage2_source_manifest.json",
+      "sha256": "313200b5c47e45a0f0907c80b61238d69faf8be8856bf3798097ac26bb4dfc83",
+      "size": 532879
+    }
+  ],
+  "identities": {
+    "acceptance_digest": "5909c878a81f0cdea85a8b8f86efd36d9c9bad5b3f3fb4c0f9960bb0551609cd",
+    "dataset_digest": "e17c6294e0a0e6714e56a44624ade37cff46125c46d8b0ee81ede6093711579c",
+    "instrument_snapshot_checksum": "dd7fab59448a3b530ab70871ec57c375f6758e409004f9673d9d0cac7ee630bd",
+    "market_data_manifest_digest": "a0d9a36bb65ec7c2ec41f47cdf6ba7d20f57ad28d8d3494a69624c60d6d0a110",
+    "runtime_identity": "2.0.0rc4+a0400251110653b6d8ae6a9b5b89c4543fa85a2d",
+    "source_manifest_digest": "de86d44c73117e17af2bbcb655cf1c8d4290043fa8854636cc0e4e592a1dc790"
+  },
+  "release": {
+    "archive_asset": {
+      "format": "tar+zstd",
+      "name": "binance-usdm-btceth-202001-202608-r1.catalog.tar.zst",
+      "sha256": "54094e48796c0829ad8a8484361eb1654c29346aeac87dfde7b7d9e34dc45ae4",
+      "size": 26319927,
+      "url": "https://github.com/PhoenixSss/tracequant/releases/download/stage2-binance-usdm-btceth-202001-202608-r1/binance-usdm-btceth-202001-202608-r1.catalog.tar.zst"
+    },
+    "file_manifest_asset": {
+      "name": "binance-usdm-btceth-202001-202608-r1.catalog.files.json",
+      "sha256": "b4ea808e09cec123be9ad840319ddc79d46e5190bf320c28609a0eb89110fb23",
+      "size": 5111,
+      "url": "https://github.com/PhoenixSss/tracequant/releases/download/stage2-binance-usdm-btceth-202001-202608-r1/binance-usdm-btceth-202001-202608-r1.catalog.files.json"
+    },
+    "repository": "PhoenixSss/tracequant",
+    "tag": "stage2-binance-usdm-btceth-202001-202608-r1"
+  },
+  "schema": "tracequant-stage2-artifact-lock-v1"
+}
