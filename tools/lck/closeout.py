@@ -477,6 +477,7 @@ class CloseoutCompleter:
         metadata_effect: CloseoutMetadataEffect | None = None,
         cleanup_effect: CleanupTaskRefsEffect | None = None,
         review_store: ReviewInvocationStore | None = None,
+        session_store: ReviewInvocationStore | None = None,
         effect_registry: EffectExecutorRegistry | None = None,
         policy_registry: ProfilePolicyRegistry | None = None,
         profile_resolver: ProfileResolver | None = None,
@@ -498,6 +499,7 @@ class CloseoutCompleter:
         self.cleanup_effect = cleanup_effect or CleanupTaskRefsEffect(resolver)
         self.effect_registry = effect_registry or DEFAULT_EFFECT_EXECUTOR_REGISTRY
         self.review_store = review_store or ReviewInvocationStore(resolver.repo_root)
+        self.session_store = session_store or ReviewInvocationStore(resolver.repo_root)
         self.last_snapshot: OperationSnapshot | None = None
         self.last_effects: list[EffectReceipt] = []
         self.last_profile_evidence: ProfileEvidenceEnvelope | None = None
@@ -626,6 +628,8 @@ class CloseoutCompleter:
         # still leaves already-completed effects visible to the failure path.
         self.last_effects = effects
         self.last_profile_evidence = None
+        if self.session_store.read_refresh_session(task_number) is not None:
+            raise LckStopError("Closeout STOP: a Candidate Refresh session is active")
         snapshot = self.snapshots.acquire(task_number, operation="closeout")
         self.last_snapshot = snapshot
         state = snapshot.state

@@ -208,10 +208,14 @@ class RemediationPreparer:
         *,
         findings_file: Path | None = None,
     ) -> RemediationContext:
+        if self.store.read_refresh_session(task_number) is not None:
+            raise LckStopError(
+                "Remediation Prepare STOP: a Candidate Refresh session is active"
+            )
         required = self.store.read_review_required(task_number)
         if required is not None:
             raise LckStopError(
-                "Remediation STOP: a fresh Independent Review is required after the previous remediation"
+                "Remediation STOP: a fresh Independent Review is required after the previous candidate change"
             )
         findings, findings_source = _remediation_findings(
             self.store,
@@ -409,9 +413,13 @@ class RemediationNoChangeCompleter:
         *,
         summary: str,
     ) -> RemediationNoChangeResult:
+        if self.store.read_refresh_session(task_number) is not None:
+            raise LckStopError(
+                "Remediation No Change STOP: a Candidate Refresh session is active"
+            )
         if self.store.read_review_required(task_number) is not None:
             raise LckStopError(
-                "Remediation STOP: a fresh Independent Review is required after the previous remediation"
+                "Remediation STOP: a fresh Independent Review is required after the previous candidate change"
             )
 
         session = self.store.read_remediation_session(task_number)
@@ -673,9 +681,13 @@ class RemediationCompleter:
         risks: str = "",
     ) -> RemediationCompletionResult:
         self.last_checks = None
+        if self.store.read_refresh_session(task_number) is not None:
+            raise LckStopError(
+                "Remediation Complete STOP: a Candidate Refresh session is active"
+            )
         if self.store.read_review_required(task_number) is not None:
             raise LckStopError(
-                "Remediation STOP: a fresh Independent Review is required after the previous remediation"
+                "Remediation STOP: a fresh Independent Review is required after the previous candidate change"
             )
         session = self.store.read_remediation_session(task_number)
         start_head: str | None = None

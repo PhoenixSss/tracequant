@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Final
 
-SCHEMA_VERSION: Final = 7
+SCHEMA_VERSION: Final = 8
 SKILLS: Final = (
     "task-delivery-runner",
     "task-pr-review-runner",
@@ -16,7 +16,13 @@ SKILLS: Final = (
     "feature-completion-audit",
 )
 REQUIRED: Final = {
-    "task-delivery-runner": ("delivery prepare", "delivery complete"),
+    "task-delivery-runner": (
+        "delivery prepare",
+        "delivery complete",
+        "refresh prepare",
+        "refresh complete",
+        "refresh abort",
+    ),
     "task-pr-review-runner": ("review prepare", "review complete"),
     "task-closeout": ("merge preflight", "closeout"),
     "feature-completion-audit": ("feature-audit-snapshot", "feature-audit-recheck"),

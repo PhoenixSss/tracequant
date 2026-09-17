@@ -28,6 +28,7 @@ def test_lck_decomposition_preserves_responsibility_boundaries() -> None:
         "review_workspace.py": {"ReviewWorkspaceManager", "ReviewInvocationStore"},
         "review.py": {"ReviewPreparer", "ReviewCompleter", "MergePreflight"},
         "remediation.py": {"RemediationPreparer", "RemediationCompleter"},
+        "refresh.py": {"RefreshPreparer", "RefreshCompleter", "RefreshAborter"},
         "closeout.py": {"CloseoutCompleter"},
         "receipts.py": {"AuditReceiptStore"},
     }
@@ -43,7 +44,14 @@ def test_package_entrypoint_is_thin_and_stable() -> None:
 
 
 def test_shared_modules_do_not_import_phase_orchestration() -> None:
-    forbidden = {"delivery", "review", "remediation", "closeout", "receipts"}
+    forbidden = {
+        "delivery",
+        "review",
+        "remediation",
+        "refresh",
+        "closeout",
+        "receipts",
+    }
     for filename in ("models.py", "state.py", "eligibility.py", "validation_gates.py"):
         tree = ast.parse((CORE / filename).read_text(encoding="utf-8"))
         imported = {

@@ -148,6 +148,8 @@ class PhaseEligibilityResolver:
                         Phase.DELIVERY_COMPLETE,
                         Phase.REMEDIATION_PREPARE,
                         Phase.REMEDIATION_COMPLETE,
+                        Phase.REFRESH_PREPARE,
+                        Phase.REFRESH_COMPLETE,
                     }:
                         reasons.append(contract_check.failure_reason)
                 else:
@@ -299,6 +301,9 @@ class PhaseEligibilityResolver:
                 Phase.REMEDIATION_PREPARE: {"Review"},
                 Phase.REMEDIATION_NO_CHANGE: {"Review"},
                 Phase.REMEDIATION_COMPLETE: {"Review"},
+                Phase.REFRESH_PREPARE: {"Review"},
+                Phase.REFRESH_COMPLETE: {"Review"},
+                Phase.REFRESH_ABORT: {"Review"},
                 Phase.CLOSEOUT: {
                     "Inbox",
                     "Specifying",
@@ -435,6 +440,58 @@ class PhaseEligibilityResolver:
                         "ensure_remote_branch",
                         "reuse_open_pr",
                     )
+        elif phase in {
+            Phase.REFRESH_PREPARE,
+            Phase.REFRESH_COMPLETE,
+            Phase.REFRESH_ABORT,
+        }:
+            if state.open_pr is None:
+                reasons.append("Candidate Refresh requires one current OPEN PR")
+            elif state.open_pr.get("isDraft") is not False:
+                reasons.append("Candidate Refresh requires a non-Draft OPEN PR")
+            if state.project_status != "Review":
+                reasons.append("Candidate Refresh requires Project Status Review")
+            pr_head = state.open_pr.get("headRefOid") if state.open_pr else None
+            pr_base = state.open_pr.get("baseRefOid") if state.open_pr else None
+            remote_main = _remote_main_sha(state.git)
+            if not is_sha(pr_head):
+                reasons.append("current OPEN PR head OID is unavailable")
+            if not is_sha(pr_base) or not is_sha(remote_main) or pr_base != remote_main:
+                reasons.append("current OPEN PR base must match current origin/main")
+            if (
+                state.open_pr
+                and state.open_pr.get("headRefName") != state.target_branch
+            ):
+                reasons.append("OPEN PR head branch must be the resolved Task branch")
+            if state.remote_issue_oid != pr_head:
+                reasons.append("remote Task branch must match current OPEN PR head")
+            if state.local_issue_branch is None:
+                reasons.append("Candidate Refresh requires a local Task branch")
+            if state.git.get("branch") != state.target_branch:
+                reasons.append(
+                    "Candidate Refresh requires the resolved Task branch selected"
+                )
+            if phase in {Phase.REFRESH_PREPARE, Phase.REFRESH_ABORT}:
+                if state.local_issue_head != pr_head:
+                    reasons.append("local Task branch must match current OPEN PR head")
+            capabilities = (
+                ("prepare_main_merge_candidate",)
+                if phase is Phase.REFRESH_PREPARE
+                else ("abort_owned_main_merge_candidate",)
+                if phase is Phase.REFRESH_ABORT
+                else (
+                    (
+                        profile_resolution.profile.candidate_capability
+                        if profile_resolution.profile is not None
+                        else "verify_critical_outcome"
+                    ),
+                    "run_formal_validation",
+                    "commit_owned_merge_candidate",
+                    "ensure_remote_branch",
+                    "reuse_open_pr",
+                    "require_fresh_review",
+                )
+            )
         else:
             if state.merged is not True:
                 reasons.append("Closeout requires one current merged PR")

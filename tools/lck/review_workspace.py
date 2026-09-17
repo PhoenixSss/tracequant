@@ -541,6 +541,9 @@ class ReviewInvocationStore:
     def remediation_session_path(self, task_number: int) -> Path:
         return self.root / "remediation-sessions" / f"task-{task_number}.json"
 
+    def refresh_session_path(self, task_number: int) -> Path:
+        return self.root / "refresh-sessions" / f"task-{task_number}.json"
+
     def remediation_no_change_receipt_path(
         self, task_number: int, review_id: str
     ) -> Path:
@@ -846,6 +849,105 @@ class ReviewInvocationStore:
             self.remediation_session_path(task_number).unlink()
         except FileNotFoundError:
             pass
+
+    def write_refresh_session(
+        self, task_number: int, payload: Mapping[str, Any]
+    ) -> Path:
+        path = self.refresh_session_path(task_number)
+        existing: Mapping[str, Any] | None = None
+        if path.exists():
+            value = read_json_file(path)
+            if not isinstance(value, Mapping):
+                raise LckStopError("Candidate Refresh session state is invalid")
+            existing = value
+        if existing is not None and (
+            existing.get("operation_id") != payload.get("operation_id")
+            or existing.get("start_head_sha") != payload.get("start_head_sha")
+            or existing.get("frozen_main_sha") != payload.get("frozen_main_sha")
+        ):
+            raise LckStopError(
+                "another Candidate Refresh session is already prepared for this Task"
+            )
+        atomic_write_json(path, payload)
+        return path
+
+    def read_refresh_session(self, task_number: int) -> dict[str, Any] | None:
+        path = self.refresh_session_path(task_number)
+        if not path.exists():
+            return None
+        value = read_json_file(path)
+        if not isinstance(value, dict) or value.get("task_number") != task_number:
+            raise LckStopError("Candidate Refresh session state is invalid")
+        return value
+
+    def record_refresh_candidate(
+        self,
+        task_number: int,
+        operation_id: str,
+        *,
+        start_head_sha: str,
+        frozen_main_sha: str,
+        candidate_head_sha: str,
+        candidate_tree_oid: str,
+    ) -> Path:
+        session = self.read_refresh_session(task_number)
+        if session is None:
+            raise LckStopError(
+                "cannot record a Candidate Refresh commit without a prepared session"
+            )
+        if (
+            session.get("operation_id") != operation_id
+            or session.get("start_head_sha") != start_head_sha
+            or session.get("frozen_main_sha") != frozen_main_sha
+        ):
+            raise LckStopError(
+                "Candidate Refresh commit does not belong to the prepared session"
+            )
+        if not is_sha(candidate_head_sha) or not is_sha(candidate_tree_oid):
+            raise LckStopError("Candidate Refresh commit identity is incomplete")
+        candidate = {
+            "operation_id": operation_id,
+            "head_sha": candidate_head_sha,
+            "tree_oid": candidate_tree_oid,
+            "parents": [start_head_sha, frozen_main_sha],
+        }
+        existing = session.get("candidate")
+        if existing is not None and existing != candidate:
+            raise LckStopError(
+                "prepared Candidate Refresh session already owns a different commit"
+            )
+        session["candidate"] = candidate
+        return self.write_refresh_session(task_number, session)
+
+    def clear_refresh_session(self, task_number: int) -> None:
+        try:
+            self.refresh_session_path(task_number).unlink()
+        except FileNotFoundError:
+            pass
+
+    def review_prepare_active(self, task_number: int) -> bool:
+        """Return whether a Review Prepare/handoff marker owns this Task."""
+        return self.review_prepare_inflight_path(task_number).exists()
+
+    def write_refresh_review_required(
+        self, task_number: int, operation_id: str, head_sha: str
+    ) -> None:
+        self._validate_id(operation_id)
+        if not is_sha(head_sha):
+            raise LckStopError("review-required state needs a valid refreshed head")
+        atomic_write_json(
+            self.review_required_path(task_number),
+            {
+                "schema_version": LCK_SCHEMA_VERSION,
+                "kind": "fresh-review-required",
+                "task_number": task_number,
+                "source_refresh_operation_id": operation_id,
+                "refreshed_head": head_sha,
+                # Compatibility projection for consumers introduced with Remediation.
+                "remediated_head": head_sha,
+                "authority": "negative lifecycle boundary only; current target remains live-resolved",
+            },
+        )
 
     def write_remediation_no_change_receipt(
         self, task_number: int, review_id: str, payload: Mapping[str, Any]

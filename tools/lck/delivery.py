@@ -36,6 +36,7 @@ from .profile_policies import (
     resolve_issue_policy,
     run_profile_delivery_gates,
 )
+from .review_workspace import ReviewInvocationStore
 from .state import (
     LiveStateResolver,
     OperationSnapshotBuilder,
@@ -90,6 +91,7 @@ class DeliveryPreparer:
         eligibility: PhaseEligibilityResolver | None = None,
         profile_resolver: ProfileResolver | None = None,
         status_effect: SetInProgressStatusEffect | None = None,
+        store: ReviewInvocationStore | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
@@ -102,6 +104,7 @@ class DeliveryPreparer:
             profile_resolver=self.profile_resolver
         )
         self.status_effect = status_effect or SetInProgressStatusEffect(resolver)
+        self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.last_snapshot: OperationSnapshot | None = None
         self.last_effects: list[EffectReceipt] = []
 
@@ -139,6 +142,10 @@ class DeliveryPreparer:
 
     def prepare(self, task_number: int) -> DeliveryContext:
         self.last_effects = []
+        if self.store.read_refresh_session(task_number) is not None:
+            raise LckStopError(
+                "Delivery Prepare STOP: a Candidate Refresh session is active"
+            )
         snapshot = self.snapshots.acquire(
             task_number,
             operation=Phase.DELIVERY_PREPARE.value,
@@ -278,6 +285,7 @@ class DeliveryCompleter:
         require_existing_open_pr: bool = False,
         candidate_recorder: Callable[[str, str], None] | None = None,
         services: Sequence[Any] = (),
+        store: ReviewInvocationStore | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
@@ -300,6 +308,7 @@ class DeliveryCompleter:
         self.services = tuple(services)
         self.require_existing_open_pr = require_existing_open_pr
         self.candidate_recorder = candidate_recorder
+        self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.last_snapshot: OperationSnapshot | None = None
         self.last_critical_outcome: dict[str, Any] | None = None
         self.last_documentation_validation: dict[str, Any] | None = None
@@ -475,7 +484,7 @@ class DeliveryCompleter:
                 or pr.get("headRefName") != branch
             ):
                 raise LckStopError(
-                    "Remediation requires the snapshot's existing OPEN PR on the "
+                    f"{phase.value} requires the snapshot's existing OPEN PR on the "
                     "resolved Task branch/base"
                 )
 
@@ -640,11 +649,20 @@ class DeliveryCompleter:
         owned_remediation_candidate: bool = False,
     ) -> DeliveryCompletionResult:
         self.last_checks = None
+        if (
+            phase is not Phase.REFRESH_COMPLETE
+            and self.store.read_refresh_session(task_number) is not None
+        ):
+            raise LckStopError(
+                "Delivery Complete STOP: a Candidate Refresh session is active"
+            )
         if not summary.strip():
             raise LckStopError("Delivery summary must be non-empty")
         operation = (
             "remediation-complete"
             if phase is Phase.REMEDIATION_COMPLETE
+            else "refresh-complete"
+            if phase is Phase.REFRESH_COMPLETE
             else "delivery-complete"
         )
         progress = ProgressReporter(operation)

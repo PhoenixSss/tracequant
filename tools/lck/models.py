@@ -37,6 +37,9 @@ class Phase(StrEnum):
     REMEDIATION_PREPARE = "Remediation Prepare"
     REMEDIATION_NO_CHANGE = "Remediation No Change"
     REMEDIATION_COMPLETE = "Remediation Complete"
+    REFRESH_PREPARE = "Refresh Prepare"
+    REFRESH_COMPLETE = "Refresh Complete"
+    REFRESH_ABORT = "Refresh Abort"
     CLOSEOUT = "Closeout"
 
 
@@ -167,6 +170,18 @@ _OPERATION_FACT_PROFILES: Final = {
     ),
     "remediation-complete": FactProfile(
         name="remediation-complete",
+        include_checks=True,
+    ),
+    "refresh-prepare": FactProfile(
+        name="refresh-prepare",
+        include_checks=True,
+    ),
+    "refresh-complete": FactProfile(
+        name="refresh-complete",
+        include_checks=True,
+    ),
+    "refresh-abort": FactProfile(
+        name="refresh-abort",
         include_checks=True,
     ),
     "merge-preflight": FactProfile(

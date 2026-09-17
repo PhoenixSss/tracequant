@@ -17,6 +17,7 @@ from .receipts import (
     _write_failure_receipt,
     _write_success_receipt,
 )
+from .refresh import RefreshAborter, RefreshCompleter, RefreshPreparer
 from .remediation import (
     RemediationCompleter,
     RemediationNoChangeCompleter,
@@ -75,6 +76,18 @@ def _build_parser() -> argparse.ArgumentParser:
     remediation_complete.add_argument("--summary", required=True)
     remediation_complete.add_argument("--risks", default="")
 
+    refresh = commands.add_parser("refresh")
+    refresh_commands = refresh.add_subparsers(dest="refresh_command", required=True)
+    refresh_prepare = refresh_commands.add_parser("prepare")
+    refresh_prepare.add_argument("task", type=int)
+    refresh_complete = refresh_commands.add_parser("complete")
+    refresh_complete.add_argument("task", type=int)
+    refresh_complete.add_argument("--commit-message", required=True)
+    refresh_complete.add_argument("--summary", required=True)
+    refresh_complete.add_argument("--risks", default="")
+    refresh_abort = refresh_commands.add_parser("abort")
+    refresh_abort.add_argument("task", type=int)
+
     merge = commands.add_parser("merge")
     merge_commands = merge.add_subparsers(dest="merge_command", required=True)
     merge_preflight = merge_commands.add_parser("preflight")
@@ -97,6 +110,8 @@ def _cli_operation(args: argparse.Namespace) -> str:
         return f"review-{args.review_command}"
     if args.command == "remediation":
         return f"remediation-{args.remediation_command}"
+    if args.command == "refresh":
+        return f"refresh-{args.refresh_command}"
     if args.command in {"merge", "merge-preflight"}:
         return "merge-preflight"
     if args.command == "closeout":
@@ -192,6 +207,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                     risks=args.risks,
                 )
             )
+        if args.command == "refresh" and args.refresh_command == "prepare":
+            handler = RefreshPreparer(resolver)
+            return emit_success(handler.prepare(task_number))
+        if args.command == "refresh" and args.refresh_command == "complete":
+            handler = RefreshCompleter(resolver)
+            return emit_success(
+                handler.complete(
+                    task_number,
+                    commit_message=args.commit_message,
+                    summary=args.summary,
+                    risks=args.risks,
+                )
+            )
+        if args.command == "refresh" and args.refresh_command == "abort":
+            handler = RefreshAborter(resolver)
+            return emit_success(handler.abort(task_number))
         if (
             args.command == "merge" and args.merge_command == "preflight"
         ) or args.command == "merge-preflight":

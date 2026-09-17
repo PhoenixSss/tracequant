@@ -675,8 +675,11 @@ class ReuseExistingOpenPrEffect:
         "number,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid"
     )
 
-    def __init__(self, resolver: LiveStateResolver) -> None:
+    def __init__(
+        self, resolver: LiveStateResolver, *, operation_label: str = "Remediation"
+    ) -> None:
         self.resolver = resolver
+        self.operation_label = operation_label
 
     def execute(
         self,
@@ -699,21 +702,23 @@ class ReuseExistingOpenPrEffect:
             or pr.get("isDraft") is not False
             or not isinstance(repository, str)
         ):
-            raise LckStopError("Remediation requires the existing non-Draft OPEN PR")
+            raise LckStopError(
+                f"{self.operation_label} requires the existing non-Draft OPEN PR"
+            )
         if _remote_main_sha(state.git) != expected_base_sha:
             raise LckStopError(
-                "Remediation PR precondition failed: snapshot base mismatch"
+                f"{self.operation_label} PR precondition failed: snapshot base mismatch"
             )
         if (
             not isinstance(issue, Mapping)
             or issue.get("body_sha256") != expected_body_sha256
         ):
             raise LckStopError(
-                "Remediation PR precondition failed: snapshot Task body mismatch"
+                f"{self.operation_label} PR precondition failed: snapshot Task body mismatch"
             )
         pr_number = pr.get("number")
         if not isinstance(pr_number, int) or isinstance(pr_number, bool):
-            raise LckStopError("Remediation PR number is unavailable")
+            raise LckStopError(f"{self.operation_label} PR number is unavailable")
         result = self.resolver.runner.run(
             [
                 "gh",
@@ -728,12 +733,14 @@ class ReuseExistingOpenPrEffect:
             command_id="lck-remediation-pr-postcondition",
         )
         if result.returncode != 0 or not result.stdout.strip():
-            raise LckStopError("Remediation PR postcondition cannot be queried")
+            raise LckStopError(
+                f"{self.operation_label} PR postcondition cannot be queried"
+            )
         current = read_json_text(
             result.stdout, field="lck-remediation-pr-postcondition"
         )
         if not isinstance(current, Mapping):
-            raise LckStopError("Remediation PR postcondition is malformed")
+            raise LckStopError(f"{self.operation_label} PR postcondition is malformed")
         if (
             current.get("number") != pr_number
             or str(current.get("state", "")).upper() != "OPEN"
@@ -744,7 +751,7 @@ class ReuseExistingOpenPrEffect:
             or current.get("baseRefName") != BASE_BRANCH
         ):
             raise LckStopError(
-                "Remediation PR postcondition failed: existing PR is not on the pushed head"
+                f"{self.operation_label} PR postcondition failed: existing PR is not on the pushed head"
             )
         return EffectReceipt(
             effect="reuse_open_pr",

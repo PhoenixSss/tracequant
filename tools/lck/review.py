@@ -171,6 +171,10 @@ class ReviewPreparer:
 
     def prepare(self, task_number: int) -> ReviewContext:
         self.last_validation = None
+        if self.store.read_refresh_session(task_number) is not None:
+            raise LckStopError(
+                "Review Prepare STOP: a Candidate Refresh session must be completed or aborted first"
+            )
         if self.store.read_remediation_session(task_number) is not None:
             raise LckStopError(
                 "Review Prepare STOP: a prepared Remediation session must be completed "
@@ -808,6 +812,7 @@ class MergePreflight:
         checks_gate: DeliveryChecksGate | None = None,
         policy_registry: ProfilePolicyRegistry | None = None,
         profile_resolver: ProfileResolver | None = None,
+        store: ReviewInvocationStore | None = None,
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
@@ -823,6 +828,7 @@ class MergePreflight:
             profile_resolver=self.profile_resolver,
         )
         self.checks_gate = checks_gate or DeliveryChecksGate(resolver)
+        self.store = store or ReviewInvocationStore(resolver.repo_root)
         self.last_snapshot: OperationSnapshot | None = None
         self.last_checks: dict[str, Any] | None = None
 
@@ -836,6 +842,10 @@ class MergePreflight:
 
     def run(self, task_number: int) -> MergePreflightResult:
         self.last_checks = None
+        if self.store.read_refresh_session(task_number) is not None:
+            raise LckStopError(
+                "Merge Preflight STOP: a Candidate Refresh session is active"
+            )
         snapshot = self.snapshots.acquire(
             task_number,
             operation="merge-preflight",

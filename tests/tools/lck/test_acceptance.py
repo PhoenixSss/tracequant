@@ -53,7 +53,14 @@ def test_restored_lck_runs_from_current_repository_layout(
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
-    for command in ("delivery", "review", "remediation", "merge", "closeout"):
+    for command in (
+        "delivery",
+        "review",
+        "remediation",
+        "refresh",
+        "merge",
+        "closeout",
+    ):
         assert command in result.stdout
 
     body = """## Critical Outcome
@@ -286,6 +293,17 @@ def test_lck_exposes_the_complete_lifecycle_parser() -> None:
             "PASS",
         ),
         ("remediation", "prepare", "333", "--review-id", "r"),
+        ("refresh", "prepare", "333"),
+        (
+            "refresh",
+            "complete",
+            "333",
+            "--commit-message",
+            "merge main",
+            "--summary",
+            "refresh candidate",
+        ),
+        ("refresh", "abort", "333"),
         ("merge", "preflight", "333"),
         ("closeout", "333"),
     )

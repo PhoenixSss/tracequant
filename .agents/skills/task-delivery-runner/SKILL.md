@@ -1,6 +1,6 @@
 ---
 name: task-delivery-runner
-description: Deliver a maintainer-specified ready leaf Issue, or remediate its latest failed Independent Review when the maintainer supplies the failed Review ID.
+description: Deliver a ready leaf Issue, remediate an explicitly identified failed Review, or refresh an existing Review candidate onto current main when the maintainer explicitly requests it.
 ---
 
 # Leaf delivery runner
@@ -16,12 +16,16 @@ Choose exactly one branch and read only its linked instructions:
   [references/initial-delivery.md](references/initial-delivery.md).
 - For Remediation, require an explicit maintainer request and the failed LCK
   `review_id`, then read [references/remediation.md](references/remediation.md).
+- For Candidate Refresh, require an explicit maintainer request for an existing
+  leaf Issue in Review, then read
+  [references/candidate-refresh.md](references/candidate-refresh.md).
 
 Do not infer Remediation from an open PR, failing checks, comments, or an old review.
 If neither branch can be selected safely, stop at a Human Gate.
 
-The routed LCK entry points are `delivery prepare` / `delivery complete` and
-`remediation prepare` / `remediation no-change` / `remediation complete`.
+The routed LCK entry points are `delivery prepare` / `delivery complete`,
+`remediation prepare` / `remediation no-change` / `remediation complete`, and
+`refresh prepare` / `refresh complete` / `refresh abort`.
 Their exact commands in the selected reference use the stable
 `uv run --frozen python -m tools.lck` front door.
 
