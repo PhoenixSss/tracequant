@@ -31,11 +31,7 @@ from .models import (
     _validation_agent_view,
 )
 from .profile_policies import ProfileEvidenceEnvelope
-from .refresh import (
-    RefreshAbortResult,
-    RefreshCompletionResult,
-    RefreshContext,
-)
+from .refresh import RefreshResult
 from .remediation import (
     RemediationCompletionResult,
     RemediationContext,
@@ -448,76 +444,35 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "human_boundary": "STOP — a new Independent Review must be started explicitly in a fresh invocation",
             "next_action": "start a new independent Review in a fresh invocation",
         }
-    if isinstance(value, RefreshContext):
+    if isinstance(value, RefreshResult):
         return {
             "schema_version": LCK_SCHEMA_VERSION,
             "kind": "lck-agent-view",
-            "operation": "refresh-prepare",
+            "operation": "refresh",
             "task_number": value.task_number,
             "issue_profile": _issue_profile_agent_view(value),
             "status": value.status,
             "action": value.action,
             "operation_id": value.operation_id,
-            "branch": value.state.target_branch,
+            "branch": value.branch,
             "pr_number": value.pr_number,
             "start_head_sha": value.start_head_sha,
             "frozen_main_sha": value.frozen_main_sha,
-            "merge_parents": [value.start_head_sha, value.frozen_main_sha],
-            "conflict_files": list(value.conflict_files),
-            "task_contract": _jsonable(_leaf_contract_from_state(value.state)),
-            "human_boundary": (
-                "resolve the bounded conflicts and inspect the candidate before completion"
-                if value.conflict_files
-                else "inspect the integrated candidate before completion"
-            ),
-            "next_action": (
-                "stop; main is already contained in the Task head"
-                if value.status == "ALREADY_CURRENT"
-                else "resolve conflicts, run targeted feedback, then run Refresh Complete"
-                if value.conflict_files
-                else "run targeted feedback, then run Refresh Complete"
-            ),
-        }
-    if isinstance(value, RefreshCompletionResult):
-        delivery = value.delivery
-        return {
-            "schema_version": LCK_SCHEMA_VERSION,
-            "kind": "lck-agent-view",
-            "operation": "refresh-complete",
-            "task_number": value.task_number,
-            "issue_profile": _issue_profile_agent_view(delivery),
-            "status": "READY_FOR_FRESH_REVIEW",
-            "operation_id": value.operation_id,
-            "branch": delivery.branch,
-            "start_head_sha": value.start_head_sha,
-            "frozen_main_sha": value.frozen_main_sha,
-            "merge_parents": [value.start_head_sha, value.frozen_main_sha],
+            "head_sha": value.head_sha,
             "validated_tree_oid": value.validated_tree_oid,
-            "head_sha": delivery.head_sha,
-            "pr": _delivery_pr_agent_view(delivery.effects),
-            "critical_outcome": _critical_outcome_agent_view(delivery.critical_outcome),
-            "profile_evidence": _profile_evidence(delivery.profile_evidence),
-            "validation": _validation_agent_view(delivery.validation),
-            "checks": _checks_agent_view(delivery.checks),
-            "effects": _effect_agent_view(delivery.effects),
-            "fresh_review_required": True,
+            "critical_outcome": _critical_outcome_agent_view(value.critical_outcome),
+            "profile_evidence": _profile_evidence(value.profile_evidence),
+            "validation": _validation_agent_view(value.validation),
+            "effects": _effect_agent_view(value.effects),
+            "fresh_review_required": value.status == "READY_FOR_FRESH_REVIEW",
             "automatic_review": False,
             "automatic_merge": False,
             "human_boundary": "STOP — a fresh Independent Review must be started explicitly",
-            "next_action": "start a fresh independent Review in a new invocation",
-        }
-    if isinstance(value, RefreshAbortResult):
-        return {
-            "schema_version": LCK_SCHEMA_VERSION,
-            "kind": "lck-agent-view",
-            "operation": "refresh-abort",
-            "task_number": value.task_number,
-            "status": value.status,
-            "operation_id": value.operation_id,
-            "start_head_sha": value.start_head_sha,
-            "frozen_main_sha": value.frozen_main_sha,
-            "session_released": True,
-            "next_action": "stop; the Task branch is restored to its pre-refresh head",
+            "next_action": (
+                "stop; main is already contained in the Task head"
+                if value.status == "ALREADY_CURRENT"
+                else "start a fresh independent Review in a new invocation"
+            ),
         }
     raise LckStopError(f"unsupported LCK result type: {type(value).__name__}")
 
@@ -635,6 +590,7 @@ def _write_failure_receipt(
             else None
         ),
         **detail,
+        "conflict_files": list(getattr(handler, "last_conflict_files", ())),
         "next_action": next_action,
     }
     receipt_payload = {
@@ -667,6 +623,9 @@ def _write_failure_receipt(
                 ]
             ),
             "session": _jsonable(getattr(handler, "last_session", None)),
+            "conflict_files": _jsonable(
+                list(getattr(handler, "last_conflict_files", ()))
+            ),
         },
     }
     reference = store.write(

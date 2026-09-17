@@ -1,63 +1,35 @@
 # Candidate Refresh
 
-Use this branch only when the maintainer explicitly asks LCK to integrate current
-`main` into the existing OPEN PR for a leaf Issue already in Review. This is base
-integration, not Initial Delivery, semantic Remediation, Review, or merge authority.
+Use this branch only when the maintainer explicitly asks to refresh an existing
+leaf Issue whose current non-Draft OPEN PR is already in Review and current main
+has advanced after a blocker or dependency was merged.
 
-## Prepare
+## Run the atomic refresh
 
-Run the elevated-first LCK entry point:
-
-```bash
-uv run --frozen python -m tools.lck refresh prepare <TASK>
-```
-
-- `ALREADY_CURRENT` is terminal success with no Refresh session or commit. Stop.
-- `READY_FOR_REFRESH_COMPLETE` owns a conflict-free, uncommitted merge candidate.
-- `REFRESH_CONFLICTS` owns the reported conflict inventory. Resolve only those
-  integration conflicts and necessary compatibility adjustments. Unknown paths,
-  unexplained semantics, or scope expansion require a Human Gate.
-- Any STOP is terminal for this invocation. Do not use direct Git/GitHub commands
-  as fallback.
-
-Inspect the complete candidate and run the smallest change-relevant targeted
-feedback. Do not commit, push, rebase, force push, update the branch through
-GitHub, create a PR, or start Review.
-
-## Complete
-
-When the candidate is resolved, targeted-ready, and contains no untracked input:
+Use the elevated-first LCK entry point:
 
 ```bash
-uv run --frozen python -m tools.lck refresh complete <TASK> \
-  --commit-message "<merge commit message>" \
-  --summary "<integration summary>" \
-  --risks "<risks or limitations>"
+uv run --frozen python -m tools.lck refresh <TASK>
 ```
 
-LCK fresh-resolves the Task/PR/head/base, validates the exact integrated tree,
-creates the ordinary two-parent merge commit, fast-forwards the same remote Task
-branch, reuses the same PR, and establishes the fresh-review-required boundary.
-Only `READY_FOR_FRESH_REVIEW` is success.
+LCK fresh-resolves the Task, native blockers, Task branch, current main and the
+existing PR; takes the shared Task-local operation lock; rebases the exact clean
+Task head onto frozen current main; validates the rebased tree; and updates the
+same remote branch with an exact old-head lease.
 
-Report the Issue and existing PR, frozen main and old/new head, exact merge
-parents and validated tree, validation/check results, effects, and remaining
-risks. End with:
+Proceed only on one of these terminal results:
 
-```text
-请使用 task-pr-review-runner，在全新会话中独立只读审查 Task #<TASK> 的当前 OPEN PR。
-```
+- `ALREADY_CURRENT`: current main is already contained in the Task head; no write
+  occurred and no new Review is required because this invocation changed nothing.
+- `READY_FOR_FRESH_REVIEW`: the exact validated rebased head was pushed to the
+  existing PR and a fresh-review-required boundary was recorded.
 
-State that Review, Merge, Issue close, Closeout, and Feature completion were not
-performed.
+Any conflict, validation failure, main/PR/head drift, or lease failure is a STOP.
+LCK must restore the original local head when the remote was not updated and must
+not leave a rebase or Refresh session behind. Do not resolve conflicts, retry with
+direct Git, run an unbounded force push, or convert the STOP into Remediation.
 
-## Abort
-
-If the maintainer explicitly chooses to discard an uncommitted prepared Refresh:
-
-```bash
-uv run --frozen python -m tools.lck refresh abort <TASK>
-```
-
-Only `REFRESH_ABORTED` is success. Abort must stop if a commit exists, identity
-drifted, or non-owned/untracked input would be discarded.
+On success, report old head, frozen main, new head, validated tree, exact-lease
+effect, validation, receipt, and limitations. Stop and ask the maintainer to start
+a fresh independent Review. This branch never starts Review, merges, closes the
+Issue, or performs Closeout.

@@ -10,6 +10,7 @@ from .closeout import CloseoutCompleter
 from .common import WorkflowToolError, print_json
 from .delivery import DeliveryCompleter, DeliveryPreparer
 from .models import LckStopError, LiveState, ResolutionStatus, ReviewStaleError
+from .operation_lock import TaskOperationLock
 from .receipts import (
     AuditReceiptStore,
     _failure_fallback,
@@ -17,7 +18,7 @@ from .receipts import (
     _write_failure_receipt,
     _write_success_receipt,
 )
-from .refresh import RefreshAborter, RefreshCompleter, RefreshPreparer
+from .refresh import CandidateRefresher
 from .remediation import (
     RemediationCompleter,
     RemediationNoChangeCompleter,
@@ -77,16 +78,7 @@ def _build_parser() -> argparse.ArgumentParser:
     remediation_complete.add_argument("--risks", default="")
 
     refresh = commands.add_parser("refresh")
-    refresh_commands = refresh.add_subparsers(dest="refresh_command", required=True)
-    refresh_prepare = refresh_commands.add_parser("prepare")
-    refresh_prepare.add_argument("task", type=int)
-    refresh_complete = refresh_commands.add_parser("complete")
-    refresh_complete.add_argument("task", type=int)
-    refresh_complete.add_argument("--commit-message", required=True)
-    refresh_complete.add_argument("--summary", required=True)
-    refresh_complete.add_argument("--risks", default="")
-    refresh_abort = refresh_commands.add_parser("abort")
-    refresh_abort.add_argument("task", type=int)
+    refresh.add_argument("task", type=int)
 
     merge = commands.add_parser("merge")
     merge_commands = merge.add_subparsers(dest="merge_command", required=True)
@@ -111,7 +103,7 @@ def _cli_operation(args: argparse.Namespace) -> str:
     if args.command == "remediation":
         return f"remediation-{args.remediation_command}"
     if args.command == "refresh":
-        return f"refresh-{args.refresh_command}"
+        return "refresh"
     if args.command in {"merge", "merge-preflight"}:
         return "merge-preflight"
     if args.command == "closeout":
@@ -130,6 +122,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     operation_id = uuid.uuid4().hex
     receipt_store = AuditReceiptStore(resolver.repo_root)
     handler: Any = resolver
+    task_lock: TaskOperationLock | None = None
 
     def emit_success(value: Any) -> int:
         nonlocal operation_id
@@ -149,6 +142,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     try:
+        if args.command != "status":
+            task_lock = TaskOperationLock.acquire(
+                resolver.repo_root, task_number, operation
+            )
         if args.command == "status":
             return emit_success(resolver.resolve(task_number))
         if args.command == "delivery" and args.delivery_command == "prepare":
@@ -207,22 +204,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     risks=args.risks,
                 )
             )
-        if args.command == "refresh" and args.refresh_command == "prepare":
-            handler = RefreshPreparer(resolver)
-            return emit_success(handler.prepare(task_number))
-        if args.command == "refresh" and args.refresh_command == "complete":
-            handler = RefreshCompleter(resolver)
-            return emit_success(
-                handler.complete(
-                    task_number,
-                    commit_message=args.commit_message,
-                    summary=args.summary,
-                    risks=args.risks,
-                )
-            )
-        if args.command == "refresh" and args.refresh_command == "abort":
-            handler = RefreshAborter(resolver)
-            return emit_success(handler.abort(task_number))
+        if args.command == "refresh":
+            handler = CandidateRefresher(resolver)
+            return emit_success(handler.refresh(task_number))
         if (
             args.command == "merge" and args.merge_command == "preflight"
         ) or args.command == "merge-preflight":
@@ -282,3 +266,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         print_json(payload)
         return 2
+    finally:
+        if task_lock is not None:
+            task_lock.release()

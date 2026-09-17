@@ -25,7 +25,7 @@ If neither branch can be selected safely, stop at a Human Gate.
 
 The routed LCK entry points are `delivery prepare` / `delivery complete`,
 `remediation prepare` / `remediation no-change` / `remediation complete`, and
-`refresh prepare` / `refresh complete` / `refresh abort`.
+the one-shot `refresh <TASK>` operation.
 Their exact commands in the selected reference use the stable
 `uv run --frozen python -m tools.lck` front door.
 
@@ -47,9 +47,10 @@ not a lifecycle verdict.
 
 LCK alone owns branch selection, staging, commit, push, PR identity/effects, and
 Project lifecycle writes. Never replace an LCK STOP with direct Git/GitHub commands,
-an archived snapshot, guessed identity, force push, or a broader-permission retry of
-a real command failure. Unknown, stale, divergent, or ambiguous authority fails
-closed.
+an archived snapshot, guessed identity, direct Git fallback, or a broader-permission
+retry of a real command failure. Candidate Refresh is the sole narrow exception for
+an LCK-owned exact `--force-with-lease`; Agents never run it directly. Unknown,
+stale, divergent, or ambiguous authority fails closed.
 
 A successful branch stops at its documented result and Human boundary. This Skill
 never starts Independent Review, merges, closes an Issue, performs Closeout, or

@@ -28,7 +28,8 @@ def test_lck_decomposition_preserves_responsibility_boundaries() -> None:
         "review_workspace.py": {"ReviewWorkspaceManager", "ReviewInvocationStore"},
         "review.py": {"ReviewPreparer", "ReviewCompleter", "MergePreflight"},
         "remediation.py": {"RemediationPreparer", "RemediationCompleter"},
-        "refresh.py": {"RefreshPreparer", "RefreshCompleter", "RefreshAborter"},
+        "refresh.py": {"CandidateRefresher"},
+        "operation_lock.py": {"TaskOperationLock"},
         "closeout.py": {"CloseoutCompleter"},
         "receipts.py": {"AuditReceiptStore"},
     }

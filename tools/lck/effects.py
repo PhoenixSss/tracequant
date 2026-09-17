@@ -237,19 +237,19 @@ class CommitCurrentTreeEffect:
             )
         return result
 
-    def stage_candidate_tree(self, *, allow_empty: bool = False) -> str:
+    def stage_candidate_tree(self) -> str:
         status = self._run(
             ["git", "status", "--porcelain=v1", "--untracked-files=all"],
             "lck-delivery-status-before-stage",
         )
-        if not status.stdout.strip() and not allow_empty:
+        if not status.stdout.strip():
             raise LckStopError("Delivery Complete found no uncommitted Task changes")
         self._run(["git", "add", "-A", "--", ":/"], "lck-stage-current-tree")
         cached = self.resolver.runner.run(
             ["git", "diff", "--cached", "--quiet"],
             command_id="lck-staged-diff-present",
         )
-        if cached.returncode == 0 and not allow_empty:
+        if cached.returncode == 0:
             raise LckStopError("Delivery candidate contains no staged changes")
         if cached.returncode not in {0, 1}:
             raise LckStopError("unable to determine staged Delivery diff")
@@ -675,11 +675,8 @@ class ReuseExistingOpenPrEffect:
         "number,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid"
     )
 
-    def __init__(
-        self, resolver: LiveStateResolver, *, operation_label: str = "Remediation"
-    ) -> None:
+    def __init__(self, resolver: LiveStateResolver) -> None:
         self.resolver = resolver
-        self.operation_label = operation_label
 
     def execute(
         self,
@@ -702,23 +699,21 @@ class ReuseExistingOpenPrEffect:
             or pr.get("isDraft") is not False
             or not isinstance(repository, str)
         ):
-            raise LckStopError(
-                f"{self.operation_label} requires the existing non-Draft OPEN PR"
-            )
+            raise LckStopError("Remediation requires the existing non-Draft OPEN PR")
         if _remote_main_sha(state.git) != expected_base_sha:
             raise LckStopError(
-                f"{self.operation_label} PR precondition failed: snapshot base mismatch"
+                "Remediation PR precondition failed: snapshot base mismatch"
             )
         if (
             not isinstance(issue, Mapping)
             or issue.get("body_sha256") != expected_body_sha256
         ):
             raise LckStopError(
-                f"{self.operation_label} PR precondition failed: snapshot Task body mismatch"
+                "Remediation PR precondition failed: snapshot Task body mismatch"
             )
         pr_number = pr.get("number")
         if not isinstance(pr_number, int) or isinstance(pr_number, bool):
-            raise LckStopError(f"{self.operation_label} PR number is unavailable")
+            raise LckStopError("Remediation PR number is unavailable")
         result = self.resolver.runner.run(
             [
                 "gh",
@@ -733,14 +728,12 @@ class ReuseExistingOpenPrEffect:
             command_id="lck-remediation-pr-postcondition",
         )
         if result.returncode != 0 or not result.stdout.strip():
-            raise LckStopError(
-                f"{self.operation_label} PR postcondition cannot be queried"
-            )
+            raise LckStopError("Remediation PR postcondition cannot be queried")
         current = read_json_text(
             result.stdout, field="lck-remediation-pr-postcondition"
         )
         if not isinstance(current, Mapping):
-            raise LckStopError(f"{self.operation_label} PR postcondition is malformed")
+            raise LckStopError("Remediation PR postcondition is malformed")
         if (
             current.get("number") != pr_number
             or str(current.get("state", "")).upper() != "OPEN"
@@ -751,7 +744,7 @@ class ReuseExistingOpenPrEffect:
             or current.get("baseRefName") != BASE_BRANCH
         ):
             raise LckStopError(
-                f"{self.operation_label} PR postcondition failed: existing PR is not on the pushed head"
+                "Remediation PR postcondition failed: existing PR is not on the pushed head"
             )
         return EffectReceipt(
             effect="reuse_open_pr",

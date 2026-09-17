@@ -1,42 +1,39 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Final
 
-from .common import CommandResult, is_sha, stderr_tail
-from .delivery import DeliveryCompleter, DeliveryCompletionResult
-from .effects import ReuseExistingOpenPrEffect
+from .common import CommandResult, ProgressReporter, is_sha, read_json_text, stderr_tail
+from .effects import CommitCurrentTreeEffect
 from .eligibility import PhaseDecision, PhaseEligibilityResolver
+from .issue_profiles import resolve_leaf_issue_profile
 from .models import (
+    BASE_BRANCH,
     LCK_SCHEMA_VERSION,
+    EffectReceipt,
     LckStopError,
     LiveState,
     OperationSnapshot,
     Phase,
     _jsonable,
-    _pr_base_sha,
-    _pr_head_sha,
     _remote_main_sha,
 )
-from .review_workspace import ReviewInvocationStore
-from .state import (
-    LiveStateResolver,
-    OperationSnapshotBuilder,
-    _leaf_contract_from_state,
+from .profile_policies import (
+    DEFAULT_PROFILE_POLICY_REGISTRY,
+    ProfileEvidenceEnvelope,
+    ProfileGateFailure,
+    ProfilePolicyRegistry,
+    ProfileResolver,
+    resolve_issue_policy,
+    run_profile_delivery_gates,
 )
+from .review_workspace import ReviewInvocationStore
+from .state import LiveStateResolver, OperationSnapshotBuilder, _policy_issue_from_state
+from .validation_gates import FormalValidationGate
 
-
-def _lines_nul(value: str) -> tuple[str, ...]:
-    items = tuple(item for item in value.split("\0") if item)
-    if len(items) > 500:
-        raise LckStopError("Candidate Refresh path inventory exceeds the bounded limit")
-    return items
-
-
-_GIT_OPERATION_MARKERS = (
+_GIT_OPERATION_MARKERS: Final = (
     "MERGE_HEAD",
     "CHERRY_PICK_HEAD",
     "REVERT_HEAD",
@@ -45,6 +42,10 @@ _GIT_OPERATION_MARKERS = (
     "rebase-apply",
     "sequencer",
     "BISECT_START",
+)
+
+_PR_IDENTITY_FIELDS: Final = (
+    "number,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid"
 )
 
 
@@ -69,18 +70,23 @@ def _active_git_operations(
 
 
 @dataclass(frozen=True)
-class RefreshContext:
+class RefreshResult:
     task_number: int
+    operation_id: str
     status: str
     action: str
-    operation_id: str | None
     operation_snapshot: OperationSnapshot
     eligibility: PhaseDecision
+    branch: str
+    pr_number: int
     start_head_sha: str
     frozen_main_sha: str
-    pr_number: int
-    conflict_files: tuple[str, ...] = ()
-    candidate_paths: tuple[str, ...] = ()
+    head_sha: str
+    validated_tree_oid: str
+    critical_outcome: Mapping[str, Any] | None = None
+    profile_evidence: ProfileEvidenceEnvelope | None = None
+    validation: Mapping[str, Any] | None = None
+    effects: tuple[EffectReceipt, ...] = ()
 
     @property
     def state(self) -> LiveState:
@@ -89,81 +95,77 @@ class RefreshContext:
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": LCK_SCHEMA_VERSION,
-            "operation": "refresh-prepare",
+            "operation": "refresh",
             "status": self.status,
             "action": self.action,
             "task_number": self.task_number,
             "operation_id": self.operation_id,
             "issue_profile": _jsonable(self.state.issue_profile),
-            "task_contract": _jsonable(_leaf_contract_from_state(self.state)),
-            "branch": self.state.target_branch,
+            "branch": self.branch,
             "pr_number": self.pr_number,
             "start_head_sha": self.start_head_sha,
             "frozen_main_sha": self.frozen_main_sha,
-            "merge_parents": [self.start_head_sha, self.frozen_main_sha],
-            "conflict_files": list(self.conflict_files),
-            "candidate_paths": list(self.candidate_paths),
-            "operation_snapshot": self.operation_snapshot.to_dict(),
-            "eligibility": self.eligibility.to_dict(),
-            "human_boundary": (
-                "resolve only the reported integration conflicts, inspect the candidate, "
-                "and run change-relevant targeted feedback before Refresh Complete"
-                if self.conflict_files
-                else "inspect the integrated candidate and run change-relevant targeted "
-                "feedback before Refresh Complete"
+            "head_sha": self.head_sha,
+            "validated_tree_oid": self.validated_tree_oid,
+            "critical_outcome": _jsonable(self.critical_outcome),
+            "profile_evidence": (
+                self.profile_evidence.to_dict() if self.profile_evidence else None
             ),
+            "validation": _jsonable(self.validation),
+            "effects": [effect.to_dict() for effect in self.effects],
+            "operation_snapshot": self.operation_snapshot.to_dict(),
+            "fresh_review_required": self.status == "READY_FOR_FRESH_REVIEW",
+            "automatic_review": False,
+            "automatic_merge": False,
         }
 
 
-class RefreshPreparer:
-    """Prepare one LCK-owned, no-commit merge of current main into a Review branch."""
+class CandidateRefresher:
+    """Atomically rebase one Review candidate onto the current trusted main."""
 
     def __init__(
         self,
         resolver: LiveStateResolver,
         *,
         eligibility: PhaseEligibilityResolver | None = None,
+        formal_validation: FormalValidationGate | None = None,
         store: ReviewInvocationStore | None = None,
+        policy_registry: ProfilePolicyRegistry | None = None,
+        profile_resolver: ProfileResolver | None = None,
+        services: Sequence[Any] = (),
     ) -> None:
         self.resolver = resolver
         self.snapshots = OperationSnapshotBuilder(resolver)
-        self.eligibility = eligibility or PhaseEligibilityResolver()
+        self.policy_registry = policy_registry or DEFAULT_PROFILE_POLICY_REGISTRY
+        self.profile_resolver = profile_resolver or resolve_leaf_issue_profile
+        self.eligibility = eligibility or PhaseEligibilityResolver(
+            registry=self.policy_registry,
+            profile_resolver=self.profile_resolver,
+        )
+        self.formal_validation = formal_validation or FormalValidationGate(resolver)
         self.store = store or ReviewInvocationStore(resolver.repo_root)
+        self.services = tuple(services)
+        self.tree_effect = CommitCurrentTreeEffect(resolver)
         self.last_snapshot: OperationSnapshot | None = None
-        self.last_session: dict[str, Any] | None = None
+        self.last_critical_outcome: dict[str, Any] | None = None
+        self.last_documentation_validation: dict[str, Any] | None = None
+        self.last_profile_evidence: ProfileEvidenceEnvelope | None = None
+        self.last_validation: dict[str, Any] | None = None
+        self.last_checks: dict[str, Any] | None = None
+        self.last_effects: list[EffectReceipt] = []
+        self.last_conflict_files: tuple[str, ...] = ()
 
     def _run(self, argv: Sequence[str], command_id: str) -> CommandResult:
         return self.resolver.runner.run(argv, command_id=command_id)
 
-    def _require_no_overlap(self, task_number: int) -> None:
-        if self.store.read_refresh_session(task_number) is not None:
-            raise LckStopError(
-                "Candidate Refresh Prepare STOP: a Refresh session is active"
-            )
+    def _require_no_durable_handoff(self, task_number: int) -> None:
         if self.store.read_remediation_session(task_number) is not None:
             raise LckStopError(
-                "Candidate Refresh Prepare STOP: a Remediation session is active"
+                "Candidate Refresh STOP: a Remediation session is active"
             )
         if self.store.review_prepare_active(task_number):
             raise LckStopError(
-                "Candidate Refresh Prepare STOP: a Review Prepare/handoff is active"
-            )
-
-    def _reject_applicable_review_fail(self, task_number: int, head_sha: str) -> None:
-        latest = self.store.read_latest_review(task_number)
-        if not isinstance(latest, Mapping) or latest.get("verdict") != "FAIL":
-            return
-        review_id = latest.get("review_id")
-        if not isinstance(review_id, str):
-            raise LckStopError("latest Review FAIL identity is invalid")
-        record = self.store.read_record(task_number, review_id)
-        identity = record.get("identity")
-        if not isinstance(identity, Mapping) or not is_sha(identity.get("head_sha")):
-            raise LckStopError("latest Review FAIL applicability is unavailable")
-        if identity.get("head_sha") == head_sha:
-            raise LckStopError(
-                "Candidate Refresh cannot bypass applicable Review FAIL findings; "
-                "start explicit Remediation with the failed review id"
+                "Candidate Refresh STOP: a Review Prepare/handoff is active"
             )
 
     def _ensure_main_object(self, frozen_main_sha: str) -> None:
@@ -188,648 +190,427 @@ class RefreshPreparer:
         ):
             raise LckStopError("cannot materialize the frozen origin/main commit")
 
-    def _require_no_git_operation(self) -> None:
-        active = _active_git_operations(
-            self.resolver, command_prefix="lck-refresh-prepare-git-operation"
-        )
-        if active:
-            raise LckStopError(
-                "Refresh Prepare requires no pre-existing Git operation: "
-                + ", ".join(active)
-            )
+    def _current_head(self) -> str:
+        result = self._run(["git", "rev-parse", "HEAD"], "lck-refresh-current-head")
+        head = result.stdout.strip()
+        if result.returncode != 0 or not is_sha(head):
+            raise LckStopError("Candidate Refresh cannot resolve current HEAD")
+        return head
 
-    def _recover_failed_merge_start(
-        self,
-        task_number: int,
-        *,
-        start_head: str,
-        frozen_main: str,
-    ) -> None:
-        """Release only a failed merge start whose state is still provably ours."""
-        active = _active_git_operations(
-            self.resolver, command_prefix="lck-refresh-prepare-recovery-operation"
-        )
-        head = self._run(
-            ["git", "rev-parse", "HEAD"], "lck-refresh-prepare-recovery-head"
-        )
-        if head.returncode != 0 or head.stdout.strip() != start_head:
-            return
-        if not active:
-            status = self._run(
-                ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-                "lck-refresh-prepare-recovery-status",
-            )
-            if status.returncode == 0 and not status.stdout.strip():
-                self.store.clear_refresh_session(task_number)
-            return
-        if active != ("MERGE_HEAD",):
-            return
-        merge_head = self._run(
-            ["git", "rev-parse", "MERGE_HEAD"],
-            "lck-refresh-prepare-recovery-merge-head",
-        )
-        if merge_head.returncode != 0 or merge_head.stdout.strip() != frozen_main:
-            return
-        aborted = self._run(["git", "merge", "--abort"], "lck-refresh-prepare-recover")
-        status = self._run(
-            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            "lck-refresh-prepare-recovery-clean",
-        )
-        if (
-            aborted.returncode == 0
-            and status.returncode == 0
-            and not status.stdout.strip()
-        ):
-            self.store.clear_refresh_session(task_number)
-
-    def prepare(self, task_number: int) -> RefreshContext:
-        self._require_no_overlap(task_number)
-        snapshot = self.snapshots.acquire(
-            task_number, operation=Phase.REFRESH_PREPARE.value
-        )
-        self.last_snapshot = snapshot
-        state = snapshot.state
-        decision = self.eligibility.resolve(state, Phase.REFRESH_PREPARE)
-        if not decision.eligible:
-            raise LckStopError(
-                f"Refresh Prepare STOP for Task #{task_number}: "
-                + "; ".join(decision.reasons)
-            )
-        if state.git.get("clean") is not True:
-            raise LckStopError("Refresh Prepare requires a clean Task worktree")
-        start_head = state.local_issue_head
-        frozen_main = _remote_main_sha(state.git)
-        pr = state.open_pr
-        if (
-            not is_sha(start_head)
-            or not is_sha(frozen_main)
-            or not isinstance(pr, Mapping)
-        ):
-            raise LckStopError("Refresh Prepare identity is incomplete")
-        pr_number = pr.get("number")
-        if not isinstance(pr_number, int) or isinstance(pr_number, bool):
-            raise LckStopError("Refresh Prepare PR number is unavailable")
-        issue = state.issue
-        body_sha = issue.get("body_sha256") if isinstance(issue, Mapping) else None
-        if not isinstance(body_sha, str) or not body_sha:
-            raise LckStopError("Refresh Prepare Task Contract identity is unavailable")
-        self._reject_applicable_review_fail(task_number, start_head)
-        # A clean porcelain view does not prove that no merge/rebase/cherry-pick
-        # operation is active.  Establish this before fetching, writing a
-        # session, or invoking merge so later recovery cannot touch prior state.
-        self._require_no_git_operation()
-        self._ensure_main_object(frozen_main)
-
-        ancestor = self._run(
-            ["git", "merge-base", "--is-ancestor", frozen_main, start_head],
-            "lck-refresh-already-current",
-        )
-        if ancestor.returncode == 0:
-            return RefreshContext(
-                task_number=task_number,
-                status="ALREADY_CURRENT",
-                action="no-op",
-                operation_id=None,
-                operation_snapshot=snapshot,
-                eligibility=decision,
-                start_head_sha=start_head,
-                frozen_main_sha=frozen_main,
-                pr_number=pr_number,
-            )
-        if ancestor.returncode != 1:
-            raise LckStopError(
-                "cannot determine whether the Task branch contains current main"
-            )
-
-        paths_result = self._run(
-            ["git", "diff", "--name-only", "-z", start_head, frozen_main],
-            "lck-refresh-candidate-paths",
-        )
-        if paths_result.returncode != 0:
-            raise LckStopError("cannot inventory the bounded main integration paths")
-        candidate_paths = _lines_nul(paths_result.stdout)
-        operation_id = self.store.new_id()
-        session: dict[str, Any] = {
-            "schema_version": LCK_SCHEMA_VERSION,
-            "kind": "candidate-refresh-session",
-            "operation_id": operation_id,
-            "task_number": task_number,
-            "repository": state.repository,
-            "branch": state.target_branch,
-            "pr_number": pr_number,
-            "task_body_sha256": body_sha,
-            "start_head_sha": start_head,
-            "frozen_main_sha": frozen_main,
-            "remote_head_sha": state.remote_issue_oid,
-            "pr_head_sha": _pr_head_sha(pr),
-            "pr_base_sha": _pr_base_sha(pr),
-            "merge_parents": [start_head, frozen_main],
-            "candidate_paths": list(candidate_paths),
-            "prepared_state": "merge-starting",
-            "candidate": None,
-            "authority": "LCK-owned Candidate Refresh session only",
-        }
-        self.store.write_refresh_session(task_number, session)
-        self.last_session = session
-        merged = self._run(
-            ["git", "merge", "--no-commit", "--no-ff", frozen_main],
-            "lck-refresh-merge-main",
-        )
-        conflicts_result = self._run(
-            ["git", "diff", "--name-only", "--diff-filter=U", "-z"],
-            "lck-refresh-conflict-inventory",
-        )
-        if conflicts_result.returncode != 0:
-            raise LckStopError("cannot inventory Candidate Refresh conflicts")
-        conflicts = _lines_nul(conflicts_result.stdout)
-        if merged.returncode not in {0, 1} or (
-            merged.returncode == 1 and not conflicts
-        ):
-            self._recover_failed_merge_start(
-                task_number,
-                start_head=start_head,
-                frozen_main=frozen_main,
-            )
-            raise LckStopError(
-                "Candidate Refresh merge failed without a bounded conflict candidate: "
-                + (
-                    stderr_tail(merged.stderr or merged.stdout)
-                    or f"exit {merged.returncode}"
-                )
-            )
-        merge_head = self._run(
-            ["git", "rev-parse", "MERGE_HEAD"], "lck-refresh-merge-head"
-        )
-        current_head = self._run(["git", "rev-parse", "HEAD"], "lck-refresh-start-head")
-        if (
-            merge_head.returncode != 0
-            or merge_head.stdout.strip() != frozen_main
-            or current_head.returncode != 0
-            or current_head.stdout.strip() != start_head
-        ):
-            raise LckStopError("prepared Candidate Refresh merge parents are not exact")
-        session["prepared_state"] = "conflicts" if conflicts else "merged"
-        session["conflict_files"] = list(conflicts)
-        self.store.write_refresh_session(task_number, session)
-        self.last_session = session
-        return RefreshContext(
-            task_number=task_number,
-            status=("REFRESH_CONFLICTS" if conflicts else "READY_FOR_REFRESH_COMPLETE"),
-            action="prepared-no-commit-merge",
-            operation_id=operation_id,
-            operation_snapshot=snapshot,
-            eligibility=decision,
-            start_head_sha=start_head,
-            frozen_main_sha=frozen_main,
-            pr_number=pr_number,
-            conflict_files=conflicts,
-            candidate_paths=candidate_paths,
-        )
-
-
-@dataclass(frozen=True)
-class RefreshCompletionResult:
-    task_number: int
-    operation_id: str
-    start_head_sha: str
-    frozen_main_sha: str
-    validated_tree_oid: str
-    delivery: DeliveryCompletionResult
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": LCK_SCHEMA_VERSION,
-            "operation": "refresh-complete",
-            "status": "READY_FOR_FRESH_REVIEW",
-            "task_number": self.task_number,
-            "operation_id": self.operation_id,
-            "branch": self.delivery.branch,
-            "start_head_sha": self.start_head_sha,
-            "frozen_main_sha": self.frozen_main_sha,
-            "merge_parents": [self.start_head_sha, self.frozen_main_sha],
-            "validated_tree_oid": self.validated_tree_oid,
-            "head_sha": self.delivery.head_sha,
-            "critical_outcome": _jsonable(self.delivery.critical_outcome),
-            "profile_evidence": (
-                self.delivery.profile_evidence.to_dict()
-                if self.delivery.profile_evidence is not None
-                else None
-            ),
-            "validation": _jsonable(self.delivery.validation),
-            "checks": _jsonable(self.delivery.checks),
-            "effects": [effect.to_dict() for effect in self.delivery.effects],
-            "operation_snapshot": self.delivery.operation_snapshot.to_dict(),
-            "fresh_review_required": True,
-            "automatic_review": False,
-            "automatic_merge": False,
-        }
-
-
-class RefreshCompleter:
-    """Validate, commit, and publish one exact prepared main merge candidate."""
-
-    def __init__(
-        self,
-        resolver: LiveStateResolver,
-        *,
-        store: ReviewInvocationStore | None = None,
-        delivery_factory: Any = DeliveryCompleter,
-    ) -> None:
-        self.resolver = resolver
-        self.snapshots = OperationSnapshotBuilder(resolver)
-        self.store = store or ReviewInvocationStore(resolver.repo_root)
-        self.delivery_factory = delivery_factory
-        self.last_snapshot: OperationSnapshot | None = None
-        self.last_session: dict[str, Any] | None = None
-        self.last_effects: list[Any] = []
-        self.last_validation: dict[str, Any] | None = None
-        self.last_checks: dict[str, Any] | None = None
-        self.last_critical_outcome: dict[str, Any] | None = None
-        self.last_documentation_validation: dict[str, Any] | None = None
-        self.last_profile_evidence: Any = None
-
-    def _capture_delivery_evidence(self, delivery: Any) -> None:
-        snapshot = getattr(delivery, "last_snapshot", None)
-        if isinstance(snapshot, OperationSnapshot):
-            self.last_snapshot = snapshot
-        for source, target in (
-            ("last_validation", "last_validation"),
-            ("last_checks", "last_checks"),
-            ("last_critical_outcome", "last_critical_outcome"),
-            ("last_documentation_validation", "last_documentation_validation"),
-        ):
-            value = getattr(delivery, source, None)
-            if isinstance(value, Mapping):
-                setattr(self, target, dict(value))
-        self.last_profile_evidence = getattr(
-            delivery, "last_profile_evidence", self.last_profile_evidence
-        )
-        effects = getattr(delivery, "last_effects", None)
-        if isinstance(effects, list):
-            self.last_effects = effects
-
-    def _run(self, argv: Sequence[str], command_id: str) -> CommandResult:
-        return self.resolver.runner.run(argv, command_id=command_id)
-
-    def _verify_commit(
-        self, head_sha: str, tree_oid: str, start_head: str, frozen_main: str
-    ) -> None:
-        parents = self._run(
-            ["git", "rev-list", "--parents", "-n", "1", head_sha],
-            "lck-refresh-commit-parents",
-        )
-        tree = self._run(
-            ["git", "rev-parse", f"{head_sha}^{{tree}}"],
-            "lck-refresh-commit-tree",
-        )
-        if (
-            parents.returncode != 0
-            or parents.stdout.strip().split() != [head_sha, start_head, frozen_main]
-            or tree.returncode != 0
-            or tree.stdout.strip() != tree_oid
-        ):
-            raise LckStopError(
-                "Candidate Refresh commit does not have the exact owned parents/tree"
-            )
-
-    def _verify_remote_main_current(self, frozen_main: str) -> None:
-        result = self._run(
-            ["git", "ls-remote", "--heads", "origin", "refs/heads/main"],
-            "lck-refresh-main-before-push",
-        )
-        lines = [line.split() for line in result.stdout.splitlines() if line.strip()]
-        if (
-            result.returncode != 0
-            or len(lines) != 1
-            or len(lines[0]) != 2
-            or lines[0][0] != frozen_main
-            or lines[0][1] != "refs/heads/main"
-        ):
-            raise LckStopError(
-                "Candidate Refresh origin/main changed after validation and before push"
-            )
-
-    def _assert_session_live(
-        self, task_number: int, session: Mapping[str, Any], state: LiveState
-    ) -> tuple[str, str, str, int]:
-        operation_id = session.get("operation_id")
-        start_head = session.get("start_head_sha")
-        frozen_main = session.get("frozen_main_sha")
-        pr_number = session.get("pr_number")
-        issue = state.issue
-        body_sha = issue.get("body_sha256") if isinstance(issue, Mapping) else None
-        pr = state.open_pr
-        if (
-            not isinstance(operation_id, str)
-            or re.fullmatch(r"[0-9a-f]{32}", operation_id) is None
-            or not is_sha(start_head)
-            or not is_sha(frozen_main)
-            or not isinstance(pr_number, int)
-            or isinstance(pr_number, bool)
-            or not isinstance(pr, Mapping)
-            or state.repository != session.get("repository")
-            or body_sha != session.get("task_body_sha256")
-            or state.target_branch != session.get("branch")
-            or _remote_main_sha(state.git) != frozen_main
-            or _pr_base_sha(pr) != frozen_main
-            or pr.get("number") != pr_number
-        ):
-            raise LckStopError("Candidate Refresh live authority changed since Prepare")
-        candidate = session.get("candidate")
-        candidate_head = (
-            candidate.get("head_sha") if isinstance(candidate, Mapping) else None
-        )
-        allowed_heads = {start_head}
-        if is_sha(candidate_head):
-            allowed_heads.add(candidate_head)
-        if (
-            state.local_issue_head not in allowed_heads
-            or state.remote_issue_oid not in allowed_heads
-            or _pr_head_sha(pr) not in allowed_heads
-            or state.remote_issue_oid != _pr_head_sha(pr)
-        ):
-            raise LckStopError("Candidate Refresh Task/remote/PR head identity drifted")
-        if (
-            state.local_issue_head != start_head
-            and state.local_issue_head != candidate_head
-        ):
-            raise LckStopError("local Candidate Refresh head is not LCK-owned")
-        return operation_id, start_head, frozen_main, pr_number
-
-    def _verify_precommit_candidate(
-        self, session: Mapping[str, Any], start_head: str, frozen_main: str
-    ) -> None:
-        conflicts = self._run(
-            ["git", "diff", "--name-only", "--diff-filter=U", "-z"],
-            "lck-refresh-complete-conflicts",
-        )
-        if conflicts.returncode != 0 or _lines_nul(conflicts.stdout):
-            raise LckStopError("Candidate Refresh has unresolved merge conflicts")
-        merge_head = self._run(
-            ["git", "rev-parse", "MERGE_HEAD"], "lck-refresh-complete-merge-head"
-        )
-        head = self._run(["git", "rev-parse", "HEAD"], "lck-refresh-complete-head")
-        unstaged = self._run(
-            ["git", "diff", "--quiet"], "lck-refresh-complete-unstaged"
+    def _require_clean_branch(self, branch: str, head_sha: str) -> None:
+        current_branch = self._run(
+            ["git", "branch", "--show-current"], "lck-refresh-current-branch"
         )
         status = self._run(
             ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            "lck-refresh-complete-status",
+            "lck-refresh-current-status",
         )
         if (
-            merge_head.returncode != 0
-            or merge_head.stdout.strip() != frozen_main
-            or head.returncode != 0
-            or head.stdout.strip() != start_head
-            or unstaged.returncode != 0
+            current_branch.returncode != 0
+            or current_branch.stdout.strip() != branch
+            or self._current_head() != head_sha
             or status.returncode != 0
-            or any(line.startswith("??") for line in status.stdout.splitlines())
+            or status.stdout.strip()
         ):
             raise LckStopError(
-                "Candidate Refresh merge state is unresolved, changed, or contains untracked input"
+                "Candidate Refresh requires the exact clean Task branch workspace"
             )
 
-    def complete(
-        self,
-        task_number: int,
-        *,
-        commit_message: str,
-        summary: str,
-        risks: str = "",
-    ) -> RefreshCompletionResult:
-        session = self.store.read_refresh_session(task_number)
-        if session is None:
-            raise LckStopError("Refresh Complete requires a prepared Refresh session")
-        self.last_session = session
-        if self.store.read_remediation_session(task_number) is not None:
-            raise LckStopError("Refresh Complete STOP: a Remediation session is active")
-        if self.store.review_prepare_active(task_number):
-            raise LckStopError(
-                "Refresh Complete STOP: a Review Prepare/handoff is active"
-            )
-        snapshot = self.snapshots.acquire(
-            task_number,
-            operation=Phase.REFRESH_COMPLETE.value,
-            include_required_checks=True,
-        )
-        self.last_snapshot = snapshot
-        operation_id, start_head, frozen_main, _pr_number = self._assert_session_live(
-            task_number, session, snapshot.state
-        )
-        candidate = session.get("candidate")
-        owned_refresh_candidate = isinstance(candidate, Mapping)
-        if isinstance(candidate, Mapping):
-            candidate_head = candidate.get("head_sha")
-            candidate_tree = candidate.get("tree_oid")
-            if not is_sha(candidate_head) or not is_sha(candidate_tree):
-                raise LckStopError("owned Candidate Refresh commit identity is invalid")
-            self._verify_commit(candidate_head, candidate_tree, start_head, frozen_main)
-            if (
-                snapshot.state.local_issue_head != candidate_head
-                or snapshot.state.git.get("clean") is not True
-            ):
-                raise LckStopError(
-                    "owned Candidate Refresh recovery workspace is not exact"
-                )
-        else:
-            self._verify_precommit_candidate(session, start_head, frozen_main)
-
-        validated_tree: dict[str, str] = {}
-
-        def record_candidate(head_sha: str, tree_oid: str) -> None:
-            self._verify_commit(head_sha, tree_oid, start_head, frozen_main)
-            self.store.record_refresh_candidate(
-                task_number,
-                operation_id,
-                start_head_sha=start_head,
-                frozen_main_sha=frozen_main,
-                candidate_head_sha=head_sha,
-                candidate_tree_oid=tree_oid,
-            )
-            validated_tree["oid"] = tree_oid
-            self._verify_remote_main_current(frozen_main)
-
-        delivery = self.delivery_factory(
-            self.resolver,
-            pr_effect=ReuseExistingOpenPrEffect(
-                self.resolver, operation_label="Candidate Refresh"
-            ),
-            require_existing_open_pr=True,
-            candidate_recorder=record_candidate,
-        )
-        try:
-            result = delivery.complete(
-                task_number,
-                commit_message=commit_message,
-                summary=summary,
-                risks=risks,
-                operation_snapshot=snapshot,
-                phase=Phase.REFRESH_COMPLETE,
-                owned_refresh_candidate=owned_refresh_candidate,
-            )
-        except BaseException:
-            self._capture_delivery_evidence(delivery)
-            raise
-        self._capture_delivery_evidence(delivery)
-        tree_oid = validated_tree.get("oid")
-        if not is_sha(tree_oid):
-            raise LckStopError(
-                "Refresh Complete did not record the validated merge tree"
-            )
-        self.store.write_refresh_review_required(
-            task_number, operation_id, result.head_sha
-        )
-        self.store.clear_refresh_session(task_number)
-        return RefreshCompletionResult(
-            task_number=task_number,
-            operation_id=operation_id,
-            start_head_sha=start_head,
-            frozen_main_sha=frozen_main,
-            validated_tree_oid=tree_oid,
-            delivery=result,
-        )
-
-
-@dataclass(frozen=True)
-class RefreshAbortResult:
-    task_number: int
-    operation_id: str
-    start_head_sha: str
-    frozen_main_sha: str
-    operation_snapshot: OperationSnapshot
-    aborted_session: Mapping[str, Any]
-    status: str = "REFRESH_ABORTED"
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": LCK_SCHEMA_VERSION,
-            "operation": "refresh-abort",
-            "status": self.status,
-            "task_number": self.task_number,
-            "operation_id": self.operation_id,
-            "start_head_sha": self.start_head_sha,
-            "frozen_main_sha": self.frozen_main_sha,
-            "session_released": True,
-            "operation_snapshot": self.operation_snapshot.to_dict(),
-            "aborted_session": _jsonable(self.aborted_session),
-        }
-
-
-class RefreshAborter:
-    """Abort only the still-uncommitted merge owned by one Refresh session."""
-
-    def __init__(
-        self,
-        resolver: LiveStateResolver,
-        *,
-        store: ReviewInvocationStore | None = None,
-    ) -> None:
-        self.resolver = resolver
-        self.snapshots = OperationSnapshotBuilder(resolver)
-        self.store = store or ReviewInvocationStore(resolver.repo_root)
-        self.last_snapshot: OperationSnapshot | None = None
-        self.last_session: dict[str, Any] | None = None
-
-    def _run(self, argv: Sequence[str], command_id: str) -> CommandResult:
-        return self.resolver.runner.run(argv, command_id=command_id)
-
-    def abort(self, task_number: int) -> RefreshAbortResult:
-        session = self.store.read_refresh_session(task_number)
-        if session is None:
-            raise LckStopError("Refresh Abort requires a prepared Refresh session")
-        self.last_session = session
-        if session.get("candidate") is not None:
-            raise LckStopError(
-                "Refresh Abort cannot discard an already committed candidate"
-            )
-        snapshot = self.snapshots.acquire(
-            task_number, operation=Phase.REFRESH_ABORT.value
-        )
-        self.last_snapshot = snapshot
-        state = snapshot.state
-        operation_id = session.get("operation_id")
-        start_head = session.get("start_head_sha")
-        frozen_main = session.get("frozen_main_sha")
-        if (
-            not isinstance(operation_id, str)
-            or re.fullmatch(r"[0-9a-f]{32}", operation_id) is None
-            or not is_sha(start_head)
-            or not is_sha(frozen_main)
-            or state.repository != session.get("repository")
-            or state.target_branch != session.get("branch")
-            or not isinstance(state.issue, Mapping)
-            or state.issue.get("body_sha256") != session.get("task_body_sha256")
-            or (state.open_pr or {}).get("number") != session.get("pr_number")
-            or state.local_issue_head != start_head
-            or state.remote_issue_oid != session.get("remote_head_sha")
-            or _pr_head_sha(state.open_pr) != session.get("pr_head_sha")
-        ):
-            raise LckStopError("Refresh Abort live/session identity does not match")
-        merge_head = self._run(
-            ["git", "rev-parse", "MERGE_HEAD"], "lck-refresh-abort-merge-head"
-        )
+    def _restore_original(self, branch: str, start_head: str) -> None:
         active = _active_git_operations(
-            self.resolver, command_prefix="lck-refresh-abort-git-operation"
+            self.resolver, command_prefix="lck-refresh-rollback-operation"
         )
-        if session.get("prepared_state") == "merge-starting" and not active:
+        rebase_markers = {"REBASE_HEAD", "rebase-merge", "rebase-apply"}
+        if active:
+            if not set(active).issubset(rebase_markers):
+                raise LckStopError(
+                    "Candidate Refresh rollback found a non-rebase Git operation"
+                )
+            aborted = self._run(
+                ["git", "rebase", "--abort"], "lck-refresh-rollback-rebase"
+            )
+            if aborted.returncode != 0:
+                raise LckStopError("Candidate Refresh could not abort its rebase")
+        if self._current_head() != start_head:
             status = self._run(
                 ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-                "lck-refresh-abort-unstarted-status",
+                "lck-refresh-rollback-status",
             )
             if status.returncode != 0 or status.stdout.strip():
                 raise LckStopError(
-                    "Refresh Abort cannot release an interrupted merge start with external input"
+                    "Candidate Refresh cannot safely restore a changed candidate workspace"
                 )
-            self.store.clear_refresh_session(task_number)
-            return RefreshAbortResult(
+            commands = (
+                (["git", "switch", "--detach", start_head], "detach-original"),
+                (["git", "branch", "--force", branch, start_head], "restore-ref"),
+                (["git", "switch", branch], "restore-branch"),
+            )
+            for argv, suffix in commands:
+                result = self._run(argv, f"lck-refresh-rollback-{suffix}")
+                if result.returncode != 0:
+                    raise LckStopError(
+                        "Candidate Refresh could not restore the original Task head"
+                    )
+        self._require_clean_branch(branch, start_head)
+
+    def _run_profile_gates(
+        self,
+        state: LiveState,
+        base_sha: str,
+        head_sha: str,
+        *,
+        progress: ProgressReporter,
+    ) -> Mapping[str, Any] | None:
+        issue = _policy_issue_from_state(state)
+        if not issue:
+            raise LckStopError("current leaf Issue workflow profile is unavailable")
+        try:
+            profile, _policy = resolve_issue_policy(
+                issue,
+                registry=self.policy_registry,
+                profile_resolver=self.profile_resolver,
+            )
+            results = run_profile_delivery_gates(
+                profile,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                include_index=False,
+                progress=progress,
+                issue=issue,
+                registry=self.policy_registry,
+                repo_root=self.resolver.repo_root,
+                runner=self.resolver.runner,
+                services=self.services,
+            )
+        except ProfileGateFailure as exc:
+            self.last_profile_evidence = exc.profile_evidence
+            for field, value in exc.legacy_results.items():
+                target = f"last_{field}"
+                if isinstance(field, str) and hasattr(self, target):
+                    setattr(self, target, value)
+            raise
+        except ValueError as exc:
+            raise LckStopError(
+                f"current leaf Issue workflow profile is unavailable: {exc}"
+            ) from exc
+        self.last_documentation_validation = results.documentation_validation
+        self.last_critical_outcome = results.critical_outcome
+        self.last_profile_evidence = results.profile_evidence
+        return results.critical_outcome
+
+    def _run_formal_validation(self, base_sha: str) -> dict[str, Any]:
+        try:
+            result = self.formal_validation.run(base_sha)
+        except BaseException:
+            payload = getattr(self.formal_validation, "last_payload", None)
+            if isinstance(payload, dict):
+                self.last_validation = payload
+            raise
+        self.last_validation = result
+        return result
+
+    def _remote_oid(self, ref: str, *, command_id: str) -> str | None:
+        result = self._run(["git", "ls-remote", "--heads", "origin", ref], command_id)
+        if result.returncode != 0:
+            raise LckStopError(f"cannot resolve remote ref {ref}")
+        lines = [line.split() for line in result.stdout.splitlines() if line.strip()]
+        if not lines:
+            return None
+        if len(lines) != 1 or len(lines[0]) != 2 or lines[0][1] != ref:
+            raise LckStopError(f"remote ref {ref} is ambiguous")
+        oid = lines[0][0]
+        if not is_sha(oid):
+            raise LckStopError(f"remote ref {ref} has an invalid object id")
+        return oid
+
+    def _verify_pr_current(
+        self,
+        state: LiveState,
+        *,
+        pr_number: int,
+        branch: str,
+        start_head: str,
+        frozen_main: str,
+    ) -> None:
+        if not isinstance(state.repository, str):
+            raise LckStopError("Candidate Refresh repository identity is unavailable")
+        result = self._run(
+            [
+                "gh",
+                "pr",
+                "view",
+                str(pr_number),
+                "--repo",
+                state.repository,
+                "--json",
+                _PR_IDENTITY_FIELDS,
+            ],
+            "lck-refresh-pr-before-push",
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            raise LckStopError("Candidate Refresh cannot verify the existing OPEN PR")
+        current = read_json_text(result.stdout, field="lck-refresh-pr-before-push")
+        if (
+            current.get("number") != pr_number
+            or str(current.get("state", "")).upper() != "OPEN"
+            or current.get("isDraft") is not False
+            or current.get("baseRefName") != BASE_BRANCH
+            or current.get("baseRefOid") != frozen_main
+            or current.get("headRefName") != branch
+            or current.get("headRefOid") != start_head
+        ):
+            raise LckStopError(
+                "Candidate Refresh PR/base/head identity changed before push"
+            )
+
+    def _push_exact_lease(
+        self, branch: str, start_head: str, new_head: str
+    ) -> EffectReceipt:
+        ref = f"refs/heads/{branch}"
+        remote_before = self._remote_oid(
+            ref, command_id="lck-refresh-remote-before-push"
+        )
+        if remote_before != start_head:
+            raise LckStopError(
+                "Candidate Refresh remote Task head changed before exact-lease push"
+            )
+        pushed = self._run(
+            [
+                "git",
+                "push",
+                f"--force-with-lease={ref}:{start_head}",
+                "origin",
+                f"{new_head}:{ref}",
+            ],
+            "lck-refresh-push-exact-lease",
+        )
+        if pushed.returncode != 0:
+            observed = self._remote_oid(
+                ref, command_id="lck-refresh-remote-after-failed-push"
+            )
+            if observed == new_head:
+                action = "updated-observed-after-command-failure"
+            elif observed == start_head:
+                raise LckStopError(
+                    "Candidate Refresh exact-lease push failed: "
+                    + (
+                        stderr_tail(pushed.stderr or pushed.stdout)
+                        or f"exit {pushed.returncode}"
+                    )
+                )
+            else:
+                raise LckStopError(
+                    "Candidate Refresh remote Task head became ambiguous during push"
+                )
+        else:
+            action = "force-with-exact-lease"
+        return EffectReceipt(
+            effect="refresh_remote_branch",
+            action=action,
+            details={
+                "branch": branch,
+                "old_head_sha": start_head,
+                "head_sha": new_head,
+                "lease": f"{ref}:{start_head}",
+            },
+        )
+
+    def refresh(self, task_number: int) -> RefreshResult:
+        operation_id = self.store.new_id()
+        progress = ProgressReporter("refresh")
+        progress.started("initializing")
+        self.last_effects = []
+        self.last_conflict_files = ()
+        candidate_active = False
+        boundary_written = False
+        prior_boundary: Mapping[str, Any] | None = None
+        branch = ""
+        start_head = ""
+        try:
+            self._require_no_durable_handoff(task_number)
+            progress.running("resolving-live-state")
+            snapshot = self.snapshots.acquire(
+                task_number,
+                operation=Phase.REFRESH.value,
+            )
+            self.last_snapshot = snapshot
+            state = snapshot.state
+            decision = self.eligibility.resolve(state, Phase.REFRESH)
+            if not decision.eligible:
+                raise LckStopError(
+                    f"Candidate Refresh STOP for Task #{task_number}: "
+                    + "; ".join(decision.reasons)
+                )
+            pr = state.open_pr
+            start_head_value = state.local_issue_head
+            frozen_main_value = _remote_main_sha(state.git)
+            if (
+                not isinstance(pr, Mapping)
+                or not is_sha(start_head_value)
+                or not is_sha(frozen_main_value)
+            ):
+                raise LckStopError("Candidate Refresh identity is incomplete")
+            pr_number = pr.get("number")
+            if not isinstance(pr_number, int) or isinstance(pr_number, bool):
+                raise LckStopError("Candidate Refresh PR number is unavailable")
+            branch = state.target_branch
+            start_head = str(start_head_value)
+            frozen_main = str(frozen_main_value)
+            self._require_clean_branch(branch, start_head)
+            active = _active_git_operations(
+                self.resolver, command_prefix="lck-refresh-preflight-operation"
+            )
+            if active:
+                raise LckStopError(
+                    "Candidate Refresh requires no active Git operation: "
+                    + ", ".join(active)
+                )
+            self._ensure_main_object(frozen_main)
+
+            ancestor = self._run(
+                ["git", "merge-base", "--is-ancestor", frozen_main, start_head],
+                "lck-refresh-already-current",
+            )
+            if ancestor.returncode == 0:
+                tree = self.tree_effect.current_head_tree()
+                progress.completed("already-current")
+                return RefreshResult(
+                    task_number=task_number,
+                    operation_id=operation_id,
+                    status="ALREADY_CURRENT",
+                    action="no-op",
+                    operation_snapshot=snapshot,
+                    eligibility=decision,
+                    branch=branch,
+                    pr_number=pr_number,
+                    start_head_sha=start_head,
+                    frozen_main_sha=frozen_main,
+                    head_sha=start_head,
+                    validated_tree_oid=tree,
+                )
+            if ancestor.returncode != 1:
+                raise LckStopError(
+                    "cannot determine whether the Task branch contains current main"
+                )
+
+            merge_base_result = self._run(
+                ["git", "merge-base", start_head, frozen_main],
+                "lck-refresh-merge-base",
+            )
+            merge_base = merge_base_result.stdout.strip()
+            if merge_base_result.returncode != 0 or not is_sha(merge_base):
+                raise LckStopError(
+                    "Candidate Refresh cannot resolve an exact merge base"
+                )
+
+            progress.running("rebasing-candidate")
+            rebased = self._run(
+                ["git", "rebase", "--onto", frozen_main, merge_base],
+                "lck-refresh-rebase-current-main",
+            )
+            candidate_active = True
+            if rebased.returncode != 0:
+                conflicts = self._run(
+                    ["git", "diff", "--name-only", "--diff-filter=U", "-z"],
+                    "lck-refresh-rebase-conflicts",
+                )
+                if conflicts.returncode == 0:
+                    self.last_conflict_files = tuple(
+                        item for item in conflicts.stdout.split("\0") if item
+                    )[:500]
+                detail = stderr_tail(rebased.stderr or rebased.stdout)
+                self._restore_original(branch, start_head)
+                candidate_active = False
+                raise LckStopError(
+                    "Candidate Refresh rebase did not complete; original Task head restored"
+                    + (f": {detail}" if detail else "")
+                )
+
+            new_head = self._current_head()
+            if new_head == start_head:
+                raise LckStopError("Candidate Refresh rebase did not create a new head")
+            self._require_clean_branch(branch, new_head)
+            contains_main = self._run(
+                ["git", "merge-base", "--is-ancestor", frozen_main, new_head],
+                "lck-refresh-rebased-main-ancestor",
+            )
+            task_diff = self._run(
+                ["git", "diff", "--quiet", f"{frozen_main}...{new_head}"],
+                "lck-refresh-rebased-task-diff",
+            )
+            if contains_main.returncode != 0 or task_diff.returncode != 1:
+                raise LckStopError(
+                    "Candidate Refresh rebased head does not preserve a Task diff on current main"
+                )
+            validated_tree = self.tree_effect.current_head_tree()
+            progress.running("profile-gates")
+            critical = self._run_profile_gates(
+                state, frozen_main, new_head, progress=progress
+            )
+            progress.running("formal-validation")
+            validation = self._run_formal_validation(frozen_main)
+            if self.last_documentation_validation is not None:
+                validation = dict(validation)
+                validation["documentation_policy"] = self.last_documentation_validation
+                self.last_validation = validation
+            self.tree_effect.verify_tree_unchanged(
+                validated_tree, expected_head_sha=new_head
+            )
+
+            current_main = self._remote_oid(
+                "refs/heads/main", command_id="lck-refresh-main-before-push"
+            )
+            if current_main != frozen_main:
+                raise LckStopError(
+                    "Candidate Refresh origin/main changed after validation"
+                )
+            self._verify_pr_current(
+                state,
+                pr_number=pr_number,
+                branch=branch,
+                start_head=start_head,
+                frozen_main=frozen_main,
+            )
+
+            prior_boundary = self.store.read_review_required(task_number)
+            self.store.write_refresh_review_required(
+                task_number, operation_id, new_head
+            )
+            boundary_written = True
+            progress.running("exact-lease-push")
+            pushed = self._push_exact_lease(branch, start_head, new_head)
+            self.last_effects.append(pushed)
+            candidate_active = False
+            progress.completed("fresh-review-required")
+            return RefreshResult(
                 task_number=task_number,
                 operation_id=operation_id,
+                status="READY_FOR_FRESH_REVIEW",
+                action="rebased-and-pushed",
+                operation_snapshot=snapshot,
+                eligibility=decision,
+                branch=branch,
+                pr_number=pr_number,
                 start_head_sha=start_head,
                 frozen_main_sha=frozen_main,
-                operation_snapshot=snapshot,
-                aborted_session=dict(session),
+                head_sha=new_head,
+                validated_tree_oid=validated_tree,
+                critical_outcome=critical,
+                profile_evidence=self.last_profile_evidence,
+                validation=validation,
+                effects=tuple(self.last_effects),
             )
-        if (
-            active != ("MERGE_HEAD",)
-            or merge_head.returncode != 0
-            or merge_head.stdout.strip() != frozen_main
-        ):
-            raise LckStopError("Refresh Abort cannot prove the LCK-owned merge state")
-        status = self._run(
-            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-            "lck-refresh-abort-status",
-        )
-        if status.returncode != 0:
-            raise LckStopError("Refresh Abort cannot inspect the current merge state")
-        entries = _lines_nul(status.stdout)
-        if any(entry.startswith("??") for entry in entries):
-            raise LckStopError("Refresh Abort refuses to discard untracked user input")
-        owned_paths = set(cast(list[str], session.get("candidate_paths", [])))
-        observed_paths = {entry[3:] for entry in entries if len(entry) > 3}
-        if not observed_paths.issubset(owned_paths):
-            raise LckStopError(
-                "Refresh Abort refuses to discard paths outside its owned merge"
-            )
-        aborted = self._run(["git", "merge", "--abort"], "lck-refresh-abort-merge")
-        head = self._run(["git", "rev-parse", "HEAD"], "lck-refresh-abort-head")
-        clean = self._run(
-            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            "lck-refresh-abort-clean",
-        )
-        if (
-            aborted.returncode != 0
-            or head.returncode != 0
-            or head.stdout.strip() != start_head
-            or clean.returncode != 0
-            or clean.stdout.strip()
-        ):
-            raise LckStopError("Refresh Abort postcondition failed")
-        self.store.clear_refresh_session(task_number)
-        return RefreshAbortResult(
-            task_number=task_number,
-            operation_id=operation_id,
-            start_head_sha=start_head,
-            frozen_main_sha=frozen_main,
-            operation_snapshot=snapshot,
-            aborted_session=dict(session),
-        )
+        except BaseException:
+            try:
+                if boundary_written:
+                    self.store.restore_review_required(task_number, prior_boundary)
+                if candidate_active and branch and is_sha(start_head):
+                    self._restore_original(branch, start_head)
+            except BaseException as rollback_error:
+                progress.failed("rollback-failed")
+                raise LckStopError(
+                    "Candidate Refresh failed and could not prove exact rollback: "
+                    f"{rollback_error}"
+                ) from rollback_error
+            progress.failed()
+            raise

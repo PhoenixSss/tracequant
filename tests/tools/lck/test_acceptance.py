@@ -293,17 +293,7 @@ def test_lck_exposes_the_complete_lifecycle_parser() -> None:
             "PASS",
         ),
         ("remediation", "prepare", "333", "--review-id", "r"),
-        ("refresh", "prepare", "333"),
-        (
-            "refresh",
-            "complete",
-            "333",
-            "--commit-message",
-            "merge main",
-            "--summary",
-            "refresh candidate",
-        ),
-        ("refresh", "abort", "333"),
+        ("refresh", "333"),
         ("merge", "preflight", "333"),
         ("closeout", "333"),
     )

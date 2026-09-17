@@ -23,7 +23,7 @@ Migrated lifecycle phases enter through LCK:
 uv run --frozen python -m tools.lck delivery prepare|complete
 uv run --frozen python -m tools.lck review prepare|complete
 uv run --frozen python -m tools.lck remediation prepare|no-change|complete
-uv run --frozen python -m tools.lck refresh prepare|complete|abort
+uv run --frozen python -m tools.lck refresh <TASK>
 ```
 
 The Validation Runner remains current for bounded deterministic validation;
@@ -46,7 +46,7 @@ uv run --frozen python -m tools.lck.validation_runner run <ARGS>
 | Initial Delivery | `uv run --frozen python -m tools.lck delivery prepare\|complete` | LCK runs formal Delivery validation |
 | Independent Review | `uv run --frozen python -m tools.lck review prepare\|complete` | LCK runs formal Review validation on the live-resolved head |
 | Explicit Remediation | `uv run --frozen python -m tools.lck remediation prepare\|no-change\|complete` | LCK reuses migrated Delivery validation/effects; no-change closes an unchanged prepared session |
-| Candidate Refresh | `uv run --frozen python -m tools.lck refresh prepare\|complete\|abort` | LCK validates the integrated tree and owns the exact two-parent commit / existing-PR effects |
+| Candidate Refresh | `uv run --frozen python -m tools.lck refresh <TASK>` | LCK atomically rebases and validates the current-main candidate before an exact-lease update of the existing PR |
 | Closeout | `uv run --frozen python -m tools.lck closeout <TASK>` | LCK closeout gate and effects |
 
 Historical Evidence snapshots may locate audit material, but they must not
@@ -74,8 +74,8 @@ This boundary applies in particular to these normal paths:
   `receipt_reference` is an on-demand audit pointer, not a default dereference
   instruction.
 - Candidate Refresh uses the same profile gates and formal Delivery validation
-  on the exact staged integration tree, with the session-frozen and still-current
-  `origin/main` as validation base. Its merge-parent/tree/session proof and
+  on the exact rebased candidate, with invocation-frozen and still-current
+  `origin/main` as validation base. Its old-head lease, validated tree and
   fresh-review-required boundary cannot be replaced by old Delivery or Review evidence.
 
 When bounded evidence is genuinely insufficient, report the gap or expand only
@@ -239,11 +239,11 @@ satisfy deferred provider/cross-runtime Review acceptance. While a prepared
 Remediation session remains open, Review Prepare fails closed rather than
 interleaving a new Review with an unfinished implementation role.
 
-A prepared Candidate Refresh session is also operation-continuity state. It
-binds the start Task head, frozen main, existing PR, merge parents, candidate
-paths, and any committed recovery candidate. Review, Delivery, Remediation,
-Merge Preflight, and Closeout fail closed while it is active. `refresh abort`
-may release only an uncommitted exact owned merge and must preserve non-owned input.
+Candidate Refresh has no durable prepared session. One shared Task-local operation
+lock serializes it with Delivery, Review, Remediation, Merge Preflight and Closeout.
+Conflict, validation failure, drift or exact-lease failure restores the original
+local head before STOP when the remote was not updated; no separate abort operation
+or cross-phase refresh marker exists.
 
 ## Failure expansion
 

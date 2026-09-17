@@ -62,25 +62,11 @@ route = "elevated-first"
 reason = "Repeated sandbox-denied Git and lifecycle metadata writes; remediation effects are LCK-authorized"
 
 [[rules]]
-name = "lck-refresh-prepare"
+name = "lck-refresh"
 executable = "uv"
-argument_prefix = ["run", "--frozen", "python", "-m", "tools.lck", "refresh", "prepare"]
+argument_prefix = ["run", "--frozen", "python", "-m", "tools.lck", "refresh"]
 route = "elevated-first"
-reason = "Candidate Refresh Prepare creates an LCK-owned no-commit merge candidate"
-
-[[rules]]
-name = "lck-refresh-complete"
-executable = "uv"
-argument_prefix = ["run", "--frozen", "python", "-m", "tools.lck", "refresh", "complete"]
-route = "elevated-first"
-reason = "Candidate Refresh Complete commits, fast-forward pushes, and reuses the authorized PR"
-
-[[rules]]
-name = "lck-refresh-abort"
-executable = "uv"
-argument_prefix = ["run", "--frozen", "python", "-m", "tools.lck", "refresh", "abort"]
-route = "elevated-first"
-reason = "Candidate Refresh Abort restores only the exact LCK-owned merge state"
+reason = "Candidate Refresh atomically rebases, validates, exact-lease pushes, and reuses the authorized PR"
 
 [[rules]]
 name = "lck-merge-preflight"

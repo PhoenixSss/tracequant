@@ -116,8 +116,7 @@ hierarchy-aware exception，见 `AGENTS.md`）。
 
 - intent = **Candidate Refresh**；
 - 解析：Review 中的 leaf Issue → 唯一 OPEN non-Draft PR → 当前 Task branch/head/base
-  与 native blocker → `refresh prepare` → Agent 检查/解决有界集成 → `refresh complete`
-  或显式 `refresh abort`；
+  与 native blocker → 单次 `refresh <TASK>` → 受控 rebase、正式验证、精确 lease 更新原 PR；
 - 执行 Skill：`task-delivery-runner` 的 Candidate Refresh 分支。它不需要 failed
   Review ID，不产生 Review verdict，也不授予 merge 权限。
 
@@ -216,34 +215,30 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
 ## 6.1 Candidate Refresh semantics
 
 Candidate Refresh 只服务于已经完成 Initial Delivery、Project Status = `Review`、存在唯一
-`main` base 的 OPEN non-Draft PR 且 local/remote/PR head 一致的 leaf Issue。它是维护者显式
-启动的 base integration，不是自动 branch bot、semantic Remediation、Review 或 merge。
+`main` base 的 OPEN non-Draft PR 且 local/remote/PR head 一致的 leaf Issue。典型场景是 Task A
+进入 Review 后，其 blocker Task B 合入 main；A 必须吸收新的 base 才能形成新候选。它是维护者
+显式启动的窄 base-sync operation，不是自动 branch bot、semantic Remediation、Review 或 merge。
 
-- `refresh prepare` fresh-resolve Task Contract、profile、native blockers、Task/PR/head/base
-  和当前 `origin/main`。active Review handoff、Remediation/Refresh session、dirty/divergent
-  workspace、适用于当前 head 的 Review FAIL、关系 unknown/conflict 或非唯一身份均在写入前
-  STOP。若 current main 已是 Task head ancestor，返回 `ALREADY_CURRENT` 且不创建 session/commit。
-- main 前移时，LCK 在 Task workspace 执行
-  `git merge --no-commit --no-ff <frozen-main-sha>`。session 持久绑定 Task/PR、Task Contract
-  digest、start head、frozen main、local/remote/PR head、预期双父、candidate paths、冲突状态与
-  workspace ownership。Prepare 不 commit/push，不启动 Review。
-- 冲突只允许在该 owned session 中解决。无法解释的语义冲突、未知 path 或超出 dependency
-  integration 的调整进入 Human Gate。
-- `refresh complete` fresh reacquire authority；main 再前移、Task/PR/head/base/body 漂移、
-  session mismatch、unresolved conflict、unstaged/untracked input 或错误 merge identity 均 STOP。
-  它以 frozen/current main 为 validation base，对精确 staged integration tree 运行 typed profile
-  gate、Critical Outcome（适用时）与 formal Delivery validation，并验证 tree 未变化。
-- 验证通过后只创建一个普通双父 merge commit：第一父为 session start Task head，第二父为
-  frozen/current main，tree 等于 validated tree。remote Task branch 只允许 fast-forward；必须
-  复用原 OPEN PR，禁止 rebase、force push、新 PR、base 改写、GitHub Update Branch 或 auto merge。
-- commit 后 effect 中断只恢复 session 已记录且 parents/tree/old/new head 完全匹配的 owned
-  candidate。任何人工或不可证明 commit 都不得接管。
+- `refresh <TASK>` fresh-resolve Task Contract、profile、native blockers、Task/PR/head/base 和当前
+  `origin/main`。shared Task-local operation lock 将本次调用与 Delivery、Review、Remediation、
+  Merge Preflight 和 Closeout 串行化；Review/Remediation durable handoff、dirty/divergent workspace、
+  relationship unknown/conflict 或非唯一身份均在写入前 STOP。
+- current main 已是 Task head ancestor 时返回 `ALREADY_CURRENT`，不创建 commit、不 push，且不建立
+  新的 Review requirement。
+- main 前移时，LCK 在 clean Task workspace 将当前 head 以非交互 rebase 更新到 invocation-frozen
+  current main。冲突、空 Task diff 或无法解释的候选立即 abort/rollback 到精确 start head 并 STOP；
+  不保留跨调用 session，也没有 prepare/complete/abort 子命令。
+- LCK 以 frozen/current main 为 validation base，对 rebased head 运行 typed profile gate、Critical
+  Outcome（适用时）与 formal Delivery validation，并证明 head/tree 未变化。validation 或 main/PR/head
+  drift 失败时恢复 start head，remote 与原 PR 不变。
+- 验证通过后仅允许使用绑定旧 remote head 的精确
+  `--force-with-lease=<task-ref>:<old-head>` 更新同一 Task branch。禁止 generic/unbounded force push、
+  interactive rebase、新 PR、PR base 改写、GitHub Update Branch 或 auto merge。
 - 成功保持 Project Status `Review`，返回 `READY_FOR_FRESH_REVIEW` 并建立
-  `fresh-review-required` negative boundary。旧 PASS、validation 与 checks 全部不可复用。
-- `refresh abort` 只终止尚未 commit/push 的匹配 session，用 merge abort 恢复 start head 和
-  clean tree；发现 non-owned/untracked input 或 identity drift 时拒绝丢弃。
-- active Refresh session 与 Initial Delivery、Review、Remediation、Merge Preflight、Closeout
-  互斥。Candidate Refresh 不关闭 Issue、不 Closeout、不评估 Feature completion。
+  `fresh-review-required` negative boundary。旧 Review verdict、validation 与 checks 绑定旧
+  base/head/effective diff，不能复用或被静默标记为已解决；必须进行 fresh Independent Review。
+- Candidate Refresh 不关闭 Issue、不 Closeout、不评估 Feature completion。需要人工解决冲突或修改
+  Task 业务代码时 STOP/Human Gate；这类扩展不属于当前 atomic fast path。
 
 ## 7. PR / CI lifecycle
 
@@ -326,8 +321,8 @@ Issue comments（Retrieval v2 comments default-off 仍适用）。
   implementation session 交错，避免遗留 session 锁死后续 invocation。
 - successful remediation 设置 `fresh-review-required` negative boundary；在新的 Review
   verdict 被接受前不得再次 remediation。该 boundary 不携带 target authorization。
-- Candidate Refresh 成功使用相同的 fresh Review 安全边界，但不继承或消除任何仍适用的
-  FAIL finding；适用 FAIL 必须先走 Human-explicit Remediation。
+- Candidate Refresh 成功使用相同的 fresh Review 安全边界。旧 FAIL 仍是历史 finding
+  evidence，但不被标记为已解决；新 base/head/effective diff 必须由 fresh Review 重新判断。
 - 任何新 commit 都需要 **fresh independent re-review**；不得复用旧 verdict。
 
 ## 11. Manual Squash Merge boundary

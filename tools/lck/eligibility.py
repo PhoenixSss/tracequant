@@ -148,8 +148,7 @@ class PhaseEligibilityResolver:
                         Phase.DELIVERY_COMPLETE,
                         Phase.REMEDIATION_PREPARE,
                         Phase.REMEDIATION_COMPLETE,
-                        Phase.REFRESH_PREPARE,
-                        Phase.REFRESH_COMPLETE,
+                        Phase.REFRESH,
                     }:
                         reasons.append(contract_check.failure_reason)
                 else:
@@ -301,9 +300,7 @@ class PhaseEligibilityResolver:
                 Phase.REMEDIATION_PREPARE: {"Review"},
                 Phase.REMEDIATION_NO_CHANGE: {"Review"},
                 Phase.REMEDIATION_COMPLETE: {"Review"},
-                Phase.REFRESH_PREPARE: {"Review"},
-                Phase.REFRESH_COMPLETE: {"Review"},
-                Phase.REFRESH_ABORT: {"Review"},
+                Phase.REFRESH: {"Review"},
                 Phase.CLOSEOUT: {
                     "Inbox",
                     "Specifying",
@@ -440,11 +437,7 @@ class PhaseEligibilityResolver:
                         "ensure_remote_branch",
                         "reuse_open_pr",
                     )
-        elif phase in {
-            Phase.REFRESH_PREPARE,
-            Phase.REFRESH_COMPLETE,
-            Phase.REFRESH_ABORT,
-        }:
+        elif phase is Phase.REFRESH:
             if state.open_pr is None:
                 reasons.append("Candidate Refresh requires one current OPEN PR")
             elif state.open_pr.get("isDraft") is not False:
@@ -471,26 +464,21 @@ class PhaseEligibilityResolver:
                 reasons.append(
                     "Candidate Refresh requires the resolved Task branch selected"
                 )
-            if phase in {Phase.REFRESH_PREPARE, Phase.REFRESH_ABORT}:
-                if state.local_issue_head != pr_head:
-                    reasons.append("local Task branch must match current OPEN PR head")
+            if state.local_issue_head != pr_head:
+                reasons.append("local Task branch must match current OPEN PR head")
+            if state.git.get("clean") is not True:
+                reasons.append("Candidate Refresh requires a clean Task worktree")
             capabilities = (
-                ("prepare_main_merge_candidate",)
-                if phase is Phase.REFRESH_PREPARE
-                else ("abort_owned_main_merge_candidate",)
-                if phase is Phase.REFRESH_ABORT
-                else (
-                    (
-                        profile_resolution.profile.candidate_capability
-                        if profile_resolution.profile is not None
-                        else "verify_critical_outcome"
-                    ),
-                    "run_formal_validation",
-                    "commit_owned_merge_candidate",
-                    "ensure_remote_branch",
-                    "reuse_open_pr",
-                    "require_fresh_review",
-                )
+                (
+                    profile_resolution.profile.candidate_capability
+                    if profile_resolution.profile is not None
+                    else "verify_critical_outcome"
+                ),
+                "rebase_current_main",
+                "run_formal_validation",
+                "push_with_exact_lease",
+                "reuse_open_pr",
+                "require_fresh_review",
             )
         else:
             if state.merged is not True:
