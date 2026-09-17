@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import tarfile
 import tempfile
 import urllib.error
@@ -187,22 +188,48 @@ def load_artifact_lock(path: Path) -> Stage2ArtifactLock:
 
 
 def verify_catalog(lock: Stage2ArtifactLock, catalog_path: Path) -> None:
-    catalog = catalog_path.resolve()
-    if not catalog.is_dir() or catalog.is_symlink():
+    try:
+        catalog_mode = catalog_path.lstat().st_mode
+    except OSError as exc:
+        raise Stage2ArtifactError("catalog path must be a real directory") from exc
+    if not stat.S_ISDIR(catalog_mode):
         raise Stage2ArtifactError("catalog path must be a real directory")
-    actual_files = tuple(
-        sorted(
-            item.relative_to(catalog).as_posix()
-            for item in catalog.rglob("*")
-            if item.is_file() and not item.is_symlink()
-        )
-    )
-    expected_files = tuple(item.path for item in lock.files)
-    if actual_files != expected_files:
+    catalog = catalog_path.resolve()
+    expected_files = {item.path for item in lock.files}
+    expected_directories: set[str] = set()
+    for name in expected_files:
+        parent = PurePosixPath(name).parent
+        while parent.as_posix() != ".":
+            expected_directories.add(parent.as_posix())
+            parent = parent.parent
+    actual_files: set[str] = set()
+    actual_directories: set[str] = set()
+    try:
+        for item in catalog.rglob("*"):
+            name = item.relative_to(catalog).as_posix()
+            item_mode = item.lstat().st_mode
+            if stat.S_ISREG(item_mode):
+                actual_files.add(name)
+            elif stat.S_ISDIR(item_mode):
+                actual_directories.add(name)
+            else:
+                raise Stage2ArtifactError(
+                    "catalog file inventory does not match artifact lock"
+                )
+    except OSError as exc:
+        raise Stage2ArtifactError(
+            "catalog file inventory does not match artifact lock"
+        ) from exc
+    if actual_files != expected_files or actual_directories != expected_directories:
         raise Stage2ArtifactError("catalog file inventory does not match artifact lock")
     for locked in lock.files:
         candidate = catalog / locked.path
-        if candidate.stat().st_size != locked.size:
+        candidate_stat = candidate.lstat()
+        if not stat.S_ISREG(candidate_stat.st_mode):
+            raise Stage2ArtifactError(
+                "catalog file inventory does not match artifact lock"
+            )
+        if candidate_stat.st_size != locked.size:
             raise Stage2ArtifactError("catalog file size does not match artifact lock")
         if sha256_file(candidate) != locked.sha256:
             raise Stage2ArtifactError("catalog file hash does not match artifact lock")
@@ -567,6 +594,8 @@ def _require_safe_target(target: Path) -> None:
 def _require_external_absolute(path: Path, *, label: str) -> Path:
     if not path.is_absolute():
         raise Stage2ArtifactError(f"{label} must be absolute")
+    if path.is_symlink():
+        raise Stage2ArtifactError(f"{label} must not be a symlink")
     resolved = path.resolve()
     repository = Path(__file__).resolve().parents[4]
     if resolved == repository or repository in resolved.parents:

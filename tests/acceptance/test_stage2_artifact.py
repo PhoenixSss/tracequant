@@ -228,6 +228,50 @@ def test_stage2_artifact_materializes_only_the_locked_accepted_catalog(
         verify_catalog(lock, first)
 
 
+def test_stage2_artifact_rejects_symlink_paths_and_catalog_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive, _manifest, _lock_payload = _bundle(tmp_path, monkeypatch)
+    lock_path = tmp_path / "artifact.lock.json"
+    lock = load_artifact_lock(lock_path)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    existing_target = tmp_path / "existing-target"
+    existing_target.mkdir()
+    sentinel = existing_target / "keep"
+    sentinel.write_text("do not replace", encoding="utf-8")
+    target_link = tmp_path / "target-link"
+    target_link.symlink_to(existing_target, target_is_directory=True)
+    with pytest.raises(Stage2ArtifactError, match="symlink"):
+        materialize_catalog(
+            lock_path,
+            staging,
+            target_link,
+            archive_path=archive,
+        )
+    assert target_link.is_symlink()
+    assert sentinel.read_text(encoding="utf-8") == "do not replace"
+
+    installed = tmp_path / "installed"
+    materialize_catalog(lock_path, staging, installed, archive_path=archive)
+    catalog_link = tmp_path / "catalog-link"
+    catalog_link.symlink_to(installed, target_is_directory=True)
+    with pytest.raises(Stage2ArtifactError, match="real directory"):
+        verify_catalog(lock, catalog_link)
+
+    for link_name, link_target in (
+        ("linked-file", lock.files[0].path),
+        ("broken-link", "missing-file"),
+    ):
+        catalog_entry = installed / link_name
+        catalog_entry.symlink_to(link_target)
+        with pytest.raises(Stage2ArtifactError, match="inventory"):
+            verify_catalog(lock, installed)
+        catalog_entry.unlink()
+
+
 @pytest.mark.parametrize(
     "case", ["absolute", "duplicate", "symlink", "traversal", "unknown"]
 )
