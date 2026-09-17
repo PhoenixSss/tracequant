@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 from .common import CommandResult, is_sha, stderr_tail
@@ -33,6 +34,38 @@ def _lines_nul(value: str) -> tuple[str, ...]:
     if len(items) > 500:
         raise LckStopError("Candidate Refresh path inventory exceeds the bounded limit")
     return items
+
+
+_GIT_OPERATION_MARKERS = (
+    "MERGE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "REBASE_HEAD",
+    "rebase-merge",
+    "rebase-apply",
+    "sequencer",
+    "BISECT_START",
+)
+
+
+def _active_git_operations(
+    resolver: LiveStateResolver, *, command_prefix: str
+) -> tuple[str, ...]:
+    active: list[str] = []
+    for marker in _GIT_OPERATION_MARKERS:
+        result = resolver.runner.run(
+            ["git", "rev-parse", "--git-path", marker],
+            command_id=f"{command_prefix}-{marker.casefold().replace('_', '-')}",
+        )
+        raw_path = result.stdout.strip()
+        if result.returncode != 0 or not raw_path:
+            raise LckStopError("cannot inspect current Git operation state")
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = resolver.repo_root / path
+        if path.exists():
+            active.append(marker)
+    return tuple(active)
 
 
 @dataclass(frozen=True)
@@ -155,6 +188,60 @@ class RefreshPreparer:
         ):
             raise LckStopError("cannot materialize the frozen origin/main commit")
 
+    def _require_no_git_operation(self) -> None:
+        active = _active_git_operations(
+            self.resolver, command_prefix="lck-refresh-prepare-git-operation"
+        )
+        if active:
+            raise LckStopError(
+                "Refresh Prepare requires no pre-existing Git operation: "
+                + ", ".join(active)
+            )
+
+    def _recover_failed_merge_start(
+        self,
+        task_number: int,
+        *,
+        start_head: str,
+        frozen_main: str,
+    ) -> None:
+        """Release only a failed merge start whose state is still provably ours."""
+        active = _active_git_operations(
+            self.resolver, command_prefix="lck-refresh-prepare-recovery-operation"
+        )
+        head = self._run(
+            ["git", "rev-parse", "HEAD"], "lck-refresh-prepare-recovery-head"
+        )
+        if head.returncode != 0 or head.stdout.strip() != start_head:
+            return
+        if not active:
+            status = self._run(
+                ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+                "lck-refresh-prepare-recovery-status",
+            )
+            if status.returncode == 0 and not status.stdout.strip():
+                self.store.clear_refresh_session(task_number)
+            return
+        if active != ("MERGE_HEAD",):
+            return
+        merge_head = self._run(
+            ["git", "rev-parse", "MERGE_HEAD"],
+            "lck-refresh-prepare-recovery-merge-head",
+        )
+        if merge_head.returncode != 0 or merge_head.stdout.strip() != frozen_main:
+            return
+        aborted = self._run(["git", "merge", "--abort"], "lck-refresh-prepare-recover")
+        status = self._run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            "lck-refresh-prepare-recovery-clean",
+        )
+        if (
+            aborted.returncode == 0
+            and status.returncode == 0
+            and not status.stdout.strip()
+        ):
+            self.store.clear_refresh_session(task_number)
+
     def prepare(self, task_number: int) -> RefreshContext:
         self._require_no_overlap(task_number)
         snapshot = self.snapshots.acquire(
@@ -187,6 +274,10 @@ class RefreshPreparer:
         if not isinstance(body_sha, str) or not body_sha:
             raise LckStopError("Refresh Prepare Task Contract identity is unavailable")
         self._reject_applicable_review_fail(task_number, start_head)
+        # A clean porcelain view does not prove that no merge/rebase/cherry-pick
+        # operation is active.  Establish this before fetching, writing a
+        # session, or invoking merge so later recovery cannot touch prior state.
+        self._require_no_git_operation()
         self._ensure_main_object(frozen_main)
 
         ancestor = self._run(
@@ -234,7 +325,7 @@ class RefreshPreparer:
             "pr_base_sha": _pr_base_sha(pr),
             "merge_parents": [start_head, frozen_main],
             "candidate_paths": list(candidate_paths),
-            "prepared_state": "starting",
+            "prepared_state": "merge-starting",
             "candidate": None,
             "authority": "LCK-owned Candidate Refresh session only",
         }
@@ -254,11 +345,11 @@ class RefreshPreparer:
         if merged.returncode not in {0, 1} or (
             merged.returncode == 1 and not conflicts
         ):
-            abort = self._run(
-                ["git", "merge", "--abort"], "lck-refresh-prepare-recover"
+            self._recover_failed_merge_start(
+                task_number,
+                start_head=start_head,
+                frozen_main=frozen_main,
             )
-            if abort.returncode == 0:
-                self.store.clear_refresh_session(task_number)
             raise LckStopError(
                 "Candidate Refresh merge failed without a bounded conflict candidate: "
                 + (
@@ -497,10 +588,6 @@ class RefreshCompleter:
             raise LckStopError(
                 "Candidate Refresh merge state is unresolved, changed, or contains untracked input"
             )
-        if not status.stdout.strip():
-            raise LckStopError(
-                "Candidate Refresh prepared tree contains no integration changes"
-            )
 
     def complete(
         self,
@@ -530,6 +617,7 @@ class RefreshCompleter:
             task_number, session, snapshot.state
         )
         candidate = session.get("candidate")
+        owned_refresh_candidate = isinstance(candidate, Mapping)
         if isinstance(candidate, Mapping):
             candidate_head = candidate.get("head_sha")
             candidate_tree = candidate.get("tree_oid")
@@ -577,6 +665,7 @@ class RefreshCompleter:
                 risks=risks,
                 operation_snapshot=snapshot,
                 phase=Phase.REFRESH_COMPLETE,
+                owned_refresh_candidate=owned_refresh_candidate,
             )
         except BaseException:
             self._capture_delivery_evidence(delivery)
@@ -679,7 +768,32 @@ class RefreshAborter:
         merge_head = self._run(
             ["git", "rev-parse", "MERGE_HEAD"], "lck-refresh-abort-merge-head"
         )
-        if merge_head.returncode != 0 or merge_head.stdout.strip() != frozen_main:
+        active = _active_git_operations(
+            self.resolver, command_prefix="lck-refresh-abort-git-operation"
+        )
+        if session.get("prepared_state") == "merge-starting" and not active:
+            status = self._run(
+                ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+                "lck-refresh-abort-unstarted-status",
+            )
+            if status.returncode != 0 or status.stdout.strip():
+                raise LckStopError(
+                    "Refresh Abort cannot release an interrupted merge start with external input"
+                )
+            self.store.clear_refresh_session(task_number)
+            return RefreshAbortResult(
+                task_number=task_number,
+                operation_id=operation_id,
+                start_head_sha=start_head,
+                frozen_main_sha=frozen_main,
+                operation_snapshot=snapshot,
+                aborted_session=dict(session),
+            )
+        if (
+            active != ("MERGE_HEAD",)
+            or merge_head.returncode != 0
+            or merge_head.stdout.strip() != frozen_main
+        ):
             raise LckStopError("Refresh Abort cannot prove the LCK-owned merge state")
         status = self._run(
             ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],

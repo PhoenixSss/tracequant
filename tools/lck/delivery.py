@@ -442,6 +442,7 @@ class DeliveryCompleter:
         *,
         phase: Phase,
         owned_remediation_candidate: bool = False,
+        owned_refresh_candidate: bool = False,
         commit_message: str,
         summary: str,
         risks: str,
@@ -488,7 +489,10 @@ class DeliveryCompleter:
                     "resolved Task branch/base"
                 )
 
-        if state.git.get("clean") is True:
+        refresh_merge_pending = (
+            phase is Phase.REFRESH_COMPLETE and not owned_refresh_candidate
+        )
+        if state.git.get("clean") is True and not refresh_merge_pending:
             progress.running("revalidating-candidate")
             if not self._has_task_diff(base_sha):
                 raise LckStopError(
@@ -524,7 +528,15 @@ class DeliveryCompleter:
             )
         else:
             progress.running("staging-candidate")
-            validated_tree = self.commit_effect.stage_candidate_tree()
+            if phase is Phase.REFRESH_COMPLETE:
+                # An exact LCK-owned MERGE_HEAD may intentionally produce the
+                # same tree as the start head (for example, history-only main
+                # advancement).  It still needs a two-parent merge commit.
+                validated_tree = self.commit_effect.stage_candidate_tree(
+                    allow_empty=True
+                )
+            else:
+                validated_tree = self.commit_effect.stage_candidate_tree()
             critical = self._run_profile_gates(
                 state,
                 base_sha,
@@ -647,6 +659,7 @@ class DeliveryCompleter:
         operation_snapshot: OperationSnapshot | None = None,
         phase: Phase = Phase.DELIVERY_COMPLETE,
         owned_remediation_candidate: bool = False,
+        owned_refresh_candidate: bool = False,
     ) -> DeliveryCompletionResult:
         self.last_checks = None
         if (
@@ -680,6 +693,7 @@ class DeliveryCompleter:
                 snapshot,
                 phase=phase,
                 owned_remediation_candidate=owned_remediation_candidate,
+                owned_refresh_candidate=owned_refresh_candidate,
                 commit_message=commit_message,
                 summary=summary,
                 risks=risks,

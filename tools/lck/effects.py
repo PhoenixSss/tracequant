@@ -237,19 +237,19 @@ class CommitCurrentTreeEffect:
             )
         return result
 
-    def stage_candidate_tree(self) -> str:
+    def stage_candidate_tree(self, *, allow_empty: bool = False) -> str:
         status = self._run(
             ["git", "status", "--porcelain=v1", "--untracked-files=all"],
             "lck-delivery-status-before-stage",
         )
-        if not status.stdout.strip():
+        if not status.stdout.strip() and not allow_empty:
             raise LckStopError("Delivery Complete found no uncommitted Task changes")
         self._run(["git", "add", "-A", "--", ":/"], "lck-stage-current-tree")
         cached = self.resolver.runner.run(
             ["git", "diff", "--cached", "--quiet"],
             command_id="lck-staged-diff-present",
         )
-        if cached.returncode == 0:
+        if cached.returncode == 0 and not allow_empty:
             raise LckStopError("Delivery candidate contains no staged changes")
         if cached.returncode not in {0, 1}:
             raise LckStopError("unable to determine staged Delivery diff")
