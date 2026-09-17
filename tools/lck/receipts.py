@@ -582,6 +582,24 @@ def _write_failure_receipt(
         "error": safe_text(error, limit=2000),
     }
     next_action = _failure_next_action(status)
+    refresh_context: dict[str, Any] = {}
+    if operation == "refresh":
+        refresh_attributes = {
+            "operation_id": "operation_id",
+            "branch": "last_branch",
+            "pr_number": "last_pr_number",
+            "old_base_sha": "last_old_base_sha",
+            "start_head_sha": "last_start_head_sha",
+            "frozen_main_sha": "last_frozen_main_sha",
+            "head_sha": "last_head_sha",
+            "validated_tree_oid": "last_validated_tree_oid",
+            "push_outcome": "last_push_outcome",
+            "fresh_review_required": "last_fresh_review_required",
+        }
+        refresh_context = {
+            key: getattr(handler, attribute, None)
+            for key, attribute in refresh_attributes.items()
+        }
     agent_view = {
         "schema_version": LCK_SCHEMA_VERSION,
         "kind": "lck-agent-view",
@@ -593,6 +611,7 @@ def _write_failure_receipt(
             else None
         ),
         **detail,
+        **refresh_context,
         "conflict_files": list(getattr(handler, "last_conflict_files", ())),
         "next_action": next_action,
     }
@@ -629,6 +648,7 @@ def _write_failure_receipt(
             "conflict_files": _jsonable(
                 list(getattr(handler, "last_conflict_files", ()))
             ),
+            **_jsonable(refresh_context),
         },
     }
     reference = store.write(

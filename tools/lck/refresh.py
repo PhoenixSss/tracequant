@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Final
 
@@ -157,6 +157,16 @@ class CandidateRefresher:
         self.last_checks: dict[str, Any] | None = None
         self.last_effects: list[EffectReceipt] = []
         self.last_conflict_files: tuple[str, ...] = ()
+        self.operation_id: str | None = None
+        self.last_branch: str | None = None
+        self.last_pr_number: int | None = None
+        self.last_old_base_sha: str | None = None
+        self.last_start_head_sha: str | None = None
+        self.last_frozen_main_sha: str | None = None
+        self.last_head_sha: str | None = None
+        self.last_validated_tree_oid: str | None = None
+        self.last_push_outcome = "not-attempted"
+        self.last_fresh_review_required = False
 
     def _run(self, argv: Sequence[str], command_id: str) -> CommandResult:
         return self.resolver.runner.run(argv, command_id=command_id)
@@ -377,6 +387,7 @@ class CandidateRefresher:
             raise LckStopError(
                 "Candidate Refresh remote Task head changed before exact-lease push"
             )
+        self.last_push_outcome = "unknown"
         pushed = self._run(
             [
                 "git",
@@ -388,12 +399,45 @@ class CandidateRefresher:
             "lck-refresh-push-exact-lease",
         )
         if pushed.returncode != 0:
-            observed = self._remote_oid(
-                ref, command_id="lck-refresh-remote-after-failed-push"
-            )
+            try:
+                observed = self._remote_oid(
+                    ref, command_id="lck-refresh-remote-after-failed-push"
+                )
+            except BaseException as exc:
+                self.last_effects.append(
+                    EffectReceipt(
+                        effect="refresh_remote_branch",
+                        action="outcome-unknown",
+                        details={
+                            "branch": branch,
+                            "old_head_sha": start_head,
+                            "head_sha": new_head,
+                            "lease": f"{ref}:{start_head}",
+                            "push_exit_code": pushed.returncode,
+                        },
+                    )
+                )
+                raise LckStopError(
+                    "Candidate Refresh exact-lease push outcome is unknown; "
+                    "the local candidate and fresh Review boundary are retained"
+                ) from exc
             if observed == new_head:
                 action = "updated-observed-after-command-failure"
             elif observed == start_head:
+                self.last_push_outcome = "not-updated"
+                self.last_effects.append(
+                    EffectReceipt(
+                        effect="refresh_remote_branch",
+                        action="not-updated-observed-after-command-failure",
+                        details={
+                            "branch": branch,
+                            "old_head_sha": start_head,
+                            "head_sha": new_head,
+                            "lease": f"{ref}:{start_head}",
+                            "push_exit_code": pushed.returncode,
+                        },
+                    )
+                )
                 raise LckStopError(
                     "Candidate Refresh exact-lease push failed: "
                     + (
@@ -402,12 +446,27 @@ class CandidateRefresher:
                     )
                 )
             else:
+                self.last_effects.append(
+                    EffectReceipt(
+                        effect="refresh_remote_branch",
+                        action="outcome-ambiguous",
+                        details={
+                            "branch": branch,
+                            "old_head_sha": start_head,
+                            "head_sha": new_head,
+                            "observed_head_sha": observed,
+                            "lease": f"{ref}:{start_head}",
+                            "push_exit_code": pushed.returncode,
+                        },
+                    )
+                )
                 raise LckStopError(
                     "Candidate Refresh remote Task head became ambiguous during push"
                 )
         else:
             action = "force-with-exact-lease"
-        return EffectReceipt(
+        self.last_push_outcome = "updated"
+        effect = EffectReceipt(
             effect="refresh_remote_branch",
             action=action,
             details={
@@ -417,6 +476,63 @@ class CandidateRefresher:
                 "lease": f"{ref}:{start_head}",
             },
         )
+        self.last_effects.append(effect)
+        return effect
+
+    def _verify_pre_push_state(
+        self,
+        task_number: int,
+        initial_snapshot: OperationSnapshot,
+        *,
+        pr_number: int,
+        branch: str,
+        start_head: str,
+        frozen_main: str,
+        new_head: str,
+        validated_tree: str,
+    ) -> OperationSnapshot:
+        """Reacquire all workflow authority before the remote branch effect."""
+        current_snapshot = self.snapshots.acquire(task_number, operation="refresh")
+        self.last_snapshot = current_snapshot
+        current_state = current_snapshot.state
+        normalized_state = replace(
+            current_state,
+            local_issue_head=start_head,
+            git={**current_state.git, "head_sha": start_head},
+        )
+        current_decision = self.eligibility.resolve(normalized_state, Phase.REFRESH)
+        initial_contract = initial_snapshot.state.leaf_contract or {}
+        current_contract = current_state.leaf_contract or {}
+        pr = current_state.open_pr
+        if (
+            not current_decision.eligible
+            or current_state.issue_number != task_number
+            or initial_contract.get("body_sha256")
+            != current_contract.get("body_sha256")
+            or current_state.target_branch != branch
+            or current_state.git.get("branch") != branch
+            or _remote_main_sha(current_state.git) != frozen_main
+            or current_state.local_issue_head != new_head
+            or current_state.remote_issue_oid != start_head
+            or not isinstance(pr, Mapping)
+            or pr.get("number") != pr_number
+            or str(pr.get("state", "")).upper() != "OPEN"
+            or pr.get("isDraft") is not False
+            or pr.get("baseRefName") != BASE_BRANCH
+            or pr.get("baseRefOid") != frozen_main
+            or pr.get("headRefName") != branch
+            or pr.get("headRefOid") != start_head
+        ):
+            details = "; ".join(current_decision.reasons)
+            raise LckStopError(
+                "Candidate Refresh Task/PR/workflow identity changed before push"
+                + (f": {details}" if details else "")
+            )
+        self._require_clean_branch(branch, new_head)
+        self.tree_effect.verify_tree_unchanged(
+            validated_tree, expected_head_sha=new_head
+        )
+        return current_snapshot
 
     def _verify_final_state(
         self,
@@ -428,8 +544,9 @@ class CandidateRefresher:
         frozen_main: str,
         new_head: str,
         validated_tree: str,
-    ) -> None:
+    ) -> OperationSnapshot:
         final_snapshot = self.snapshots.acquire(task_number, operation="refresh")
+        self.last_snapshot = final_snapshot
         final_state = final_snapshot.state
         final_decision = self.eligibility.resolve(final_state, Phase.REFRESH)
         initial_contract = initial_snapshot.state.leaf_contract or {}
@@ -462,16 +579,26 @@ class CandidateRefresher:
         self.tree_effect.verify_tree_unchanged(
             validated_tree, expected_head_sha=new_head
         )
+        return final_snapshot
 
     def refresh(self, task_number: int) -> RefreshResult:
         operation_id = self.store.new_id()
+        self.operation_id = operation_id
         progress = ProgressReporter("refresh")
         progress.started("initializing")
         self.last_effects = []
         self.last_conflict_files = ()
+        self.last_branch = None
+        self.last_pr_number = None
+        self.last_old_base_sha = None
+        self.last_start_head_sha = None
+        self.last_frozen_main_sha = None
+        self.last_head_sha = None
+        self.last_validated_tree_oid = None
+        self.last_push_outcome = "not-attempted"
+        self.last_fresh_review_required = False
         candidate_active = False
         boundary_written = False
-        remote_updated = False
         prior_boundary: Mapping[str, Any] | None = None
         branch = ""
         start_head = ""
@@ -505,6 +632,10 @@ class CandidateRefresher:
             branch = state.target_branch
             start_head = str(start_head_value)
             frozen_main = str(frozen_main_value)
+            self.last_branch = branch
+            self.last_pr_number = pr_number
+            self.last_start_head_sha = start_head
+            self.last_frozen_main_sha = frozen_main
             self._require_clean_branch(branch, start_head)
             active = _active_git_operations(
                 self.resolver, command_prefix="lck-refresh-preflight-operation"
@@ -525,8 +656,10 @@ class CandidateRefresher:
                 raise LckStopError(
                     "Candidate Refresh cannot resolve an exact merge base"
                 )
+            self.last_old_base_sha = merge_base
 
             prior_boundary = self.store.read_review_required(task_number)
+            self.last_fresh_review_required = prior_boundary is not None
 
             ancestor = self._run(
                 ["git", "merge-base", "--is-ancestor", frozen_main, start_head],
@@ -558,7 +691,14 @@ class CandidateRefresher:
 
             progress.running("rebasing-candidate")
             rebased = self._run(
-                ["git", "rebase", "--onto", frozen_main, merge_base],
+                [
+                    "git",
+                    "rebase",
+                    "--no-update-refs",
+                    "--onto",
+                    frozen_main,
+                    merge_base,
+                ],
                 "lck-refresh-rebase-current-main",
             )
             candidate_active = True
@@ -580,6 +720,7 @@ class CandidateRefresher:
                 )
 
             new_head = self._current_head()
+            self.last_head_sha = new_head
             if new_head == start_head:
                 raise LckStopError("Candidate Refresh rebase did not create a new head")
             self._require_clean_branch(branch, new_head)
@@ -596,6 +737,7 @@ class CandidateRefresher:
                     "Candidate Refresh rebased head does not preserve a Task diff on current main"
                 )
             validated_tree = self.tree_effect.current_head_tree()
+            self.last_validated_tree_oid = validated_tree
             progress.running("profile-gates")
             critical = self._run_profile_gates(
                 state, frozen_main, new_head, progress=progress
@@ -608,6 +750,17 @@ class CandidateRefresher:
                 self.last_validation = validation
             self.tree_effect.verify_tree_unchanged(
                 validated_tree, expected_head_sha=new_head
+            )
+
+            self._verify_pre_push_state(
+                task_number,
+                snapshot,
+                pr_number=pr_number,
+                branch=branch,
+                start_head=start_head,
+                frozen_main=frozen_main,
+                new_head=new_head,
+                validated_tree=validated_tree,
             )
 
             current_main = self._remote_oid(
@@ -629,10 +782,9 @@ class CandidateRefresher:
                 task_number, operation_id, new_head
             )
             boundary_written = True
+            self.last_fresh_review_required = True
             progress.running("exact-lease-push")
-            pushed = self._push_exact_lease(branch, start_head, new_head)
-            self.last_effects.append(pushed)
-            remote_updated = True
+            self._push_exact_lease(branch, start_head, new_head)
             candidate_active = False
             progress.running("verifying-final-identity")
             try:
@@ -673,9 +825,19 @@ class CandidateRefresher:
             )
         except BaseException:
             try:
-                if boundary_written and not remote_updated:
+                safe_to_restore = self.last_push_outcome in {
+                    "not-attempted",
+                    "not-updated",
+                }
+                if boundary_written and safe_to_restore:
                     self.store.restore_review_required(task_number, prior_boundary)
-                if candidate_active and branch and is_sha(start_head):
+                    self.last_fresh_review_required = prior_boundary is not None
+                if (
+                    candidate_active
+                    and safe_to_restore
+                    and branch
+                    and is_sha(start_head)
+                ):
                     self._restore_original(branch, start_head)
             except BaseException as rollback_error:
                 progress.failed("rollback-failed")

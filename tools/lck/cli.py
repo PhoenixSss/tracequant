@@ -217,6 +217,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return emit_success(handler.complete(task_number))
         raise LckStopError("unsupported LCK command")
     except ReviewStaleError as exc:
+        operation_id = _result_operation_id(handler, operation_id)
         try:
             payload = _write_failure_receipt(
                 operation=operation,
@@ -242,6 +243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print_json(payload)
         return 3
     except WorkflowToolError as exc:
+        operation_id = _result_operation_id(handler, operation_id)
         try:
             payload = _write_failure_receipt(
                 operation=operation,
