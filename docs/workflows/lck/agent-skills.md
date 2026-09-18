@@ -71,8 +71,8 @@ standalone clone 内。
 
 ## Skill identity 验证
 
-当前 Codex / Claude Skill 路径、共享语义引用、单一机械入口与每个文件的
-SHA-256 由以下只读审计统一验证：
+当前 Codex / Claude Skill 包路径、共享语义引用、单一机械入口与每个 Skill
+包的 SHA-256 由以下只读审计统一验证：
 
 ```bash
 uv run --frozen python -m tools.lck.skill_audit
@@ -91,7 +91,7 @@ semantic owner；其历史内容仅通过 Git 历史恢复。
 | `docs/workflows/lck/review-and-remediation.md` | ACTIVE | Independent Review semantics 与 verdict/remediation contract |
 | `CLAUDE.md` | ACTIVE | Claude provider adapter、Codex/Claude 边界说明与 Skill discovery |
 | `.agents/skills/*-runner/`、`.agents/skills/task-closeout/`、`.agents/skills/feature-completion-audit/` | ACTIVE | Codex executable procedures（含 Codex 专有 `## Execution route contract`） |
-| `.claude/skills/` current four Skills | ACTIVE | Claude provider Skills；canonical Skill 包的镜像副本，仅差一个已声明的 provider 专有段 |
+| `.claude/skills/` current four Skills | ACTIVE | Claude provider Skills；canonical Skill 包（`SKILL.md` + `references/*.md`）的镜像副本，仅差一个已声明的 provider 专有段 |
 | `tools/lck/shared_facts.py` | ACTIVE | authoritative profile-neutral Git/GitHub fact acquisition and normalization |
 | `tools/lck/wsl2_validation_runner.py`、`validation_runner.py`、validation profiles 与 current tests | ACTIVE | deterministic validation plans、exit codes 与 bounded diagnostics |
 | `tools/lck/feature_audit.py` | AUDIT-ONLY | Feature audit evidence and adapter over shared facts；不具备 Task lifecycle authority |

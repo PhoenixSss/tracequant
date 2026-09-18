@@ -35,7 +35,11 @@ from tools.lck.common import (
     CommandRunner,
     sha256_json,
 )
-from tools.lck.skill_audit import expected_provider_skill, provider_skill_text
+from tools.lck.skill_audit import (
+    expected_provider_package,
+    package_text,
+    provider_package,
+)
 
 SHA = "a" * 40
 
@@ -1183,8 +1187,9 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
     initial_delivery = (
         root / ".agents/skills/task-delivery-runner/references/initial-delivery.md"
     ).read_text(encoding="utf-8")
-    claude_skill = provider_skill_text(root, "task-delivery-runner")
-    assert claude_skill == expected_provider_skill(root, "task-delivery-runner")[0]
+    claude_skill = package_text(provider_package(root, "task-delivery-runner"))
+    expected_claude, _ = expected_provider_package(root, "task-delivery-runner")
+    assert claude_skill == package_text(expected_claude)
     assert ".agents/skills" not in claude_skill
     assert "elevated-first" not in claude_skill
     assert "references/initial-delivery.md" in agent_skill

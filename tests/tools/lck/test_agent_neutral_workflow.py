@@ -8,8 +8,9 @@ from typing import Any, cast
 from tools.lck.skill_audit import (
     SKILLS,
     audit,
-    expected_provider_skill,
-    provider_skill_text,
+    expected_provider_package,
+    package_text,
+    provider_package,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -44,11 +45,11 @@ def test_claude_is_a_provider_adapter() -> None:
 
 def test_each_claude_skill_mirrors_one_canonical_package() -> None:
     for skill in SKILLS:
-        adapter = provider_skill_text(ROOT, skill)
-        expected, difference = expected_provider_skill(ROOT, skill)
+        adapter = provider_package(ROOT, skill)
+        expected, difference = expected_provider_package(ROOT, skill)
         assert adapter == expected
         assert difference
-        assert ".agents/skills" not in adapter
+        assert ".agents/skills" not in package_text(adapter)
 
 
 def test_skill_audit_accepts_the_current_layout() -> None:
