@@ -457,6 +457,7 @@ class LiveStateResolver:
                         profile.include_checks,
                         profile.include_mergeability,
                         False,
+                        include_head_repository=profile.include_pr_head_repository,
                     )
             except PrResolveError as exc:
                 reasons.append(str(exc))

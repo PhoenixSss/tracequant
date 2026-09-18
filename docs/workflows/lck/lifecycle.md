@@ -223,6 +223,11 @@ Candidate Refresh 只服务于已经完成 Initial Delivery、Project Status = `
   `origin/main`。shared Task-local operation lock 将本次调用与 Delivery、Review、Remediation、
   Merge Preflight 和 Closeout 串行化；Review/Remediation durable handoff、dirty/divergent workspace、
   relationship unknown/conflict 或非唯一身份均在写入前 STOP。
+- PR identity 包含 head repository：OPEN PR 的 `headRepository.nameWithOwner` 必须是本次 resolve 的
+  repository（即 `origin` 所代表的仓库）。同名 head branch 的跨仓库/fork PR 即使 head branch 与 head
+  OID 匹配也必须在任何 branch 修改前 STOP，因为对该 PR head 的 force-with-lease 只作用于 `origin`，
+  无法使 fork head 前进。initial resolution、push 前 fresh PR recheck 与 final identity 都要求该事实；
+  缺失或 unknown 一律视为不匹配。
 - current main 已是 Task head ancestor 时返回 `ALREADY_CURRENT`，不创建 commit、不 push，且不建立
   新的 Review requirement。
 - main 前移时，LCK 在 clean Task workspace 将当前 head 以非交互 rebase 更新到 invocation-frozen

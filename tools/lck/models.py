@@ -59,6 +59,7 @@ class FactProfile:
     include_local_issue_branches: bool = True
     include_remote_issue_branches: bool = True
     include_open_pr: bool = True
+    include_pr_head_repository: bool = False
     include_pr_history: bool = False
     include_pr_history_details: bool = False
     include_checks: bool = False
@@ -172,6 +173,7 @@ _OPERATION_FACT_PROFILES: Final = {
     ),
     "refresh": FactProfile(
         name="refresh",
+        include_pr_head_repository=True,
     ),
     "merge-preflight": FactProfile(
         name="merge-preflight",

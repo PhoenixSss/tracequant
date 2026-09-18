@@ -54,6 +54,7 @@ def _pr_fields(
     include_checks: bool,
     include_mergeability: bool,
     include_history_details: bool,
+    include_head_repository: bool = False,
 ) -> str:
     fields = list(_REQUIRED_PR_FIELDS)
     if include_history_details:
@@ -66,11 +67,30 @@ def _pr_fields(
                 "closingIssuesReferences",
             )
         )
+    if include_head_repository and "headRepository" not in fields:
+        fields.append("headRepository")
     if include_checks:
         fields.append("statusCheckRollup")
     if include_mergeability:
         fields.append("mergeable")
     return ",".join(fields)
+
+
+def pr_head_repository_matches(pr: Mapping[str, Any], repository: str | None) -> bool:
+    """Prove a PR head branch is owned by the resolved repository, not a fork.
+
+    A same-named branch on another repository produces a PR whose head OID and
+    head branch name can match the local Task branch while the objects live in
+    a different remote.  Callers that may rewrite a Task branch must bind this
+    fact before their effect, so missing or unknown repository identity is
+    reported as no match.
+    """
+    head_repository = pr.get("headRepository")
+    return (
+        isinstance(repository, str)
+        and isinstance(head_repository, Mapping)
+        and head_repository.get("nameWithOwner") == repository
+    )
 
 
 class PrResolveError(WorkflowToolError):
@@ -226,6 +246,7 @@ def resolve_open_pr(
     include_checks: bool = True,
     include_mergeability: bool = True,
     include_history_details: bool = True,
+    include_head_repository: bool = False,
 ) -> dict[str, Any] | None:
     """Resolve the unique matching OPEN PR without creating or changing one.
 
@@ -253,6 +274,7 @@ def resolve_open_pr(
                 include_checks=include_checks,
                 include_mergeability=include_mergeability,
                 include_history_details=include_history_details,
+                include_head_repository=include_head_repository,
             ),
         ],
         command_id="gh-pr-list-live-state",
@@ -300,6 +322,7 @@ def resolve_open_pr(
                 include_checks=include_checks,
                 include_mergeability=include_mergeability,
                 include_history_details=include_history_details,
+                include_head_repository=include_head_repository,
             ),
         ],
         command_id="gh-pr-view-live-state",

@@ -421,7 +421,7 @@ def test_review_complete_acquires_only_review_complete_fact_profile(
         observations["branches"].append((include_local, include_remote))
         return set(), {branch: SHA}, True
 
-    def open_pr_query(*args: Any) -> dict[str, Any]:
+    def open_pr_query(*args: Any, **_kwargs: Any) -> dict[str, Any]:
         observations["pr"].append(tuple(args[-3:]))
         return pr
 

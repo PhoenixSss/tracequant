@@ -15,10 +15,21 @@ from tools.lck import refresh as lck_refresh
 from tools.lck import remediation as lck_remediation
 from tools.lck import review as lck_review
 from tools.lck import review_workspace as lck_review_workspace
+from tools.lck import state as lck_state
 from tools.lck.common import CommandResult, CommandRunner
 from tools.lck.operation_lock import TaskOperationLock
 
-from .support import StaticResolver, _issue, _open_pr, _relationships
+from .support import (
+    SHA,
+    FakeRunner,
+    StaticResolver,
+    _git_snapshot,
+    _issue,
+    _open_pr,
+    _relationships,
+    _resolver,
+    _task_contract,
+)
 
 
 def _git(root: Path, *args: str) -> str:
@@ -85,10 +96,11 @@ def _state(
     *,
     clean: bool = True,
     blocked: bool = False,
+    head_repository: str = "owner/repo",
 ) -> lck_models.LiveState:
     issue = _issue()
     issue.update({"project_status": "Review", "body_sha256": "d" * 64})
-    pr = _open_pr(branch)
+    pr = _open_pr(branch, head_repository=head_repository)
     pr.update({"headRefOid": start_head, "baseRefOid": main_head})
     relationships = _relationships(
         blocked_by={
@@ -135,6 +147,16 @@ def _remote_head(root: Path, branch: str) -> str:
     return value.split()[0]
 
 
+def _pr_view_json_fields(commands: list[tuple[str, ...]]) -> list[str]:
+    views = [
+        command
+        for command in commands
+        if command[:3] == ("gh", "pr", "view") and "--json" in command
+    ]
+    assert views, "expected a gh pr view fact query"
+    return views[0][views[0].index("--json") + 1].split(",")
+
+
 class _PrObservingRunner(CommandRunner):
     def __init__(
         self,
@@ -142,6 +164,7 @@ class _PrObservingRunner(CommandRunner):
         branch: str,
         *,
         pr_head_override: str | None = None,
+        pr_head_repository_override: str | None = None,
         drift_main_before_push: bool = False,
         drift_remote_before_push: bool = False,
         report_unknown_after_successful_push: bool = False,
@@ -150,6 +173,7 @@ class _PrObservingRunner(CommandRunner):
         self.root = root
         self.branch = branch
         self.pr_head_override = pr_head_override
+        self.pr_head_repository_override = pr_head_repository_override
         self.drift_main_before_push = drift_main_before_push
         self.drift_remote_before_push = drift_remote_before_push
         self.report_unknown_after_successful_push = report_unknown_after_successful_push
@@ -200,6 +224,9 @@ class _PrObservingRunner(CommandRunner):
                 "headRefName": self.branch,
                 "headRefOid": self.pr_head_override
                 or _remote_head(self.root, self.branch),
+                "headRepository": {
+                    "nameWithOwner": self.pr_head_repository_override or "owner/repo"
+                },
             }
             return CommandResult(command_id, command, 0, json.dumps(payload), "")
         if (
@@ -743,6 +770,93 @@ def test_refresh_pr_drift_rolls_back_before_push(tmp_path: Path) -> None:
     assert _git(root, "rev-parse", "HEAD") == start_head
     assert _remote_head(root, branch) == start_head
     assert not any(command[:2] == ("git", "push") for command in runner.commands)
+
+
+def test_refresh_rejects_cross_repository_pr_before_rebase(tmp_path: Path) -> None:
+    root, branch, start_head, main_head = _repository(tmp_path)
+    refresher, runner = _refresher(
+        root,
+        branch,
+        _state(branch, start_head, main_head, head_repository="fork/repo"),
+    )
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="OPEN PR head repository must be the resolved repository",
+    ):
+        refresher.refresh(159)
+
+    assert _git(root, "rev-parse", "HEAD") == start_head
+    assert _git(root, "status", "--porcelain=v1") == ""
+    assert _remote_head(root, branch) == start_head
+    assert not any(command[:2] == ("git", "rebase") for command in runner.commands)
+    assert not any(command[:2] == ("git", "push") for command in runner.commands)
+
+
+def test_refresh_cross_repository_pr_at_push_recheck_stops_before_push(
+    tmp_path: Path,
+) -> None:
+    root, branch, start_head, main_head = _repository(tmp_path)
+    runner = _PrObservingRunner(
+        root,
+        branch,
+        pr_head_repository_override="fork/repo",
+    )
+    refresher, runner = _refresher(
+        root, branch, _state(branch, start_head, main_head), runner=runner
+    )
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="Candidate Refresh PR/base/head identity changed before push",
+    ):
+        refresher.refresh(159)
+
+    assert _git(root, "rev-parse", "HEAD") == start_head
+    assert _git(root, "status", "--porcelain=v1") == ""
+    assert _remote_head(root, branch) == start_head
+    assert not any(command[:2] == ("git", "push") for command in runner.commands)
+    assert (
+        lck_review_workspace.ReviewInvocationStore(root).read_review_required(159)
+        is None
+    )
+
+
+def test_refresh_fact_profile_acquires_pr_head_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "task/159-lck-core-live-state-resolution"
+    open_pr = _open_pr(branch)
+    fake = FakeRunner(
+        branch=branch,
+        local_branches={branch},
+        remote_branches={branch: SHA},
+        open_pr=open_pr,
+    )
+    monkeypatch.setattr(lck_state, "_repository_slug", lambda *_args: "owner/repo")
+    monkeypatch.setattr(
+        lck_state,
+        "_issue_view_with_contract",
+        lambda *_args: (_issue(), _task_contract()),
+    )
+    monkeypatch.setattr(
+        lck_state, "_relationship_snapshot", lambda *_args: _relationships()
+    )
+    monkeypatch.setattr(
+        lck_state, "_git_snapshot", lambda *_args, **_kwargs: _git_snapshot(fake)
+    )
+
+    refresh_state = _resolver(fake).resolve_for_operation(159, "refresh")
+    refresh_fields = _pr_view_json_fields(fake.commands)
+    fake.commands.clear()
+    _resolver(fake).resolve_for_operation(159, "remediation-prepare")
+    remediation_fields = _pr_view_json_fields(fake.commands)
+
+    assert refresh_state.repository == "owner/repo"
+    assert refresh_state.open_pr is not None
+    assert refresh_state.open_pr["headRepository"] == {"nameWithOwner": "owner/repo"}
+    assert "headRepository" in refresh_fields
+    assert "headRepository" not in remediation_fields
 
 
 def test_refresh_main_drift_rolls_back_before_push(tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .common import is_sha
+from .github_prs import pr_head_repository_matches
 from .issue_profiles import resolve_leaf_issue_profile
 from .models import (
     LiveState,
@@ -456,6 +457,12 @@ class PhaseEligibilityResolver:
                 and state.open_pr.get("headRefName") != state.target_branch
             ):
                 reasons.append("OPEN PR head branch must be the resolved Task branch")
+            if state.open_pr and not pr_head_repository_matches(
+                state.open_pr, state.repository
+            ):
+                reasons.append(
+                    "OPEN PR head repository must be the resolved repository"
+                )
             if state.remote_issue_oid != pr_head:
                 reasons.append("remote Task branch must match current OPEN PR head")
             if state.local_issue_branch is None:

@@ -8,6 +8,7 @@ from typing import Any, Final
 from .common import CommandResult, ProgressReporter, is_sha, read_json_text, stderr_tail
 from .effects import CommitCurrentTreeEffect
 from .eligibility import PhaseDecision, PhaseEligibilityResolver
+from .github_prs import pr_head_repository_matches
 from .issue_profiles import resolve_leaf_issue_profile
 from .models import (
     BASE_BRANCH,
@@ -45,7 +46,8 @@ _GIT_OPERATION_MARKERS: Final = (
 )
 
 _PR_IDENTITY_FIELDS: Final = (
-    "number,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid"
+    "number,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,"
+    "headRepository"
 )
 
 
@@ -371,6 +373,7 @@ class CandidateRefresher:
             or current.get("baseRefOid") != frozen_main
             or current.get("headRefName") != branch
             or current.get("headRefOid") != start_head
+            or not pr_head_repository_matches(current, state.repository)
         ):
             raise LckStopError(
                 "Candidate Refresh PR/base/head identity changed before push"
@@ -522,6 +525,7 @@ class CandidateRefresher:
             or pr.get("baseRefOid") != frozen_main
             or pr.get("headRefName") != branch
             or pr.get("headRefOid") != start_head
+            or not pr_head_repository_matches(pr, current_state.repository)
         ):
             details = "; ".join(current_decision.reasons)
             raise LckStopError(
@@ -569,6 +573,7 @@ class CandidateRefresher:
             or pr.get("baseRefOid") != frozen_main
             or pr.get("headRefName") != branch
             or pr.get("headRefOid") != new_head
+            or not pr_head_repository_matches(pr, final_state.repository)
         ):
             details = "; ".join(final_decision.reasons)
             raise LckStopError(
@@ -626,6 +631,10 @@ class CandidateRefresher:
                 or not is_sha(frozen_main_value)
             ):
                 raise LckStopError("Candidate Refresh identity is incomplete")
+            if not pr_head_repository_matches(pr, state.repository):
+                raise LckStopError(
+                    "Candidate Refresh OPEN PR head repository is not this repository"
+                )
             pr_number = pr.get("number")
             if not isinstance(pr_number, int) or isinstance(pr_number, bool):
                 raise LckStopError("Candidate Refresh PR number is unavailable")
