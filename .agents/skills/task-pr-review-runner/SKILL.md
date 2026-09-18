@@ -12,11 +12,47 @@ number mentioned by the maintainer is intent, not authority.
 Read applicable `AGENTS.md` and `.agents/policies/command-execution.md`. Read only
 the Review portions needed from `.agents/policies/workflow-evidence.md`,
 `docs/workflows/lck/review-and-remediation.md`, and
-`docs/workflows/lck/lifecycle.md`. Those owners define execution routes, 30-second
-waits, validation/evidence consumption, freshness, and shared lifecycle semantics.
+`docs/workflows/lck/lifecycle.md`. Those owners define validation/evidence
+consumption, freshness, and shared lifecycle semantics.
 
 Before the first LCK command, verify `command -v uv`, `uv --version`, and
 `uv run --frozen python --version`. A launcher failure is not a Review verdict.
+
+## Execution route contract
+
+`review prepare`, `review complete`, and `merge preflight` (including the
+`merge-preflight` compatibility alias) use `sandbox-first`. These operations
+keep the source repository read-only; Review's temporary clone and ignored LCK
+runtime state remain operation-owned exceptions defined by this contract. This
+classification is selected from the exact LCK invocation before it starts.
+
+The route only selects the execution context for a command already authorized
+by this Skill and LCK. It never grants GitHub, lifecycle, merge, or write
+authority, and Review must not be rerouted through a generic elevated `uv`,
+`python`, `git`, or `gh` rule. Preserve the exact-context retry rules below for
+a genuine `sandbox-denied` or `credential-isolated` result.
+
+Creating, sealing, or removing the Review clone is expected to work in the
+normal sandbox and is not by itself a reason to elevate the LCK command. A known
+required write route should be correct on the first formal call; do not
+intentionally run a known-failing sandbox probe before an approved exact route.
+
+`review prepare` and formal workflow validation are known heavyweight LCK
+operations and use a fixed 30-second wait window for the first wait and every
+subsequent still-running poll (for example,
+`write_stdin`/`yield_time_ms=30000`). A process that exits earlier is returned
+immediately; the 30-second value is a maximum wait window, not a minimum
+runtime. Adaptive polling intervals are not part of the workflow contract.
+
+Codex-only failure classes are `sandbox-denied` (local process, network, or an
+exact ignored output path blocked) and `credential-isolated` (credentials
+unavailable only in the current context). Only these two justify an
+exact-context retry; a real command failure never justifies a broader-permission
+retry or an equivalent direct command chain.
+
+Read the optional ignored `.agents/execution-profile.local.toml` when present.
+It may route only exact documented LCK invocations and cannot change reviewed
+SHAs, findings, severity, verdict, or the read-only boundary.
 
 ## Prepare the exact review target
 

@@ -114,10 +114,12 @@ AGENTS.md
 .agents/policies/command-execution.md
 .agents/policies/workflow-evidence.md
 .agents/skills/task-delivery-runner/SKILL.md
+.agents/skills/task-delivery-runner/references/*.md
 .agents/skills/task-pr-review-runner/SKILL.md
 .agents/skills/task-closeout/SKILL.md
 .agents/skills/feature-completion-audit/SKILL.md
 .claude/skills/task-delivery-runner/SKILL.md       # when Claude is supported
+.claude/skills/task-delivery-runner/references/*.md
 .claude/skills/task-pr-review-runner/SKILL.md
 .claude/skills/task-closeout/SKILL.md
 .claude/skills/feature-completion-audit/SKILL.md
@@ -166,7 +168,7 @@ adaptation and conventions that remain TraceQuant-specific.
 | LCK CLI and kernel | `tools/lck/` as a coherent source snapshot, invoked with `uv run --frozen python -m tools.lck` | Repository root, default branch, GitHub identity, Issue/PR resolution, permissions, paths, and supported leaf profiles | `PhoenixSss/tracequant` identity and its current four-profile registry |
 | Profile policies and forms | Generic typed-profile pattern and shared Issue-form parsing | Canonical `type:*` labels, form fields, blocker rules, candidate paths, and any profile policy | TraceQuant's `type:task`, `type:bug`, `type:documentation`, `type:research` labels and policy semantics |
 | Workflow guidance | Shared lifecycle and Review principles in the current development docs | Rewrite examples, paths, maintainer instructions, and provider adapters for the adopting repository | TraceQuant's exact `AGENTS.md`, Project lifecycle, branch namespaces, and Issue relationships |
-| Agent Skills | Semantic Skill structure and the rule that Skills invoke LCK rather than own lifecycle state | Copy only the supported provider's current Skills, update discovery paths and prompts, and validate them | `.agents/skills/`, `.claude/skills/`, and their TraceQuant-specific provider/sandbox instructions |
+| Agent Skills | Semantic Skill structure and the rule that Skills invoke LCK rather than own lifecycle state | Copy only the supported provider's current Skills, update discovery paths and prompts, and validate them | `.agents/skills/`, `.claude/skills/`, and their TraceQuant-specific provider-only Skill sections |
 | Validation | Bounded validation, exact-head identity, static CI job policy, and redacted local evidence principles | Toolchain commands, language checks, CI job names, base-commit policy, permissions, and ignored output roots | `.github/workflows/ci.yml`, `tools/lck/config/validation_profiles.json`, and `.codex/rules/tracequant-wsl-validation.rules` as currently named |
 | GitHub lifecycle | Issue → Delivery → human stop → Independent Review → manual merge → Closeout model | Issue state labels, Project fields/statuses, PR policy, branch namespace, authentication, and repository permissions | TraceQuant's `codex:ready`, Project statuses, `documentation/<Issue>-<slug>` naming, and current GitHub metadata |
 | Local state and evidence | Keep runtime/evidence local, bounded, ignored, and separate from authority | Configure and verify equivalent ignored paths; never stage local state | `.workflow.local/lck/`, `.agents/validation.local/`, and `.agents/evidence.local/` ownership rules |

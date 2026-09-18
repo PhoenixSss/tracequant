@@ -15,6 +15,11 @@ import pytest
 from tools.lck import cli, issue_profiles
 from tools.lck import state as lck_state
 from tools.lck.common import CommandResult, CommandRunner, sha256_json
+from tools.lck.skill_audit import (
+    expected_provider_package,
+    package_text,
+    provider_package,
+)
 
 from .support import FakeRunner
 
@@ -313,14 +318,16 @@ def test_typed_leaf_profiles_share_the_restored_kernel() -> None:
     assert len({profile.profile_id for profile in profiles.values()}) == 4
 
 
-def test_agent_assets_have_one_canonical_source_and_thin_adapters() -> None:
+def test_agent_assets_have_one_canonical_source_and_mirrored_provider_skills() -> None:
     for skill in SKILLS:
         canonical = ROOT / ".agents" / "skills" / skill / "SKILL.md"
-        adapter = ROOT / ".claude" / "skills" / skill / "SKILL.md"
         assert canonical.is_file()
-        adapter_text = adapter.read_text(encoding="utf-8")
-        assert canonical.relative_to(ROOT).as_posix() in adapter_text
-        assert len(adapter_text.splitlines()) < 15
+        adapter = provider_package(ROOT, skill)
+        assert adapter["SKILL.md"]
+        expected, difference = expected_provider_package(ROOT, skill)
+        assert adapter == expected
+        assert difference
+        assert ".agents/skills" not in package_text(adapter)
         assert "uv run --frozen python -m tools.lck" in canonical.read_text(
             encoding="utf-8"
         )

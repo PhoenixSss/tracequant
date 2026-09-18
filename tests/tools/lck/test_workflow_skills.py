@@ -163,7 +163,6 @@ def test_workflow_skills_follow_astra_content_guidance() -> None:
         )
         assert _description(canonical) == expected_description
         assert _description(adapter) == expected_description
-        assert f".agents/skills/{name}/SKILL.md" in adapter
 
     for intent, skill in (
         ("implementing an Issue", "task-delivery-runner"),

@@ -71,8 +71,8 @@ standalone clone 内。
 
 ## Skill identity 验证
 
-当前 Codex / Claude Skill 路径、共享语义引用、单一机械入口与每个文件的
-SHA-256 由以下只读审计统一验证：
+当前 Codex / Claude Skill 包路径、共享语义引用、单一机械入口与每个 Skill
+包的 SHA-256 由以下只读审计统一验证：
 
 ```bash
 uv run --frozen python -m tools.lck.skill_audit
@@ -89,15 +89,15 @@ semantic owner；其历史内容仅通过 Git 历史恢复。
 | `AGENTS.md` | ACTIVE | repository invariants、leaf-first retrieval 与 natural-language workflow entry |
 | `docs/workflows/lck/lifecycle.md` | ACTIVE | shared lifecycle、readiness、Delivery、Closeout 与 Feature audit semantics |
 | `docs/workflows/lck/review-and-remediation.md` | ACTIVE | Independent Review semantics 与 verdict/remediation contract |
-| `CLAUDE.md` | ACTIVE | Claude-specific thin adapter 与 Skill discovery |
-| `.agents/skills/*-runner/`、`.agents/skills/task-closeout/`、`.agents/skills/feature-completion-audit/` | ACTIVE | Codex executable procedures |
-| `.claude/skills/` current four Skills | ACTIVE | Claude executable procedures |
+| `CLAUDE.md` | ACTIVE | Claude provider adapter、Codex/Claude 边界说明与 Skill discovery |
+| `.agents/skills/*-runner/`、`.agents/skills/task-closeout/`、`.agents/skills/feature-completion-audit/` | ACTIVE | Codex executable procedures（含 Codex 专有 `## Execution route contract`） |
+| `.claude/skills/` current four Skills | ACTIVE | Claude provider Skills；canonical Skill 包（`SKILL.md` + `references/*.md`）的镜像副本，仅差一个已声明的 provider 专有段 |
 | `tools/lck/shared_facts.py` | ACTIVE | authoritative profile-neutral Git/GitHub fact acquisition and normalization |
 | `tools/lck/wsl2_validation_runner.py`、`validation_runner.py`、validation profiles 与 current tests | ACTIVE | deterministic validation plans、exit codes 与 bounded diagnostics |
 | `tools/lck/feature_audit.py` | AUDIT-ONLY | Feature audit evidence and adapter over shared facts；不具备 Task lifecycle authority |
 | pre-LCK Task Evidence Runner、Task profiles、Codex Rules、dedicated Runner/Rules tests 与 `self_review.py` binder/test | REMOVED | 不属于当前 workflow entry point；需要时仅从 Git 历史恢复 |
 | retired `.agents/skills/task-delivery/`、`.agents/skills/task-pr-review/` | DEAD / ABSENT | Legacy executable Skills 已退役；历史内容由 Git 历史及 frozen evidence 保留 |
-| Claude current Skills 中的 Codex/Claude permission-boundary 说明 | COMPATIBILITY ONLY | cross-agent adapter guidance; retained intentionally while both agents are supported |
+| `CLAUDE.md` 中的 Codex/Claude provider 边界说明 | COMPATIBILITY ONLY | cross-agent adapter guidance; retained intentionally while both agents are supported |
 | retired Skill-variant provenance JSON/doc/tool/test bundle | DEAD / ABSENT | replaced by `skill_path_audit.py`; all stale current references removed |
 | removed trusted-runner、runtime usage-measurement 与 runtime manifest machinery | DEAD / ABSENT | no current responsibility; absence is regression-tested |
 

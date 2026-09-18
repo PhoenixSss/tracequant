@@ -18,6 +18,7 @@ from tools.lck import review_workspace as lck_review_workspace
 from tools.lck import state as lck_state
 from tools.lck.common import CommandResult, CommandRunner
 from tools.lck.operation_lock import TaskOperationLock
+from tools.lck.skill_audit import package_text, provider_package
 
 from .support import (
     SHA,
@@ -1252,9 +1253,9 @@ def test_task_operation_lock_serializes_lifecycle_operations(tmp_path: Path) -> 
 
 def test_refresh_has_no_persistent_session_or_abort_surface() -> None:
     source = Path(lck_refresh.__file__).read_text(encoding="utf-8")
-    claude_adapter = (
-        Path(__file__).parents[3] / ".claude/skills/task-delivery-runner/SKILL.md"
-    ).read_text(encoding="utf-8")
+    claude_adapter = package_text(
+        provider_package(Path(__file__).parents[3], "task-delivery-runner")
+    )
     assert "RefreshPreparer" not in source
     assert "RefreshCompleter" not in source
     assert "RefreshAborter" not in source

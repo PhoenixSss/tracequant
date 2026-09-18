@@ -23,6 +23,10 @@ Natural-language entries route to the canonical procedures:
 - closing out a manually merged PR: `.agents/skills/task-closeout/SKILL.md`;
 - auditing Feature completion: `.agents/skills/feature-completion-audit/SKILL.md`.
 
+Codex reads those `.agents/skills/` paths directly; Claude reads the mirrored
+provider copies under `.claude/skills/<name>/SKILL.md` and must not use these
+canonical paths as its own reading target.
+
 The stable lifecycle entry is:
 
 ```bash

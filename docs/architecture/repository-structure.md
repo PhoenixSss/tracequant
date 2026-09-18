@@ -19,7 +19,7 @@ Every tracked top-level path has one purpose and owner:
 | --- | --- | --- |
 | `.github/` | Repository-native CI and Issue metadata | Maintainers |
 | `.agents/` | Canonical Agent procedures and LCK execution/evidence policies | LCK maintainers |
-| `.claude/` | Thin Claude-specific adapters to canonical Agent procedures | LCK maintainers |
+| `.claude/` | Claude provider Skills mirrored from canonical Agent procedures | LCK maintainers |
 | `.codex/` | Thin Codex execution-policy adapter | LCK maintainers |
 | `config/` | Safe configuration boundary documentation | TraceQuant configuration owner |
 | `docs/` | Current architecture, dependency policy, evidence, and release identity | Maintainers and named capability owners |
@@ -27,7 +27,7 @@ Every tracked top-level path has one purpose and owner:
 | `tests/` | Product, architecture, and isolated repository-tooling tests | TraceQuant engineering and LCK maintainers |
 | `tools/lck/` | Repository-only Local Control Kernel implementation and configuration | LCK maintainers |
 | `AGENTS.md` | Agent entry routing and repository ownership boundaries | Maintainers |
-| `CLAUDE.md` | Thin Claude adapter to `AGENTS.md` and canonical Skills | Maintainers |
+| `CLAUDE.md` | Claude provider adapter to `AGENTS.md` and `.claude/skills/` | Maintainers |
 | `.gitattributes` | Cross-platform tracked-text normalization | Maintainers |
 | `.env.example` | Safe statement of the currently empty environment surface | TraceQuant configuration owner |
 | `.gitignore` | Closed set of disposable checkout-local output and secret-shaped local files | Maintainers |

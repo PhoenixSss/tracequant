@@ -5,7 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
-from tools.lck.skill_audit import SKILLS, audit
+from tools.lck.skill_audit import (
+    SKILLS,
+    audit,
+    expected_provider_package,
+    package_text,
+    provider_package,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -29,20 +35,21 @@ def test_natural_language_routes_to_canonical_skills() -> None:
     assert "uv run --frozen python -m tools.lck --help" in agents
 
 
-def test_claude_is_a_thin_agent_adapter() -> None:
+def test_claude_is_a_provider_adapter() -> None:
     claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     assert "AGENTS.md" in claude
     assert ".claude/settings.json" in claude
+    assert ".codex/rules/" in claude
     assert len(claude.splitlines()) < 20
 
 
-def test_each_claude_skill_points_to_one_canonical_source() -> None:
+def test_each_claude_skill_mirrors_one_canonical_package() -> None:
     for skill in SKILLS:
-        adapter = (ROOT / ".claude" / "skills" / skill / "SKILL.md").read_text(
-            encoding="utf-8"
-        )
-        assert f".agents/skills/{skill}/SKILL.md" in adapter
-        assert len(adapter.splitlines()) < 15
+        adapter = provider_package(ROOT, skill)
+        expected, difference = expected_provider_package(ROOT, skill)
+        assert adapter == expected
+        assert difference
+        assert ".agents/skills" not in package_text(adapter)
 
 
 def test_skill_audit_accepts_the_current_layout() -> None:

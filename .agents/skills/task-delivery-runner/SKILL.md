@@ -8,6 +8,44 @@ description: Deliver a ready leaf Issue, remediate an explicitly identified fail
 Use this Skill for one existing leaf Issue explicitly named by the maintainer. The
 Issue number is the mechanical key; the current GitHub title and body are canonical.
 
+## Execution route contract
+
+Select the route from the exact LCK invocation before running it. Known
+Git-metadata or GitHub-lifecycle write operations use `elevated-first`:
+`delivery prepare`, `delivery complete`, `remediation prepare`,
+`remediation complete`, `refresh`, and `closeout`. Source-repository read-only
+operations use `sandbox-first`: `status`, `review prepare`, `review complete`,
+`remediation no-change`, and `merge preflight` (including its compatibility
+alias `merge-preflight`).
+
+Read the optional ignored `.agents/execution-profile.local.toml` when present.
+It may route only exact documented runner invocations and cannot alter Task/PR
+IDs, base/head SHAs, repository, output paths, or profile semantics. The route
+classification is deterministic and is resolved before the command starts; an
+Agent must not probe the normal sandbox first when the matching rule is
+`elevated-first`. The profile must not contain a generic `uv`, `python`, `git`,
+or `gh` write rule. Explicit read-only rules may remain `sandbox-first`,
+including the source-repository boundary of Independent Review.
+
+This route only selects the execution context for a command already authorized
+by this Skill and LCK; it does not grant branch, commit, push, PR, Project,
+merge, cleanup, or lifecycle authority. Do not intentionally run a known write
+operation in the sandbox to obtain a predictable `.git/index.lock` or
+equivalent failure before using its approved route.
+
+Known heavyweight LCK operations (`delivery complete`, `refresh`,
+`review prepare`, and formal workflow validation) use a fixed 30-second wait
+window for the first wait and every subsequent still-running poll (for example,
+`write_stdin`/`yield_time_ms=30000`). A process that exits earlier is returned
+immediately; the 30-second value is a maximum wait window, not a minimum
+runtime. Adaptive polling intervals are not part of the workflow contract.
+
+Codex-only failure classes are `sandbox-denied` (local process, network, or an
+exact ignored output path blocked) and `credential-isolated` (credentials
+unavailable only in the current context). Only these two justify an
+exact-context retry; a real command failure never justifies a broader-permission
+retry or an equivalent direct command chain.
+
 ## Select one workflow
 
 Choose exactly one branch and read only its linked instructions:
@@ -23,7 +61,7 @@ Choose exactly one branch and read only its linked instructions:
 Do not infer Remediation from an open PR, failing checks, comments, or an old review.
 If neither branch can be selected safely, stop at a Human Gate.
 
-The routed LCK entry points are `delivery prepare` / `delivery complete`,
+The LCK entry points are `delivery prepare` / `delivery complete`,
 `remediation prepare` / `remediation no-change` / `remediation complete`, and
 the one-shot `refresh <TASK>` operation.
 Their exact commands in the selected reference use the stable
@@ -34,8 +72,8 @@ Their exact commands in the selected reference use the stable
 Read applicable `AGENTS.md`. Use these canonical owners only when their decisions
 apply to the selected branch:
 
-- `.agents/policies/command-execution.md` for execution route, launcher preflight,
-  failure classification, and 30-second waits;
+- `.agents/policies/command-execution.md` for launcher preflight and failure
+  classification;
 - `.agents/policies/context-retrieval.md` for scoped context acquisition;
 - `.agents/policies/workflow-evidence.md` for validation and evidence consumption;
 - `docs/workflows/lck/lifecycle.md` and, for Remediation,
