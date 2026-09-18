@@ -167,7 +167,12 @@ class _PrObservingRunner(CommandRunner):
         pr_head_repository_override: str | None = None,
         drift_main_before_push: bool = False,
         drift_remote_before_push: bool = False,
+        drift_remote_at_push: bool = False,
+        drift_remote_at_compensation: bool = False,
         report_unknown_after_successful_push: bool = False,
+        fail_compensating_push: bool = False,
+        report_compensation_failure_after_success: bool = False,
+        unobservable_after_compensation: bool = False,
     ) -> None:
         super().__init__(root)
         self.root = root
@@ -176,8 +181,30 @@ class _PrObservingRunner(CommandRunner):
         self.pr_head_repository_override = pr_head_repository_override
         self.drift_main_before_push = drift_main_before_push
         self.drift_remote_before_push = drift_remote_before_push
+        self.drift_remote_at_push = drift_remote_at_push
+        self.drift_remote_at_compensation = drift_remote_at_compensation
         self.report_unknown_after_successful_push = report_unknown_after_successful_push
+        self.fail_compensating_push = fail_compensating_push
+        self.report_compensation_failure_after_success = (
+            report_compensation_failure_after_success
+        )
+        self.unobservable_after_compensation = unobservable_after_compensation
         self.commands: list[tuple[str, ...]] = []
+
+    def _move_remote_task_ref(self, head_sha: str) -> None:
+        """Simulate an independent writer advancing the remote Task branch."""
+        subprocess.run(
+            [
+                "git",
+                f"--git-dir={self.root.parent / 'remote.git'}",
+                "update-ref",
+                f"refs/heads/{self.branch}",
+                head_sha,
+            ],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
 
     def run(self, argv: Any, *, command_id: str, **kwargs: Any) -> CommandResult:
         command = tuple(str(item) for item in argv)
@@ -200,19 +227,16 @@ class _PrObservingRunner(CommandRunner):
             command_id == "lck-refresh-remote-before-push"
             and self.drift_remote_before_push
         ):
-            remote = self.root.parent / "remote.git"
-            subprocess.run(
-                [
-                    "git",
-                    f"--git-dir={remote}",
-                    "update-ref",
-                    f"refs/heads/{self.branch}",
-                    _git(self.root, "rev-parse", "main"),
-                ],
-                check=True,
-                text=True,
-                capture_output=True,
-            )
+            self._move_remote_task_ref(_git(self.root, "rev-parse", "main"))
+        if command_id == "lck-refresh-push-exact-lease" and self.drift_remote_at_push:
+            # Advance the remote ref after the pre-push check but immediately before
+            # the real push, so the exact lease itself is what rejects the update.
+            self._move_remote_task_ref(_git(self.root, "rev-parse", "main"))
+        if (
+            command_id == "lck-refresh-remote-before-compensation"
+            and self.drift_remote_at_compensation
+        ):
+            self._move_remote_task_ref(_git(self.root, "rev-parse", "main"))
         if command[:3] == ("gh", "pr", "view"):
             payload = {
                 "number": 200,
@@ -239,6 +263,25 @@ class _PrObservingRunner(CommandRunner):
         if (
             command_id == "lck-refresh-remote-after-failed-push"
             and self.report_unknown_after_successful_push
+        ):
+            return CommandResult(command_id, command, 1, "", "network unavailable")
+        if (
+            command_id == "lck-refresh-compensating-lease-push"
+            and self.report_compensation_failure_after_success
+        ):
+            completed = super().run(argv, command_id=command_id, **kwargs)
+            assert completed.returncode == 0
+            return CommandResult(command_id, command, 1, "", "connection lost")
+        if (
+            command_id == "lck-refresh-compensating-lease-push"
+            and self.fail_compensating_push
+        ):
+            return CommandResult(
+                command_id, command, 1, "", "remote rejected the update"
+            )
+        if (
+            command_id == "lck-refresh-remote-after-compensation"
+            and self.unobservable_after_compensation
         ):
             return CommandResult(command_id, command, 1, "", "network unavailable")
         return super().run(argv, command_id=command_id, **kwargs)
@@ -269,14 +312,24 @@ class _Snapshots:
         pre_push_project_status: str = "Review",
         final_project_status: str = "Review",
         pre_push_body_sha: str | None = None,
+        final_body_sha: str | None = None,
         pre_push_blocked: bool = False,
+        final_blocked: bool = False,
+        final_remote_main_sha: str | None = None,
+        final_pr_state: str | None = None,
+        final_pr_head_override: str | None = None,
     ) -> None:
         self.state = state
         self.root = root
         self.pre_push_project_status = pre_push_project_status
         self.final_project_status = final_project_status
         self.pre_push_body_sha = pre_push_body_sha
+        self.final_body_sha = final_body_sha
         self.pre_push_blocked = pre_push_blocked
+        self.final_blocked = final_blocked
+        self.final_remote_main_sha = final_remote_main_sha
+        self.final_pr_state = final_pr_state
+        self.final_pr_head_override = final_pr_head_override
         self.calls = 0
 
     def acquire(
@@ -285,20 +338,21 @@ class _Snapshots:
         self.calls += 1
         state = self.state
         if self.calls > 1:
+            final = self.calls > 2
             head = _git(self.root, "rev-parse", "HEAD")
             remote_head = _remote_head(self.root, state.target_branch)
             issue = dict(state.issue or {})
             issue["project_status"] = (
-                self.pre_push_project_status
-                if self.calls == 2
-                else self.final_project_status
+                self.final_project_status if final else self.pre_push_project_status
             )
+            body_sha = self.final_body_sha if final else self.pre_push_body_sha
             task_contract = dict(state.task_contract or {})
+            if body_sha is not None:
+                issue["body_sha256"] = body_sha
+                task_contract["body_sha256"] = body_sha
             relationships = state.relationships
-            if self.calls == 2 and self.pre_push_body_sha is not None:
-                issue["body_sha256"] = self.pre_push_body_sha
-                task_contract["body_sha256"] = self.pre_push_body_sha
-            if self.calls == 2 and self.pre_push_blocked:
+            blocked = self.final_blocked if final else self.pre_push_blocked
+            if blocked:
                 relationships = _relationships(
                     blocked_by={
                         "items": [{"number": 88, "state": "OPEN"}],
@@ -307,13 +361,22 @@ class _Snapshots:
                     }
                 )
             pr = dict(state.open_pr or {})
-            pr["headRefOid"] = remote_head
+            pr["headRefOid"] = (
+                self.final_pr_head_override
+                if final and self.final_pr_head_override is not None
+                else remote_head
+            )
+            if final and self.final_pr_state is not None:
+                pr["state"] = self.final_pr_state
+            git = {**state.git, "head_sha": head, "clean": True}
+            if final and self.final_remote_main_sha is not None:
+                git["remote_main_sha"] = self.final_remote_main_sha
             state = replace(
                 state,
                 issue=issue,
                 leaf_contract=task_contract,
                 relationships=relationships,
-                git={**state.git, "head_sha": head, "clean": True},
+                git=git,
                 local_issue_head=head,
                 remote_issue_oid=remote_head,
                 open_pr=pr,
@@ -351,7 +414,12 @@ def _refresher(
     pre_push_project_status: str = "Review",
     final_project_status: str = "Review",
     pre_push_body_sha: str | None = None,
+    final_body_sha: str | None = None,
     pre_push_blocked: bool = False,
+    final_blocked: bool = False,
+    final_remote_main_sha: str | None = None,
+    final_pr_state: str | None = None,
+    final_pr_head_override: str | None = None,
     real_snapshot: bool = False,
 ) -> tuple[_ControlledRefresher, _PrObservingRunner]:
     selected = runner or _PrObservingRunner(root, branch)
@@ -370,7 +438,12 @@ def _refresher(
                 pre_push_project_status=pre_push_project_status,
                 final_project_status=final_project_status,
                 pre_push_body_sha=pre_push_body_sha,
+                final_body_sha=final_body_sha,
                 pre_push_blocked=pre_push_blocked,
+                final_blocked=final_blocked,
+                final_remote_main_sha=final_remote_main_sha,
+                final_pr_state=final_pr_state,
+                final_pr_head_override=final_pr_head_override,
             ),
         )
     return refresher, selected
@@ -472,9 +545,174 @@ def test_refresh_front_door_uses_registered_operation_snapshot_profile(
     assert result.operation_snapshot.fact_profile == "refresh"
 
 
-def test_refresh_post_push_drift_stops_with_boundary_and_updated_candidate(
+@pytest.mark.parametrize(
+    "final_drift",
+    [
+        {"final_project_status": "In Progress"},
+        {"final_body_sha": "e" * 64},
+        {"final_blocked": True},
+        {"final_remote_main_sha": "9" * 40},
+        {"final_pr_state": "CLOSED"},
+        {"final_pr_head_override": "8" * 40},
+    ],
+)
+def test_refresh_post_push_drift_compensates_to_original_identity(
+    tmp_path: Path, final_drift: dict[str, Any]
+) -> None:
+    root, branch, start_head, main_head = _repository(tmp_path)
+    refresher, _runner = _refresher(
+        root, branch, _state(branch, start_head, main_head), **final_drift
+    )
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="push completed but final identity verification failed",
+    ):
+        refresher.refresh(159)
+
+    assert _git(root, "branch", "--show-current") == branch
+    assert _git(root, "rev-parse", "HEAD") == start_head
+    assert _git(root, "status", "--porcelain=v1") == ""
+    assert _remote_head(root, branch) == start_head
+    assert refresher.last_push_outcome == "not-updated"
+    assert refresher.last_head_sha != start_head
+    assert [effect.action for effect in refresher.last_effects] == [
+        "force-with-exact-lease",
+        "compensated-to-original-head",
+    ]
+    assert (
+        lck_review_workspace.ReviewInvocationStore(root).read_review_required(159)
+        is None
+    )
+    assert refresher.last_fresh_review_required is False
+
+
+def test_refresh_post_push_drift_restores_prior_boundary(tmp_path: Path) -> None:
+    root, branch, start_head, main_head = _repository(tmp_path)
+    store = lck_review_workspace.ReviewInvocationStore(root)
+    store.write_review_required(159, store.new_id(), start_head)
+    prior_boundary = store.read_review_required(159)
+    refresher, _runner = _refresher(
+        root,
+        branch,
+        _state(branch, start_head, main_head),
+        final_project_status="In Progress",
+    )
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="push completed but final identity verification failed",
+    ):
+        refresher.refresh(159)
+
+    assert store.read_review_required(159) == prior_boundary
+    assert _git(root, "rev-parse", "HEAD") == start_head
+    assert _remote_head(root, branch) == start_head
+    assert refresher.last_fresh_review_required is True
+
+
+def test_refresh_post_push_drift_never_overwrites_external_remote_head(
     tmp_path: Path,
 ) -> None:
+    root, branch, start_head, main_head = _repository(tmp_path)
+    store = lck_review_workspace.ReviewInvocationStore(root)
+    store.write_review_required(159, store.new_id(), start_head)
+    prior_boundary = store.read_review_required(159)
+    runner = _PrObservingRunner(root, branch, drift_remote_at_compensation=True)
+    refresher, runner = _refresher(
+        root,
+        branch,
+        _state(branch, start_head, main_head),
+        runner=runner,
+        final_project_status="In Progress",
+    )
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="push completed but final identity verification failed",
+    ):
+        refresher.refresh(159)
+
+    # The independent writer's head is reported, and no compensating push ran.
+    assert _remote_head(root, branch) == main_head
+    assert (
+        len([command for command in runner.commands if command[:2] == ("git", "push")])
+        == 1
+    )
+    assert refresher.last_push_outcome == "not-updated-external-drift"
+    assert refresher.last_effects[-1].action == "compensation-blocked-by-external-drift"
+    assert refresher.last_effects[-1].details["observed_head_sha"] == main_head
+    # Everything LCK controls returns to the pre-call identity.
+    assert _git(root, "rev-parse", "HEAD") == start_head
+    assert _git(root, "status", "--porcelain=v1") == ""
+    assert store.read_review_required(159) == prior_boundary
+
+
+def test_refresh_post_push_drift_preserves_unproven_partial_effect(
+    tmp_path: Path,
+) -> None:
+    root, branch, start_head, main_head = _repository(tmp_path)
+    runner = _PrObservingRunner(
+        root,
+        branch,
+        fail_compensating_push=True,
+        unobservable_after_compensation=True,
+    )
+    refresher, _runner = _refresher(
+        root,
+        branch,
+        _state(branch, start_head, main_head),
+        runner=runner,
+        final_project_status="In Progress",
+    )
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="push completed but final identity verification failed",
+    ):
+        refresher.refresh(159)
+
+    new_head = _git(root, "rev-parse", "HEAD")
+    assert new_head != start_head
+    assert _remote_head(root, branch) == new_head
+    assert refresher.last_push_outcome == "updated"
+    assert refresher.last_effects[-1].action == "compensation-unproven"
+    boundary = lck_review_workspace.ReviewInvocationStore(root).read_review_required(
+        159
+    )
+    assert boundary is not None
+    assert boundary["refreshed_head"] == new_head
+    assert refresher.last_fresh_review_required is True
+
+
+def test_refresh_post_push_drift_accepts_compensation_after_command_failure(
+    tmp_path: Path,
+) -> None:
+    root, branch, start_head, main_head = _repository(tmp_path)
+    runner = _PrObservingRunner(
+        root, branch, report_compensation_failure_after_success=True
+    )
+    refresher, _runner = _refresher(
+        root,
+        branch,
+        _state(branch, start_head, main_head),
+        runner=runner,
+        final_project_status="In Progress",
+    )
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="push completed but final identity verification failed",
+    ):
+        refresher.refresh(159)
+
+    assert _git(root, "rev-parse", "HEAD") == start_head
+    assert _remote_head(root, branch) == start_head
+    assert refresher.last_push_outcome == "not-updated"
+    assert refresher.last_effects[-1].action == "compensated-to-original-head"
+
+
+def test_refresh_post_push_drift_receipt_records_compensation(tmp_path: Path) -> None:
     root, branch, start_head, main_head = _repository(tmp_path)
     refresher, _runner = _refresher(
         root,
@@ -490,15 +728,6 @@ def test_refresh_post_push_drift_stops_with_boundary_and_updated_candidate(
     ):
         refresher.refresh(159)
 
-    new_head = _git(root, "rev-parse", "HEAD")
-    assert new_head != start_head
-    assert _remote_head(root, branch) == new_head
-    assert refresher.last_effects[0].effect == "refresh_remote_branch"
-    boundary = lck_review_workspace.ReviewInvocationStore(root).read_review_required(
-        159
-    )
-    assert boundary is not None
-    assert boundary["refreshed_head"] == new_head
     assert refresher.last_snapshot is not None
     assert refresher.last_snapshot.state.project_status == "In Progress"
 
@@ -514,12 +743,13 @@ def test_refresh_post_push_drift_stops_with_boundary_and_updated_candidate(
         store=receipt_store,
     )
     receipt = receipt_store.read(payload["receipt_reference"])
-    assert receipt["operation_id"] == boundary["source_refresh_operation_id"]
+    assert receipt["operation_id"] == refresher.operation_id
     assert receipt["operation_snapshot"] == refresher.last_snapshot.to_dict()
     assert receipt["audit"]["old_base_sha"] == refresher.last_old_base_sha
     assert receipt["audit"]["validated_tree_oid"] == (refresher.last_validated_tree_oid)
-    assert receipt["audit"]["head_sha"] == new_head
-    assert receipt["audit"]["fresh_review_required"] is True
+    assert receipt["audit"]["head_sha"] == refresher.last_head_sha
+    assert receipt["audit"]["push_outcome"] == "not-updated"
+    assert receipt["audit"]["fresh_review_required"] is False
 
 
 def test_refresh_task_contract_drift_stops_before_push(tmp_path: Path) -> None:
@@ -886,6 +1116,41 @@ def test_refresh_exact_lease_failure_rolls_back_local_candidate(tmp_path: Path) 
 
     assert _git(root, "rev-parse", "HEAD") == start_head
     assert _git(root, "status", "--porcelain=v1") == ""
+    assert (
+        lck_review_workspace.ReviewInvocationStore(root).read_review_required(159)
+        is None
+    )
+
+
+def test_refresh_lease_rejected_by_push_race_restores_original_state(
+    tmp_path: Path,
+) -> None:
+    """An independent writer moving the ref inside the precheck/push window must
+    not leave the local branch on an unpushed candidate."""
+    root, branch, start_head, main_head = _repository(tmp_path)
+    runner = _PrObservingRunner(root, branch, drift_remote_at_push=True)
+    refresher, runner = _refresher(
+        root, branch, _state(branch, start_head, main_head), runner=runner
+    )
+
+    with pytest.raises(
+        lck_models.LckStopError,
+        match="moved by an independent writer before the exact-lease push",
+    ):
+        refresher.refresh(159)
+
+    assert _git(root, "branch", "--show-current") == branch
+    assert _git(root, "rev-parse", "HEAD") == start_head
+    assert _git(root, "status", "--porcelain=v1") == ""
+    # The independent writer's head is reported, never overwritten.
+    assert _remote_head(root, branch) == main_head
+    assert (
+        len([command for command in runner.commands if command[:2] == ("git", "push")])
+        == 1
+    )
+    assert refresher.last_push_outcome == "not-updated-external-drift"
+    assert refresher.last_effects[-1].action == "not-current-on-remote"
+    assert refresher.last_effects[-1].details["observed_head_sha"] == main_head
     assert (
         lck_review_workspace.ReviewInvocationStore(root).read_review_required(159)
         is None

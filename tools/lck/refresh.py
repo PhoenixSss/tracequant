@@ -50,6 +50,33 @@ _PR_IDENTITY_FIELDS: Final = (
     "headRepository"
 )
 
+# Bounded compensating-rollback outcomes for a push whose final identity
+# verification failed after the remote Task ref had already been updated.
+_COMPENSATED: Final = "compensated"
+_EXTERNAL_DRIFT: Final = "external-drift"
+_COMPENSATION_UNPROVEN: Final = "compensation-unproven"
+
+# Push outcomes that prove the refreshed candidate is not on the remote, so the
+# local branch provably holds a candidate that must be restored away.
+_CANDIDATE_NOT_ON_REMOTE_OUTCOMES: Final = frozenset(
+    {"not-attempted", "not-updated", "not-updated-external-drift"}
+)
+
+_COMPENSATION_SUMMARY: Final = {
+    _COMPENSATED: (
+        "the remote Task head was restored to the original head with an exact lease, "
+        "and the local Task head and prior boundary were restored"
+    ),
+    _EXTERNAL_DRIFT: (
+        "an independent writer moved the remote Task head, which was left untouched; "
+        "the local Task head and prior boundary were restored"
+    ),
+    _COMPENSATION_UNPROVEN: (
+        "the remote Task head could not be proven restored; the partial effect and the "
+        "fresh Review requirement are preserved"
+    ),
+}
+
 
 def _active_git_operations(
     resolver: LiveStateResolver, *, command_prefix: str
@@ -449,10 +476,14 @@ class CandidateRefresher:
                     )
                 )
             else:
+                # The remote Task ref is at a third-party head, so the refreshed
+                # candidate is provably not on the remote even though the lease
+                # rejection itself did not observe the pre-call identity.
+                self.last_push_outcome = "not-updated-external-drift"
                 self.last_effects.append(
                     EffectReceipt(
                         effect="refresh_remote_branch",
-                        action="outcome-ambiguous",
+                        action="not-current-on-remote",
                         details={
                             "branch": branch,
                             "old_head_sha": start_head,
@@ -464,7 +495,9 @@ class CandidateRefresher:
                     )
                 )
                 raise LckStopError(
-                    "Candidate Refresh remote Task head became ambiguous during push"
+                    "Candidate Refresh remote Task head was moved by an independent "
+                    "writer before the exact-lease push; the refreshed candidate is "
+                    "not on the remote"
                 )
         else:
             action = "force-with-exact-lease"
@@ -481,6 +514,69 @@ class CandidateRefresher:
         )
         self.last_effects.append(effect)
         return effect
+
+    def _compensate_post_push_failure(
+        self, *, branch: str, start_head: str, new_head: str
+    ) -> str:
+        """Undo one exact-lease push whose final applicability could not be proven.
+
+        The compensating push is itself bound to the observed refreshed head, so a
+        remote ref that an independent writer already moved is never overwritten.
+        """
+        ref = f"refs/heads/{branch}"
+
+        def record(action: str, observed_sha: str | None) -> None:
+            self.last_effects.append(
+                EffectReceipt(
+                    effect="refresh_remote_branch",
+                    action=action,
+                    details={
+                        "branch": branch,
+                        "old_head_sha": start_head,
+                        "head_sha": new_head,
+                        "observed_head_sha": observed_sha,
+                        "lease": f"{ref}:{new_head}",
+                    },
+                )
+            )
+
+        try:
+            observed = self._remote_oid(
+                ref, command_id="lck-refresh-remote-before-compensation"
+            )
+        except BaseException:
+            record("compensation-unproven", None)
+            return _COMPENSATION_UNPROVEN
+        if observed != new_head:
+            record("compensation-blocked-by-external-drift", observed)
+            return _EXTERNAL_DRIFT
+        compensated = self._run(
+            [
+                "git",
+                "push",
+                f"--force-with-lease={ref}:{new_head}",
+                "origin",
+                f"{start_head}:{ref}",
+            ],
+            "lck-refresh-compensating-lease-push",
+        )
+        if compensated.returncode == 0:
+            record("compensated-to-original-head", start_head)
+            return _COMPENSATED
+        try:
+            observed_after = self._remote_oid(
+                ref, command_id="lck-refresh-remote-after-compensation"
+            )
+        except BaseException:
+            observed_after = None
+        if observed_after == start_head:
+            record("compensated-to-original-head", start_head)
+            return _COMPENSATED
+        if observed_after is None or observed_after == new_head:
+            record("compensation-unproven", observed_after)
+            return _COMPENSATION_UNPROVEN
+        record("compensation-blocked-by-external-drift", observed_after)
+        return _EXTERNAL_DRIFT
 
     def _verify_pre_push_state(
         self,
@@ -807,9 +903,25 @@ class CandidateRefresher:
                     validated_tree=validated_tree,
                 )
             except BaseException as exc:
+                compensated = self._compensate_post_push_failure(
+                    branch=branch, start_head=start_head, new_head=new_head
+                )
+                if compensated in {_COMPENSATED, _EXTERNAL_DRIFT}:
+                    # The local branch must never keep pointing at a candidate that
+                    # the remote does not hold, so it is restored by the outer guard.
+                    candidate_active = True
+                if compensated == _COMPENSATED:
+                    # The remote is provably back at the pre-call Task head, so the
+                    # outer guard restores the pre-existing negative boundary too.
+                    self.last_push_outcome = "not-updated"
+                elif compensated == _EXTERNAL_DRIFT:
+                    # Our candidate is gone from the remote, so the local head and
+                    # the pre-existing boundary are restored by the outer guard; the
+                    # independent writer's head was left untouched.
+                    self.last_push_outcome = "not-updated-external-drift"
                 raise LckStopError(
                     "Candidate Refresh push completed but final identity verification "
-                    f"failed; fresh Review remains required: {exc}"
+                    f"failed: {_COMPENSATION_SUMMARY[compensated]}: {exc}"
                 ) from exc
             progress.completed("fresh-review-required")
             return RefreshResult(
@@ -834,16 +946,20 @@ class CandidateRefresher:
             )
         except BaseException:
             try:
-                safe_to_restore = self.last_push_outcome in {
-                    "not-attempted",
-                    "not-updated",
-                }
-                if boundary_written and safe_to_restore:
+                # A refresh that provably left no candidate on the remote restores
+                # both the local Task head and the pre-existing boundary. A landed or
+                # unproven push keeps them, so the partial effect and the fresh
+                # Review requirement stay inspectable. An independently moved remote
+                # is never overwritten, and its drift stays in the effect receipt.
+                candidate_not_on_remote = (
+                    self.last_push_outcome in _CANDIDATE_NOT_ON_REMOTE_OUTCOMES
+                )
+                if boundary_written and candidate_not_on_remote:
                     self.store.restore_review_required(task_number, prior_boundary)
                     self.last_fresh_review_required = prior_boundary is not None
                 if (
                     candidate_active
-                    and safe_to_restore
+                    and candidate_not_on_remote
                     and branch
                     and is_sha(start_head)
                 ):

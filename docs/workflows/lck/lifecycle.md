@@ -239,6 +239,11 @@ Candidate Refresh 只服务于已经完成 Initial Delivery、Project Status = `
 - 验证通过后仅允许使用绑定旧 remote head 的精确
   `--force-with-lease=<task-ref>:<old-head>` 更新同一 Task branch。禁止 generic/unbounded force push、
   interactive rebase、新 PR、PR base 改写、GitHub Update Branch 或 auto merge。
+- 精确 lease push 之后仍必须通过 final identity 校验（Task/PR/main/head 与 validated tree）。
+  该校验失败时用绑定**新** head 的精确 lease 做一次有界补偿回滚：补偿可证明时，远端 Task branch、
+  本地 Task head 与调用前的 fresh-review boundary 一并恢复；若独立写入者已移动该 ref，则绝不覆盖
+  远端，只把该 drift 写入 effect receipt。若补偿命令失败且远端状态不可观测，则保留 partial effect
+  与 `fresh-review-required` boundary 并 STOP，不伪造已回滚状态。
 - 成功保持 Project Status `Review`，返回 `READY_FOR_FRESH_REVIEW` 并建立
   `fresh-review-required` negative boundary。旧 Review verdict、validation 与 checks 绑定旧
   base/head/effective diff，不能复用或被静默标记为已解决；必须进行 fresh Independent Review。
