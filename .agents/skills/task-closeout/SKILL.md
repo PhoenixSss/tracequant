@@ -77,3 +77,7 @@ exact ignored output path blocked) and `credential-isolated` (credentials
 unavailable only in the current context). Only these two justify an
 exact-context retry; a real command failure never justifies a broader-permission
 retry or an equivalent direct command chain.
+
+Read the optional ignored `.agents/execution-profile.local.toml` when present.
+It may route only exact documented LCK invocations and cannot change merge
+identity, lifecycle metadata, or cleanup scope.

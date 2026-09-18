@@ -23,7 +23,7 @@ Choose exactly one branch and read only its linked instructions:
 Do not infer Remediation from an open PR, failing checks, comments, or an old review.
 If neither branch can be selected safely, stop at a Human Gate.
 
-The routed LCK entry points are `delivery prepare` / `delivery complete`,
+The LCK entry points are `delivery prepare` / `delivery complete`,
 `remediation prepare` / `remediation no-change` / `remediation complete`, and
 the one-shot `refresh <TASK>` operation.
 Their exact commands in the selected reference use the stable
@@ -97,7 +97,7 @@ has not explicitly requested Remediation with a failed Review ID.
 
 ## Prepare
 
-Run the LCK entry point defined by this Skill's execution route contract:
+Run the LCK entry point:
 
 ```bash
 uv run --frozen python -m tools.lck delivery prepare <TASK>

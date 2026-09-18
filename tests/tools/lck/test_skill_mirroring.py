@@ -87,6 +87,30 @@ def test_mirror_check_detects_an_undeclared_difference() -> None:
         assert mutated != expected, f"{skill} mirror check is vacuous"
 
 
+def test_provider_vocabulary_covers_route_family_leakage() -> None:
+    """A dangling route reference outside the container must fail closed."""
+
+    assert "route" in PROVIDER_VOCABULARY
+    for skill in SKILLS:
+        adapter = provider_skill_text(ROOT, skill)
+        _, difference = expected_provider_skill(ROOT, skill)
+        declared_only = (
+            adapter
+            if difference == ROUTE_SECTION
+            else adapter[: len(canonical_package(ROOT, skill))]
+        )
+        assert "route" not in declared_only, f"{skill} references a route contract"
+
+
+def test_agent_entry_routing_names_both_provider_paths() -> None:
+    """A Claude session reading AGENTS.md must not be sent to the canonical tree."""
+
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    for skill in SKILLS:
+        assert f".agents/skills/{skill}/SKILL.md" in agents
+    assert ".claude/skills/" in agents
+
+
 def test_audit_reports_mirrors_and_passes() -> None:
     report, returncode = audit(ROOT)
     assert returncode == 0, report["violations"]

@@ -5,7 +5,7 @@ has not explicitly requested Remediation with a failed Review ID.
 
 ## Prepare
 
-Run the LCK entry point defined by this Skill's execution route contract:
+Run the LCK entry point:
 
 ```bash
 uv run --frozen python -m tools.lck delivery prepare <TASK>

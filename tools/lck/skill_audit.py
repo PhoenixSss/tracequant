@@ -58,6 +58,9 @@ PROVIDER_VOCABULARY: Final = (
     "30-second",
     "still-running poll",
     "execution-profile",
+    # Covers route/routed/rerouted/routes. A dangling reference to the Codex-only
+    # route contract is the same class of leak as a route label.
+    "route",
 )
 REQUIRED: Final = {
     "task-delivery-runner": (
