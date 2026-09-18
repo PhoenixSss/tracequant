@@ -23,7 +23,7 @@ uv run --frozen python -m tools.lck merge preflight <TASK>
 ```
 
 It may return `READY_FOR_HUMAN_MERGE`; it never performs the merge. After the
-maintainer's merge statement, run the elevated-first closeout entry point:
+maintainer's merge statement, run the closeout entry point:
 
 ```bash
 uv run --frozen python -m tools.lck closeout <TASK>
@@ -55,3 +55,25 @@ request.
 
 Report that no merge, manual Issue close, repair commit, unrelated branch cleanup,
 or Feature completion was performed. Closeout never assesses Feature completion.
+
+## Execution route contract
+
+`closeout` uses `elevated-first` because its already-authorized effects may write
+Git metadata and GitHub lifecycle state. `merge preflight` remains
+`sandbox-first` because it is a source-repository read-only gate and never
+merges. Select these routes from the exact LCK invocation before execution;
+never apply an elevated route to generic `uv`, `python`, `git`, or `gh`
+commands. The route changes execution context only and does not grant merge,
+Issue, Project, label, branch, or cleanup authority.
+
+`closeout` is a known heavyweight LCK operation and uses a fixed 30-second wait
+window for the first wait and every subsequent still-running poll (for example,
+`write_stdin`/`yield_time_ms=30000`). A process that exits earlier is returned
+immediately; the 30-second value is a maximum wait window, not a minimum
+runtime. Adaptive polling intervals are not part of the workflow contract.
+
+Codex-only failure classes are `sandbox-denied` (local process, network, or an
+exact ignored output path blocked) and `credential-isolated` (credentials
+unavailable only in the current context). Only these two justify an
+exact-context retry; a real command failure never justifies a broader-permission
+retry or an equivalent direct command chain.

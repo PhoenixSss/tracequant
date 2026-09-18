@@ -6,7 +6,7 @@ has advanced after a blocker or dependency was merged.
 
 ## Run the atomic refresh
 
-Use the elevated-first LCK entry point:
+Use the one-shot refresh LCK entry point:
 
 ```bash
 uv run --frozen python -m tools.lck refresh <TASK>

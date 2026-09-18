@@ -42,7 +42,7 @@ uv run --frozen python -m tools.lck remediation no-change <TASK> \
 
 Proceed only on `NO_IMPLEMENTATION_CHANGE`; do not manufacture a no-op commit.
 
-When an actual repair is targeted-ready, run the elevated-first operation:
+When an actual repair is targeted-ready, run the remediation-complete operation:
 
 ```bash
 uv run --frozen python -m tools.lck remediation complete <TASK> \
@@ -52,10 +52,9 @@ uv run --frozen python -m tools.lck remediation complete <TASK> \
   --risks "<risks or limitations>"
 ```
 
-Follow the command-execution policy's fixed 30-second wait. LCK must reuse the
-existing OPEN PR, run the profile gates and formal validation, commit/push the
-exact repaired tree, and verify the new candidate head. It never creates a
-replacement PR.
+LCK must reuse the existing OPEN PR, run the profile gates and formal validation,
+commit/push the exact repaired tree, and verify the new candidate head. It never
+creates a replacement PR.
 
 Only `READY_FOR_NEW_REVIEW` is repair success. Report repaired findings, the new
 head, validation/check observations, limitations, and deferred Review-acceptance

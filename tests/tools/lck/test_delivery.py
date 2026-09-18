@@ -35,27 +35,9 @@ from tools.lck.common import (
     CommandRunner,
     sha256_json,
 )
+from tools.lck.skill_audit import expected_provider_skill, provider_skill_text
 
 SHA = "a" * 40
-
-
-def _without_route_contract(text: str) -> str:
-    """Remove the Codex-only `## Execution route contract` section.
-
-    The sandbox route (sandbox-first / elevated-first) is a Codex
-    execution-profile concept; Claude Code permissions come from
-    `.claude/settings.json`, so the Claude Skills deliberately omit it.
-    """
-    marker = "## Execution route contract"
-    start = text.find(marker)
-    assert start != -1
-    ends = [
-        index
-        for probe in ("\n## ", "\nIt must contain")
-        if (index := text.find(probe, start)) != -1
-    ]
-    assert ends
-    return text[:start] + text[min(ends) + 1 :]
 
 
 REQUIRED_CHECKS_WORKFLOW_TEXT = """name: CI
@@ -1201,11 +1183,10 @@ def test_task_160_critical_outcome_initial_delivery_is_lck_owned(
     initial_delivery = (
         root / ".agents/skills/task-delivery-runner/references/initial-delivery.md"
     ).read_text(encoding="utf-8")
-    claude_skill = (root / ".claude/skills/task-delivery-runner/SKILL.md").read_text(
-        encoding="utf-8"
-    )
-    assert ".agents/skills/task-delivery-runner/SKILL.md" in claude_skill
-    assert len(claude_skill.splitlines()) < 15
+    claude_skill = provider_skill_text(root, "task-delivery-runner")
+    assert claude_skill == expected_provider_skill(root, "task-delivery-runner")[0]
+    assert ".agents/skills" not in claude_skill
+    assert "elevated-first" not in claude_skill
     assert "references/initial-delivery.md" in agent_skill
     assert "uv run --frozen python -m tools.lck delivery prepare" in initial_delivery
     assert "uv run --frozen python -m tools.lck delivery complete" in initial_delivery

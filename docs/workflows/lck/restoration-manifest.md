@@ -142,5 +142,8 @@ documentation instead.
 
 Normative workflow documents live only under `docs/workflows/lck/`; public
 usage guidance lives only under `docs/guides/lck/`; executable canonical
-Skills live only under `.agents/skills/`. Claude Skill files are thin
-provider adapters and contain no second lifecycle procedure.
+Skills live only under `.agents/skills/`. Claude Skill files are provider
+mirrors of the canonical Skill package with exactly one declared
+provider-specific difference and contain no second lifecycle procedure.
+(Task #377 replaced the thin-adapter decision recorded in the rows above with
+V1's mirrored provider copies.)

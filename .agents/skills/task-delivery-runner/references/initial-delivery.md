@@ -5,7 +5,7 @@ has not explicitly requested Remediation with a failed Review ID.
 
 ## Prepare
 
-Run the elevated-first LCK entry point defined by the command-execution policy:
+Run the LCK entry point defined by this Skill's execution route contract:
 
 ```bash
 uv run --frozen python -m tools.lck delivery prepare <TASK>
@@ -37,7 +37,7 @@ completion. Do not stage or commit the candidate yourself.
 
 ## Complete
 
-Run the elevated-first operation with concise semantic metadata:
+Run the delivery-complete operation with concise semantic metadata:
 
 ```bash
 uv run --frozen python -m tools.lck delivery complete <TASK> \
@@ -49,8 +49,7 @@ uv run --frozen python -m tools.lck delivery complete <TASK> \
 Do not supply branch, remote, SHA, base SHA, PR number, or refspec. LCK reacquires
 live authority, validates and commits the exact candidate, synchronizes the remote,
 ensures the OPEN PR, observes checks, moves Project Status to `Review`, and verifies
-the final local/remote/PR head. Follow the command-execution policy's fixed 30-second
-wait for this heavyweight operation.
+the final local/remote/PR head.
 
 Only `READY_FOR_REVIEW` is success. Report the canonical Issue and PR URLs, changed
 files and behavior, Critical Outcome and formal validation results, bounded LCK
