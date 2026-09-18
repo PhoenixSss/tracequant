@@ -201,7 +201,7 @@ def test_ambiguous_open_pr_stops_phase_resolution(
     fake = FakeRunner(branch=branch, local_branches={branch})
     _install_facts(monkeypatch, fake)
 
-    def ambiguous(*_args: Any) -> dict[str, Any] | None:
+    def ambiguous(*_args: Any, **_kwargs: Any) -> dict[str, Any] | None:
         raise PrResolveError("multiple OPEN PRs for the Task branch")
 
     monkeypatch.setattr(lck_state, "resolve_open_pr", ambiguous)
@@ -598,7 +598,7 @@ def test_authoritative_operation_resolver_queries_only_its_fact_profile(
         observations["branches"].append((include_local, include_remote))
         return set(), {branch: SHA} if include_remote else {}, True
 
-    def open_pr_query(*args: Any) -> dict[str, Any]:
+    def open_pr_query(*args: Any, **_kwargs: Any) -> dict[str, Any]:
         observations["pr"].append(tuple(args[-3:]))
         return pr
 
@@ -670,6 +670,11 @@ def test_authoritative_operation_resolver_queries_only_its_fact_profile(
             "Remediation Complete",
             {"task_contract", "git", "local_task_branches", "checks"},
             {"comments", "issue_closure", "workspace_inventory", "pr_history"},
+        ),
+        (
+            "refresh",
+            {"task_contract", "git", "local_task_branches", "open_pr"},
+            {"comments", "issue_closure", "checks", "pr_history"},
         ),
         (
             "merge-preflight",

@@ -1,6 +1,6 @@
 ---
 name: task-delivery-runner
-description: Deliver a maintainer-specified ready leaf Issue, or remediate its latest failed Independent Review when the maintainer supplies the failed Review ID.
+description: Deliver a ready leaf Issue, remediate an explicitly identified failed Review, or refresh an existing Review candidate onto current main when the maintainer explicitly requests it.
 ---
 
 # Leaf delivery runner
@@ -16,12 +16,16 @@ Choose exactly one branch and read only its linked instructions:
   [references/initial-delivery.md](references/initial-delivery.md).
 - For Remediation, require an explicit maintainer request and the failed LCK
   `review_id`, then read [references/remediation.md](references/remediation.md).
+- For Candidate Refresh, require an explicit maintainer request for an existing
+  leaf Issue in Review, then read
+  [references/candidate-refresh.md](references/candidate-refresh.md).
 
 Do not infer Remediation from an open PR, failing checks, comments, or an old review.
 If neither branch can be selected safely, stop at a Human Gate.
 
-The routed LCK entry points are `delivery prepare` / `delivery complete` and
-`remediation prepare` / `remediation no-change` / `remediation complete`.
+The routed LCK entry points are `delivery prepare` / `delivery complete`,
+`remediation prepare` / `remediation no-change` / `remediation complete`, and
+the one-shot `refresh <TASK>` operation.
 Their exact commands in the selected reference use the stable
 `uv run --frozen python -m tools.lck` front door.
 
@@ -43,9 +47,10 @@ not a lifecycle verdict.
 
 LCK alone owns branch selection, staging, commit, push, PR identity/effects, and
 Project lifecycle writes. Never replace an LCK STOP with direct Git/GitHub commands,
-an archived snapshot, guessed identity, force push, or a broader-permission retry of
-a real command failure. Unknown, stale, divergent, or ambiguous authority fails
-closed.
+an archived snapshot, guessed identity, direct Git fallback, or a broader-permission
+retry of a real command failure. Candidate Refresh is the sole narrow exception for
+an LCK-owned exact `--force-with-lease`; Agents never run it directly. Unknown,
+stale, divergent, or ambiguous authority fails closed.
 
 A successful branch stops at its documented result and Human boundary. This Skill
 never starts Independent Review, merges, closes an Issue, performs Closeout, or

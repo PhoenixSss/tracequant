@@ -23,8 +23,8 @@ Run them from the current repository root on the WSL2 Linux filesystem. Do not
 wrap them in `bash -c`, `sh -c`, command substitution, pipelines, redirection,
 or a generic shell string.
 
-Known heavyweight LCK operations (`delivery complete`, `review prepare`, and
-formal workflow validation) use a fixed 30-second wait window for the first
+Known heavyweight LCK operations (`delivery complete`, `refresh`,
+`review prepare`, and formal workflow validation) use a fixed 30-second wait window for the first
 wait and every subsequent still-running poll. A process that exits earlier is
 returned immediately; the 30-second value is a maximum wait window, not a
 minimum runtime. Adaptive polling intervals are not part of the workflow
@@ -59,6 +59,7 @@ is `elevated-first`.
 | `remediation prepare` | `elevated-first` | May restore or switch the Task branch |
 | `remediation no-change` | `sandbox-first` | Writes only the ignored no-change receipt |
 | `remediation complete` | `elevated-first` | Reuses the authorized commit, push, and existing-PR effects |
+| `refresh` | `elevated-first` | Atomically rebases, validates, exact-lease pushes, and reuses the existing PR |
 | `merge preflight` / `merge-preflight` | `sandbox-first` | Read-only merge gate; it never merges |
 | `closeout` | `elevated-first` | Performs the authorized main, lifecycle metadata, and exact-branch effects |
 
@@ -131,7 +132,7 @@ Never authorize:
 
 ```text
 gh auth token
-force push
+generic or unbounded force push (Candidate Refresh alone may use LCK-owned exact `--force-with-lease=<ref>:<old-head>`)
 --admin
 protection bypass
 git reset --hard

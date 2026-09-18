@@ -18,6 +18,7 @@ conversation history and local receipts do not replace fresh LCK resolution.
 Natural-language entries route to the canonical procedures:
 
 - implementing an Issue: `.agents/skills/task-delivery-runner/SKILL.md`;
+- refreshing an existing Review candidate onto current main: `.agents/skills/task-delivery-runner/SKILL.md`;
 - reviewing a PR: `.agents/skills/task-pr-review-runner/SKILL.md`;
 - closing out a manually merged PR: `.agents/skills/task-closeout/SKILL.md`;
 - auditing Feature completion: `.agents/skills/feature-completion-audit/SKILL.md`.

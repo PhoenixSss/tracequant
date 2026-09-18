@@ -31,6 +31,7 @@ from .models import (
     _validation_agent_view,
 )
 from .profile_policies import ProfileEvidenceEnvelope
+from .refresh import RefreshResult
 from .remediation import (
     RemediationCompletionResult,
     RemediationContext,
@@ -443,6 +444,39 @@ def _agent_view_for_result(value: Any) -> dict[str, Any]:
             "human_boundary": "STOP — a new Independent Review must be started explicitly in a fresh invocation",
             "next_action": "start a new independent Review in a fresh invocation",
         }
+    if isinstance(value, RefreshResult):
+        return {
+            "schema_version": LCK_SCHEMA_VERSION,
+            "kind": "lck-agent-view",
+            "operation": "refresh",
+            "task_number": value.task_number,
+            "issue_profile": _issue_profile_agent_view(value),
+            "status": value.status,
+            "action": value.action,
+            "operation_id": value.operation_id,
+            "branch": value.branch,
+            "pr_number": value.pr_number,
+            "old_base_sha": value.old_base_sha,
+            "start_head_sha": value.start_head_sha,
+            "frozen_main_sha": value.frozen_main_sha,
+            "head_sha": value.head_sha,
+            "validated_tree_oid": value.validated_tree_oid,
+            "critical_outcome": _critical_outcome_agent_view(value.critical_outcome),
+            "profile_evidence": _profile_evidence(value.profile_evidence),
+            "validation": _validation_agent_view(value.validation),
+            "effects": _effect_agent_view(value.effects),
+            "fresh_review_required": value.fresh_review_required,
+            "automatic_review": False,
+            "automatic_merge": False,
+            "human_boundary": "STOP — a fresh Independent Review must be started explicitly",
+            "next_action": (
+                "start a fresh independent Review in a new invocation"
+                if value.fresh_review_required
+                else "stop; main is already contained in the Task head"
+                if value.status == "ALREADY_CURRENT"
+                else "start a fresh independent Review in a new invocation"
+            ),
+        }
     raise LckStopError(f"unsupported LCK result type: {type(value).__name__}")
 
 
@@ -477,7 +511,7 @@ def _audit_payload_for_result(
 
 
 def _result_operation_id(value: Any, fallback: str) -> str:
-    for attribute in ("review_id",):
+    for attribute in ("review_id", "operation_id"):
         candidate = getattr(value, attribute, None)
         if isinstance(candidate, str) and AuditReceiptStore._ID.fullmatch(candidate):
             return candidate
@@ -548,6 +582,24 @@ def _write_failure_receipt(
         "error": safe_text(error, limit=2000),
     }
     next_action = _failure_next_action(status)
+    refresh_context: dict[str, Any] = {}
+    if operation == "refresh":
+        refresh_attributes = {
+            "operation_id": "operation_id",
+            "branch": "last_branch",
+            "pr_number": "last_pr_number",
+            "old_base_sha": "last_old_base_sha",
+            "start_head_sha": "last_start_head_sha",
+            "frozen_main_sha": "last_frozen_main_sha",
+            "head_sha": "last_head_sha",
+            "validated_tree_oid": "last_validated_tree_oid",
+            "push_outcome": "last_push_outcome",
+            "fresh_review_required": "last_fresh_review_required",
+        }
+        refresh_context = {
+            key: getattr(handler, attribute, None)
+            for key, attribute in refresh_attributes.items()
+        }
     agent_view = {
         "schema_version": LCK_SCHEMA_VERSION,
         "kind": "lck-agent-view",
@@ -559,6 +611,8 @@ def _write_failure_receipt(
             else None
         ),
         **detail,
+        **refresh_context,
+        "conflict_files": list(getattr(handler, "last_conflict_files", ())),
         "next_action": next_action,
     }
     receipt_payload = {
@@ -590,6 +644,11 @@ def _write_failure_receipt(
                     for item in getattr(handler, "last_effects", [])
                 ]
             ),
+            "session": _jsonable(getattr(handler, "last_session", None)),
+            "conflict_files": _jsonable(
+                list(getattr(handler, "last_conflict_files", ()))
+            ),
+            **_jsonable(refresh_context),
         },
     }
     reference = store.write(

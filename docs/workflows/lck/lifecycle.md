@@ -22,6 +22,7 @@ Issue (Specifying)
   → Ready（codex:ready + Project Ready + 无 blocker）
   → Delivery Prepare（workspace postcondition → Project In Progress）
   → Delivery（implementation/tests → commit/push → PR → Project Review）
+  → 可选 Candidate Refresh（main 前移时显式集成 → 同一 PR fresh Review）
   → Independent Review（fresh session，read-only；可与 CI 并行）
   → maintainer manual Squash Merge
   → Closeout（merge identity / state convergence / branch cleanup）
@@ -110,6 +111,14 @@ intent = **Feature Completion Audit**，执行 Skill：`feature-completion-audit
 （Codex: `.agents/skills/feature-completion-audit/`；
 Claude: `.claude/skills/feature-completion-audit/`；
 hierarchy-aware exception，见 `AGENTS.md`）。
+
+### `刷新 Issue #N 的 Review candidate`
+
+- intent = **Candidate Refresh**；
+- 解析：Review 中的 leaf Issue → 唯一 OPEN non-Draft PR → 当前 Task branch/head/base
+  与 native blocker → 单次 `refresh <TASK>` → 受控 rebase、正式验证、精确 lease 更新原 PR；
+- 执行 Skill：`task-delivery-runner` 的 Candidate Refresh 分支。它不需要 failed
+  Review ID，不产生 Review verdict，也不授予 merge 权限。
 
 ### 解析失败 / 歧义
 
@@ -203,6 +212,44 @@ subprocesses continue to receive the same path through `build_workflow_env()`.
 - Human Gate 事项未决时不得继续 Delivery（§9）。
 - Delivery 不执行 Independent Review、不 merge、不 close Issue、不 closeout。
 
+## 6.1 Candidate Refresh semantics
+
+Candidate Refresh 只服务于已经完成 Initial Delivery、Project Status = `Review`、存在唯一
+`main` base 的 OPEN non-Draft PR 且 local/remote/PR head 一致的 leaf Issue。典型场景是 Task A
+进入 Review 后，其 blocker Task B 合入 main；A 必须吸收新的 base 才能形成新候选。它是维护者
+显式启动的窄 base-sync operation，不是自动 branch bot、semantic Remediation、Review 或 merge。
+
+- `refresh <TASK>` fresh-resolve Task Contract、profile、native blockers、Task/PR/head/base 和当前
+  `origin/main`。shared Task-local operation lock 将本次调用与 Delivery、Review、Remediation、
+  Merge Preflight 和 Closeout 串行化；Review/Remediation durable handoff、dirty/divergent workspace、
+  relationship unknown/conflict 或非唯一身份均在写入前 STOP。
+- PR identity 包含 head repository：OPEN PR 的 `headRepository.nameWithOwner` 必须是本次 resolve 的
+  repository（即 `origin` 所代表的仓库）。同名 head branch 的跨仓库/fork PR 即使 head branch 与 head
+  OID 匹配也必须在任何 branch 修改前 STOP，因为对该 PR head 的 force-with-lease 只作用于 `origin`，
+  无法使 fork head 前进。initial resolution、push 前 fresh PR recheck 与 final identity 都要求该事实；
+  缺失或 unknown 一律视为不匹配。
+- current main 已是 Task head ancestor 时返回 `ALREADY_CURRENT`，不创建 commit、不 push，且不建立
+  新的 Review requirement。
+- main 前移时，LCK 在 clean Task workspace 将当前 head 以非交互 rebase 更新到 invocation-frozen
+  current main。冲突、空 Task diff 或无法解释的候选立即 abort/rollback 到精确 start head 并 STOP；
+  不保留跨调用 session，也没有 prepare/complete/abort 子命令。
+- LCK 以 frozen/current main 为 validation base，对 rebased head 运行 typed profile gate、Critical
+  Outcome（适用时）与 formal Delivery validation，并证明 head/tree 未变化。validation 或 main/PR/head
+  drift 失败时恢复 start head，remote 与原 PR 不变。
+- 验证通过后仅允许使用绑定旧 remote head 的精确
+  `--force-with-lease=<task-ref>:<old-head>` 更新同一 Task branch。禁止 generic/unbounded force push、
+  interactive rebase、新 PR、PR base 改写、GitHub Update Branch 或 auto merge。
+- 精确 lease push 之后仍必须通过 final identity 校验（Task/PR/main/head 与 validated tree）。
+  该校验失败时用绑定**新** head 的精确 lease 做一次有界补偿回滚：补偿可证明时，远端 Task branch、
+  本地 Task head 与调用前的 fresh-review boundary 一并恢复；若独立写入者已移动该 ref，则绝不覆盖
+  远端，只把该 drift 写入 effect receipt。若补偿命令失败且远端状态不可观测，则保留 partial effect
+  与 `fresh-review-required` boundary 并 STOP，不伪造已回滚状态。
+- 成功保持 Project Status `Review`，返回 `READY_FOR_FRESH_REVIEW` 并建立
+  `fresh-review-required` negative boundary。旧 Review verdict、validation 与 checks 绑定旧
+  base/head/effective diff，不能复用或被静默标记为已解决；必须进行 fresh Independent Review。
+- Candidate Refresh 不关闭 Issue、不 Closeout、不评估 Feature completion。需要人工解决冲突或修改
+  Task 业务代码时 STOP/Human Gate；这类扩展不属于当前 atomic fast path。
+
 ## 7. PR / CI lifecycle
 
 - PR base = `main`，Squash-only merge policy 由 GitHub Ruleset 定义
@@ -284,6 +331,8 @@ Issue comments（Retrieval v2 comments default-off 仍适用）。
   implementation session 交错，避免遗留 session 锁死后续 invocation。
 - successful remediation 设置 `fresh-review-required` negative boundary；在新的 Review
   verdict 被接受前不得再次 remediation。该 boundary 不携带 target authorization。
+- Candidate Refresh 成功使用相同的 fresh Review 安全边界。旧 FAIL 仍是历史 finding
+  evidence，但不被标记为已解决；新 base/head/effective diff 必须由 fresh Review 重新判断。
 - 任何新 commit 都需要 **fresh independent re-review**；不得复用旧 verdict。
 
 ## 11. Manual Squash Merge boundary

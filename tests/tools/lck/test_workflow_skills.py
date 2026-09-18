@@ -33,6 +33,7 @@ def test_lifecycle_commands_use_the_locked_project_python() -> None:
     combined = "\n".join(_skill_package(name) for name in SKILLS)
     assert f"{LOCKED_PYTHON} -m tools.lck delivery prepare" in combined
     assert f"{LOCKED_PYTHON} -m tools.lck review prepare" in combined
+    assert f"{LOCKED_PYTHON} -m tools.lck refresh <TASK>" in combined
     assert f"{LOCKED_PYTHON} -m tools.lck merge preflight" in combined
     assert "tools/agent_workflow" not in combined
 
@@ -63,6 +64,7 @@ def test_active_evidence_policy_uses_locked_module_front_doors() -> None:
         "-m tools.lck delivery prepare|complete",
         "-m tools.lck review prepare|complete",
         "-m tools.lck remediation prepare|no-change|complete",
+        "-m tools.lck refresh <TASK>",
         "-m tools.lck.wsl2_validation_runner <PROFILE>",
         "-m tools.lck.feature_audit feature-audit-snapshot",
         "-m tools.lck.feature_audit feature-audit-recheck",
@@ -87,6 +89,10 @@ def test_delivery_skill_delegates_git_and_github_effects_to_lck() -> None:
     assert "delivery complete" in delivery
     assert "remediation prepare" in delivery
     assert "remediation complete" in delivery
+    assert "refresh <TASK>" in delivery
+    assert "refresh prepare" not in delivery
+    assert "refresh complete" not in delivery
+    assert "refresh abort" not in delivery
     for direct in ("git commit", "git push", "gh pr create"):
         assert direct not in delivery
 
@@ -131,8 +137,9 @@ def test_path_audit_reports_clean_canonical_skills_and_adapters() -> None:
 def test_workflow_skills_follow_astra_content_guidance() -> None:
     descriptions = {
         "task-delivery-runner": (
-            "Deliver a maintainer-specified ready leaf Issue, or remediate its latest "
-            "failed Independent Review when the maintainer supplies the failed Review ID."
+            "Deliver a ready leaf Issue, remediate an explicitly identified failed Review, "
+            "or refresh an existing Review candidate onto current main when the maintainer "
+            "explicitly requests it."
         ),
         "task-pr-review-runner": (
             "Independently review the current open PR for a maintainer-specified leaf "
@@ -160,6 +167,10 @@ def test_workflow_skills_follow_astra_content_guidance() -> None:
 
     for intent, skill in (
         ("implementing an Issue", "task-delivery-runner"),
+        (
+            "refreshing an existing Review candidate onto current main",
+            "task-delivery-runner",
+        ),
         ("reviewing a PR", "task-pr-review-runner"),
         ("closing out a manually merged PR", "task-closeout"),
         ("auditing Feature completion", "feature-completion-audit"),

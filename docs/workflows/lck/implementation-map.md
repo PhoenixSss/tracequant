@@ -17,6 +17,7 @@ maintainer or reviewer can start with the responsibility that owns the behavior.
 | isolated Review workspace and review records | `review_workspace.py` | `review.py` |
 | Independent Review and Merge Preflight | `review.py` | `review_workspace.py`, `validation_gates.py` |
 | remediation and owned-candidate recovery | `remediation.py` | `eligibility.py`, `delivery.py`, `effects.py` |
+| atomic Candidate Refresh rebase, rollback and exact-lease update | `refresh.py` | `operation_lock.py`, `review_workspace.py`, `validation_gates.py` |
 | post-merge Closeout | `closeout.py` | `eligibility.py`, `profile_policies.py` |
 | Agent View, Audit Receipt, failure evidence/replay | `receipts.py` | affected phase module |
 | CLI dispatch only | `cli.py` | phase modules |
@@ -68,6 +69,7 @@ The former mixed `tests/tools/` suite is now isolated under `tests/tools/lck/`:
 - `test_prepare.py` — prepare/admission and eligibility behavior.
 - `test_review.py` — Review workspace, Review Complete, Merge Preflight.
 - `test_remediation.py` — remediation sessions and partial-effect recovery.
+- `test_candidate_refresh.py` — current-main rebase, exact lease, rollback, staleness, and Task-operation locking.
 - `test_receipts.py` — Agent View / Audit Receipt and failure evidence.
 - `test_closeout.py` plus `test_closeout_additional.py` — Closeout.
 - `test_delivery.py` — Delivery completion and bounded effects.

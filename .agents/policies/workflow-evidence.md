@@ -23,6 +23,7 @@ Migrated lifecycle phases enter through LCK:
 uv run --frozen python -m tools.lck delivery prepare|complete
 uv run --frozen python -m tools.lck review prepare|complete
 uv run --frozen python -m tools.lck remediation prepare|no-change|complete
+uv run --frozen python -m tools.lck refresh <TASK>
 ```
 
 The Validation Runner remains current for bounded deterministic validation;
@@ -45,6 +46,7 @@ uv run --frozen python -m tools.lck.validation_runner run <ARGS>
 | Initial Delivery | `uv run --frozen python -m tools.lck delivery prepare\|complete` | LCK runs formal Delivery validation |
 | Independent Review | `uv run --frozen python -m tools.lck review prepare\|complete` | LCK runs formal Review validation on the live-resolved head |
 | Explicit Remediation | `uv run --frozen python -m tools.lck remediation prepare\|no-change\|complete` | LCK reuses migrated Delivery validation/effects; no-change closes an unchanged prepared session |
+| Candidate Refresh | `uv run --frozen python -m tools.lck refresh <TASK>` | LCK atomically rebases and validates the current-main candidate before an exact-lease update of the existing PR |
 | Closeout | `uv run --frozen python -m tools.lck closeout <TASK>` | LCK closeout gate and effects |
 
 Historical Evidence snapshots may locate audit material, but they must not
@@ -59,7 +61,7 @@ work. Additional checks or evidence expansion require a concrete diagnostic or
 audit trigger; precaution, Task importance, or a desire for a more complete
 report is not sufficient.
 
-This boundary applies in particular to three normal paths:
+This boundary applies in particular to these normal paths:
 
 - Delivery uses targeted development feedback until the candidate is
   targeted-ready, then enters LCK Delivery Complete for authoritative Critical
@@ -71,6 +73,10 @@ This boundary applies in particular to three normal paths:
 - A terminal successful Closeout reports from compact `lck-agent-view` and stops.
   `receipt_reference` is an on-demand audit pointer, not a default dereference
   instruction.
+- Candidate Refresh uses the same profile gates and formal Delivery validation
+  on the exact rebased candidate, with invocation-frozen and still-current
+  `origin/main` as validation base. Its old-head lease, validated tree and
+  fresh-review-required boundary cannot be replaced by old Delivery or Review evidence.
 
 When bounded evidence is genuinely insufficient, report the gap or expand only
 the referenced evidence needed for the current diagnosis. Such supplemental work
@@ -232,6 +238,12 @@ It does not commit, push, create a new head, set `fresh-review-required`, or
 satisfy deferred provider/cross-runtime Review acceptance. While a prepared
 Remediation session remains open, Review Prepare fails closed rather than
 interleaving a new Review with an unfinished implementation role.
+
+Candidate Refresh has no durable prepared session. One shared Task-local operation
+lock serializes it with Delivery, Review, Remediation, Merge Preflight and Closeout.
+Conflict, validation failure, drift or exact-lease failure restores the original
+local head before STOP when the remote was not updated; no separate abort operation
+or cross-phase refresh marker exists.
 
 ## Failure expansion
 

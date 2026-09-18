@@ -22,6 +22,10 @@ Report
 
 Review 不修复实现、不提交 GitHub Review、不改 Issue / PR / Project、不 merge。
 
+shared Task-local operation lock 使 Candidate Refresh 与 Review Prepare 互斥。Refresh 完成产生新 PR head 后，
+任何旧 Review PASS/FAIL applicability、validation 与 checks 都不是新 head 的 verdict；
+必须从新的 `review prepare` 开始完整 Independent Review。
+
 ## 2. LCK launcher preflight
 
 在第一次调用 LCK 前，先确认项目解释器入口可用：
@@ -327,6 +331,11 @@ Remediation 不允许创建替代 PR；current existing OPEN PR 若不存在或�
 必须 STOP。Remediation complete 也不会自动启动 Review。成功 completion 会写入一个本地
 `fresh-review-required` **negative lifecycle boundary**：它只阻止再次 remediation，
 不选择或授权 PR/head/base；机械 target 仍完全由下一阶段 live state 解析。
+
+Candidate Refresh 也写入该 negative boundary，但它不是 Remediation且不需要 failed
+`review_id`。Refresh 将旧候选以受控 rebase 更新到 current main 并用精确 old-head lease
+更新同一 Task branch / OPEN PR；旧 verdict 仍作为历史 finding evidence，但因
+base/head/effective diff 已改变而不再是新候选 verdict。新的 Review 必须重新判断 finding。
 
 任何 repair commit 产生 new head 后，都必须由 Human 在新的 fresh invocation 中
 重新启动 Independent Review。只有新的 Review verdict 被 LCK 正式接受后，该 boundary

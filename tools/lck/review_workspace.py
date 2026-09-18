@@ -770,6 +770,17 @@ class ReviewInvocationStore:
         except FileNotFoundError:
             pass
 
+    def restore_review_required(
+        self, task_number: int, payload: Mapping[str, Any] | None
+    ) -> None:
+        """Restore the exact pre-operation negative boundary after safe rollback."""
+        if payload is None:
+            self.clear_review_required(task_number)
+            return
+        if payload.get("task_number") != task_number:
+            raise LckStopError("review-required rollback state is invalid")
+        atomic_write_json(self.review_required_path(task_number), payload)
+
     def write_remediation_session(
         self, task_number: int, payload: Mapping[str, Any]
     ) -> Path:
@@ -846,6 +857,30 @@ class ReviewInvocationStore:
             self.remediation_session_path(task_number).unlink()
         except FileNotFoundError:
             pass
+
+    def review_prepare_active(self, task_number: int) -> bool:
+        """Return whether a Review Prepare/handoff marker owns this Task."""
+        return self.review_prepare_inflight_path(task_number).exists()
+
+    def write_refresh_review_required(
+        self, task_number: int, operation_id: str, head_sha: str
+    ) -> None:
+        self._validate_id(operation_id)
+        if not is_sha(head_sha):
+            raise LckStopError("review-required state needs a valid refreshed head")
+        atomic_write_json(
+            self.review_required_path(task_number),
+            {
+                "schema_version": LCK_SCHEMA_VERSION,
+                "kind": "fresh-review-required",
+                "task_number": task_number,
+                "source_refresh_operation_id": operation_id,
+                "refreshed_head": head_sha,
+                # Compatibility projection for consumers introduced with Remediation.
+                "remediated_head": head_sha,
+                "authority": "negative lifecycle boundary only; current target remains live-resolved",
+            },
+        )
 
     def write_remediation_no_change_receipt(
         self, task_number: int, review_id: str, payload: Mapping[str, Any]

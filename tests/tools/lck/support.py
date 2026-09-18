@@ -251,7 +251,7 @@ def _install_facts(
         "_git_snapshot",
         lambda *_args, **_kwargs: _git_snapshot(fake),
     )
-    monkeypatch.setattr(lck_state, "resolve_open_pr", lambda *_args: open_pr)
+    monkeypatch.setattr(lck_state, "resolve_open_pr", lambda *_args, **_kwargs: open_pr)
     monkeypatch.setattr(
         lck_state, "list_matching_prs", lambda *_args, **_kwargs: history or []
     )
@@ -265,6 +265,7 @@ def _open_pr(
     branch: str,
     *,
     is_draft: bool = False,
+    head_repository: str = "owner/repo",
 ) -> dict[str, Any]:
     return {
         "number": 200,
@@ -275,6 +276,7 @@ def _open_pr(
         "headRefName": branch,
         "headRefOid": SHA,
         "url": "https://github.com/owner/repo/pull/200",
+        "headRepository": {"nameWithOwner": head_repository},
         "statusCheckRollup": [],
     }
 

@@ -325,6 +325,7 @@ def test_review_complete_acquires_one_fresh_snapshot_and_accepts_unchanged_targe
     )
     store = lck_review_workspace.ReviewInvocationStore(tmp_path)
     review_id = store.new_id()
+    store.write_refresh_review_required(159, store.new_id(), identity.head_sha)
     review_root = tmp_path / "review-root"
     review_root.mkdir()
     store.write_guard(
@@ -349,6 +350,7 @@ def test_review_complete_acquires_one_fresh_snapshot_and_accepts_unchanged_targe
     assert "fresh Review Complete snapshot matched" in record["authority_note"]
     assert workspace.ready_checked == [review_root]
     assert workspace.removed == [review_root]
+    assert store.read_review_required(159) is None
 
 
 def test_review_complete_rejects_research_outcome_for_task_profile(
@@ -419,7 +421,7 @@ def test_review_complete_acquires_only_review_complete_fact_profile(
         observations["branches"].append((include_local, include_remote))
         return set(), {branch: SHA}, True
 
-    def open_pr_query(*args: Any) -> dict[str, Any]:
+    def open_pr_query(*args: Any, **_kwargs: Any) -> dict[str, Any]:
         observations["pr"].append(tuple(args[-3:]))
         return pr
 

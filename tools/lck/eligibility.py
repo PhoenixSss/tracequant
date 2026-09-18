@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .common import is_sha
+from .github_prs import pr_head_repository_matches
 from .issue_profiles import resolve_leaf_issue_profile
 from .models import (
     LiveState,
@@ -148,6 +149,7 @@ class PhaseEligibilityResolver:
                         Phase.DELIVERY_COMPLETE,
                         Phase.REMEDIATION_PREPARE,
                         Phase.REMEDIATION_COMPLETE,
+                        Phase.REFRESH,
                     }:
                         reasons.append(contract_check.failure_reason)
                 else:
@@ -299,6 +301,7 @@ class PhaseEligibilityResolver:
                 Phase.REMEDIATION_PREPARE: {"Review"},
                 Phase.REMEDIATION_NO_CHANGE: {"Review"},
                 Phase.REMEDIATION_COMPLETE: {"Review"},
+                Phase.REFRESH: {"Review"},
                 Phase.CLOSEOUT: {
                     "Inbox",
                     "Specifying",
@@ -435,6 +438,55 @@ class PhaseEligibilityResolver:
                         "ensure_remote_branch",
                         "reuse_open_pr",
                     )
+        elif phase is Phase.REFRESH:
+            if state.open_pr is None:
+                reasons.append("Candidate Refresh requires one current OPEN PR")
+            elif state.open_pr.get("isDraft") is not False:
+                reasons.append("Candidate Refresh requires a non-Draft OPEN PR")
+            if state.project_status != "Review":
+                reasons.append("Candidate Refresh requires Project Status Review")
+            pr_head = state.open_pr.get("headRefOid") if state.open_pr else None
+            pr_base = state.open_pr.get("baseRefOid") if state.open_pr else None
+            remote_main = _remote_main_sha(state.git)
+            if not is_sha(pr_head):
+                reasons.append("current OPEN PR head OID is unavailable")
+            if not is_sha(pr_base) or not is_sha(remote_main) or pr_base != remote_main:
+                reasons.append("current OPEN PR base must match current origin/main")
+            if (
+                state.open_pr
+                and state.open_pr.get("headRefName") != state.target_branch
+            ):
+                reasons.append("OPEN PR head branch must be the resolved Task branch")
+            if state.open_pr and not pr_head_repository_matches(
+                state.open_pr, state.repository
+            ):
+                reasons.append(
+                    "OPEN PR head repository must be the resolved repository"
+                )
+            if state.remote_issue_oid != pr_head:
+                reasons.append("remote Task branch must match current OPEN PR head")
+            if state.local_issue_branch is None:
+                reasons.append("Candidate Refresh requires a local Task branch")
+            if state.git.get("branch") != state.target_branch:
+                reasons.append(
+                    "Candidate Refresh requires the resolved Task branch selected"
+                )
+            if state.local_issue_head != pr_head:
+                reasons.append("local Task branch must match current OPEN PR head")
+            if state.git.get("clean") is not True:
+                reasons.append("Candidate Refresh requires a clean Task worktree")
+            capabilities = (
+                (
+                    profile_resolution.profile.candidate_capability
+                    if profile_resolution.profile is not None
+                    else "verify_critical_outcome"
+                ),
+                "rebase_current_main",
+                "run_formal_validation",
+                "push_with_exact_lease",
+                "reuse_open_pr",
+                "require_fresh_review",
+            )
         else:
             if state.merged is not True:
                 reasons.append("Closeout requires one current merged PR")
