@@ -393,3 +393,9 @@ def test_tracked_publication_record_binds_release_and_artifact_lock() -> None:
     validation = cast(dict[str, object], publication["validation"])
     assert validation["release_restore_count"] == 2
     assert validation["staging_deleted_between_restores"] is True
+    smoke = cast(dict[str, object], validation["stage3_loader_smoke"])
+    loader_source = REPOSITORY_ROOT / cast(str, smoke["loader_source"])
+    assert loader_source == (
+        REPOSITORY_ROOT / "src/tracequant/research/stage3_features.py"
+    )
+    assert smoke["loader_source_sha256"] == sha256_file(loader_source)

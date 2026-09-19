@@ -85,9 +85,9 @@
           "tradable_rows": 24
         }
       },
+      "loader_source": "src/tracequant/research/stage3_features.py",
+      "loader_source_sha256": "0eb4bb46dfcd1b1556217a21295eca96a56a46a598d4dd43c901d1fa89dd01a7",
       "mode": "evaluation",
-      "pr_head": "fa76a7029f5b87d25f9f90544292968cb4e692fc",
-      "pr_url": "https://github.com/PhoenixSss/tracequant/pull/367",
       "result": "pass",
       "window": {
         "decision_start": "2020-01-08T00:00:00Z",

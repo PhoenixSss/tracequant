@@ -309,12 +309,16 @@ feature schema 固定为下表顺序，dtype 全部为 Float64：
 | 13 | `hour_cos` | `cos(2*pi*h/24)` |
 | 14 | `instrument_code` | `BTCUSDT-PERP.BINANCE -> 0.0`，`ETHUSDT-PERP.BINANCE -> 1.0` |
 
-名称、顺序、dtype、lookback 与 as-of 规则必须可序列化，并产生稳定的
+名称、顺序、dtype、lookback、as-of 与缺失处理规则必须可序列化，并产生稳定的
 `feature_schema_digest`。任一名称、顺序、dtype 或本文档定义的口径漂移即视为 schema
 mismatch（§4.5）。`std_24 == 0` 属于非有限值情形（§4.3），不得输出 `Inf`。
 
 每个 feature 行还必须携带真实 `decision_ts`，以及其有序 feature 向量对应的
 `feature_schema_digest`。
+
+序列化的缺失处理规则包括：拒绝未批准 gap、两个 mark gap 的事件时间例外、
+mark/funding 网格及 funding 偏移容差、禁止静默填补、warm-up 与正式 readiness 的区别，
+以及 `std_24 == 0` 的失败策略。这些规则变化必须改变 schema digest。
 
 ### 4.2 as-of 与 warm-up
 
@@ -348,6 +352,11 @@ mismatch（§4.5）。`std_24 == 0` 属于非有限值情形（§4.3），不得
 
 Stage 2 研究视图保留的精确字符串/Decimal 语义不改变：研究 batch 只可在通过精确源投影
 校验后转换为模型所需的有限 Float64，且任何派生数据不得写回 Nautilus catalog。
+
+增量消费者必须提供逐条 15m mark 和 8h funding 投影，不能只在每个 decision 提供最新值。
+状态在 warm-up 期间也检查相邻事件的网格连续性；ready 前还验证 mark 覆盖保留的 decision
+历史，以及 funding 覆盖完整 24h 求和窗口。仅有新鲜的最新值不能证明这些窗口完整。
+funding 保留 Stage 2 的时间偏移容差，窗口求和始终按实际 `ts_event` 判断。
 
 ### 4.4 Label 与 purge
 

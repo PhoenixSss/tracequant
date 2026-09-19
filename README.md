@@ -13,9 +13,9 @@ SMA crossover offline backtest. Stage 2 imports the accepted BTC/ETH
 `binance-usdm-btceth-202001-202608-r1` dataset — 15m/1h/4h Bars, 15m mark price,
 and funding — into one Nautilus catalog, and serves both the read-only Polars
 research views and `BacktestNode` from that same catalog. Stage 3 is not
-implemented: this tree contains no feature or label contract, no model
-artifact, and no momentum or LightGBM strategy. There is no Demo mode or Live
-mode in this tree. The project remains `OFFLINE_BACKTEST_ONLY` and
+complete: this tree now contains the accepted-input binding and finite causal
+feature/label contract, but no model artifact and no momentum or LightGBM
+strategy. There is no Demo mode or Live mode in this tree. The project remains `OFFLINE_BACKTEST_ONLY` and
 `LIVE_NOT_APPROVED`; live trading cannot be enabled by configuration.
 
 ## Bootstrap environment
@@ -59,14 +59,15 @@ uv run --frozen pytest tests/acceptance/test_stage1_backtest.py::test_stage1_nat
 
 ## Current stage status
 
-The repository is between stages. Stage 1 and stage 2 capabilities are
-implemented and accepted; stage 3 is specified but not implemented.
+Stage 1 and stage 2 are implemented and accepted. Stage 3 implementation has
+started with its trusted-input and causal feature/label capability; the strategy,
+model, evaluation, and OOS capabilities remain unimplemented.
 
 | Stage | Status | Where it lives |
 | --- | --- | --- |
 | Stage 1: minimal offline loop | complete | [stage 1 backtest](#stage-1-offline-backtest) above |
 | Stage 2: Nautilus-homologous data | complete and accepted | [stage 2 requirements](docs/product/stage-2-data-and-research-requirements.md) |
-| Stage 3: strategy and model loop | specified only, not implemented | [stage 3 requirements](docs/product/stage-3-strategy-and-model-requirements.md) |
+| Stage 3: strategy and model loop | trusted input + feature/label implemented; remaining capabilities pending | [stage 3 requirements](docs/product/stage-3-strategy-and-model-requirements.md) |
 
 The accepted stage 2 dataset identity is tracked in
 [`docs/product/stage2-btceth-dataset-acceptance.json`](docs/product/stage2-btceth-dataset-acceptance.json).

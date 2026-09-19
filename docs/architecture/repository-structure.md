@@ -5,11 +5,11 @@ bootstrap and its repository engineering tooling. The product runtime pins
 NautilusTrader, owns source provenance, implements the stage 1 BTCUSDT 1h
 catalog path and the accepted stage 2 BTC/ETH Nautilus-homologous dataset path,
 and runs one Nautilus-native offline MA-cross backtest plus read-only Polars
-research views over that stage 2 catalog. Stage 3 is specified but not
-implemented: there is no feature or label contract, no model artifact, and no
-momentum or LightGBM strategy in this tree. It does not provide an execution
-connection, Demo mode, or Live mode. LCK is an approved repository capability
-outside that product runtime.
+research views over that stage 2 catalog. Stage 3 now includes the accepted
+catalog binding and finite causal feature/label contract; there is still no model
+artifact and no momentum or LightGBM strategy in this tree. It does not provide
+an execution connection, Demo mode, or Live mode. LCK is an approved repository
+capability outside that product runtime.
 
 ## Tracked layout
 
@@ -81,6 +81,7 @@ src/tracequant/
   research/
     __init__.py
     source_schema.py
+    stage3_features.py
     views.py
   integrations/
     __init__.py
@@ -107,14 +108,16 @@ offline MA-cross backtest live in use-case modules beside that seam; they are
 not a generic adapter, trading domain, or import-time runtime wrapper.
 
 `integrations/nautilus/strategies/` now holds the stage 1 MA-cross Strategy.
-`tracequant.research` owns read-only Polars views and time splits over the
-stage 2 Nautilus catalog. That catalog is the accepted
+`tracequant.research` owns read-only Polars views, time splits, and the finite
+Stage 3 causal feature/label contract over the stage 2 Nautilus catalog. That catalog is the accepted
 `binance-usdm-btceth-202001-202608-r1` dataset; its tracked identity lives in
 `docs/product/stage2-btceth-dataset-acceptance.json`, and the stage 3
-requirements that later consumers must bind to are in
+requirements that consumers bind to are in
 `docs/product/stage-3-strategy-and-model-requirements.md`. A successful
 ordinary catalog identity check does not by itself prove that a catalog is that
-accepted dataset.
+accepted dataset: sidecar declarations only bind identity, so the formal loader
+also binds the bar/mark/funding rows it actually reads to the accepted coverage
+grid, accepting omissions only where that coverage records an explained gap.
 
 Later scoped Issues may add these remaining product boundaries only when
 implementing the corresponding capability, in that Issue's scope and against
