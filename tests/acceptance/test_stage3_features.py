@@ -26,6 +26,8 @@ from nautilus_trader.model import (
 from nautilus_trader.persistence import ParquetDataCatalog
 
 from tracequant.integrations.nautilus import UPSTREAM_RELEASE_IDENTITY
+from tracequant.integrations.nautilus import stage2_artifact as artifact_module
+from tracequant.integrations.nautilus.stage2_artifact import sha256_file
 from tracequant.integrations.nautilus.stage2_btceth import (
     instrument_snapshot_payload,
     stage2_bar_type,
@@ -208,6 +210,9 @@ def _config(catalog_path: Path, tmp_path: Path) -> Stage3Config:
         market_data_manifest_digest=STAGE2_MARKET_DATA_MANIFEST_DIGEST,
         instrument_snapshot_checksum=STAGE2_INSTRUMENT_SNAPSHOT_CHECKSUM,
         runtime_identity=UPSTREAM_RELEASE_IDENTITY,
+        artifact_lock_path=(
+            REPOSITORY_ROOT / stage3.STAGE2_ARTIFACT_LOCK_RELATIVE_PATH
+        ),
         catalog_path=catalog_path,
         evidence_root=tmp_path / "evidence",
         run_root=tmp_path / "runs",
@@ -297,7 +302,7 @@ def _build_accepted_catalog(
     include_approved_gap: bool = False,
     truncate_marks: bool = False,
     funding_offset_ms: int = 0,
-) -> tuple[Path, Path, dict[str, object], dict[str, object]]:
+) -> tuple[Path, Path, dict[str, object], dict[str, object], Path]:
     """Write a deterministic Stage 2-shaped accepted catalog under ``root``.
 
     The catalog is small, but every identity surface it carries is derived the
@@ -465,20 +470,84 @@ def _build_accepted_catalog(
     )
     record_path = root / "stage2-acceptance.json"
     write_json(record_path, record)
-    return catalog_path, record_path, record, snapshot
+    artifact_lock_path = _write_fixture_artifact_lock(
+        catalog_path, root, record, snapshot
+    )
+    return catalog_path, record_path, record, snapshot, artifact_lock_path
+
+
+def _write_fixture_artifact_lock(
+    catalog_path: Path,
+    root: Path,
+    record: Mapping[str, object],
+    snapshot: Mapping[str, object],
+) -> Path:
+    """Lock the fixture tree exactly as the tracked release locks production."""
+    files = [
+        {
+            "path": item.relative_to(catalog_path).as_posix(),
+            "sha256": sha256_file(item),
+            "size": item.stat().st_size,
+        }
+        for item in sorted(catalog_path.rglob("*"))
+        if item.is_file()
+    ]
+    identities = {
+        "acceptance_digest": record["acceptance_digest"],
+        "dataset_digest": record["dataset_digest"],
+        "instrument_snapshot_checksum": snapshot["checksum_sha256"],
+        "market_data_manifest_digest": record["market_data_manifest_digest"],
+        "runtime_identity": record["runtime_identity"],
+        "source_manifest_digest": record["source_manifest_digest"],
+    }
+    base_url = (
+        f"https://github.com/{artifact_module.RELEASE_REPOSITORY}/releases/download/"
+        f"{artifact_module.RELEASE_TAG}"
+    )
+    lock_path = root / "stage2-artifact.lock.json"
+    write_json(
+        lock_path,
+        {
+            "archive_root": STAGE2_DATASET_ID,
+            "dataset_id": STAGE2_DATASET_ID,
+            "files": files,
+            "identities": identities,
+            "release": {
+                "archive_asset": {
+                    "format": artifact_module.ARCHIVE_FORMAT,
+                    "name": artifact_module.ARCHIVE_ASSET_NAME,
+                    "sha256": "0" * 64,
+                    "size": 1,
+                    "url": f"{base_url}/{artifact_module.ARCHIVE_ASSET_NAME}",
+                },
+                "file_manifest_asset": {
+                    "name": artifact_module.FILE_MANIFEST_ASSET_NAME,
+                    "sha256": "1" * 64,
+                    "size": 1,
+                    "url": f"{base_url}/{artifact_module.FILE_MANIFEST_ASSET_NAME}",
+                },
+                "repository": artifact_module.RELEASE_REPOSITORY,
+                "tag": artifact_module.RELEASE_TAG,
+            },
+            "schema": artifact_module.ARTIFACT_LOCK_SCHEMA,
+        },
+    )
+    return lock_path
 
 
 def _bind_fixture_identity(
     monkeypatch: pytest.MonkeyPatch,
     record: dict[str, object],
     snapshot: dict[str, object],
+    artifact_lock_path: Path,
 ) -> Stage3Config:
     """Rebind the Stage 3 locked identity to the fixture-derived accepted record.
 
     The production constants pin the one accepted 2020-2026 dataset whose
     800-object manifest lives outside this repository, so a repository-local
-    fixture cannot reproduce them byte for byte. Rebinding the five pinned
-    values to this mechanically derived equivalent lets the formal loader be
+    fixture cannot reproduce them byte for byte. Rebinding the pinned identity
+    values and immutable catalog lock to this mechanically derived equivalent lets
+    the formal loader be
     exercised end to end. Every other tracked acceptance field is still checked
     by ``require_complete_acceptance_record`` on the fixture record, and the
     unmodified constants keep their own fail-closed coverage in the mismatch
@@ -497,6 +566,18 @@ def _bind_fixture_identity(
     monkeypatch.setattr(
         stage3, "STAGE2_INSTRUMENT_SNAPSHOT_CHECKSUM", snapshot["checksum_sha256"]
     )
+    identities = {
+        "acceptance_digest": record["acceptance_digest"],
+        "dataset_digest": record["dataset_digest"],
+        "instrument_snapshot_checksum": snapshot["checksum_sha256"],
+        "market_data_manifest_digest": record["market_data_manifest_digest"],
+        "runtime_identity": record["runtime_identity"],
+        "source_manifest_digest": record["source_manifest_digest"],
+    }
+    monkeypatch.setattr(artifact_module, "LOCKED_IDENTITIES", identities)
+    monkeypatch.setattr(
+        stage3, "STAGE2_ARTIFACT_LOCK_SHA256", sha256_file(artifact_lock_path)
+    )
     return Stage3Config(
         schema=STAGE3_CONFIG_SCHEMA,
         dataset_id=STAGE2_DATASET_ID,
@@ -506,6 +587,7 @@ def _bind_fixture_identity(
         market_data_manifest_digest=cast(str, record["market_data_manifest_digest"]),
         instrument_snapshot_checksum=cast(str, snapshot["checksum_sha256"]),
         runtime_identity=UPSTREAM_RELEASE_IDENTITY,
+        artifact_lock_path=artifact_lock_path,
         catalog_path=Path("/fixture-catalog"),
         evidence_root=Path("/fixture-evidence"),
         run_root=Path("/fixture-runs"),
@@ -513,7 +595,11 @@ def _bind_fixture_identity(
 
 
 def _accepted_config(
-    template: Stage3Config, catalog_path: Path, tmp_path: Path
+    template: Stage3Config,
+    catalog_path: Path,
+    tmp_path: Path,
+    *,
+    artifact_lock_path: Path | None = None,
 ) -> Stage3Config:
     return Stage3Config(
         schema=template.schema,
@@ -524,6 +610,7 @@ def _accepted_config(
         market_data_manifest_digest=template.market_data_manifest_digest,
         instrument_snapshot_checksum=template.instrument_snapshot_checksum,
         runtime_identity=template.runtime_identity,
+        artifact_lock_path=artifact_lock_path or template.artifact_lock_path,
         catalog_path=catalog_path,
         evidence_root=tmp_path / "accepted-evidence",
         run_root=tmp_path / "accepted-runs",
@@ -720,8 +807,10 @@ def test_stage3_features_are_bound_to_accepted_catalog_and_causal(
         )
 
     # --- formal accepted-catalog path ----------------------------------------
-    catalog_path, record_path, record, snapshot = _build_accepted_catalog(tmp_path)
-    template = _bind_fixture_identity(monkeypatch, record, snapshot)
+    catalog_path, record_path, record, snapshot, artifact_lock_path = (
+        _build_accepted_catalog(tmp_path)
+    )
+    template = _bind_fixture_identity(monkeypatch, record, snapshot, artifact_lock_path)
     config = _accepted_config(template, catalog_path, tmp_path)
 
     window = load_accepted_feature_window(
@@ -864,12 +953,18 @@ def test_stage3_features_are_bound_to_accepted_catalog_and_causal(
     # --- the rows actually consumed must match the accepted coverage ---------
     # An unapproved mark or funding gap fails closed even though every sidecar
     # still matches the tracked record.
-    gapped_path, gapped_record, _, _ = _build_accepted_catalog(
+    gapped_path, gapped_record, _, _, gapped_lock = _build_accepted_catalog(
         tmp_path / "gapped", missing_marks=frozenset({900})
     )
+    monkeypatch.setattr(stage3, "STAGE2_ARTIFACT_LOCK_SHA256", sha256_file(gapped_lock))
     with pytest.raises(Stage3DataError, match="does not approve"):
         load_accepted_feature_window(
-            _accepted_config(template, gapped_path, tmp_path / "gapped"),
+            _accepted_config(
+                template,
+                gapped_path,
+                tmp_path / "gapped",
+                artifact_lock_path=gapped_lock,
+            ),
             acceptance_record_path=gapped_record,
             start=DATASET_START,
             end=EVALUATION_END,
@@ -877,12 +972,22 @@ def test_stage3_features_are_bound_to_accepted_catalog_and_causal(
             mode="evaluation",
         )
 
-    funding_gap_path, funding_gap_record, _, _ = _build_accepted_catalog(
-        tmp_path / "funding-gap", missing_funding=frozenset({12})
+    funding_gap_path, funding_gap_record, _, _, funding_gap_lock = (
+        _build_accepted_catalog(
+            tmp_path / "funding-gap", missing_funding=frozenset({12})
+        )
+    )
+    monkeypatch.setattr(
+        stage3, "STAGE2_ARTIFACT_LOCK_SHA256", sha256_file(funding_gap_lock)
     )
     with pytest.raises(Stage3DataError, match="does not approve"):
         load_accepted_feature_window(
-            _accepted_config(template, funding_gap_path, tmp_path / "funding-gap"),
+            _accepted_config(
+                template,
+                funding_gap_path,
+                tmp_path / "funding-gap",
+                artifact_lock_path=funding_gap_lock,
+            ),
             acceptance_record_path=funding_gap_record,
             start=DATASET_START,
             end=EVALUATION_END,
@@ -891,12 +996,20 @@ def test_stage3_features_are_bound_to_accepted_catalog_and_causal(
         )
 
     # A truncated tail no longer covers the accepted query window.
-    truncated_path, truncated_record, _, _ = _build_accepted_catalog(
+    truncated_path, truncated_record, _, _, truncated_lock = _build_accepted_catalog(
         tmp_path / "truncated", truncate_marks=True
+    )
+    monkeypatch.setattr(
+        stage3, "STAGE2_ARTIFACT_LOCK_SHA256", sha256_file(truncated_lock)
     )
     with pytest.raises(Stage3DataError, match="accepted query window"):
         load_accepted_feature_window(
-            _accepted_config(template, truncated_path, tmp_path / "truncated"),
+            _accepted_config(
+                template,
+                truncated_path,
+                tmp_path / "truncated",
+                artifact_lock_path=truncated_lock,
+            ),
             acceptance_record_path=truncated_record,
             start=DATASET_START,
             end=EVALUATION_END,
@@ -906,15 +1019,50 @@ def test_stage3_features_are_bound_to_accepted_catalog_and_causal(
 
     # The two tracked mark omissions are expected input; a catalog that keeps a
     # record the accepted coverage says was omitted is not.
-    included_path, included_record, _, _ = _build_accepted_catalog(
+    included_path, included_record, _, _, included_lock = _build_accepted_catalog(
         tmp_path / "included", include_approved_gap=True
+    )
+    monkeypatch.setattr(
+        stage3, "STAGE2_ARTIFACT_LOCK_SHA256", sha256_file(included_lock)
     )
     with pytest.raises(Stage3DataError, match="coverage omits"):
         load_accepted_feature_window(
-            _accepted_config(template, included_path, tmp_path / "included"),
+            _accepted_config(
+                template,
+                included_path,
+                tmp_path / "included",
+                artifact_lock_path=included_lock,
+            ),
             acceptance_record_path=included_record,
             start=DATASET_START,
             end=EVALUATION_END,
+            decision_start=EVALUATION_START,
+            mode="evaluation",
+        )
+
+    # Keep every accepted sidecar unchanged, but remove one actual 1h row well
+    # after an otherwise valid early evaluation query. Query-local grid checks
+    # cannot observe this tail deletion; the immutable artifact binding must.
+    bar_file = next(
+        (catalog_path / "data" / "bars" / stage2_bar_type_str(BTC, "1h")).glob(
+            "*.parquet"
+        )
+    )
+    complete_bars = pl.read_parquet(bar_file)
+    early_end = DATASET_START + timedelta(days=10)
+    assert cast(int, complete_bars.get_column("ts_event").max()) > datetime_to_nanos(
+        early_end + timedelta(hours=LABEL_HORIZON_HOURS)
+    )
+    complete_bars.head(complete_bars.height - 1).write_parquet(bar_file)
+    monkeypatch.setattr(
+        stage3, "STAGE2_ARTIFACT_LOCK_SHA256", sha256_file(artifact_lock_path)
+    )
+    with pytest.raises(Stage3DataError, match="locked Stage 2 artifact"):
+        load_accepted_feature_window(
+            config,
+            acceptance_record_path=record_path,
+            start=DATASET_START,
+            end=early_end,
             decision_start=EVALUATION_START,
             mode="evaluation",
         )
@@ -989,10 +1137,10 @@ def test_accepted_funding_is_bound_at_the_producer_schedule_tolerance(
     tracked coverage records that shape at its tail, so requiring the close_time
     grid would reject the one accepted catalog.
     """
-    within_path, within_record, record, snapshot = _build_accepted_catalog(
-        tmp_path / "funding-offset", funding_offset_ms=3
+    within_path, within_record, record, snapshot, artifact_lock_path = (
+        _build_accepted_catalog(tmp_path / "funding-offset", funding_offset_ms=3)
     )
-    template = _bind_fixture_identity(monkeypatch, record, snapshot)
+    template = _bind_fixture_identity(monkeypatch, record, snapshot, artifact_lock_path)
     window = load_accepted_feature_window(
         _accepted_config(template, within_path, tmp_path / "funding-offset"),
         acceptance_record_path=within_record,
@@ -1006,13 +1154,21 @@ def test_accepted_funding_is_bound_at_the_producer_schedule_tolerance(
 
     # The bound is the producer's written schedule tolerance, not an unbounded
     # exemption: funding further off the accepted grid still fails closed.
-    outside_path, outside_record, _, _ = _build_accepted_catalog(
+    outside_path, outside_record, _, _, outside_lock = _build_accepted_catalog(
         tmp_path / "funding-outside",
         funding_offset_ms=STAGE2_FUNDING_SCHEDULE_TOLERANCE_MS + 1,
     )
+    monkeypatch.setattr(
+        stage3, "STAGE2_ARTIFACT_LOCK_SHA256", sha256_file(outside_lock)
+    )
     with pytest.raises(Stage3DataError, match="accepted coverage grid"):
         load_accepted_feature_window(
-            _accepted_config(template, outside_path, tmp_path / "funding-outside"),
+            _accepted_config(
+                template,
+                outside_path,
+                tmp_path / "funding-outside",
+                artifact_lock_path=outside_lock,
+            ),
             acceptance_record_path=outside_record,
             start=DATASET_START,
             end=EVALUATION_END,
@@ -1031,10 +1187,10 @@ def test_out_of_window_read_reports_the_stage3_error_contract(
     escaping Stage 2 type would leave an out-of-window request uncaught even
     though the read does fail closed.
     """
-    catalog_path, record_path, record, snapshot = _build_accepted_catalog(
-        tmp_path / "outside-window"
+    catalog_path, record_path, record, snapshot, artifact_lock_path = (
+        _build_accepted_catalog(tmp_path / "outside-window")
     )
-    template = _bind_fixture_identity(monkeypatch, record, snapshot)
+    template = _bind_fixture_identity(monkeypatch, record, snapshot, artifact_lock_path)
     with pytest.raises(Stage3DataError, match="outside the declared window"):
         load_accepted_feature_window(
             _accepted_config(template, catalog_path, tmp_path / "outside-window"),
@@ -1065,6 +1221,44 @@ def test_incremental_funding_gap_during_warmup_cannot_become_ready(
     assert incomplete[-1].ts_event == funding[-1].ts_event
     with pytest.raises(Stage3DataError, match="funding.*unapproved gap"):
         _feed(bars, marks, incomplete, tradable_from=bars[-1].ts_event)
+
+
+@pytest.mark.parametrize("rate_dtype", [pl.Boolean, pl.Int64])
+def test_funding_source_projection_rejects_rate_dtype_drift(
+    rate_dtype: type[pl.DataType] | pl.DataType,
+) -> None:
+    frame = pl.DataFrame(
+        {
+            "instrument_id": [BTC],
+            "rate": [True if rate_dtype == pl.Boolean else 1],
+            "interval": [480],
+            "next_funding_ns": [DATASET_START_NS],
+            "ts_event": [DATASET_START_NS],
+            "ts_init": [DATASET_START_NS],
+        },
+        schema={
+            "instrument_id": pl.String,
+            "rate": rate_dtype,
+            "interval": pl.UInt64,
+            "next_funding_ns": pl.UInt64,
+            "ts_event": pl.UInt64,
+            "ts_init": pl.UInt64,
+        },
+    )
+    with pytest.raises(Stage3DataError, match="source projection schema or dtype"):
+        stage3._funding_from_frame(frame)
+
+
+def test_incremental_funding_rejects_float_source_projection() -> None:
+    state = IncrementalFeatureState(BTC)
+    with pytest.raises(Stage3DataError, match="source type must be str or Decimal"):
+        state.push_funding(
+            FundingProjection(
+                instrument_id=BTC,
+                rate=cast(str | Decimal, 0.0001),
+                ts_event=DATASET_START_NS,
+            )
+        )
 
 
 @pytest.mark.parametrize("instrument_id", [BTC, ETH])
@@ -1239,6 +1433,9 @@ def test_stage3_typed_config_has_no_implicit_path_or_identity_defaults(
     )
     loaded = load_stage3_config(config_path, repository_root=REPOSITORY_ROOT)
     assert loaded.catalog_path == catalog
+    assert loaded.artifact_lock_path == (
+        REPOSITORY_ROOT / stage3.STAGE2_ARTIFACT_LOCK_RELATIVE_PATH
+    )
 
     monkeypatch.delenv("TRACEQUANT_STAGE3_CONFIG", raising=False)
     with pytest.raises(Stage3DataError, match="must point"):

@@ -15,6 +15,11 @@ from typing import Final, Literal, cast
 import polars as pl
 
 from tracequant.integrations.nautilus import UPSTREAM_RELEASE_IDENTITY
+from tracequant.integrations.nautilus.stage2_artifact import (
+    load_artifact_lock,
+    sha256_file,
+    verify_catalog,
+)
 from tracequant.integrations.nautilus.stage2_btceth import (
     require_stage2_catalog_identity,
 )
@@ -48,6 +53,12 @@ from tracequant.source_data.stage2_btceth import (
 STAGE3_CONFIG_ENV: Final = "TRACEQUANT_STAGE3_CONFIG"
 STAGE3_CONFIG_SCHEMA: Final = "tracequant-stage3-features-v1"
 STAGE3_ACCEPTANCE_FILENAME: Final = "stage2-btceth-dataset-acceptance.json"
+STAGE2_ARTIFACT_LOCK_RELATIVE_PATH: Final = (
+    "config/datasets/binance-usdm-btceth-202001-202608-r1.lock.json"
+)
+STAGE2_ARTIFACT_LOCK_SHA256: Final = (
+    "8afa251b2c5418ce14ac03d5bd983c553867409157f0c4acf488eebef6fdad67"
+)
 
 STAGE2_ACCEPTANCE_DIGEST: Final = (
     "5909c878a81f0cdea85a8b8f86efd36d9c9bad5b3f3fb4c0f9960bb0551609cd"
@@ -316,6 +327,7 @@ class Stage3Config:
     market_data_manifest_digest: str
     instrument_snapshot_checksum: str
     runtime_identity: str
+    artifact_lock_path: Path
     catalog_path: Path
     evidence_root: Path
     run_root: Path
@@ -453,6 +465,9 @@ def load_stage3_config(path: Path, *, repository_root: Path) -> Stage3Config:
             payload, "instrument_snapshot_checksum"
         ),
         runtime_identity=_required_string(payload, "runtime_identity"),
+        artifact_lock_path=(
+            Path(repository_root).resolve() / STAGE2_ARTIFACT_LOCK_RELATIVE_PATH
+        ),
         catalog_path=_external_path(payload, "catalog_path", repository_root),
         evidence_root=_external_path(payload, "evidence_root", repository_root),
         run_root=_external_path(payload, "run_root", repository_root),
@@ -526,6 +541,7 @@ def bind_accepted_stage2_catalog(
     )
     coverage = _require_external_coverage(coverage_record, config, acceptance)
     _require_external_manifest(config.catalog_path, config, acceptance)
+    _require_locked_catalog_artifact(config)
     return AcceptedStage2Catalog(
         catalog_path=config.catalog_path,
         dataset_id=config.dataset_id,
@@ -1229,6 +1245,8 @@ def _require_next_timestamp(value: int, previous: int | None, name: str) -> int:
 
 
 def _finite_float(value: str | Decimal, field: str) -> float:
+    if type(value) not in {str, Decimal}:
+        raise Stage3DataError(f"{field} source type must be str or Decimal")
     try:
         exact = value if isinstance(value, Decimal) else Decimal(value)
     except (InvalidOperation, ValueError) as exc:
@@ -1367,6 +1385,27 @@ def _require_acceptance_locks(
         raise Stage3DataError("tracked stage 2 acceptance identity does not match")
 
 
+def _require_locked_catalog_artifact(config: Stage3Config) -> None:
+    """Bind the installed catalog tree to the immutable accepted release lock.
+
+    Coverage and digest sidecars describe the accepted dataset, but cannot prove
+    that the catalog files currently present still contain that dataset.  The
+    tracked release lock binds every catalog file by path, size, and SHA-256, so
+    deleting or rewriting rows outside the current query window also fails here.
+    """
+    try:
+        if sha256_file(config.artifact_lock_path) != STAGE2_ARTIFACT_LOCK_SHA256:
+            raise Stage3DataError("stage 2 artifact lock identity does not match")
+        lock = load_artifact_lock(config.artifact_lock_path)
+        verify_catalog(lock, config.catalog_path)
+    except Stage3DataError:
+        raise
+    except (OSError, Stage2DataError, ValueError) as exc:
+        raise Stage3DataError(
+            f"external catalog does not match the locked Stage 2 artifact: {exc}"
+        ) from exc
+
+
 def _read_json_object(path: Path, description: str) -> dict[str, object]:
     if not path.is_file():
         raise Stage3DataError(f"{description} is missing")
@@ -1496,6 +1535,21 @@ def _marks_from_frame(frame: pl.DataFrame) -> tuple[MarkProjection, ...]:
 
 
 def _funding_from_frame(frame: pl.DataFrame) -> tuple[FundingProjection, ...]:
+    expected_schema = (
+        ("instrument_id", "String"),
+        ("rate", "String"),
+        ("interval", "UInt64"),
+        ("next_funding_ns", "UInt64"),
+        ("ts_event", "UInt64"),
+        ("ts_init", "UInt64"),
+    )
+    observed_schema = tuple((name, str(dtype)) for name, dtype in frame.schema.items())
+    if observed_schema != expected_schema:
+        raise Stage3DataError(
+            "funding source projection schema or dtype does not match"
+        )
+    if any(frame.null_count().row(0)):
+        raise Stage3DataError("funding source projection contains null values")
     return tuple(
         FundingProjection(
             instrument_id=cast(str, item["instrument_id"]),
