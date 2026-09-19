@@ -7,7 +7,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 from typing import Final, cast
 
@@ -15,6 +15,7 @@ from nautilus_trader.backtest import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.common import LoggerConfig, LogLevel
 from nautilus_trader.model import (
     AccountType,
+    AggressorSide,
     Bar,
     CryptoPerpetual,
     Currency,
@@ -24,7 +25,10 @@ from nautilus_trader.model import (
     Money,
     OmsType,
     OrderFilled,
+    Quantity,
+    TradeId,
     TraderId,
+    TradeTick,
     Venue,
 )
 from nautilus_trader.persistence import ParquetDataCatalog
@@ -45,6 +49,7 @@ from tracequant.integrations.nautilus.strategies.stage3_momentum import (
     BASE_TAKER_FEE,
     MOMENTUM_TARGET_NOTIONAL_USDT,
     MOMENTUM_THRESHOLD,
+    STAGE3_BAR_OPEN_TRADE_ID_PREFIX,
     Stage3MomentumError,
     Stage3MomentumParameters,
     Stage3MomentumStrategy,
@@ -52,6 +57,7 @@ from tracequant.integrations.nautilus.strategies.stage3_momentum import (
     target_quantity,
     unsettled_orders,
 )
+from tracequant.research import source_schema as research_source_schema
 from tracequant.research import stage3_features
 from tracequant.research import views as research_views
 from tracequant.research.stage3_features import (
@@ -426,9 +432,15 @@ def _run_engine(
     )
     for instrument in loaded.instruments:
         engine.add_instrument(instrument)
-    unsorted_events: list[Bar | MarkPriceUpdate | FundingRateUpdate] = [
+    opening_ticks = _bar_open_trade_ticks(
+        loaded.bars,
+        loaded.instruments,
+        target_notional=parameters.target_notional_usdt,
+    )
+    unsorted_events: list[Bar | MarkPriceUpdate | FundingRateUpdate | TradeTick] = [
         *loaded.marks,
         *loaded.funding,
+        *opening_ticks,
         *loaded.bars,
     ]
     events = sorted(
@@ -439,7 +451,9 @@ def _run_engine(
             if isinstance(item, MarkPriceUpdate)
             else 1
             if isinstance(item, FundingRateUpdate)
-            else 2,
+            else 2
+            if isinstance(item, TradeTick)
+            else 3,
             str(getattr(item, "instrument_id", getattr(item, "bar_type", ""))),
         ),
     )
@@ -458,6 +472,51 @@ def _run_engine(
     finally:
         engine.dispose()
     return reports
+
+
+def _bar_open_trade_ticks(
+    bars: Sequence[Bar],
+    instruments: Sequence[CryptoPerpetual],
+    *,
+    target_notional: Decimal,
+) -> tuple[TradeTick, ...]:
+    """Expose each accepted 1h bar open before Nautilus processes later OHLC prices."""
+    by_id = {str(instrument.id): instrument for instrument in instruments}
+    prior_target_capacity = {
+        instrument_id: instrument.size_increment.as_decimal()
+        for instrument_id, instrument in by_id.items()
+    }
+    ticks: list[TradeTick] = []
+    for bar in sorted(
+        bars,
+        key=lambda item: (int(item.ts_event), str(item.bar_type.instrument_id)),
+    ):
+        instrument_id = str(bar.bar_type.instrument_id)
+        instrument = by_id[instrument_id]
+        capacity = prior_target_capacity[instrument_id]
+        ticks.append(
+            TradeTick(
+                instrument_id=instrument.id,
+                price=bar.open,
+                size=Quantity.from_str(f"{capacity:.{instrument.size_precision}f}"),
+                aggressor_side=AggressorSide.NO_AGGRESSOR,
+                trade_id=TradeId.from_str(
+                    STAGE3_BAR_OPEN_TRADE_ID_PREFIX
+                    + hashlib.sha256(
+                        f"{bar.bar_type.instrument_id}|{bar.ts_event}".encode()
+                    ).hexdigest()[:16]
+                ),
+                ts_event=bar.ts_event,
+                ts_init=bar.ts_init,
+            )
+        )
+        close = Decimal(str(bar.close))
+        increment = instrument.size_increment.as_decimal()
+        closed_bar_target = (target_notional / close / increment).to_integral_value(
+            rounding=ROUND_DOWN
+        ) * increment
+        prior_target_capacity[instrument_id] = max(capacity, closed_bar_target)
+    return tuple(ticks)
 
 
 def _collect_reports(
@@ -614,6 +673,7 @@ def _require_fee_and_execution_contract(
                     "native fill quantity does not complete the submitted intent"
                 )
             expected_fill_ts = cast(int, intent["expected_fill_ts"])
+            expected_fill_price = Decimal(cast(str, intent["expected_fill_price"]))
             submit_sequence = cast(int, intent["submit_sequence"])
             if submit_sequence <= decision_sequence:
                 raise Stage3MomentumError(
@@ -635,6 +695,10 @@ def _require_fee_and_execution_contract(
                     )
                 if fill_ts <= decision_ts:
                     raise Stage3MomentumError("market fill is not after its decision")
+                if Decimal(cast(str, fill["last_px"])) != expected_fill_price:
+                    raise Stage3MomentumError(
+                        "market fill price does not match the B_1 open"
+                    )
                 fill_sequence = cast(int, fill["event_sequence"])
                 if fill_sequence <= submit_sequence:
                     raise Stage3MomentumError(
@@ -819,6 +883,7 @@ def _associations(
                         "decision_sequence": decision["decision_sequence"],
                         "decision_ts": decision["decision_ts"],
                         "expected_fill_ts": intent["expected_fill_ts"],
+                        "expected_fill_price": intent["expected_fill_price"],
                         "fill_event_sequence": fill["event_sequence"],
                         "fill_ts": fill["ts_event"],
                         "flat_confirmation_sequence": intent.get(
@@ -1123,6 +1188,7 @@ def _relevant_code_files() -> tuple[tuple[str, Path], ...]:
             Path(momentum_strategy.__file__),
         ),
         ("research/stage3_features.py", Path(stage3_features.__file__)),
+        ("research/source_schema.py", Path(research_source_schema.__file__)),
         ("research/views.py", Path(research_views.__file__)),
         ("source_data/stage2_btceth.py", Path(source_stage2_btceth.__file__)),
     )

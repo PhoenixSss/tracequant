@@ -19,6 +19,7 @@ from nautilus_trader.model import (
     PositionChanged,
     PositionClosed,
     Quantity,
+    TradeTick,
 )
 from nautilus_trader.trading import Strategy, StrategyConfig
 
@@ -37,6 +38,7 @@ from tracequant.source_data.stage2_btceth import (
 )
 
 MOMENTUM_LOOKBACK_HOURS: Final = 24
+STAGE3_BAR_OPEN_TRADE_ID_PREFIX: Final = "S3-BAR-OPEN-"
 
 
 class _FixedDecimals:
@@ -233,6 +235,7 @@ class Stage3MomentumStrategy(Strategy):
             self._instruments[value] = instrument
             self.subscribe_mark_prices(native_id)
             self.subscribe_funding_rates(native_id)
+            self.subscribe_trades(native_id)
             self.subscribe_bars(self._bar_types[value])
 
     def on_mark_price(self, event: MarkPriceUpdate) -> None:
@@ -264,6 +267,35 @@ class Stage3MomentumStrategy(Strategy):
                     rate=str(event.rate),
                     ts_event=int(event.ts_event),
                 )
+            )
+        except Exception as exc:
+            self.fatal_error = f"{type(exc).__name__}: {exc}"
+            raise
+
+    def on_trade(self, event: TradeTick) -> None:
+        try:
+            instrument_id = str(event.instrument_id)
+            if instrument_id not in self._feature_states:
+                raise Stage3MomentumError("execution trade is outside Stage 3")
+            if not str(event.trade_id).startswith(STAGE3_BAR_OPEN_TRADE_ID_PREFIX):
+                raise Stage3MomentumError("execution trade is not a Stage 3 bar open")
+            execution_ts = int(event.ts_event)
+            if not (
+                self.parameters.evaluation_start_ns
+                <= execution_ts
+                < self.parameters.evaluation_end_ns
+            ):
+                return
+            execution_price = Decimal(str(event.price))
+            self._advance_confirmed_reversal(
+                instrument_id,
+                execution_ts=execution_ts,
+                execution_price=execution_price,
+            )
+            self._execute_pending(
+                instrument_id,
+                execution_ts=execution_ts,
+                execution_price=execution_price,
             )
         except Exception as exc:
             self.fatal_error = f"{type(exc).__name__}: {exc}"
@@ -324,12 +356,6 @@ class Stage3MomentumStrategy(Strategy):
             <= decision_ts
             < self.parameters.evaluation_end_ns
         )
-        if tradable:
-            self._advance_confirmed_reversal(
-                instrument_id,
-                execution_ts=decision_ts,
-            )
-            self._execute_pending(instrument_id, execution_ts=decision_ts)
         observation = state.push_bar(
             BarProjection(
                 instrument_id=instrument_id,
@@ -453,12 +479,22 @@ class Stage3MomentumStrategy(Strategy):
         self._pending[instrument_id] = record
         self.decisions.append(record)
 
-    def _execute_pending(self, instrument_id: str, *, execution_ts: int) -> None:
+    def _execute_pending(
+        self,
+        instrument_id: str,
+        *,
+        execution_ts: int,
+        execution_price: Decimal,
+    ) -> None:
         record = self._pending.pop(instrument_id, None)
         if record is None:
             return
+        decision_ts = cast(int, record["decision_ts"])
+        if execution_ts != decision_ts + HOUR_NS:
+            raise Stage3MomentumError("pending decision did not reach its B_1 open")
         native_id = self._instrument_ids[instrument_id]
         record["execution_ts"] = execution_ts
+        record["execution_price"] = str(execution_price)
         if unsettled_orders(self.cache, instrument_id=native_id):
             record["action"] = "none"
             record["reason"] = "b1_unsettled_order"
@@ -515,6 +551,7 @@ class Stage3MomentumStrategy(Strategy):
                 order_id=str(order.client_order_id),
                 leg="reversal_close",
                 expected_fill_ts=execution_ts,
+                expected_fill_price=execution_price,
             )
         else:
             self._record_order_intent(
@@ -522,6 +559,7 @@ class Stage3MomentumStrategy(Strategy):
                 order_id=str(order.client_order_id),
                 leg="direct",
                 expected_fill_ts=execution_ts,
+                expected_fill_price=execution_price,
             )
         self.submit_order(order)
 
@@ -562,23 +600,35 @@ class Stage3MomentumStrategy(Strategy):
             reversal.flat_confirmation_sequence
         )
         reversal.close_decision["flat_confirmation_ts"] = event_ts
-        self._submit_reversal_open(instrument_id, execution_ts=event_ts)
+        self._submit_reversal_open(
+            instrument_id,
+            execution_ts=event_ts,
+            execution_price=Decimal(
+                cast(str, reversal.close_decision["execution_price"])
+            ),
+        )
 
     def _advance_confirmed_reversal(
         self,
         instrument_id: str,
         *,
         execution_ts: int,
+        execution_price: Decimal,
     ) -> None:
         reversal = self._reversals.get(instrument_id)
         if reversal is not None and reversal.phase == "flat_confirmed":
-            self._submit_reversal_open(instrument_id, execution_ts=execution_ts)
+            self._submit_reversal_open(
+                instrument_id,
+                execution_ts=execution_ts,
+                execution_price=execution_price,
+            )
 
     def _submit_reversal_open(
         self,
         instrument_id: str,
         *,
         execution_ts: int,
+        execution_price: Decimal,
     ) -> None:
         reversal = self._reversals.get(instrument_id)
         if reversal is None or reversal.phase != "flat_confirmed":
@@ -632,6 +682,7 @@ class Stage3MomentumStrategy(Strategy):
         record["reason"] = "submitted_after_flat_confirmation"
         record["current_qty_at_execution"] = "0"
         record["delta_qty_at_execution"] = str(target)
+        record["execution_price"] = str(execution_price)
         record["flat_confirmation_sequence"] = reversal.flat_confirmation_sequence
         record["flat_confirmation_ts"] = reversal.flat_confirmation_ts
         record["submitted_qty"] = str(quantity)
@@ -641,6 +692,7 @@ class Stage3MomentumStrategy(Strategy):
             order_id=str(order.client_order_id),
             leg="reversal_open",
             expected_fill_ts=execution_ts,
+            expected_fill_price=execution_price,
             flat_confirmation_sequence=reversal.flat_confirmation_sequence,
         )
         reversal.close_decision["reversal_open_decision_id"] = record["decision_id"]
@@ -656,11 +708,13 @@ class Stage3MomentumStrategy(Strategy):
         order_id: str,
         leg: Literal["direct", "reversal_close", "reversal_open"],
         expected_fill_ts: int,
+        expected_fill_price: Decimal,
         flat_confirmation_sequence: int | None = None,
     ) -> None:
         submit_sequence = self._next_event_sequence()
         cast(list[str], record["order_ids"]).append(order_id)
         intent: dict[str, object] = {
+            "expected_fill_price": str(expected_fill_price),
             "expected_fill_ts": expected_fill_ts,
             "leg": leg,
             "order_id": order_id,

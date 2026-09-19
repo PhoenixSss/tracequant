@@ -184,6 +184,7 @@ def test_momentum_state_machine_covers_long_flat_short_and_reversal(
         end=feature_fixture.EVALUATION_END,
     )
     rewritten: list[Bar] = []
+    opens: dict[tuple[str, int], Decimal] = {}
     counts = {value: 0 for value in STAGE2_INSTRUMENT_IDS}
     for bar in loaded.bars:
         instrument_id = str(bar.bar_type.instrument_id)
@@ -195,14 +196,17 @@ def test_momentum_state_machine_covers_long_flat_short_and_reversal(
             close = Decimal("80")
         else:
             close = Decimal("80") - Decimal(index - 210) * Decimal("0.05")
-        price = Price.from_str(f"{close:.2f}")
+        open_price = close - Decimal("3.00")
+        high = max(open_price, close) + Decimal("5.00")
+        low = min(open_price, close) - Decimal("5.00")
+        opens[(instrument_id, int(bar.ts_event))] = open_price
         rewritten.append(
             Bar(
                 bar_type=bar.bar_type,
-                open=price,
-                high=price,
-                low=price,
-                close=price,
+                open=Price.from_str(f"{open_price:.2f}"),
+                high=Price.from_str(f"{high:.2f}"),
+                low=Price.from_str(f"{low:.2f}"),
+                close=Price.from_str(f"{close:.2f}"),
                 volume=bar.volume,
                 ts_event=bar.ts_event,
                 ts_init=bar.ts_init,
@@ -232,8 +236,7 @@ def test_momentum_state_machine_covers_long_flat_short_and_reversal(
         )
     for reversal in reversals:
         open_decision = decisions_by_id[reversal["reversal_open_decision_id"]]
-        assert open_decision is not reversal
-        assert open_decision["action"] == "reversal_open"
+        assert open_decision is reversal
         close_intent = next(
             item
             for item in cast(list[dict[str, object]], reversal["order_intents"])
@@ -256,12 +259,16 @@ def test_momentum_state_machine_covers_long_flat_short_and_reversal(
             == cast(int, open_decision["decision_ts"]) + HOUR_NS
             for item in open_fills
         )
-        assert cast(int, close_intent["submit_sequence"]) < cast(
-            int, open_decision["decision_sequence"]
-        ) < min(cast(int, item["fill_event_sequence"]) for item in close_fills) and max(
-            cast(int, item["fill_event_sequence"]) for item in close_fills
-        ) < flat_sequence < cast(int, open_fills[0]["order_submit_sequence"]) < min(
-            cast(int, item["fill_event_sequence"]) for item in open_fills
+        assert (
+            cast(int, open_decision["decision_sequence"])
+            < cast(int, close_intent["submit_sequence"])
+            < min(cast(int, item["fill_event_sequence"]) for item in close_fills)
+        )
+        assert (
+            max(cast(int, item["fill_event_sequence"]) for item in close_fills)
+            < flat_sequence
+            < cast(int, open_fills[0]["order_submit_sequence"])
+            < min(cast(int, item["fill_event_sequence"]) for item in open_fills)
         )
     assert any(
         item["action"] == "submit_delta"
@@ -271,6 +278,16 @@ def test_momentum_state_machine_covers_long_flat_short_and_reversal(
     )
     assert all(
         cast(int, item["fill_ts"]) == cast(int, item["decision_ts"]) + HOUR_NS
+        for item in reports.associations
+    )
+    fills_by_trade = {
+        (item["client_order_id"], item["trade_id"]): Decimal(cast(str, item["last_px"]))
+        for item in reports.fills
+    }
+    assert all(
+        fills_by_trade[(item["order_id"], item["trade_id"])]
+        == Decimal(cast(str, item["expected_fill_price"]))
+        == opens[(cast(str, item["instrument_id"]), cast(int, item["fill_ts"]))]
         for item in reports.associations
     )
     closed_cycles = [item for item in reports.positions if item["is_closed"]]
@@ -375,6 +392,7 @@ def test_native_fill_contract_rejects_incomplete_order() -> None:
         "order_ids": ["O-1"],
         "order_intents": [
             {
+                "expected_fill_price": "100",
                 "expected_fill_ts": HOUR_NS,
                 "leg": "direct",
                 "order_id": "O-1",
@@ -417,6 +435,11 @@ def test_native_fill_contract_rejects_incomplete_order() -> None:
         momentum._require_fee_and_execution_contract(
             [decision], [incomplete], fills[:1], Currency.from_str("USDT")
         )
+    wrong_price = [{**item, "last_px": "101"} for item in fills]
+    with pytest.raises(Stage3MomentumError, match="does not match the B_1 open"):
+        momentum._require_fee_and_execution_contract(
+            [decision], [order], wrong_price, Currency.from_str("USDT")
+        )
 
 
 def test_run_root_claim_is_exclusive(tmp_path: Path) -> None:
@@ -450,9 +473,14 @@ def test_relevant_code_digest_tracks_declared_closure_only(tmp_path: Path) -> No
     assert momentum._relevant_code_digest(files) == original
     view.write_text("view-v2", encoding="utf-8")
     assert momentum._relevant_code_digest(files) != original
-    assert {name for name, _path in momentum._relevant_code_files()} >= {
+    assert {name for name, _path in momentum._relevant_code_files()} == {
+        "integrations/nautilus/__init__.py",
         "integrations/nautilus/stage2_artifact.py",
         "integrations/nautilus/stage2_btceth.py",
+        "integrations/nautilus/stage3_momentum.py",
+        "integrations/nautilus/strategies/stage3_momentum.py",
+        "research/source_schema.py",
+        "research/stage3_features.py",
         "research/views.py",
         "source_data/stage2_btceth.py",
     }
