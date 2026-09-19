@@ -13,10 +13,12 @@ SMA crossover offline backtest. Stage 2 imports the accepted BTC/ETH
 `binance-usdm-btceth-202001-202608-r1` dataset — 15m/1h/4h Bars, 15m mark price,
 and funding — into one Nautilus catalog, and serves both the read-only Polars
 research views and `BacktestNode` from that same catalog. Stage 3 is not
-complete: this tree now contains the accepted-input binding and finite causal
-feature/label contract, but no model artifact and no momentum or LightGBM
-strategy. There is no Demo mode or Live mode in this tree. The project remains `OFFLINE_BACKTEST_ONLY` and
-`LIVE_NOT_APPROVED`; live trading cannot be enabled by configuration.
+complete: this tree contains the accepted-input binding, finite causal
+feature/label contract, and fixed-parameter traditional momentum Nautilus
+Strategy for the single base offline run, but no model artifact or LightGBM
+strategy. There is no Demo mode or Live mode in this tree. The project remains
+`OFFLINE_BACKTEST_ONLY` and `LIVE_NOT_APPROVED`; live trading cannot be enabled
+by configuration.
 
 ## Bootstrap environment
 
@@ -59,15 +61,16 @@ uv run --frozen pytest tests/acceptance/test_stage1_backtest.py::test_stage1_nat
 
 ## Current stage status
 
-Stage 1 and stage 2 are implemented and accepted. Stage 3 implementation has
-started with its trusted-input and causal feature/label capability; the strategy,
-model, evaluation, and OOS capabilities remain unimplemented.
+Stage 1 and stage 2 are implemented and accepted. Stage 3 includes its
+trusted-input and causal feature/label capability plus the traditional momentum
+base-run strategy; the LightGBM model, full evaluation, and OOS capabilities
+remain unimplemented.
 
 | Stage | Status | Where it lives |
 | --- | --- | --- |
 | Stage 1: minimal offline loop | complete | [stage 1 backtest](#stage-1-offline-backtest) above |
 | Stage 2: Nautilus-homologous data | complete and accepted | [stage 2 requirements](docs/product/stage-2-data-and-research-requirements.md) |
-| Stage 3: strategy and model loop | trusted input + feature/label implemented; remaining capabilities pending | [stage 3 requirements](docs/product/stage-3-strategy-and-model-requirements.md) |
+| Stage 3: strategy and model loop | trusted input + feature/label + traditional momentum base run implemented; remaining capabilities pending | [stage 3 momentum entry](src/tracequant/integrations/nautilus/stage3_momentum.py) and [requirements](docs/product/stage-3-strategy-and-model-requirements.md) |
 
 The accepted stage 2 dataset identity is tracked in
 [`docs/product/stage2-btceth-dataset-acceptance.json`](docs/product/stage2-btceth-dataset-acceptance.json).
