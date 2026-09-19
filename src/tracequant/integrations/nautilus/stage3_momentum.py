@@ -447,12 +447,14 @@ def _run_engine(
         unsorted_events,
         key=lambda item: (
             int(item.ts_event),
+            # At an exact timestamp collision, the B_1-open execution belongs
+            # to the newly opened interval and must precede its funding event.
             0
             if isinstance(item, MarkPriceUpdate)
             else 1
-            if isinstance(item, FundingRateUpdate)
-            else 2
             if isinstance(item, TradeTick)
+            else 2
+            if isinstance(item, FundingRateUpdate)
             else 3,
             str(getattr(item, "instrument_id", getattr(item, "bar_type", ""))),
         ),
@@ -494,6 +496,11 @@ def _bar_open_trade_ticks(
         instrument_id = str(bar.bar_type.instrument_id)
         instrument = by_id[instrument_id]
         capacity = prior_target_capacity[instrument_id]
+        open_ts = (
+            int(bar.ts_event)
+            - stage3_features.HOUR_NS
+            + stage3_features.STAGE2_CLOSE_OFFSET_MS * stage3_features.MS_NS
+        )
         ticks.append(
             TradeTick(
                 instrument_id=instrument.id,
@@ -506,8 +513,8 @@ def _bar_open_trade_ticks(
                         f"{bar.bar_type.instrument_id}|{bar.ts_event}".encode()
                     ).hexdigest()[:16]
                 ),
-                ts_event=bar.ts_event,
-                ts_init=bar.ts_init,
+                ts_event=open_ts,
+                ts_init=open_ts,
             )
         )
         close = Decimal(str(bar.close))
@@ -554,7 +561,7 @@ def _collect_reports(
     if account is None:
         raise Stage3MomentumError("Nautilus account result is missing")
     account_events = tuple(_account_event_record(item) for item in account.events)
-    funding = _funding_report(account_events, funding_events, fills)
+    funding = _funding_report(account_events, funding_events)
     account_report: dict[str, object] = {
         "base_currency": str(account.base_currency),
         "events": list(account_events),
@@ -765,7 +772,6 @@ def _require_runtime_feature_parity(
 def _funding_report(
     account_events: Sequence[Mapping[str, object]],
     funding_events: Sequence[FundingRateUpdate],
-    fills: Sequence[Mapping[str, object]],
 ) -> dict[str, object]:
     funding_by_ts: dict[int, list[dict[str, object]]] = {}
     for item in funding_events:
@@ -778,11 +784,6 @@ def _funding_report(
                 "ts_event": int(item.ts_event),
             }
         )
-    fill_times = {cast(int, item["ts_event"]) for item in fills}
-    if fill_times.intersection(funding_by_ts):
-        raise Stage3MomentumError(
-            "funding and fill timestamps collide; account attribution is ambiguous"
-        )
     events_by_ts: dict[int, list[Mapping[str, object]]] = {}
     for event in account_events:
         events_by_ts.setdefault(cast(int, event["ts_event"]), []).append(event)
@@ -791,29 +792,43 @@ def _funding_report(
     total = Decimal(0)
     for ts_event in sorted(events_by_ts):
         states = events_by_ts[ts_event]
-        ending = _account_event_total(states[-1])
-        if ts_event in funding_by_ts:
-            delta = ending - prior
-            total += delta
-            timeline.append(
-                {
-                    "account_delta": str(delta),
-                    "events": funding_by_ts[ts_event],
-                    "ts_event": ts_event,
-                }
+        funding_delta = Decimal(0)
+        funding_account_event_count = 0
+        for state in states:
+            ending = _account_event_total(state)
+            if ts_event in funding_by_ts and state.get("reported") is True:
+                funding_delta += ending - prior
+                funding_account_event_count += 1
+            prior = ending
+        if ts_event not in funding_by_ts:
+            continue
+        if funding_account_event_count > len(funding_by_ts[ts_event]):
+            raise Stage3MomentumError(
+                "native funding produced more account events than rate updates"
             )
-        prior = ending
+        total += funding_delta
+        timeline.append(
+            {
+                "account_delta": str(funding_delta),
+                "events": funding_by_ts[ts_event],
+                "native_account_event_count": funding_account_event_count,
+                "ts_event": ts_event,
+            }
+        )
     for ts_event in sorted(set(funding_by_ts).difference(events_by_ts)):
         timeline.append(
             {
                 "account_delta": "0",
                 "events": funding_by_ts[ts_event],
+                "native_account_event_count": 0,
                 "ts_event": ts_event,
             }
         )
     timeline.sort(key=lambda item: cast(int, item["ts_event"]))
     return {
-        "derivation": "Nautilus account-state deltas at native funding timestamps",
+        "derivation": (
+            "Nautilus reported account-state deltas at native funding timestamps"
+        ),
         "events": timeline,
         "total_funding": str(total),
     }

@@ -7,10 +7,11 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from nautilus_trader.model import Bar, CryptoPerpetual, Currency, Price
+from nautilus_trader.model import Bar, CryptoPerpetual, Currency, Price, Quantity
 from nautilus_trader.trading import Strategy
 
 from tests.acceptance import test_stage3_features as feature_fixture
@@ -49,9 +50,14 @@ def _iso(value: datetime) -> str:
 def _accepted_fixture(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    *,
+    funding_offset_ms: int = 0,
 ) -> tuple[Path, Path, Stage3Config, Path]:
     catalog, record_path, record, snapshot, artifact_lock = (
-        feature_fixture._build_accepted_catalog(tmp_path)
+        feature_fixture._build_accepted_catalog(
+            tmp_path,
+            funding_offset_ms=funding_offset_ms,
+        )
     )
     template = feature_fixture._bind_fixture_identity(
         monkeypatch, record, snapshot, artifact_lock
@@ -199,7 +205,12 @@ def test_momentum_state_machine_covers_long_flat_short_and_reversal(
         open_price = close - Decimal("3.00")
         high = max(open_price, close) + Decimal("5.00")
         low = min(open_price, close) - Decimal("5.00")
-        opens[(instrument_id, int(bar.ts_event))] = open_price
+        opens[
+            (
+                instrument_id,
+                int(bar.ts_event) - HOUR_NS + feature_fixture.MS_NS,
+            )
+        ] = open_price
         rewritten.append(
             Bar(
                 bar_type=bar.bar_type,
@@ -256,7 +267,7 @@ def test_momentum_state_machine_covers_long_flat_short_and_reversal(
         assert all(
             item["fill_ts"] == open_intent["expected_fill_ts"]
             and cast(int, item["fill_ts"])
-            == cast(int, open_decision["decision_ts"]) + HOUR_NS
+            == cast(int, open_decision["decision_ts"]) + feature_fixture.MS_NS
             for item in open_fills
         )
         assert (
@@ -277,7 +288,8 @@ def test_momentum_state_machine_covers_long_flat_short_and_reversal(
         for item in reports.decisions
     )
     assert all(
-        cast(int, item["fill_ts"]) == cast(int, item["decision_ts"]) + HOUR_NS
+        cast(int, item["fill_ts"])
+        == cast(int, item["decision_ts"]) + feature_fixture.MS_NS
         for item in reports.associations
     )
     fills_by_trade = {
@@ -298,6 +310,57 @@ def test_momentum_state_machine_covers_long_flat_short_and_reversal(
     assert reports.positions == repeated.positions
     assert reports.summary == repeated.summary
     assert reports.terminal["open_order_count"] == 0
+
+
+def test_b1_open_fill_precedes_funding_inside_the_execution_bar(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    catalog, _record_path, _template, _artifact_lock = _accepted_fixture(
+        monkeypatch,
+        tmp_path,
+        funding_offset_ms=3,
+    )
+    loaded = momentum._load_native_stage3_data(
+        catalog,
+        start=feature_fixture.DATASET_START,
+        end=feature_fixture.EVALUATION_END,
+    )
+    rewritten: list[Bar] = []
+    counts = {value: 0 for value in STAGE2_INSTRUMENT_IDS}
+    for bar in loaded.bars:
+        instrument_id = str(bar.bar_type.instrument_id)
+        index = counts[instrument_id]
+        counts[instrument_id] += 1
+        close = Decimal("100") if index < 175 else Decimal("101")
+        rewritten.append(
+            Bar(
+                bar_type=bar.bar_type,
+                open=Price.from_str(f"{close:.2f}"),
+                high=Price.from_str(f"{close + Decimal('1'):.2f}"),
+                low=Price.from_str(f"{close - Decimal('1'):.2f}"),
+                close=Price.from_str(f"{close:.2f}"),
+                volume=bar.volume,
+                ts_event=bar.ts_event,
+                ts_init=bar.ts_init,
+            )
+        )
+    parameters = Stage3MomentumParameters(
+        evaluation_start_ns=datetime_to_nanos(feature_fixture.EVALUATION_START),
+        evaluation_end_ns=datetime_to_nanos(feature_fixture.EVALUATION_END),
+    )
+
+    reports = momentum._run_engine(replace(loaded, bars=tuple(rewritten)), parameters)
+
+    b1_open = feature_fixture.DATASET_START_NS + 176 * HOUR_NS
+    in_bar_funding = b1_open + 3 * feature_fixture.MS_NS
+    assert any(cast(int, item["fill_ts"]) == b1_open for item in reports.associations)
+    funding = next(
+        item
+        for item in cast(list[dict[str, object]], reports.funding["events"])
+        if item["ts_event"] == in_bar_funding
+    )
+    assert Decimal(cast(str, funding["account_delta"])) != 0
 
 
 @pytest.mark.parametrize("status", ["INITIALIZED", "SUBMITTED", "PENDING_UPDATE"])
@@ -362,25 +425,249 @@ def test_unknown_order_state_fails_closed() -> None:
         strategy_module.unsettled_orders(UnknownOrderCache())
 
 
-def test_reversal_state_keeps_only_the_latest_target_before_confirmation() -> None:
-    close: dict[str, object] = {"decision_id": "close", "target_qty": "1"}
-    first_update: dict[str, object] = {
-        "decision_id": "first",
-        "target_qty": "-1",
-    }
-    latest_update: dict[str, object] = {
-        "decision_id": "latest",
-        "target_qty": "-2",
-    }
+@pytest.mark.parametrize(
+    ("current_at_decision", "current_at_b1", "expected_reason"),
+    [
+        ("1.000", None, "target_aligned"),
+        ("0.995", None, "delta_below_minimum"),
+        (None, "1.000", "target_aligned_at_b1"),
+        (None, "0.995", "delta_below_minimum_at_b1"),
+    ],
+)
+def test_zero_and_too_small_deltas_never_reach_the_order_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    current_at_decision: str | None,
+    current_at_b1: str | None,
+    expected_reason: str,
+) -> None:
+    def position(quantity: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            quantity=Quantity.from_str(quantity),
+            is_long=True,
+            is_short=False,
+        )
+
+    class MutableCache:
+        positions: list[object] = (
+            [] if current_at_decision is None else [position(current_at_decision)]
+        )
+
+        @classmethod
+        def positions_open(cls, *, instrument_id: object) -> list[object]:
+            return cls.positions
+
+        @staticmethod
+        def orders(*, instrument_id: object | None = None) -> list[object]:
+            return []
+
+    instrument_payload = feature_fixture._perpetual(
+        feature_fixture.BTC, "BTCUSDT", "BTC"
+    ).to_dict()
+    instrument_payload["min_quantity"] = "0.010"
+    instrument = CryptoPerpetual.from_dict(instrument_payload)
+    strategy = Stage3MomentumStrategy(
+        Stage3MomentumParameters(
+            evaluation_start_ns=0,
+            evaluation_end_ns=3 * HOUR_NS,
+        )
+    )
+    instrument_id = STAGE2_INSTRUMENT_IDS[0]
+    strategy._instruments[instrument_id] = instrument
+    monkeypatch.setattr(
+        Stage3MomentumStrategy,
+        "cache",
+        property(lambda _instance: MutableCache()),
+    )
+    monkeypatch.setattr(
+        Stage3MomentumStrategy,
+        "submit_order",
+        lambda _instance, _order: pytest.fail("a no-op submitted an order"),
+    )
+    decision_ts = HOUR_NS - feature_fixture.MS_NS
+
+    strategy._queue_decision(
+        instrument_id=instrument_id,
+        decision_ts=decision_ts,
+        close=Decimal("100"),
+        ret_24h=0.01,
+        signal="long",
+        target=Decimal("1.000"),
+    )
+    if current_at_b1 is not None:
+        MutableCache.positions = [position(current_at_b1)]
+        strategy._execute_pending(
+            instrument_id,
+            execution_ts=decision_ts + feature_fixture.MS_NS,
+            execution_price=Decimal("100"),
+        )
+
+    assert strategy.decisions[-1]["action"] == "none"
+    assert strategy.decisions[-1]["reason"] == expected_reason
+    assert not MutableCache.orders()
+
+
+def test_unknown_position_side_fails_closed_before_order_submission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnknownPositionCache:
+        @staticmethod
+        def positions_open(*, instrument_id: object) -> list[object]:
+            return [
+                SimpleNamespace(
+                    quantity=Quantity.from_str("1.000"),
+                    is_long=False,
+                    is_short=False,
+                )
+            ]
+
+        @staticmethod
+        def orders(*, instrument_id: object | None = None) -> list[object]:
+            return []
+
+    strategy = Stage3MomentumStrategy(
+        Stage3MomentumParameters(
+            evaluation_start_ns=0,
+            evaluation_end_ns=3 * HOUR_NS,
+        )
+    )
+    instrument_id = STAGE2_INSTRUMENT_IDS[0]
+    strategy._instruments[instrument_id] = feature_fixture._perpetual(
+        feature_fixture.BTC, "BTCUSDT", "BTC"
+    )
+    monkeypatch.setattr(
+        Stage3MomentumStrategy,
+        "cache",
+        property(lambda _instance: UnknownPositionCache()),
+    )
+
+    with pytest.raises(Stage3MomentumError, match="unknown side"):
+        strategy._queue_decision(
+            instrument_id=instrument_id,
+            decision_ts=HOUR_NS - feature_fixture.MS_NS,
+            close=Decimal("100"),
+            ret_24h=0.01,
+            signal="long",
+            target=Decimal("1.000"),
+        )
+
+
+def test_reversal_confirmation_submits_only_the_latest_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    decision_ts = HOUR_NS - feature_fixture.MS_NS
+
+    def record(decision_id: str, target: str) -> dict[str, object]:
+        return {
+            "action": "reversal_target_update",
+            "decision_id": decision_id,
+            "decision_sequence": 1,
+            "decision_ts": decision_ts,
+            "order_ids": [],
+            "order_intents": [],
+            "target_qty": target,
+        }
+
+    close = record("close", "1.000")
+    close["execution_price"] = "100"
+    first_update = record("first", "-1.000")
+    latest_update = record("latest", "-2.000")
     state = strategy_module._ReversalState(
         close_decision=close,
         latest_decision=close,
         close_order_id="close-order",
     )
-
     state.replace_target(first_update)
     state.replace_target(latest_update)
 
+    close_quantity = Quantity.from_str("1.000")
+    close_order = SimpleNamespace(
+        is_closed=True,
+        status="FILLED",
+        filled_qty=close_quantity,
+        quantity=close_quantity,
+    )
+
+    class FlatConfirmedCache:
+        @staticmethod
+        def orders(*, instrument_id: object | None = None) -> list[object]:
+            return [close_order]
+
+        @staticmethod
+        def order(client_order_id: object) -> object:
+            return close_order
+
+        @staticmethod
+        def positions_open(*, instrument_id: object) -> list[object]:
+            return []
+
+    created: list[dict[str, object]] = []
+
+    class RecordingOrderFactory:
+        @staticmethod
+        def market(
+            instrument_id: object,
+            side: object,
+            quantity: Quantity,
+            *,
+            reduce_only: bool,
+        ) -> SimpleNamespace:
+            created.append(
+                {
+                    "instrument_id": instrument_id,
+                    "quantity": quantity.as_decimal(),
+                    "reduce_only": reduce_only,
+                    "side": getattr(side, "name"),
+                }
+            )
+            return SimpleNamespace(client_order_id="latest-open-order")
+
+    submitted: list[object] = []
+    strategy = Stage3MomentumStrategy(
+        Stage3MomentumParameters(
+            evaluation_start_ns=0,
+            evaluation_end_ns=3 * HOUR_NS,
+        )
+    )
+    instrument_id = STAGE2_INSTRUMENT_IDS[0]
+    strategy._instruments[instrument_id] = feature_fixture._perpetual(
+        feature_fixture.BTC, "BTCUSDT", "BTC"
+    )
+    strategy._reversals[instrument_id] = state
+    monkeypatch.setattr(
+        Stage3MomentumStrategy,
+        "cache",
+        property(lambda _instance: FlatConfirmedCache()),
+    )
+    monkeypatch.setattr(
+        Stage3MomentumStrategy,
+        "order_factory",
+        property(lambda _instance: RecordingOrderFactory()),
+    )
+    monkeypatch.setattr(
+        Stage3MomentumStrategy,
+        "submit_order",
+        lambda _instance, order: submitted.append(order),
+    )
+
+    strategy._observe_reversal_confirmation(
+        instrument_id,
+        event_ts=decision_ts + feature_fixture.MS_NS,
+        confirmation_kind="PositionClosed",
+    )
+
+    assert created == [
+        {
+            "instrument_id": strategy._instrument_ids[instrument_id],
+            "quantity": Decimal("2.000"),
+            "reduce_only": False,
+            "side": "SELL",
+        }
+    ]
+    assert len(submitted) == 1
+    assert first_update["order_ids"] == []
+    assert latest_update["order_ids"] == ["latest-open-order"]
+    assert latest_update["reason"] == "submitted_after_flat_confirmation"
+    assert instrument_id not in strategy._reversals
     assert state.latest_decision is latest_update
     assert close["reversal_open_decision_id"] == "latest"
 

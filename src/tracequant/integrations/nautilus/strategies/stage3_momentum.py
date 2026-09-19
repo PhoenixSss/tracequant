@@ -26,7 +26,8 @@ from nautilus_trader.trading import Strategy, StrategyConfig
 from tracequant.research.stage3_features import (
     FEATURE_NAMES,
     FEATURE_SCHEMA_DIGEST,
-    HOUR_NS,
+    MS_NS,
+    STAGE2_CLOSE_OFFSET_MS,
     BarProjection,
     FundingProjection,
     IncrementalFeatureState,
@@ -438,7 +439,7 @@ class Stage3MomentumStrategy(Strategy):
             record["action"] = "reversal_target_update"
             record["reason"] = (
                 "no_in_window_next_bar"
-                if decision_ts + HOUR_NS >= self.parameters.evaluation_end_ns
+                if _next_bar_open_ns(decision_ts) >= self.parameters.evaluation_end_ns
                 else (
                     "awaiting_flat_confirmation"
                     if reversal.phase == "closing"
@@ -450,7 +451,7 @@ class Stage3MomentumStrategy(Strategy):
             return
         # The evaluation window is half-open. A decision without an in-window
         # B_1 is observable, but it cannot create an order or an outside fill.
-        if decision_ts + HOUR_NS >= self.parameters.evaluation_end_ns:
+        if _next_bar_open_ns(decision_ts) >= self.parameters.evaluation_end_ns:
             record["reason"] = "no_in_window_next_bar"
             self.decisions.append(record)
             return
@@ -490,7 +491,7 @@ class Stage3MomentumStrategy(Strategy):
         if record is None:
             return
         decision_ts = cast(int, record["decision_ts"])
-        if execution_ts != decision_ts + HOUR_NS:
+        if execution_ts != _next_bar_open_ns(decision_ts):
             raise Stage3MomentumError("pending decision did not reach its B_1 open")
         native_id = self._instrument_ids[instrument_id]
         record["execution_ts"] = execution_ts
@@ -635,7 +636,7 @@ class Stage3MomentumStrategy(Strategy):
             return
         record = reversal.latest_decision
         decision_ts = cast(int, record["decision_ts"])
-        if decision_ts + HOUR_NS >= self.parameters.evaluation_end_ns:
+        if _next_bar_open_ns(decision_ts) >= self.parameters.evaluation_end_ns:
             record["action"] = "none"
             record["reason"] = "no_in_window_reversal_open"
             self._reversals.pop(instrument_id, None)
@@ -740,6 +741,10 @@ def _signed_position_quantity(position: object) -> Decimal:
 
 def _instrument_quantity(instrument: CryptoPerpetual, absolute: Decimal) -> Quantity:
     return Quantity.from_str(f"{absolute:.{instrument.size_precision}f}")
+
+
+def _next_bar_open_ns(decision_ts: int) -> int:
+    return decision_ts + STAGE2_CLOSE_OFFSET_MS * MS_NS
 
 
 def _named(value: object) -> str:
