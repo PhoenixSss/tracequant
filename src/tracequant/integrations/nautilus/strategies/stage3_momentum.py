@@ -8,12 +8,16 @@ from typing import Final, Literal, cast
 from nautilus_trader.model import (
     Bar,
     BarType,
+    ClientOrderId,
     CryptoPerpetual,
     FundingRateUpdate,
     InstrumentId,
     MarkPriceUpdate,
     OmsType,
+    OrderFilled,
     OrderSide,
+    PositionChanged,
+    PositionClosed,
     Quantity,
 )
 from nautilus_trader.trading import Strategy, StrategyConfig
@@ -87,6 +91,20 @@ class Stage3MomentumParameters:
 
 
 Signal = Literal["long", "flat", "short"]
+
+
+@dataclass
+class _ReversalState:
+    close_decision: dict[str, object]
+    latest_decision: dict[str, object]
+    close_order_id: str
+    phase: Literal["closing", "flat_confirmed", "opening"] = "closing"
+    flat_confirmation_sequence: int | None = None
+    flat_confirmation_ts: int | None = None
+
+    def replace_target(self, decision: dict[str, object]) -> None:
+        self.latest_decision = decision
+        self.close_decision["reversal_open_decision_id"] = decision["decision_id"]
 
 
 def momentum_signal(ret_24h: float, threshold: Decimal) -> Signal:
@@ -165,6 +183,9 @@ class Stage3MomentumStrategy(Strategy):
         }
         self._instruments: dict[str, CryptoPerpetual] = {}
         self._pending: dict[str, dict[str, object]] = {}
+        self._reversals: dict[str, _ReversalState] = {}
+        self._event_sequence = 0
+        self.fill_event_sequences: dict[tuple[str, str], int] = {}
 
     def on_start(self) -> None:
         try:
@@ -234,6 +255,43 @@ class Stage3MomentumStrategy(Strategy):
             self.fatal_error = f"{type(exc).__name__}: {exc}"
             raise
 
+    def on_order_filled(self, event: OrderFilled) -> None:
+        try:
+            key = (str(event.client_order_id), str(event.trade_id))
+            if key in self.fill_event_sequences:
+                raise Stage3MomentumError("duplicate native fill identity")
+            self.fill_event_sequences[key] = self._next_event_sequence()
+            self._observe_reversal_confirmation(
+                str(event.instrument_id),
+                event_ts=int(event.ts_event),
+                confirmation_kind=type(event).__name__,
+            )
+        except Exception as exc:
+            self.fatal_error = f"{type(exc).__name__}: {exc}"
+            raise
+
+    def on_position_changed(self, event: PositionChanged) -> None:
+        try:
+            self._observe_reversal_confirmation(
+                str(event.instrument_id),
+                event_ts=int(event.ts_event),
+                confirmation_kind=type(event).__name__,
+            )
+        except Exception as exc:
+            self.fatal_error = f"{type(exc).__name__}: {exc}"
+            raise
+
+    def on_position_closed(self, event: PositionClosed) -> None:
+        try:
+            self._observe_reversal_confirmation(
+                str(event.instrument_id),
+                event_ts=int(event.ts_event),
+                confirmation_kind=type(event).__name__,
+            )
+        except Exception as exc:
+            self.fatal_error = f"{type(exc).__name__}: {exc}"
+            raise
+
     def _handle_bar(self, bar: Bar) -> None:
         instrument_id = str(bar.bar_type.instrument_id)
         state = self._feature_states.get(instrument_id)
@@ -246,6 +304,10 @@ class Stage3MomentumStrategy(Strategy):
             < self.parameters.evaluation_end_ns
         )
         if tradable:
+            self._advance_confirmed_reversal(
+                instrument_id,
+                execution_ts=decision_ts,
+            )
             self._execute_pending(instrument_id, execution_ts=decision_ts)
         observation = state.push_bar(
             BarProjection(
@@ -312,16 +374,33 @@ class Stage3MomentumStrategy(Strategy):
             "decision_id": _decision_id(
                 instrument_id, decision_ts, signal, target, close
             ),
+            "decision_sequence": self._next_event_sequence(),
             "decision_ts": decision_ts,
             "delta_qty": str(delta),
             "feature_schema_digest": FEATURE_SCHEMA_DIGEST,
             "instrument_id": instrument_id,
             "order_ids": [],
+            "order_intents": [],
             "reason": "target_aligned",
             "ret_24h": repr(ret_24h),
             "signal": signal,
             "target_qty": str(target),
         }
+        reversal = self._reversals.get(instrument_id)
+        if reversal is not None and reversal.phase != "opening":
+            record["action"] = "reversal_target_update"
+            record["reason"] = (
+                "no_in_window_next_bar"
+                if decision_ts + HOUR_NS >= self.parameters.evaluation_end_ns
+                else (
+                    "awaiting_flat_confirmation"
+                    if reversal.phase == "closing"
+                    else "awaiting_first_executable_event_after_flat"
+                )
+            )
+            reversal.replace_target(record)
+            self.decisions.append(record)
+            return
         # The evaluation window is half-open. A decision without an in-window
         # B_1 is observable, but it cannot create an order or an outside fill.
         if decision_ts + HOUR_NS >= self.parameters.evaluation_end_ns:
@@ -392,12 +471,180 @@ class Stage3MomentumStrategy(Strategy):
             quantity,
             reduce_only=reduce_only,
         )
-        self.submit_order(order)
         record["action"] = "reversal_close" if reversing else "submit_delta"
-        record["order_ids"] = [str(order.client_order_id)]
         record["reason"] = "submitted"
         record["submitted_qty"] = str(quantity)
         record["submitted_side"] = side.name
+        if reversing:
+            reversal = _ReversalState(
+                close_decision=record,
+                latest_decision=record,
+                close_order_id=str(order.client_order_id),
+            )
+            self._reversals[instrument_id] = reversal
+            self._record_order_intent(
+                record,
+                order_id=str(order.client_order_id),
+                leg="reversal_close",
+                expected_fill_ts=execution_ts,
+            )
+        else:
+            self._record_order_intent(
+                record,
+                order_id=str(order.client_order_id),
+                leg="direct",
+                expected_fill_ts=execution_ts,
+            )
+        self.submit_order(order)
+
+    @property
+    def pending_reversal_count(self) -> int:
+        return len(self._reversals)
+
+    def _observe_reversal_confirmation(
+        self,
+        instrument_id: str,
+        *,
+        event_ts: int,
+        confirmation_kind: str,
+    ) -> None:
+        reversal = self._reversals.get(instrument_id)
+        if reversal is None or reversal.phase != "closing":
+            return
+        native_id = self._instrument_ids[instrument_id]
+        if self.cache.orders_open(instrument_id=native_id):
+            return
+        close_order = self.cache.order(ClientOrderId.from_str(reversal.close_order_id))
+        if (
+            close_order is None
+            or _named(getattr(close_order, "status")) != "FILLED"
+            or getattr(close_order, "filled_qty") != getattr(close_order, "quantity")
+        ):
+            return
+        positions = self.cache.positions_open(instrument_id=native_id)
+        if len(positions) > 1:
+            raise Stage3MomentumError("NETTING cache has multiple open positions")
+        if positions:
+            return
+        reversal.phase = "flat_confirmed"
+        reversal.flat_confirmation_sequence = self._next_event_sequence()
+        reversal.flat_confirmation_ts = event_ts
+        reversal.close_decision["flat_confirmation_kind"] = confirmation_kind
+        reversal.close_decision["flat_confirmation_sequence"] = (
+            reversal.flat_confirmation_sequence
+        )
+        reversal.close_decision["flat_confirmation_ts"] = event_ts
+        self._submit_reversal_open(instrument_id, execution_ts=event_ts)
+
+    def _advance_confirmed_reversal(
+        self,
+        instrument_id: str,
+        *,
+        execution_ts: int,
+    ) -> None:
+        reversal = self._reversals.get(instrument_id)
+        if reversal is not None and reversal.phase == "flat_confirmed":
+            self._submit_reversal_open(instrument_id, execution_ts=execution_ts)
+
+    def _submit_reversal_open(
+        self,
+        instrument_id: str,
+        *,
+        execution_ts: int,
+    ) -> None:
+        reversal = self._reversals.get(instrument_id)
+        if reversal is None or reversal.phase != "flat_confirmed":
+            return
+        record = reversal.latest_decision
+        decision_ts = cast(int, record["decision_ts"])
+        if decision_ts + HOUR_NS >= self.parameters.evaluation_end_ns:
+            record["action"] = "none"
+            record["reason"] = "no_in_window_reversal_open"
+            self._reversals.pop(instrument_id, None)
+            return
+        if execution_ts <= decision_ts:
+            record["reason"] = "awaiting_first_event_after_updated_decision"
+            return
+        native_id = self._instrument_ids[instrument_id]
+        if self.cache.orders_open(instrument_id=native_id):
+            record["reason"] = "flat_confirmation_has_open_order"
+            return
+        positions = self.cache.positions_open(instrument_id=native_id)
+        if len(positions) > 1:
+            raise Stage3MomentumError("NETTING cache has multiple open positions")
+        if positions:
+            record["reason"] = "flat_confirmation_has_position"
+            return
+        target = Decimal(cast(str, record["target_qty"]))
+        if target == 0:
+            record["action"] = "none"
+            record["reason"] = "latest_reversal_target_is_flat"
+            self._reversals.pop(instrument_id, None)
+            return
+        instrument = self._instruments[instrument_id]
+        absolute = abs(target)
+        if absolute < minimum_order_quantity(instrument):
+            raise Stage3MomentumError("reversal target is below minimum")
+        quantity = _instrument_quantity(instrument, absolute)
+        if (
+            quantity.as_decimal() != absolute
+            or quantity.precision > instrument.size_precision
+        ):
+            raise Stage3MomentumError("reversal target violates instrument precision")
+        side = OrderSide.BUY if target > 0 else OrderSide.SELL
+        order = self.order_factory.market(
+            native_id,
+            side,
+            quantity,
+            reduce_only=False,
+        )
+        reversal.phase = "opening"
+        if record is not reversal.close_decision:
+            record["action"] = "reversal_open"
+        record["reason"] = "submitted_after_flat_confirmation"
+        record["current_qty_at_execution"] = "0"
+        record["delta_qty_at_execution"] = str(target)
+        record["flat_confirmation_sequence"] = reversal.flat_confirmation_sequence
+        record["flat_confirmation_ts"] = reversal.flat_confirmation_ts
+        record["submitted_qty"] = str(quantity)
+        record["submitted_side"] = side.name
+        self._record_order_intent(
+            record,
+            order_id=str(order.client_order_id),
+            leg="reversal_open",
+            expected_fill_ts=execution_ts,
+            flat_confirmation_sequence=reversal.flat_confirmation_sequence,
+        )
+        reversal.close_decision["reversal_open_decision_id"] = record["decision_id"]
+        reversal.close_decision["reversal_open_order_id"] = str(order.client_order_id)
+        self.submit_order(order)
+        if self._reversals.get(instrument_id) is reversal:
+            self._reversals.pop(instrument_id, None)
+
+    def _record_order_intent(
+        self,
+        record: dict[str, object],
+        *,
+        order_id: str,
+        leg: Literal["direct", "reversal_close", "reversal_open"],
+        expected_fill_ts: int,
+        flat_confirmation_sequence: int | None = None,
+    ) -> None:
+        submit_sequence = self._next_event_sequence()
+        cast(list[str], record["order_ids"]).append(order_id)
+        intent: dict[str, object] = {
+            "expected_fill_ts": expected_fill_ts,
+            "leg": leg,
+            "order_id": order_id,
+            "submit_sequence": submit_sequence,
+        }
+        if flat_confirmation_sequence is not None:
+            intent["flat_confirmation_sequence"] = flat_confirmation_sequence
+        cast(list[dict[str, object]], record["order_intents"]).append(intent)
+
+    def _next_event_sequence(self) -> int:
+        self._event_sequence += 1
+        return self._event_sequence
 
 
 def _signed_position_quantity(position: object) -> Decimal:
@@ -411,6 +658,11 @@ def _signed_position_quantity(position: object) -> Decimal:
 
 def _instrument_quantity(instrument: CryptoPerpetual, absolute: Decimal) -> Quantity:
     return Quantity.from_str(f"{absolute:.{instrument.size_precision}f}")
+
+
+def _named(value: object) -> str:
+    name = getattr(value, "name", None)
+    return name if isinstance(name, str) and name else str(value)
 
 
 def _decision_id(

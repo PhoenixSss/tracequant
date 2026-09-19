@@ -23,15 +23,20 @@ from nautilus_trader.model import (
     MarkPriceUpdate,
     Money,
     OmsType,
+    OrderFilled,
     TraderId,
     Venue,
 )
 from nautilus_trader.persistence import ParquetDataCatalog
 
+from tracequant.integrations import nautilus as nautilus_integration
 from tracequant.integrations.nautilus import (
     EXPECTED_VERSION,
     UPSTREAM_RELEASE_IDENTITY,
     distribution_version,
+)
+from tracequant.integrations.nautilus.strategies import (
+    stage3_momentum as momentum_strategy,
 )
 from tracequant.integrations.nautilus.strategies.stage3_momentum import (
     BASE_MAKER_FEE,
@@ -45,6 +50,7 @@ from tracequant.integrations.nautilus.strategies.stage3_momentum import (
     target_quantity,
 )
 from tracequant.research import stage3_features
+from tracequant.research import views as research_views
 from tracequant.research.stage3_features import (
     FEATURE_LOOKBACK_HOURS,
     FEATURE_SCHEMA_DIGEST,
@@ -55,6 +61,7 @@ from tracequant.research.stage3_features import (
     load_stage3_config,
 )
 from tracequant.research.views import load_funding
+from tracequant.source_data import stage2_btceth
 from tracequant.source_data.stage2_btceth import (
     STAGE2_INSTRUMENT_IDS,
     STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
@@ -135,37 +142,42 @@ def run_stage3_momentum_backtest(
     _require_runtime()
     _require_requirements_baseline()
     _require_external_run_root(config.run_root, catalog_path=config.catalog_path)
-    start = parse_utc(STAGE3_MOMENTUM_START)
-    end = parse_utc(STAGE3_MOMENTUM_END)
-    context_start = start - timedelta(hours=FEATURE_LOOKBACK_HOURS)
+    _claim_run_root(config.run_root)
     try:
-        expected = load_accepted_feature_window(
-            config,
-            acceptance_record_path=acceptance_record_path,
-            start=context_start,
-            end=end,
-            decision_start=start,
-            mode="evaluation",
+        start = parse_utc(STAGE3_MOMENTUM_START)
+        end = parse_utc(STAGE3_MOMENTUM_END)
+        context_start = start - timedelta(hours=FEATURE_LOOKBACK_HOURS)
+        try:
+            expected = load_accepted_feature_window(
+                config,
+                acceptance_record_path=acceptance_record_path,
+                start=context_start,
+                end=end,
+                decision_start=start,
+                mode="evaluation",
+            )
+            loaded = _load_native_stage3_data(
+                config.catalog_path,
+                start=context_start,
+                end=end,
+            )
+        except Stage3DataError as exc:
+            raise Stage3MomentumError(f"accepted Stage 3 input failed: {exc}") from exc
+        reports = _run_engine(loaded, parameters)
+        _require_runtime_feature_parity(reports.decisions, expected, loaded.instruments)
+        run_identity = _run_identity(config, parameters)
+        result_digest = _canonical_digest(_business_result(reports))
+        outcome = Stage3MomentumOutcome(
+            reports=reports,
+            partition=config.run_root,
+            run_identity=run_identity,
+            result_digest=result_digest,
         )
-        loaded = _load_native_stage3_data(
-            config.catalog_path,
-            start=context_start,
-            end=end,
-        )
-    except Stage3DataError as exc:
-        raise Stage3MomentumError(f"accepted Stage 3 input failed: {exc}") from exc
-    reports = _run_engine(loaded, parameters)
-    _require_runtime_feature_parity(reports.decisions, expected, loaded.instruments)
-    run_identity = _run_identity(config, parameters)
-    result_digest = _canonical_digest(_business_result(reports))
-    outcome = Stage3MomentumOutcome(
-        reports=reports,
-        partition=config.run_root,
-        run_identity=run_identity,
-        result_digest=result_digest,
-    )
-    _write_outcome(outcome, config, parameters, loaded.fee_provenance)
-    return outcome
+        _write_outcome(outcome, config, parameters, loaded.fee_provenance)
+        return outcome
+    except Exception:
+        _release_empty_run_root(config.run_root)
+        raise
 
 
 def canonical_business_result(outcome: Stage3MomentumOutcome) -> dict[str, object]:
@@ -216,9 +228,7 @@ def _require_requirements_baseline() -> None:
 def _require_empty_run_root(run_root: Path) -> None:
     if not run_root.is_absolute():
         raise Stage3MomentumError("run_root must be an absolute external path")
-    if run_root.exists() and not run_root.is_dir():
-        raise Stage3MomentumError("run_root must be a directory")
-    if run_root.is_dir() and any(run_root.iterdir()):
+    if run_root.exists():
         raise Stage3MomentumError("run_root must be a new empty identity partition")
 
 
@@ -237,6 +247,25 @@ def _require_external_run_root(run_root: Path, *, catalog_path: Path) -> None:
         raise Stage3MomentumError("run_root must not overlap the Nautilus catalog")
     if any(part.lower() == "latest" for part in resolved.parts):
         raise Stage3MomentumError("run_root must not use a latest alias")
+
+
+def _claim_run_root(run_root: Path) -> None:
+    run_root.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        run_root.mkdir()
+    except FileExistsError as exc:
+        raise Stage3MomentumError(
+            "run_root must be a new empty identity partition"
+        ) from exc
+
+
+def _release_empty_run_root(run_root: Path) -> None:
+    try:
+        run_root.rmdir()
+    except OSError:
+        # A non-empty partition is immutable failure evidence and must not be
+        # removed or reused after a partial output commit.
+        pass
 
 
 def _load_native_stage3_data(
@@ -438,10 +467,10 @@ def _collect_reports(
 ) -> Stage3MomentumReports:
     native_orders = tuple(engine.cache.orders())
     orders = tuple(_order_record(item, usdt) for item in native_orders)
-    fills = tuple(
-        _fill_record(item, usdt) for item in native_orders if _is_filled(item)
-    )
+    fills = _native_fill_records(native_orders, strategy.fill_event_sequences)
     _require_fee_and_execution_contract(strategy.decisions, orders, fills, usdt)
+    if strategy.pending_reversal_count:
+        raise Stage3MomentumError("terminal state contains unresolved reversal intent")
     native_positions = tuple(engine.cache.positions())
     positions = tuple(_position_record(item) for item in native_positions)
     account = engine.cache.account_for_venue(venue)
@@ -486,7 +515,7 @@ def _collect_reports(
     )
     turnover_notional = sum(
         (
-            Decimal(cast(str, item["filled_qty"])) * Decimal(cast(str, item["avg_px"]))
+            Decimal(cast(str, item["last_qty"])) * Decimal(cast(str, item["last_px"]))
             for item in fills
         ),
         Decimal(0),
@@ -502,7 +531,7 @@ def _collect_reports(
         ),
         "turnover": str(turnover_notional / STAGE3_STARTING_USDT),
     }
-    associations = _associations(strategy.decisions, orders)
+    associations = _associations(strategy.decisions, orders, fills)
     return Stage3MomentumReports(
         decisions=tuple(dict(item) for item in strategy.decisions),
         associations=associations,
@@ -524,40 +553,91 @@ def _require_fee_and_execution_contract(
     currency: Currency,
 ) -> None:
     by_order = {cast(str, item["client_order_id"]): item for item in orders}
-    fill_ids = {cast(str, item["client_order_id"]) for item in fills}
+    fills_by_order: dict[str, list[Mapping[str, object]]] = {}
+    for fill in fills:
+        fills_by_order.setdefault(cast(str, fill["client_order_id"]), []).append(fill)
+    submitted_order_ids: set[str] = set()
     for decision in decisions:
         if decision["reason"] == "b1_open_order_unavailable":
             raise Stage3MomentumError("a momentum intent could not execute on B_1")
         decision_ts = cast(int, decision["decision_ts"])
-        for order_id in cast(Sequence[str], decision["order_ids"]):
+        decision_sequence = cast(int, decision["decision_sequence"])
+        intents = cast(Sequence[Mapping[str, object]], decision["order_intents"])
+        if [item["order_id"] for item in intents] != list(
+            cast(Sequence[str], decision["order_ids"])
+        ):
+            raise Stage3MomentumError("decision order intent identity is inconsistent")
+        for intent in intents:
+            order_id = cast(str, intent["order_id"])
+            if order_id in submitted_order_ids:
+                raise Stage3MomentumError("order is associated with multiple decisions")
+            submitted_order_ids.add(order_id)
             order = by_order.get(order_id)
             if order is None:
                 raise Stage3MomentumError("submitted market order is missing")
-            if order_id not in fill_ids:
+            if order["status"] != "FILLED" or Decimal(
+                cast(str, order["filled_qty"])
+            ) != Decimal(cast(str, order["quantity"])):
                 raise Stage3MomentumError(
-                    "submitted market order did not fill: "
+                    "submitted market order was not completely filled: "
                     f"{order_id} status={order['status']} "
                     f"reason={order['last_event_reason']}"
                 )
-            fill_ts = cast(int, order["ts_last"])
-            if fill_ts != decision_ts + stage3_features.HOUR_NS:
-                raise Stage3MomentumError("market order did not execute on B_1")
-            if fill_ts <= decision_ts:
-                raise Stage3MomentumError("market fill is not after its decision")
-            commission = order["commission"]
-            avg_px = order["avg_px"]
-            if commission is None or avg_px is None:
-                raise Stage3MomentumError("filled market order has no fee or price")
-            expected_amount = (
-                Decimal(cast(str, order["filled_qty"]))
-                * Decimal(cast(str, avg_px))
-                * BASE_TAKER_FEE
-            )
-            expected = Money.from_str(f"{expected_amount} {currency}").as_decimal()
-            if _money_amount(cast(str, commission)) != expected:
+            native_fills = fills_by_order.get(order_id, [])
+            if not native_fills:
                 raise Stage3MomentumError(
-                    "market fill commission does not match the bound taker fee"
+                    f"submitted market order has no native fills: {order_id}"
                 )
+            native_quantity = sum(
+                (Decimal(cast(str, fill["last_qty"])) for fill in native_fills),
+                Decimal(0),
+            )
+            if native_quantity != Decimal(cast(str, order["quantity"])):
+                raise Stage3MomentumError(
+                    "native fill quantity does not complete the submitted intent"
+                )
+            expected_fill_ts = cast(int, intent["expected_fill_ts"])
+            submit_sequence = cast(int, intent["submit_sequence"])
+            if submit_sequence <= decision_sequence:
+                raise Stage3MomentumError(
+                    "order submission does not follow its target decision"
+                )
+            leg = cast(str, intent["leg"])
+            flat_sequence = intent.get("flat_confirmation_sequence")
+            if leg == "reversal_open" and (
+                not isinstance(flat_sequence, int) or submit_sequence <= flat_sequence
+            ):
+                raise Stage3MomentumError(
+                    "reversal open was not ordered after flat confirmation"
+                )
+            for fill in native_fills:
+                fill_ts = cast(int, fill["ts_event"])
+                if fill_ts != expected_fill_ts:
+                    raise Stage3MomentumError(
+                        "market fill missed its first executable event"
+                    )
+                if fill_ts <= decision_ts:
+                    raise Stage3MomentumError("market fill is not after its decision")
+                fill_sequence = cast(int, fill["event_sequence"])
+                if fill_sequence <= submit_sequence:
+                    raise Stage3MomentumError(
+                        "native fill event does not follow order submission"
+                    )
+                commission = fill["commission"]
+                if commission is None:
+                    raise Stage3MomentumError("native market fill has no commission")
+                expected_amount = (
+                    Decimal(cast(str, fill["last_qty"]))
+                    * Decimal(cast(str, fill["last_px"]))
+                    * BASE_TAKER_FEE
+                )
+                expected = Money.from_str(f"{expected_amount} {currency}").as_decimal()
+                if _money_amount(cast(str, commission)) != expected:
+                    raise Stage3MomentumError(
+                        "market fill commission does not match the bound taker fee"
+                    )
+    if set(fills_by_order) != submitted_order_ids:
+        raise Stage3MomentumError("native fills include an unassociated order")
 
 
 def _require_runtime_feature_parity(
@@ -617,7 +697,7 @@ def _funding_report(
                 "ts_event": int(item.ts_event),
             }
         )
-    fill_times = {cast(int, item["ts_last"]) for item in fills}
+    fill_times = {cast(int, item["ts_event"]) for item in fills}
     if fill_times.intersection(funding_by_ts):
         raise Stage3MomentumError(
             "funding and fill timestamps collide; account attribution is ambiguous"
@@ -704,25 +784,38 @@ def _native_signed_position_quantity(position: object) -> Decimal:
 def _associations(
     decisions: Sequence[Mapping[str, object]],
     orders: Sequence[Mapping[str, object]],
+    fills: Sequence[Mapping[str, object]],
 ) -> tuple[dict[str, object], ...]:
     by_id = {cast(str, item["client_order_id"]): item for item in orders}
+    fills_by_order: dict[str, list[Mapping[str, object]]] = {}
+    for fill in fills:
+        fills_by_order.setdefault(cast(str, fill["client_order_id"]), []).append(fill)
     result: list[dict[str, object]] = []
     for decision in decisions:
-        for order_id in cast(Sequence[str], decision["order_ids"]):
+        for intent in cast(Sequence[Mapping[str, object]], decision["order_intents"]):
+            order_id = cast(str, intent["order_id"])
             order = by_id[order_id]
-            result.append(
-                {
-                    "decision_id": decision["decision_id"],
-                    "decision_ts": decision["decision_ts"],
-                    "event_sequence": len(result),
-                    "expected_fill_ts": cast(int, decision["decision_ts"])
-                    + stage3_features.HOUR_NS,
-                    "fill_ts": order["ts_last"],
-                    "instrument_id": decision["instrument_id"],
-                    "order_id": order_id,
-                    "order_ts_init": order["ts_init"],
-                }
-            )
+            for fill in fills_by_order[order_id]:
+                result.append(
+                    {
+                        "decision_id": decision["decision_id"],
+                        "decision_sequence": decision["decision_sequence"],
+                        "decision_ts": decision["decision_ts"],
+                        "expected_fill_ts": intent["expected_fill_ts"],
+                        "fill_event_sequence": fill["event_sequence"],
+                        "fill_ts": fill["ts_event"],
+                        "flat_confirmation_sequence": intent.get(
+                            "flat_confirmation_sequence"
+                        ),
+                        "instrument_id": decision["instrument_id"],
+                        "leg": intent["leg"],
+                        "order_id": order_id,
+                        "order_submit_sequence": intent["submit_sequence"],
+                        "order_ts_init": order["ts_init"],
+                        "trade_id": fill["trade_id"],
+                    }
+                )
+    result.sort(key=lambda item: cast(int, item["fill_event_sequence"]))
     return tuple(result)
 
 
@@ -743,20 +836,50 @@ def _order_record(order: object, currency: Currency) -> dict[str, object]:
     }
 
 
-def _fill_record(order: object, currency: Currency) -> dict[str, object]:
-    record = _order_record(order, currency)
-    return {
-        key: record[key]
-        for key in (
-            "avg_px",
-            "client_order_id",
-            "commission",
-            "filled_qty",
-            "instrument_id",
-            "side",
-            "status",
-            "ts_last",
+def _native_fill_records(
+    orders: Sequence[object],
+    fill_event_sequences: Mapping[tuple[str, str], int],
+) -> tuple[dict[str, object], ...]:
+    records: list[dict[str, object]] = []
+    for order in orders:
+        for event in cast(Sequence[object], getattr(order, "events")()):
+            if not isinstance(event, OrderFilled):
+                continue
+            key = (str(event.client_order_id), str(event.trade_id))
+            sequence = fill_event_sequences.get(key)
+            if sequence is None:
+                raise Stage3MomentumError(
+                    "native fill is missing its Strategy callback sequence"
+                )
+            records.append(_fill_record(event, event_sequence=sequence))
+    records.sort(
+        key=lambda item: (
+            cast(int, item["ts_event"]),
+            cast(int, item["event_sequence"]),
+            cast(str, item["client_order_id"]),
+            cast(str, item["trade_id"]),
         )
+    )
+    return tuple(records)
+
+
+def _fill_record(fill: object, *, event_sequence: int) -> dict[str, object]:
+    return {
+        "client_order_id": str(getattr(fill, "client_order_id")),
+        "commission": _maybe_str(getattr(fill, "commission", None)),
+        "currency": str(getattr(fill, "currency")),
+        "event_sequence": event_sequence,
+        "instrument_id": str(getattr(fill, "instrument_id")),
+        "last_px": str(getattr(fill, "last_px")),
+        "last_qty": str(getattr(fill, "last_qty")),
+        "liquidity_side": _named(getattr(fill, "liquidity_side")),
+        "order_side": _named(getattr(fill, "order_side")),
+        "order_type": _named(getattr(fill, "order_type")),
+        "position_id": _maybe_str(getattr(fill, "position_id", None)),
+        "trade_id": str(getattr(fill, "trade_id")),
+        "ts_event": int(getattr(fill, "ts_event")),
+        "ts_init": int(getattr(fill, "ts_init")),
+        "venue_order_id": str(getattr(fill, "venue_order_id")),
     }
 
 
@@ -796,11 +919,6 @@ def _commission(order: object, currency: Currency) -> str | None:
     if method is None:
         return None
     return _maybe_str(method(currency) if callable(method) else method)
-
-
-def _is_filled(order: object) -> bool:
-    filled = getattr(order, "filled_qty", None)
-    return filled is not None and Decimal(str(filled)) > 0
 
 
 def _business_result(reports: Stage3MomentumReports) -> dict[str, object]:
@@ -878,10 +996,6 @@ def _write_outcome(
     fee_provenance: Sequence[Mapping[str, object]],
 ) -> None:
     partition = outcome.partition
-    # Recheck after the potentially long backtest so an external writer cannot
-    # turn the identity partition into an overwrite target during the run.
-    _require_empty_run_root(partition)
-    partition.mkdir(parents=True, exist_ok=True)
     payloads: dict[str, object] = {
         "account.json": outcome.reports.account,
         "associations.json": list(outcome.reports.associations),
@@ -889,7 +1003,24 @@ def _write_outcome(
         "fee-provenance.json": list(fee_provenance),
         "fills.json": list(outcome.reports.fills),
         "funding.json": outcome.reports.funding,
-        "manifest.json": {
+        "orders.json": list(outcome.reports.orders),
+        "positions.json": list(outcome.reports.positions),
+        "result.json": outcome.reports.result,
+        "stage3_partition_identity.json": {
+            "acceptance_digest": config.acceptance_digest,
+            "dataset_id": config.dataset_id,
+            "runtime_identity": config.runtime_identity,
+        },
+        "summary.json": outcome.reports.summary,
+        "terminal.json": outcome.reports.terminal,
+    }
+    for name, payload in payloads.items():
+        _write_json_exclusive(partition / name, payload)
+    # The manifest is the completion marker and is committed last. Every file
+    # uses exclusive creation so even an external writer cannot be overwritten.
+    _write_json_exclusive(
+        partition / "manifest.json",
+        {
             "acceptance_digest": config.acceptance_digest,
             "dataset_digest": config.dataset_digest,
             "dataset_id": config.dataset_id,
@@ -907,36 +1038,44 @@ def _write_outcome(
             "schema": STAGE3_MOMENTUM_SCHEMA,
             "source_manifest_digest": config.source_manifest_digest,
         },
-        "orders.json": list(outcome.reports.orders),
-        "positions.json": list(outcome.reports.positions),
-        "result.json": outcome.reports.result,
-        "stage3_partition_identity.json": {
-            "acceptance_digest": config.acceptance_digest,
-            "dataset_id": config.dataset_id,
-            "runtime_identity": config.runtime_identity,
-        },
-        "summary.json": outcome.reports.summary,
-        "terminal.json": outcome.reports.terminal,
-    }
-    for name, payload in payloads.items():
-        (partition / name).write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-
-
-def _relevant_code_digest() -> str:
-    paths = (
-        Path(__file__),
-        Path(stage3_features.__file__),
-        Path(__file__).with_name("strategies") / "stage3_momentum.py",
     )
+
+
+def _write_json_exclusive(path: Path, payload: object) -> None:
+    try:
+        with path.open("x", encoding="utf-8") as stream:
+            json.dump(payload, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+    except FileExistsError as exc:
+        raise Stage3MomentumError(
+            f"run output already exists and cannot be overwritten: {path.name}"
+        ) from exc
+
+
+def _relevant_code_files() -> tuple[tuple[str, Path], ...]:
+    return (
+        ("integrations/nautilus/__init__.py", Path(nautilus_integration.__file__)),
+        ("integrations/nautilus/stage3_momentum.py", Path(__file__)),
+        (
+            "integrations/nautilus/strategies/stage3_momentum.py",
+            Path(momentum_strategy.__file__),
+        ),
+        ("research/stage3_features.py", Path(stage3_features.__file__)),
+        ("research/views.py", Path(research_views.__file__)),
+        ("source_data/stage2_btceth.py", Path(stage2_btceth.__file__)),
+    )
+
+
+def _relevant_code_digest(
+    files: Sequence[tuple[str, Path]] | None = None,
+) -> str:
+    paths = _relevant_code_files() if files is None else tuple(files)
     payload = [
         {
-            "name": path.name if index < 2 else f"strategies/{path.name}",
+            "name": name,
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         }
-        for index, path in enumerate(paths)
+        for name, path in sorted(paths)
     ]
     return _canonical_digest(payload)
 

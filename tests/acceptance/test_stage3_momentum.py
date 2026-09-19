@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from threading import Barrier
 from typing import cast
 
 import pytest
-from nautilus_trader.model import Bar, CryptoPerpetual, Price
+from nautilus_trader.model import Bar, CryptoPerpetual, Currency, Price
 from nautilus_trader.trading import Strategy
 
 from tests.acceptance import test_stage3_features as feature_fixture
@@ -16,6 +18,9 @@ from tracequant.integrations.nautilus import stage3_momentum as momentum
 from tracequant.integrations.nautilus.stage3_momentum import (
     canonical_business_result,
     run_stage3_momentum_backtest,
+)
+from tracequant.integrations.nautilus.strategies import (
+    stage3_momentum as strategy_module,
 )
 from tracequant.integrations.nautilus.strategies.stage3_momentum import (
     BASE_TAKER_FEE,
@@ -106,8 +111,8 @@ def test_stage3_momentum_runs_from_stage2_catalog_with_nautilus_accounting(
     for fill in first.reports.fills:
         commission = Decimal(cast(str, fill["commission"]).split()[0])
         expected = (
-            Decimal(cast(str, fill["filled_qty"]))
-            * Decimal(cast(str, fill["avg_px"]))
+            Decimal(cast(str, fill["last_qty"]))
+            * Decimal(cast(str, fill["last_px"]))
             * BASE_TAKER_FEE
         ).quantize(Decimal("0.00000001"))
         assert commission == expected
@@ -217,17 +222,45 @@ def test_momentum_state_machine_covers_long_flat_short_and_reversal(
         item for item in reports.decisions if item["action"] == "reversal_close"
     ]
     assert reversals
+    decisions_by_id = {item["decision_id"]: item for item in reports.decisions}
+    associations_by_order: dict[object, list[dict[str, object]]] = {}
+    for association in reports.associations:
+        associations_by_order.setdefault(association["order_id"], []).append(
+            association
+        )
     for reversal in reversals:
-        later_opens = [
+        open_decision = decisions_by_id[reversal["reversal_open_decision_id"]]
+        assert open_decision is not reversal
+        assert open_decision["action"] == "reversal_open"
+        close_intent = next(
             item
-            for item in reports.decisions
-            if item["instrument_id"] == reversal["instrument_id"]
-            and cast(int, item["decision_ts"]) > cast(int, reversal["decision_ts"])
-            and item["signal"] == reversal["signal"]
-            and item["action"] == "submit_delta"
-            and item.get("current_qty_at_execution") == "0"
-        ]
-        assert later_opens
+            for item in cast(list[dict[str, object]], reversal["order_intents"])
+            if item["leg"] == "reversal_close"
+        )
+        open_intent = next(
+            item
+            for item in cast(list[dict[str, object]], open_decision["order_intents"])
+            if item["leg"] == "reversal_open"
+        )
+        close_fills = associations_by_order[close_intent["order_id"]]
+        open_fills = associations_by_order[open_intent["order_id"]]
+        flat_sequence = cast(int, reversal["flat_confirmation_sequence"])
+        assert all(
+            item["fill_ts"] == reversal["flat_confirmation_ts"] for item in close_fills
+        )
+        assert all(
+            item["fill_ts"] == open_intent["expected_fill_ts"]
+            and cast(int, item["fill_ts"])
+            == cast(int, open_decision["decision_ts"]) + HOUR_NS
+            for item in open_fills
+        )
+        assert cast(int, close_intent["submit_sequence"]) < cast(
+            int, open_decision["decision_sequence"]
+        ) < min(cast(int, item["fill_event_sequence"]) for item in close_fills) and max(
+            cast(int, item["fill_event_sequence"]) for item in close_fills
+        ) < flat_sequence < cast(int, open_fills[0]["order_submit_sequence"]) < min(
+            cast(int, item["fill_event_sequence"]) for item in open_fills
+        )
     assert any(
         item["action"] == "submit_delta"
         and item["current_qty"] != "0"
@@ -239,6 +272,117 @@ def test_momentum_state_machine_covers_long_flat_short_and_reversal(
         for item in reports.associations
     )
     assert reports.terminal["open_order_count"] == 0
+
+
+def test_reversal_state_keeps_only_the_latest_target_before_confirmation() -> None:
+    close: dict[str, object] = {"decision_id": "close", "target_qty": "1"}
+    first_update: dict[str, object] = {
+        "decision_id": "first",
+        "target_qty": "-1",
+    }
+    latest_update: dict[str, object] = {
+        "decision_id": "latest",
+        "target_qty": "-2",
+    }
+    state = strategy_module._ReversalState(
+        close_decision=close,
+        latest_decision=close,
+        close_order_id="close-order",
+    )
+
+    state.replace_target(first_update)
+    state.replace_target(latest_update)
+
+    assert state.latest_decision is latest_update
+    assert close["reversal_open_decision_id"] == "latest"
+
+
+def test_native_fill_contract_rejects_incomplete_order() -> None:
+    decision: dict[str, object] = {
+        "decision_sequence": 0,
+        "decision_ts": 0,
+        "order_ids": ["O-1"],
+        "order_intents": [
+            {
+                "expected_fill_ts": HOUR_NS,
+                "leg": "direct",
+                "order_id": "O-1",
+                "submit_sequence": 1,
+            }
+        ],
+        "reason": "submitted",
+    }
+    order: dict[str, object] = {
+        "client_order_id": "O-1",
+        "filled_qty": "2",
+        "last_event_reason": None,
+        "quantity": "2",
+        "status": "FILLED",
+    }
+    fills: list[dict[str, object]] = [
+        {
+            "client_order_id": "O-1",
+            "commission": "0.02000000 USDT",
+            "event_sequence": 2,
+            "last_px": "100",
+            "last_qty": "0.5",
+            "ts_event": HOUR_NS,
+        },
+        {
+            "client_order_id": "O-1",
+            "commission": "0.06000000 USDT",
+            "event_sequence": 3,
+            "last_px": "100",
+            "last_qty": "1.5",
+            "ts_event": HOUR_NS,
+        },
+    ]
+
+    momentum._require_fee_and_execution_contract(
+        [decision], [order], fills, Currency.from_str("USDT")
+    )
+    incomplete = {**order, "filled_qty": "0.5", "status": "CANCELED"}
+    with pytest.raises(Stage3MomentumError, match="not completely filled"):
+        momentum._require_fee_and_execution_contract(
+            [decision], [incomplete], fills[:1], Currency.from_str("USDT")
+        )
+
+
+def test_run_root_claim_is_exclusive(tmp_path: Path) -> None:
+    run_root = tmp_path / "contended-run"
+    barrier = Barrier(2)
+
+    def claim() -> str:
+        barrier.wait()
+        try:
+            momentum._claim_run_root(run_root)
+        except Stage3MomentumError:
+            return "rejected"
+        return "claimed"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = tuple(pool.map(lambda _: claim(), range(2)))
+
+    assert sorted(results) == ["claimed", "rejected"]
+
+
+def test_relevant_code_digest_tracks_declared_closure_only(tmp_path: Path) -> None:
+    runner = tmp_path / "runner.py"
+    view = tmp_path / "views.py"
+    unrelated = tmp_path / "notes.md"
+    runner.write_text("runner-v1", encoding="utf-8")
+    view.write_text("view-v1", encoding="utf-8")
+    files = (("runner.py", runner), ("views.py", view))
+    original = momentum._relevant_code_digest(files)
+
+    unrelated.write_text("unrelated-v2", encoding="utf-8")
+    assert momentum._relevant_code_digest(files) == original
+    view.write_text("view-v2", encoding="utf-8")
+    assert momentum._relevant_code_digest(files) != original
+    assert {name for name, _path in momentum._relevant_code_files()} >= {
+        "research/views.py",
+        "source_data/stage2_btceth.py",
+    }
 
 
 def test_momentum_signal_and_decimal_sizing_are_strictly_frozen() -> None:
