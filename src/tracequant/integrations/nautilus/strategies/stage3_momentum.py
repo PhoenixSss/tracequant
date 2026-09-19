@@ -157,6 +157,27 @@ def minimum_order_quantity(instrument: CryptoPerpetual) -> Decimal:
     return max(increment, instrument.min_quantity.as_decimal())
 
 
+def unsettled_orders(
+    cache: object,
+    *,
+    instrument_id: InstrumentId | None = None,
+) -> tuple[object, ...]:
+    """Return every non-terminal order, including local and in-flight states."""
+    orders_method = getattr(cache, "orders", None)
+    if not callable(orders_method):
+        raise Stage3MomentumError("Nautilus cache cannot prove order state")
+    orders = orders_method(instrument_id=instrument_id)
+    result: list[object] = []
+    for order in orders:
+        closed = getattr(order, "is_closed", None)
+        closed = closed() if callable(closed) else closed
+        if not isinstance(closed, bool):
+            raise Stage3MomentumError("Nautilus order has unknown terminal state")
+        if not closed:
+            result.append(order)
+    return tuple(result)
+
+
 class Stage3MomentumStrategy(Strategy):
     """BTC/ETH 24h momentum Strategy using only Nautilus trading state."""
 
@@ -348,7 +369,7 @@ class Stage3MomentumStrategy(Strategy):
 
     def on_stop(self) -> None:
         for native_id in self._instrument_ids.values():
-            if self.cache.orders_open(instrument_id=native_id):
+            if unsettled_orders(self.cache, instrument_id=native_id):
                 self.cancel_all_orders(native_id)
 
     def _queue_decision(
@@ -407,13 +428,13 @@ class Stage3MomentumStrategy(Strategy):
             record["reason"] = "no_in_window_next_bar"
             self.decisions.append(record)
             return
-        if self.cache.orders_open(instrument_id=native_id):
+        if unsettled_orders(self.cache, instrument_id=native_id):
             # A direct order submitted earlier in this on_bar callback settles
             # only after the callback. Preserve the newer target for its own
             # B_1; _execute_pending will reconcile it against the then-current
             # Nautilus position instead of dropping the decision here.
             record["action"] = "queued"
-            record["queue_reason"] = "open_order_settling"
+            record["queue_reason"] = "unsettled_order"
             record["reason"] = "awaiting_b1"
             self._pending[instrument_id] = record
             self.decisions.append(record)
@@ -438,9 +459,9 @@ class Stage3MomentumStrategy(Strategy):
             return
         native_id = self._instrument_ids[instrument_id]
         record["execution_ts"] = execution_ts
-        if self.cache.orders_open(instrument_id=native_id):
+        if unsettled_orders(self.cache, instrument_id=native_id):
             record["action"] = "none"
-            record["reason"] = "b1_open_order_unavailable"
+            record["reason"] = "b1_unsettled_order"
             return
         positions = self.cache.positions_open(instrument_id=native_id)
         if len(positions) > 1:
@@ -519,7 +540,7 @@ class Stage3MomentumStrategy(Strategy):
         if reversal is None or reversal.phase != "closing":
             return
         native_id = self._instrument_ids[instrument_id]
-        if self.cache.orders_open(instrument_id=native_id):
+        if unsettled_orders(self.cache, instrument_id=native_id):
             return
         close_order = self.cache.order(ClientOrderId.from_str(reversal.close_order_id))
         if (
@@ -573,8 +594,8 @@ class Stage3MomentumStrategy(Strategy):
             record["reason"] = "awaiting_first_event_after_updated_decision"
             return
         native_id = self._instrument_ids[instrument_id]
-        if self.cache.orders_open(instrument_id=native_id):
-            record["reason"] = "flat_confirmation_has_open_order"
+        if unsettled_orders(self.cache, instrument_id=native_id):
+            record["reason"] = "flat_confirmation_has_unsettled_order"
             return
         positions = self.cache.positions_open(instrument_id=native_id)
         if len(positions) > 1:

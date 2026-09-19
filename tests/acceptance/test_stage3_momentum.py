@@ -213,6 +213,7 @@ def test_momentum_state_machine_covers_long_flat_short_and_reversal(
         evaluation_end_ns=datetime_to_nanos(feature_fixture.EVALUATION_END),
     )
     reports = momentum._run_engine(replace(loaded, bars=tuple(rewritten)), parameters)
+    repeated = momentum._run_engine(replace(loaded, bars=tuple(rewritten)), parameters)
 
     assert {item["signal"] for item in reports.decisions} == {
         "long",
@@ -272,20 +273,35 @@ def test_momentum_state_machine_covers_long_flat_short_and_reversal(
         cast(int, item["fill_ts"]) == cast(int, item["decision_ts"]) + HOUR_NS
         for item in reports.associations
     )
+    closed_cycles = [item for item in reports.positions if item["is_closed"]]
+    assert closed_cycles
+    assert all(item["is_snapshot"] for item in closed_cycles)
+    assert reports.summary["trade_count"] == len(closed_cycles)
+    assert reports.summary["position_count"] == len(reports.positions)
+    assert reports.positions == repeated.positions
+    assert reports.summary == repeated.summary
     assert reports.terminal["open_order_count"] == 0
 
 
-def test_ready_decision_is_retained_while_prior_direct_order_settles(
+@pytest.mark.parametrize("status", ["INITIALIZED", "SUBMITTED", "PENDING_UPDATE"])
+def test_ready_decision_is_retained_while_any_prior_order_is_unsettled(
     monkeypatch: pytest.MonkeyPatch,
+    status: str,
 ) -> None:
-    class OpenOrderCache:
+    class UnsettledOrder:
+        is_closed = False
+
+        def __init__(self) -> None:
+            self.status = status
+
+    class UnsettledOrderCache:
         @staticmethod
         def positions_open(*, instrument_id: object) -> list[object]:
             return []
 
         @staticmethod
-        def orders_open(*, instrument_id: object) -> list[object]:
-            return [object()]
+        def orders(*, instrument_id: object) -> list[object]:
+            return [UnsettledOrder()]
 
     parameters = Stage3MomentumParameters(
         evaluation_start_ns=0,
@@ -296,7 +312,7 @@ def test_ready_decision_is_retained_while_prior_direct_order_settles(
     strategy._instruments[instrument_id] = feature_fixture._perpetual(
         feature_fixture.BTC, "BTCUSDT", "BTC"
     )
-    setattr(strategy, "_test_cache", OpenOrderCache())
+    setattr(strategy, "_test_cache", UnsettledOrderCache())
     monkeypatch.setattr(
         Stage3MomentumStrategy,
         "cache",
@@ -316,7 +332,17 @@ def test_ready_decision_is_retained_while_prior_direct_order_settles(
     assert strategy._pending[instrument_id] is decision
     assert decision["action"] == "queued"
     assert decision["reason"] == "awaiting_b1"
-    assert decision["queue_reason"] == "open_order_settling"
+    assert decision["queue_reason"] == "unsettled_order"
+
+
+def test_unknown_order_state_fails_closed() -> None:
+    class UnknownOrderCache:
+        @staticmethod
+        def orders(*, instrument_id: object | None = None) -> list[object]:
+            return [object()]
+
+    with pytest.raises(Stage3MomentumError, match="unknown terminal state"):
+        strategy_module.unsettled_orders(UnknownOrderCache())
 
 
 def test_reversal_state_keeps_only_the_latest_target_before_confirmation() -> None:
@@ -425,6 +451,8 @@ def test_relevant_code_digest_tracks_declared_closure_only(tmp_path: Path) -> No
     view.write_text("view-v2", encoding="utf-8")
     assert momentum._relevant_code_digest(files) != original
     assert {name for name, _path in momentum._relevant_code_files()} >= {
+        "integrations/nautilus/stage2_artifact.py",
+        "integrations/nautilus/stage2_btceth.py",
         "research/views.py",
         "source_data/stage2_btceth.py",
     }

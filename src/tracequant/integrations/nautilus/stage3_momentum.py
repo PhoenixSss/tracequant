@@ -34,7 +34,9 @@ from tracequant.integrations.nautilus import (
     EXPECTED_VERSION,
     UPSTREAM_RELEASE_IDENTITY,
     distribution_version,
+    stage2_artifact,
 )
+from tracequant.integrations.nautilus import stage2_btceth as nautilus_stage2_btceth
 from tracequant.integrations.nautilus.strategies import (
     stage3_momentum as momentum_strategy,
 )
@@ -48,6 +50,7 @@ from tracequant.integrations.nautilus.strategies.stage3_momentum import (
     Stage3MomentumStrategy,
     momentum_signal,
     target_quantity,
+    unsettled_orders,
 )
 from tracequant.research import stage3_features
 from tracequant.research import views as research_views
@@ -61,7 +64,7 @@ from tracequant.research.stage3_features import (
     load_stage3_config,
 )
 from tracequant.research.views import load_funding
-from tracequant.source_data import stage2_btceth
+from tracequant.source_data import stage2_btceth as source_stage2_btceth
 from tracequant.source_data.stage2_btceth import (
     STAGE2_INSTRUMENT_IDS,
     STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
@@ -472,7 +475,22 @@ def _collect_reports(
     if strategy.pending_reversal_count:
         raise Stage3MomentumError("terminal state contains unresolved reversal intent")
     native_positions = tuple(engine.cache.positions())
-    positions = tuple(_position_record(item) for item in native_positions)
+    native_position_snapshots = tuple(engine.cache.position_snapshots())
+    position_records = [
+        *(
+            _position_record(item, is_snapshot=True)
+            for item in native_position_snapshots
+        ),
+        *(_position_record(item, is_snapshot=False) for item in native_positions),
+    ]
+    position_records.sort(
+        key=lambda item: (
+            cast(str, item["instrument_id"]),
+            cast(int, item["ts_opened"]),
+            cast(str, item["id"]),
+        )
+    )
+    positions = tuple(position_records)
     account = engine.cache.account_for_venue(venue)
     if account is None:
         raise Stage3MomentumError("Nautilus account result is missing")
@@ -491,9 +509,10 @@ def _collect_reports(
         str(key): str(value)
         for key, value in sorted(dict(engine.get_result().summary).items())
     }
-    open_orders = tuple(engine.cache.orders_open())
-    if open_orders:
-        raise Stage3MomentumError("terminal state contains unexplained open orders")
+    if unsettled_orders(engine.cache):
+        raise Stage3MomentumError(
+            "terminal state contains unexplained unsettled orders"
+        )
     latest_marks = _latest_marks(
         engine, strategy.parameters.instrument_ids, mark_events
     )
@@ -526,9 +545,7 @@ def _collect_reports(
         "position_count": len(positions),
         "total_commission": str(total_commission),
         "total_funding": cast(str, funding["total_funding"]),
-        "trade_count": sum(
-            1 for item in native_positions if bool(getattr(item, "is_closed"))
-        ),
+        "trade_count": sum(1 for item in positions if item["is_closed"] is True),
         "turnover": str(turnover_notional / STAGE3_STARTING_USDT),
     }
     associations = _associations(strategy.decisions, orders, fills)
@@ -558,7 +575,7 @@ def _require_fee_and_execution_contract(
         fills_by_order.setdefault(cast(str, fill["client_order_id"]), []).append(fill)
     submitted_order_ids: set[str] = set()
     for decision in decisions:
-        if decision["reason"] == "b1_open_order_unavailable":
+        if decision["reason"] == "b1_unsettled_order":
             raise Stage3MomentumError("a momentum intent could not execute on B_1")
         decision_ts = cast(int, decision["decision_ts"])
         decision_sequence = cast(int, decision["decision_sequence"])
@@ -883,19 +900,54 @@ def _fill_record(fill: object, *, event_sequence: int) -> dict[str, object]:
     }
 
 
-def _position_record(position: object) -> dict[str, object]:
+def _position_record(
+    position: object,
+    *,
+    is_snapshot: bool,
+) -> dict[str, object]:
+    native_id = (
+        _position_source_id(position) if is_snapshot else str(getattr(position, "id"))
+    )
+    opening_order_id = str(getattr(position, "opening_order_id"))
+    closing_order_id = _maybe_str(getattr(position, "closing_order_id", None))
+    closed = getattr(position, "is_closed", None)
+    closed = closed() if callable(closed) else closed
+    if not isinstance(closed, bool):
+        raise Stage3MomentumError("Nautilus position has unknown terminal state")
     return {
         "avg_px_close": _maybe_str(getattr(position, "avg_px_close", None)),
         "avg_px_open": str(getattr(position, "avg_px_open")),
-        "id": str(getattr(position, "id")),
+        "closing_order_id": closing_order_id,
+        "id": f"{native_id}:{opening_order_id}" if is_snapshot else native_id,
         "instrument_id": str(getattr(position, "instrument_id")),
+        "is_closed": closed,
+        "is_snapshot": is_snapshot,
+        "opening_order_id": opening_order_id,
         "peak_qty": str(getattr(position, "peak_qty", getattr(position, "quantity"))),
+        "position_id": native_id,
         "quantity": str(getattr(position, "quantity")),
         "realized_pnl": _maybe_str(getattr(position, "realized_pnl", None)),
         "side": _named(getattr(position, "side")),
         "ts_closed": _maybe_int(getattr(position, "ts_closed", None)),
         "ts_opened": int(getattr(position, "ts_opened")),
     }
+
+
+def _position_source_id(position: object) -> str:
+    events_method = getattr(position, "events", None)
+    if not callable(events_method):
+        raise Stage3MomentumError("Nautilus position snapshot has no events")
+    events = tuple(events_method())
+    position_ids = {
+        str(value)
+        for event in events
+        if (value := getattr(event, "position_id", None)) is not None
+    }
+    if len(position_ids) != 1:
+        raise Stage3MomentumError(
+            "Nautilus position snapshot has ambiguous source identity"
+        )
+    return next(iter(position_ids))
 
 
 def _account_event_record(event: object) -> dict[str, object]:
@@ -1057,6 +1109,14 @@ def _write_json_exclusive(path: Path, payload: object) -> None:
 def _relevant_code_files() -> tuple[tuple[str, Path], ...]:
     return (
         ("integrations/nautilus/__init__.py", Path(nautilus_integration.__file__)),
+        (
+            "integrations/nautilus/stage2_artifact.py",
+            Path(stage2_artifact.__file__),
+        ),
+        (
+            "integrations/nautilus/stage2_btceth.py",
+            Path(nautilus_stage2_btceth.__file__),
+        ),
         ("integrations/nautilus/stage3_momentum.py", Path(__file__)),
         (
             "integrations/nautilus/strategies/stage3_momentum.py",
@@ -1064,7 +1124,7 @@ def _relevant_code_files() -> tuple[tuple[str, Path], ...]:
         ),
         ("research/stage3_features.py", Path(stage3_features.__file__)),
         ("research/views.py", Path(research_views.__file__)),
-        ("source_data/stage2_btceth.py", Path(stage2_btceth.__file__)),
+        ("source_data/stage2_btceth.py", Path(source_stage2_btceth.__file__)),
     )
 
 
