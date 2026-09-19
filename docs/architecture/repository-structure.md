@@ -6,10 +6,11 @@ NautilusTrader, owns source provenance, implements the stage 1 BTCUSDT 1h
 catalog path and the accepted stage 2 BTC/ETH Nautilus-homologous dataset path,
 and runs one Nautilus-native offline MA-cross backtest plus read-only Polars
 research views over that stage 2 catalog. Stage 3 now includes the accepted
-catalog binding and finite causal feature/label contract; there is still no model
-artifact and no momentum or LightGBM strategy in this tree. It does not provide
-an execution connection, Demo mode, or Live mode. LCK is an approved repository
-capability outside that product runtime.
+catalog binding, finite causal feature/label contract, and fixed-parameter
+traditional momentum Nautilus Strategy for the single base offline run; there
+is still no model artifact or LightGBM strategy in this tree. It does not
+provide an execution connection, Demo mode, or Live mode. LCK is an approved
+repository capability outside that product runtime.
 
 ## Tracked layout
 
@@ -90,9 +91,11 @@ src/tracequant/
       stage1_btcusdt.py
       stage1_backtest.py
       stage2_btceth.py
+      stage3_momentum.py
       strategies/
         __init__.py
         stage1_ma_cross.py
+        stage3_momentum.py
 ```
 
 All self-developed production Python belongs below the single `tracequant`
@@ -107,9 +110,12 @@ Stage 1 catalog ingest, the stage 2 BTC/ETH public-data bar catalog, and the
 offline MA-cross backtest live in use-case modules beside that seam; they are
 not a generic adapter, trading domain, or import-time runtime wrapper.
 
-`integrations/nautilus/strategies/` now holds the stage 1 MA-cross Strategy.
-`tracequant.research` owns read-only Polars views, time splits, and the finite
-Stage 3 causal feature/label contract over the stage 2 Nautilus catalog. That catalog is the accepted
+`integrations/nautilus/strategies/` holds the stage 1 MA-cross Strategy and the
+fixed-parameter Stage 3 traditional momentum Strategy. The adjacent
+`integrations/nautilus/stage3_momentum.py` module owns its accepted-catalog
+offline base-run entry and immutable fact outputs. `tracequant.research` owns
+read-only Polars views, time splits, and the finite Stage 3 causal feature/label
+contract over the stage 2 Nautilus catalog. That catalog is the accepted
 `binance-usdm-btceth-202001-202608-r1` dataset; its tracked identity lives in
 `docs/product/stage2-btceth-dataset-acceptance.json`, and the stage 3
 requirements that consumers bind to are in
@@ -128,13 +134,13 @@ src/tracequant/
   research/                    features, labels, and models beyond read-only views
   integrations/nautilus/
     configuration/             concrete Nautilus runtime configuration
-    strategies/                additional strategies beyond the stage 1 MA-cross
+    strategies/                additional strategies beyond stage 1 MA-cross and stage 3 momentum
   operations/                  admission, observation, alerts, and release
 ```
 
-These capabilities are not implemented today. Listing them here assigns
-ownership only; it creates no scaffolding. `strategies/` already exists for the
-stage 1 MA-cross Strategy, but no stage 3 strategy is present, and
+These remaining capabilities are not implemented today. Listing them here
+assigns ownership only; it creates no scaffolding. `strategies/` already exists
+for the stage 1 MA-cross and Stage 3 traditional momentum Strategies, while
 `configuration/` and `operations/` are absent entirely.
 
 NautilusTrader owns trading types, instruments, orders, positions, portfolio and

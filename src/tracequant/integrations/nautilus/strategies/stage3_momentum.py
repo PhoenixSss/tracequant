@@ -408,7 +408,14 @@ class Stage3MomentumStrategy(Strategy):
             self.decisions.append(record)
             return
         if self.cache.orders_open(instrument_id=native_id):
-            record["reason"] = "open_order_pending"
+            # A direct order submitted earlier in this on_bar callback settles
+            # only after the callback. Preserve the newer target for its own
+            # B_1; _execute_pending will reconcile it against the then-current
+            # Nautilus position instead of dropping the decision here.
+            record["action"] = "queued"
+            record["queue_reason"] = "open_order_settling"
+            record["reason"] = "awaiting_b1"
+            self._pending[instrument_id] = record
             self.decisions.append(record)
             return
         if delta == 0:

@@ -138,6 +138,7 @@ def test_stage3_momentum_runs_from_stage2_catalog_with_nautilus_accounting(
             (first.partition / "fee-provenance.json").read_text(encoding="utf-8")
         ),
     )
+    assert manifest["fee_provenance"] == fee_provenance
     assert {item["instrument_id"] for item in fee_provenance} == set(
         STAGE2_INSTRUMENT_IDS
     )
@@ -272,6 +273,50 @@ def test_momentum_state_machine_covers_long_flat_short_and_reversal(
         for item in reports.associations
     )
     assert reports.terminal["open_order_count"] == 0
+
+
+def test_ready_decision_is_retained_while_prior_direct_order_settles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class OpenOrderCache:
+        @staticmethod
+        def positions_open(*, instrument_id: object) -> list[object]:
+            return []
+
+        @staticmethod
+        def orders_open(*, instrument_id: object) -> list[object]:
+            return [object()]
+
+    parameters = Stage3MomentumParameters(
+        evaluation_start_ns=0,
+        evaluation_end_ns=3 * HOUR_NS,
+    )
+    strategy = Stage3MomentumStrategy(parameters)
+    instrument_id = STAGE2_INSTRUMENT_IDS[0]
+    strategy._instruments[instrument_id] = feature_fixture._perpetual(
+        feature_fixture.BTC, "BTCUSDT", "BTC"
+    )
+    setattr(strategy, "_test_cache", OpenOrderCache())
+    monkeypatch.setattr(
+        Stage3MomentumStrategy,
+        "cache",
+        property(lambda instance: getattr(instance, "_test_cache")),
+    )
+
+    strategy._queue_decision(
+        instrument_id=instrument_id,
+        decision_ts=HOUR_NS,
+        close=Decimal("100"),
+        ret_24h=0.01,
+        signal="long",
+        target=Decimal("1"),
+    )
+
+    decision = strategy.decisions[-1]
+    assert strategy._pending[instrument_id] is decision
+    assert decision["action"] == "queued"
+    assert decision["reason"] == "awaiting_b1"
+    assert decision["queue_reason"] == "open_order_settling"
 
 
 def test_reversal_state_keeps_only_the_latest_target_before_confirmation() -> None:

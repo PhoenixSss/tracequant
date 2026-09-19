@@ -996,11 +996,12 @@ def _write_outcome(
     fee_provenance: Sequence[Mapping[str, object]],
 ) -> None:
     partition = outcome.partition
+    fee_provenance_payload = [dict(item) for item in fee_provenance]
     payloads: dict[str, object] = {
         "account.json": outcome.reports.account,
         "associations.json": list(outcome.reports.associations),
         "decisions.json": list(outcome.reports.decisions),
-        "fee-provenance.json": list(fee_provenance),
+        "fee-provenance.json": fee_provenance_payload,
         "fills.json": list(outcome.reports.fills),
         "funding.json": outcome.reports.funding,
         "orders.json": list(outcome.reports.orders),
@@ -1025,6 +1026,7 @@ def _write_outcome(
             "dataset_digest": config.dataset_digest,
             "dataset_id": config.dataset_id,
             "feature_schema_digest": FEATURE_SCHEMA_DIGEST,
+            "fee_provenance": fee_provenance_payload,
             "instrument_snapshot_checksum": config.instrument_snapshot_checksum,
             "live_not_approved": LIVE_NOT_APPROVED,
             "market_data_manifest_digest": config.market_data_manifest_digest,
