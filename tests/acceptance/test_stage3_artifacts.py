@@ -1,0 +1,561 @@
+from __future__ import annotations
+
+import json
+import math
+import tomllib
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any, cast
+
+import polars as pl
+import pytest
+
+from tracequant.integrations.nautilus.stage2_artifact import sha256_file
+from tracequant.research import stage3_artifacts as artifacts
+from tracequant.research.stage3_artifacts import (
+    ARTIFACT_IDENTITY_FIELDS,
+    MANIFEST_FILENAME,
+    MODEL_FILENAME,
+    ArtifactWindow,
+    Stage2ArtifactIdentity,
+    Stage3ArtifactError,
+    TrainingProvenance,
+    default_effective_parameters,
+    freeze_training_parameters,
+    load_lightgbm_artifact,
+    load_training_parameters,
+    locked_stage2_identity,
+    synthetic_fixture_provenance,
+    train_fixture_lightgbm_artifact,
+    train_lightgbm_artifact,
+)
+from tracequant.research.stage3_features import (
+    FEATURE_NAMES,
+    FEATURE_SCHEMA_DIGEST,
+    HOUR_NS,
+    Stage3Config,
+)
+from tracequant.source_data.stage2_btceth import (
+    STAGE2_INSTRUMENT_IDS,
+    datetime_to_nanos,
+)
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+TRAIN_START = datetime(2020, 1, 1, tzinfo=UTC)
+TRAIN_END = datetime(2020, 2, 1, tzinfo=UTC)
+EVALUATION_END = datetime(2020, 2, 8, tzinfo=UTC)
+
+
+def _training_frame() -> pl.DataFrame:
+    records: list[dict[str, object]] = []
+    first = TRAIN_START + timedelta(hours=169) - timedelta(milliseconds=1)
+    for hour in range(96):
+        decision_ts = datetime_to_nanos(first + timedelta(hours=hour))
+        for instrument_index, instrument_id in enumerate(STAGE2_INSTRUMENT_IDS):
+            features = {
+                name: float(
+                    (hour + 1) * (feature_index + 1) / 10_000 + instrument_index * 0.001
+                )
+                for feature_index, name in enumerate(FEATURE_NAMES)
+            }
+            features["instrument_code"] = float(instrument_index)
+            records.append(
+                {
+                    "instrument_id": instrument_id,
+                    "decision_ts": decision_ts,
+                    **features,
+                    "feature_schema_digest": FEATURE_SCHEMA_DIGEST,
+                    "label_available": True,
+                    "label_log_return_4h": float(
+                        math.sin(hour / 12) / 100 + instrument_index * 0.0001
+                    ),
+                    "label_end_ts": decision_ts + 4 * HOUR_NS,
+                    "tradable": False,
+                }
+            )
+    schema: dict[str, type[pl.DataType] | pl.DataType] = {
+        "instrument_id": pl.String,
+        "decision_ts": pl.Int64,
+        **{name: pl.Float64 for name in FEATURE_NAMES},
+        "feature_schema_digest": pl.String,
+        "label_available": pl.Boolean,
+        "label_log_return_4h": pl.Float64,
+        "label_end_ts": pl.Int64,
+        "tradable": pl.Boolean,
+    }
+    return pl.DataFrame(records, schema=schema).sort(["decision_ts", "instrument_id"])
+
+
+def _window() -> ArtifactWindow:
+    return ArtifactWindow(
+        train_start=TRAIN_START,
+        train_end=TRAIN_END,
+        evaluation_start=TRAIN_END,
+        evaluation_end=EVALUATION_END,
+        role="development",
+    )
+
+
+def _freeze(tmp_path: Path) -> Path:
+    path = tmp_path / "parameter-record" / "parameters.json"
+    freeze_training_parameters(
+        path,
+        revision="stage3-lgbm-r1",
+        parameters=default_effective_parameters(),
+        repository_root=REPOSITORY_ROOT,
+    )
+    return path
+
+
+def _train(
+    tmp_path: Path, name: str = "artifact"
+) -> tuple[Path, Path, dict[str, object]]:
+    parameter_path = _freeze(tmp_path)
+    partition = tmp_path / name
+    manifest = train_fixture_lightgbm_artifact(
+        _training_frame(),
+        output_partition=partition,
+        parameter_record_path=parameter_path,
+        stage2_identity=locked_stage2_identity(),
+        window=_window(),
+        provenance=synthetic_fixture_provenance(created_at="2026-09-20T00:00:00Z"),
+        repository_root=REPOSITORY_ROOT,
+    )
+    return partition, parameter_path, manifest
+
+
+def _train_fixture(
+    frame: pl.DataFrame,
+    *,
+    output_partition: Path,
+    parameter_record_path: Path,
+    window: ArtifactWindow | None = None,
+) -> dict[str, object]:
+    return train_fixture_lightgbm_artifact(
+        frame,
+        output_partition=output_partition,
+        parameter_record_path=parameter_record_path,
+        stage2_identity=locked_stage2_identity(),
+        window=window if window is not None else _window(),
+        provenance=synthetic_fixture_provenance(created_at="2026-09-20T00:00:00Z"),
+        repository_root=REPOSITORY_ROOT,
+    )
+
+
+def _rewrite_manifest(partition: Path, manifest: dict[str, object]) -> None:
+    manifest["artifact_id"] = artifacts._artifact_id(manifest)
+    manifest["manifest_digest"] = artifacts._manifest_digest(manifest)
+    (partition / MANIFEST_FILENAME).write_text(
+        artifacts._canonical_json(manifest) + "\n", encoding="utf-8"
+    )
+
+
+def test_stage3_lightgbm_artifact_round_trips_with_locked_identity(
+    tmp_path: Path,
+) -> None:
+    parameter_path = _freeze(tmp_path)
+    frame = _training_frame()
+    provenance = synthetic_fixture_provenance(created_at="2026-09-20T00:00:00Z")
+    manifests: list[dict[str, object]] = []
+    predictors = []
+    for name in ("artifact-one", "artifact-two"):
+        partition = tmp_path / name
+        manifests.append(
+            train_fixture_lightgbm_artifact(
+                frame,
+                output_partition=partition,
+                parameter_record_path=parameter_path,
+                stage2_identity=locked_stage2_identity(),
+                window=_window(),
+                provenance=provenance,
+                repository_root=REPOSITORY_ROOT,
+            )
+        )
+        predictors.append(
+            load_lightgbm_artifact(
+                partition,
+                parameter_record_path=parameter_path,
+                expected_stage2_identity=locked_stage2_identity(),
+                repository_root=REPOSITORY_ROOT,
+            )
+        )
+
+    prediction_input = frame.select(FEATURE_NAMES).head(12)
+    first_predictions = predictors[0].predict(
+        prediction_input, feature_schema_digest=FEATURE_SCHEMA_DIGEST
+    )
+    second_predictions = predictors[1].predict(
+        prediction_input, feature_schema_digest=FEATURE_SCHEMA_DIGEST
+    )
+    assert first_predictions == second_predictions
+    assert all(math.isfinite(value) for value in first_predictions)
+    assert manifests[0]["artifact_id"] == manifests[1]["artifact_id"]
+    assert manifests[0]["manifest_digest"] == manifests[1]["manifest_digest"]
+    assert (
+        cast(dict[str, object], manifests[0]["model"])["checksum_sha256"]
+        == cast(dict[str, object], manifests[1]["model"])["checksum_sha256"]
+    )
+    provenance_differences = set(predictors[0].provenance_differences)
+    assert {"git_sha", "uv_lock_checksum"} <= provenance_differences
+    assert provenance_differences <= {
+        "git_sha",
+        "uv_lock_checksum",
+        "git_worktree_dirty",
+    }
+    assert tuple(cast(list[str], manifests[0]["artifact_identity_fields"])) == (
+        ARTIFACT_IDENTITY_FIELDS
+    )
+
+
+def test_formal_trainer_reuses_the_accepted_window_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frame = _training_frame()
+    identity = locked_stage2_identity()
+    config = Stage3Config(
+        schema="tracequant-stage3-features-v1",
+        dataset_id=identity.dataset_id,
+        acceptance_digest=identity.acceptance_digest,
+        dataset_digest=identity.dataset_digest,
+        source_manifest_digest=identity.source_manifest_digest,
+        market_data_manifest_digest=identity.market_data_manifest_digest,
+        instrument_snapshot_checksum=identity.instrument_snapshot_checksum,
+        runtime_identity=identity.runtime_identity,
+        artifact_lock_path=tmp_path / "artifact-lock.json",
+        catalog_path=tmp_path / "catalog",
+        evidence_root=tmp_path / "evidence",
+        run_root=tmp_path / "run",
+    )
+    calls: dict[str, object] = {}
+
+    def accepted_loader(*args: object, **kwargs: object) -> Any:
+        calls["accepted_loader"] = (args, kwargs)
+        return {
+            instrument_id: (instrument_id,) for instrument_id in STAGE2_INSTRUMENT_IDS
+        }
+
+    def fixture_frame(rows: object) -> pl.DataFrame:
+        instrument_id = cast(tuple[str], rows)[0]
+        return frame.filter(pl.col("instrument_id") == instrument_id)
+
+    def captured_training(
+        input_frame: pl.DataFrame, **kwargs: object
+    ) -> dict[str, object]:
+        calls["training_frame"] = input_frame
+        calls["training_kwargs"] = kwargs
+        return {"status": "captured"}
+
+    monkeypatch.setattr(artifacts, "load_accepted_feature_window", accepted_loader)
+    monkeypatch.setattr(artifacts, "feature_frame", fixture_frame)
+    monkeypatch.setattr(artifacts, "_train_lightgbm_artifact", captured_training)
+    result = train_lightgbm_artifact(
+        config,
+        acceptance_record_path=tmp_path / "acceptance.json",
+        output_partition=tmp_path / "artifact",
+        parameter_record_path=tmp_path / "parameters.json",
+        window=_window(),
+        provenance=TrainingProvenance(
+            kind="formal_git",
+            git_sha="0" * 40,
+            uv_lock_checksum="0" * 64,
+            created_at="2026-09-20T00:00:00Z",
+        ),
+        repository_root=REPOSITORY_ROOT,
+    )
+    assert result == {"status": "captured"}
+    assert calls["accepted_loader"]
+    captured_frame = cast(pl.DataFrame, calls["training_frame"])
+    assert captured_frame.equals(frame)
+    captured_kwargs = cast(dict[str, object], calls["training_kwargs"])
+    assert captured_kwargs["stage2_identity"] == identity
+    assert captured_kwargs["fixture_mode"] is False
+    with pytest.raises(Stage3ArtifactError, match="rejects synthetic"):
+        artifacts._validate_provenance(
+            synthetic_fixture_provenance(created_at="2026-09-20T00:00:00Z"),
+            repository_root=REPOSITORY_ROOT,
+            fixture_mode=False,
+        )
+
+
+def test_parameter_record_is_closed_frozen_and_alias_free(tmp_path: Path) -> None:
+    target = tmp_path / "parameters.json"
+    parameters = default_effective_parameters()
+    parameters["num_iterations"] = parameters.pop("num_boost_round")
+    with pytest.raises(Stage3ArtifactError, match="alias"):
+        freeze_training_parameters(
+            target,
+            revision="r1",
+            parameters=parameters,
+            repository_root=REPOSITORY_ROOT,
+        )
+    parameter_path = _freeze(tmp_path)
+    frozen = load_training_parameters(parameter_path)
+    assert frozen.parameter_map() == default_effective_parameters()
+    with pytest.raises(Stage3ArtifactError, match="immutable"):
+        freeze_training_parameters(
+            parameter_path,
+            revision="r2",
+            parameters=default_effective_parameters(),
+            repository_root=REPOSITORY_ROOT,
+        )
+
+
+def test_training_rejects_frame_identity_purge_and_partition_drift(
+    tmp_path: Path,
+) -> None:
+    parameter_path = _freeze(tmp_path)
+    frame = _training_frame()
+    with pytest.raises(Stage3ArtifactError, match="row order"):
+        _train_fixture(
+            frame.reverse(),
+            output_partition=tmp_path / "reordered",
+            parameter_record_path=parameter_path,
+        )
+    with pytest.raises(Stage3ArtifactError, match="NaN"):
+        _train_fixture(
+            frame.with_columns(pl.lit(float("nan")).alias(FEATURE_NAMES[0])),
+            output_partition=tmp_path / "nan",
+            parameter_record_path=parameter_path,
+        )
+    purge_boundary = TRAIN_START + timedelta(hours=172)
+    purge_window = ArtifactWindow(
+        train_start=TRAIN_START,
+        train_end=purge_boundary,
+        evaluation_start=purge_boundary,
+        evaluation_end=purge_boundary + timedelta(days=1),
+        role="development",
+    )
+    with pytest.raises(Stage3ArtifactError, match="purge"):
+        _train_fixture(
+            frame.head(2),
+            output_partition=tmp_path / "purge",
+            parameter_record_path=parameter_path,
+            window=purge_window,
+        )
+    nonempty = tmp_path / "nonempty"
+    nonempty.mkdir()
+    (nonempty / "existing").write_text("immutable", encoding="utf-8")
+    with pytest.raises(Stage3ArtifactError, match="empty"):
+        _train_fixture(
+            frame,
+            output_partition=nonempty,
+            parameter_record_path=parameter_path,
+        )
+
+
+def test_loader_rejects_manifest_model_parameter_and_runtime_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    partition, parameter_path, _ = _train(tmp_path)
+    manifest_path = partition / MANIFEST_FILENAME
+    original_manifest = cast(
+        dict[str, object], json.loads(manifest_path.read_text(encoding="utf-8"))
+    )
+
+    tampered = dict(original_manifest)
+    tampered["artifact_id"] = "0" * 64
+    manifest_path.write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(Stage3ArtifactError, match="manifest digest"):
+        load_lightgbm_artifact(
+            partition,
+            parameter_record_path=parameter_path,
+            expected_stage2_identity=locked_stage2_identity(),
+            repository_root=REPOSITORY_ROOT,
+        )
+
+    manifest_path.write_text(
+        artifacts._canonical_json(original_manifest) + "\n", encoding="utf-8"
+    )
+    model_path = partition / MODEL_FILENAME
+    model_path.write_text(model_path.read_text(encoding="utf-8") + "tamper\n")
+    with pytest.raises(Stage3ArtifactError, match="model checksum"):
+        load_lightgbm_artifact(
+            partition,
+            parameter_record_path=parameter_path,
+            expected_stage2_identity=locked_stage2_identity(),
+            repository_root=REPOSITORY_ROOT,
+        )
+
+    parameter_partition, _, _ = _train(tmp_path / "parameter-drift", name="artifact")
+    replacement_parameters = tmp_path / "replacement-parameters" / "parameters.json"
+    freeze_training_parameters(
+        replacement_parameters,
+        revision="stage3-lgbm-r2",
+        parameters=default_effective_parameters(),
+        repository_root=REPOSITORY_ROOT,
+    )
+    with pytest.raises(Stage3ArtifactError, match="frozen record"):
+        load_lightgbm_artifact(
+            parameter_partition,
+            parameter_record_path=replacement_parameters,
+            expected_stage2_identity=locked_stage2_identity(),
+            repository_root=REPOSITORY_ROOT,
+        )
+
+    feature_partition, feature_parameters, _ = _train(
+        tmp_path / "feature-drift", name="artifact"
+    )
+    feature_model_path = feature_partition / MODEL_FILENAME
+    model_text = feature_model_path.read_text(encoding="utf-8")
+    assert "feature_names=ret_1h" in model_text
+    feature_model_path.write_text(
+        model_text.replace("feature_names=ret_1h", "feature_names=wrong_ret_1h", 1),
+        encoding="utf-8",
+    )
+    feature_manifest = cast(
+        dict[str, object],
+        json.loads((feature_partition / MANIFEST_FILENAME).read_text(encoding="utf-8")),
+    )
+    feature_model = cast(dict[str, object], feature_manifest["model"])
+    feature_model["checksum_sha256"] = sha256_file(feature_model_path)
+    _rewrite_manifest(feature_partition, feature_manifest)
+    with pytest.raises(Stage3ArtifactError, match="feature names"):
+        load_lightgbm_artifact(
+            feature_partition,
+            parameter_record_path=feature_parameters,
+            expected_stage2_identity=locked_stage2_identity(),
+            repository_root=REPOSITORY_ROOT,
+        )
+
+    partition, parameter_path, _ = _train(tmp_path / "runtime", name="artifact")
+    original_runtime = artifacts._runtime_identity
+
+    def drifted_runtime(
+        lightgbm: object, *, repository_root: Path
+    ) -> dict[str, object]:
+        runtime = original_runtime(lightgbm, repository_root=repository_root)
+        compatibility = dict(cast(dict[str, object], runtime["compatibility"]))
+        compatibility["code_digest"] = "f" * 64
+        runtime["compatibility"] = compatibility
+        return runtime
+
+    monkeypatch.setattr(artifacts, "_runtime_identity", drifted_runtime)
+    with pytest.raises(Stage3ArtifactError, match="code or dependency"):
+        load_lightgbm_artifact(
+            partition,
+            parameter_record_path=parameter_path,
+            expected_stage2_identity=locked_stage2_identity(),
+            repository_root=REPOSITORY_ROOT,
+        )
+
+
+def test_loader_reports_provenance_but_rejects_stage2_drift(tmp_path: Path) -> None:
+    partition, parameter_path, _ = _train(tmp_path)
+    predictor = load_lightgbm_artifact(
+        partition,
+        parameter_record_path=parameter_path,
+        expected_stage2_identity=locked_stage2_identity(),
+        repository_root=REPOSITORY_ROOT,
+    )
+    assert predictor.provenance_differences
+    identity = locked_stage2_identity()
+    wrong_identity = Stage2ArtifactIdentity(
+        dataset_id=identity.dataset_id + "-wrong",
+        acceptance_digest=identity.acceptance_digest,
+        dataset_digest=identity.dataset_digest,
+        source_manifest_digest=identity.source_manifest_digest,
+        market_data_manifest_digest=identity.market_data_manifest_digest,
+        instrument_snapshot_checksum=identity.instrument_snapshot_checksum,
+        runtime_identity=identity.runtime_identity,
+    )
+    with pytest.raises(Stage3ArtifactError, match="Stage 2"):
+        load_lightgbm_artifact(
+            partition,
+            parameter_record_path=parameter_path,
+            expected_stage2_identity=wrong_identity,
+            repository_root=REPOSITORY_ROOT,
+        )
+
+
+def test_prediction_rejects_schema_dtype_and_nonfinite_inputs(tmp_path: Path) -> None:
+    partition, parameter_path, _ = _train(tmp_path)
+    predictor = load_lightgbm_artifact(
+        partition,
+        parameter_record_path=parameter_path,
+        expected_stage2_identity=locked_stage2_identity(),
+        repository_root=REPOSITORY_ROOT,
+    )
+    frame = _training_frame().select(FEATURE_NAMES).head(2)
+    with pytest.raises(Stage3ArtifactError, match="digest"):
+        predictor.predict(frame, feature_schema_digest="wrong")
+    with pytest.raises(Stage3ArtifactError, match="names or order"):
+        predictor.predict(
+            frame.select(tuple(reversed(FEATURE_NAMES))),
+            feature_schema_digest=FEATURE_SCHEMA_DIGEST,
+        )
+    with pytest.raises(Stage3ArtifactError, match="dtype"):
+        predictor.predict(
+            frame.with_columns(pl.col(FEATURE_NAMES[0]).cast(pl.Float32)),
+            feature_schema_digest=FEATURE_SCHEMA_DIGEST,
+        )
+    with pytest.raises(Stage3ArtifactError, match="NaN"):
+        predictor.predict(
+            frame.with_columns(pl.lit(float("inf")).alias(FEATURE_NAMES[0])),
+            feature_schema_digest=FEATURE_SCHEMA_DIGEST,
+        )
+
+    class NonFiniteBooster:
+        def feature_name(self) -> list[str]:
+            return list(FEATURE_NAMES)
+
+        def num_feature(self) -> int:
+            return len(FEATURE_NAMES)
+
+        def current_iteration(self) -> int:
+            return 1
+
+        def predict(self, *args: object, **kwargs: object) -> object:
+            return pl.Series([float("nan"), 0.0], dtype=pl.Float64).to_numpy()
+
+    nonfinite_predictor = artifacts.LightGBMArtifactPredictor(
+        _booster=NonFiniteBooster(),
+        artifact_id="fixture",
+        provenance_differences=(),
+    )
+    with pytest.raises(Stage3ArtifactError, match="output is not finite"):
+        nonfinite_predictor.predict(frame, feature_schema_digest=FEATURE_SCHEMA_DIGEST)
+
+
+def test_manifest_identity_excludes_provenance_but_manifest_digest_tracks_it(
+    tmp_path: Path,
+) -> None:
+    partition, _, _ = _train(tmp_path)
+    manifest = cast(
+        dict[str, object],
+        json.loads((partition / MANIFEST_FILENAME).read_text(encoding="utf-8")),
+    )
+    artifact_id = manifest["artifact_id"]
+    manifest_digest = manifest["manifest_digest"]
+    provenance = dict(cast(dict[str, object], manifest["provenance"]))
+    provenance["git_sha"] = "fixture-" + "1" * 56
+    provenance["created_at"] = "2026-09-21T00:00:00Z"
+    manifest["provenance"] = provenance
+    assert artifacts._artifact_id(manifest) == artifact_id
+    assert artifacts._manifest_digest(manifest) != manifest_digest
+
+
+def test_lightgbm_lock_has_only_the_approved_base_runtime_closure() -> None:
+    lock = cast(
+        dict[str, object],
+        tomllib.loads((REPOSITORY_ROOT / "uv.lock").read_text(encoding="utf-8")),
+    )
+    packages = cast(list[dict[str, object]], lock["package"])
+    by_name = {cast(str, package["name"]): package for package in packages}
+    assert cast(str, by_name["lightgbm"]["version"]) == "4.7.0"
+    dependencies = {
+        cast(str, dependency["name"])
+        for dependency in cast(
+            list[dict[str, object]], by_name["lightgbm"]["dependencies"]
+        )
+    }
+    assert dependencies == {"narwhals", "numpy", "scipy"}
+    assert not {
+        "xgboost",
+        "scikit-learn",
+        "pandas",
+        "pyarrow",
+        "optuna",
+        "mlflow",
+        "matplotlib",
+    } & set(by_name)

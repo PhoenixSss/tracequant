@@ -7,8 +7,9 @@ catalog path and the accepted stage 2 BTC/ETH Nautilus-homologous dataset path,
 and runs one Nautilus-native offline MA-cross backtest plus read-only Polars
 research views over that stage 2 catalog. Stage 3 now includes the accepted
 catalog binding, finite causal feature/label contract, and fixed-parameter
-traditional momentum Nautilus Strategy for the single base offline run; there
-is still no model artifact or LightGBM strategy in this tree. It does not
+traditional momentum Nautilus Strategy for the single base offline run, plus a
+deterministic single-artifact LightGBM trainer and fail-closed loader; the
+LightGBM Nautilus Strategy remains outside this tree. It does not
 provide an execution connection, Demo mode, or Live mode. LCK is an approved
 repository capability outside that product runtime.
 
@@ -82,6 +83,7 @@ src/tracequant/
   research/
     __init__.py
     source_schema.py
+    stage3_artifacts.py
     stage3_features.py
     views.py
   integrations/
@@ -114,9 +116,12 @@ not a generic adapter, trading domain, or import-time runtime wrapper.
 fixed-parameter Stage 3 traditional momentum Strategy. The adjacent
 `integrations/nautilus/stage3_momentum.py` module owns its accepted-catalog
 offline base-run entry and immutable fact outputs. `tracequant.research` owns
-read-only Polars views, time splits, and the finite Stage 3 causal feature/label
-contract over the stage 2 Nautilus catalog. That catalog is the accepted
-`binance-usdm-btceth-202001-202608-r1` dataset; its tracked identity lives in
+read-only Polars views, time splits, the finite Stage 3 causal feature/label
+contract, and the LightGBM training/artifact/loading boundary over the stage 2
+Nautilus catalog. The model boundary writes only caller-selected absolute
+external empty partitions, uses LightGBM's native text format, and does not own
+strategy, order, position, account, or execution state. That catalog is the
+accepted `binance-usdm-btceth-202001-202608-r1` dataset; its tracked identity lives in
 `docs/product/stage2-btceth-dataset-acceptance.json`, and the stage 3
 requirements that consumers bind to are in
 `docs/product/stage-3-strategy-and-model-requirements.md`. A successful
@@ -131,7 +136,7 @@ its accepted requirements:
 
 ```text
 src/tracequant/
-  research/                    features, labels, and models beyond read-only views
+  research/                    later model/evaluation capabilities beyond the first artifact
   integrations/nautilus/
     configuration/             concrete Nautilus runtime configuration
     strategies/                additional strategies beyond stage 1 MA-cross and stage 3 momentum

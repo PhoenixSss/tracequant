@@ -15,8 +15,11 @@ and funding — into one Nautilus catalog, and serves both the read-only Polars
 research views and `BacktestNode` from that same catalog. Stage 3 is not
 complete: this tree contains the accepted-input binding, finite causal
 feature/label contract, and fixed-parameter traditional momentum Nautilus
-Strategy for the single base offline run, but no model artifact or LightGBM
-strategy. There is no Demo mode or Live mode in this tree. The project remains
+Strategy for the single base offline run. It also provides the deterministic
+LightGBM training, immutable single-artifact manifest, strict local loader, and
+prediction wrapper needed by the later model Strategy and OOS tasks; that
+Strategy and the complete fold evaluation are not implemented yet. There is no
+Demo mode or Live mode in this tree. The project remains
 `OFFLINE_BACKTEST_ONLY` and `LIVE_NOT_APPROVED`; live trading cannot be enabled
 by configuration.
 
@@ -30,7 +33,8 @@ uv sync --locked --dev --no-build-package nautilus-trader --no-cache
 ```
 
 A missing compatible wheel is a hard failure; do not relax the Python target or
-allow a source build. Run the repository checks with:
+allow a source build. The pinned LightGBM CPU wheel also requires the platform's
+native OpenMP runtime (`libgomp1` on Ubuntu). Run the repository checks with:
 
 ```bash
 uv lock --check
@@ -63,14 +67,15 @@ uv run --frozen pytest tests/acceptance/test_stage1_backtest.py::test_stage1_nat
 
 Stage 1 and stage 2 are implemented and accepted. Stage 3 includes its
 trusted-input and causal feature/label capability plus the traditional momentum
-base-run strategy; the LightGBM model, full evaluation, and OOS capabilities
-remain unimplemented.
+base-run strategy and deterministic single-artifact LightGBM train/load
+capability; the model Strategy, full evaluation, and OOS capabilities remain
+unimplemented.
 
 | Stage | Status | Where it lives |
 | --- | --- | --- |
 | Stage 1: minimal offline loop | complete | [stage 1 backtest](#stage-1-offline-backtest) above |
 | Stage 2: Nautilus-homologous data | complete and accepted | [stage 2 requirements](docs/product/stage-2-data-and-research-requirements.md) |
-| Stage 3: strategy and model loop | trusted input + feature/label + traditional momentum base run implemented; remaining capabilities pending | [stage 3 momentum entry](src/tracequant/integrations/nautilus/stage3_momentum.py) and [requirements](docs/product/stage-3-strategy-and-model-requirements.md) |
+| Stage 3: strategy and model loop | trusted input + feature/label + traditional momentum base run + LightGBM artifact capability implemented; remaining capabilities pending | [stage 3 artifact module](src/tracequant/research/stage3_artifacts.py) and [requirements](docs/product/stage-3-strategy-and-model-requirements.md) |
 
 The accepted stage 2 dataset identity is tracked in
 [`docs/product/stage2-btceth-dataset-acceptance.json`](docs/product/stage2-btceth-dataset-acceptance.json).
