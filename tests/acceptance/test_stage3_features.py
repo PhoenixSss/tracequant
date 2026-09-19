@@ -132,6 +132,7 @@ def _bar(index: int, *, instrument_id: str = BTC) -> BarProjection:
     close = 100.0 + index * 0.2 + (index % 5) * 0.01
     return BarProjection(
         instrument_id=instrument_id,
+        bar_type=stage2_bar_type_str(instrument_id, "1h"),
         open=f"{close - 0.05:.8f}",
         high=f"{close + 0.20:.8f}",
         low=f"{close - 0.20:.8f}",
@@ -850,31 +851,25 @@ def test_stage3_features_are_bound_to_accepted_catalog_and_causal(
             mode="evaluation",
         )
 
-    # The formal training window uses the same warm-up rule, emits no tradable
-    # signal, and purging drops every row whose label crosses the boundary.
+    # The formal training entry point applies the fold boundary itself. Context
+    # and crossing labels can never escape as rows accepted by feature_frame.
+    training_boundary = DATASET_START + timedelta(hours=176)
     training = load_accepted_feature_window(
         config,
         acceptance_record_path=record_path,
         start=DATASET_START,
-        end=EVALUATION_END,
-        decision_start=EVALUATION_START,
+        end=training_boundary,
+        decision_start=training_boundary,
         mode="training",
     )[BTC]
-    assert training[167].status == "warming_up"
+    assert training
+    assert all(item.status == "ready" and item.label_available for item in training)
     assert all(not item.tradable for item in training)
-    training_boundary = DATASET_START + timedelta(hours=176)
-    trainable = purge_training_rows(training, evaluation_start=training_boundary)
-    assert trainable
     assert all(
         cast(int, item.label_end_ts) < datetime_to_nanos(training_boundary)
-        for item in trainable
-    )
-    excluded = next(
-        item
         for item in training
-        if item.status == "ready" and item.decision_ts > trainable[-1].decision_ts
     )
-    assert cast(int, excluded.label_end_ts) >= datetime_to_nanos(training_boundary)
+    require_feature_frame_schema(feature_frame(training))
 
     # --- non-tautological batch/runtime parity -------------------------------
     # AC4 names both instruments, so each one is compared against its own
@@ -1626,12 +1621,30 @@ def test_label_boundary_uses_four_distinct_future_bars() -> None:
         build_feature_rows(tuple(broken), marks, funding)
 
 
+def test_incremental_contract_rejects_non_1h_and_off_grid_decision_bars() -> None:
+    bars = tuple(_bar(index) for index in range(FEATURE_LOOKBACK_HOURS + 1))
+    marks, funding = _events(len(bars))
+    subsampled_15m = tuple(
+        replace(bar, bar_type=stage2_bar_type_str(bar.instrument_id, "15m"))
+        for bar in bars
+    )
+    with pytest.raises(Stage3DataError, match="canonical 1h closed bar"):
+        build_feature_rows(subsampled_15m, marks, funding)
+
+    hourly_but_off_grid = tuple(
+        replace(bar, ts_event=bar.ts_event + 15 * 60 * 1_000_000_000) for bar in bars
+    )
+    with pytest.raises(Stage3DataError, match="accepted 1h close grid"):
+        build_feature_rows(hourly_but_off_grid, marks, funding)
+
+
 def test_zero_volume_bars_are_accepted_input_not_malformed() -> None:
     """The Task enumerates NaN/Inf/duplicate/order/missing; zero volume is legal."""
     bars = [_bar(index) for index in range(173)]
     flat = bars[100]
     bars[100] = BarProjection(
         instrument_id=flat.instrument_id,
+        bar_type=flat.bar_type,
         open=flat.open,
         high=flat.high,
         low=flat.low,
@@ -1646,6 +1659,7 @@ def test_zero_volume_bars_are_accepted_input_not_malformed() -> None:
     negative = list(bars)
     negative[100] = BarProjection(
         instrument_id=flat.instrument_id,
+        bar_type=flat.bar_type,
         open=flat.open,
         high=flat.high,
         low=flat.low,
@@ -1661,6 +1675,7 @@ def test_timestamps_are_integer_nanoseconds() -> None:
     invalid = _bar(0)
     invalid = BarProjection(
         instrument_id=invalid.instrument_id,
+        bar_type=invalid.bar_type,
         open=invalid.open,
         high=invalid.high,
         low=invalid.low,

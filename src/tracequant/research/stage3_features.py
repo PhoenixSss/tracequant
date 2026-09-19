@@ -387,6 +387,7 @@ class AcceptedSeriesCoverage:
 @dataclass(frozen=True)
 class BarProjection:
     instrument_id: str
+    bar_type: str
     open: str | Decimal
     high: str | Decimal
     low: str | Decimal
@@ -619,6 +620,7 @@ class IncrementalFeatureState:
         self, bar: BarProjection, *, tradable: bool = False
     ) -> FeatureObservation:
         self._require_instrument(bar.instrument_id)
+        _require_decision_bar_identity(bar)
         self._prune_funding(bar.ts_event)
         if (
             self._last_bar_ts is not None
@@ -862,6 +864,12 @@ def load_accepted_feature_window(
     decision_start: datetime,
     mode: Literal["training", "evaluation"],
 ) -> dict[str, tuple[FeatureObservation, ...]]:
+    """Load a formal window whose mode-specific boundary is ``decision_start``.
+
+    Evaluation uses it as the first tradable boundary. Training uses it as the
+    next fold's evaluation start and never returns a row whose label reaches or
+    crosses that boundary.
+    """
     if mode not in {"training", "evaluation"}:
         raise Stage3DataError("stage 3 feature mode is invalid")
     accepted = bind_accepted_stage2_catalog(
@@ -872,8 +880,12 @@ def load_accepted_feature_window(
     decision_start_utc = require_utc(decision_start)
     if not start_utc < end_utc:
         raise Stage3DataError("stage 3 feature window is inverted")
-    if not start_utc <= decision_start_utc < end_utc:
-        raise Stage3DataError("decision start is outside the feature window")
+    if mode == "evaluation" and not start_utc <= decision_start_utc < end_utc:
+        raise Stage3DataError("evaluation decision start is outside the feature window")
+    if mode == "training" and not start_utc < decision_start_utc <= end_utc:
+        raise Stage3DataError(
+            "training evaluation boundary is outside the feature window"
+        )
     if mode == "evaluation" and start_utc > decision_start_utc - timedelta(hours=168):
         raise Stage3DataError("evaluation window is missing 168h pre-start context")
     dataset_start = parse_utc(STAGE2_WINDOW_START_ISO)
@@ -944,6 +956,8 @@ def load_accepted_feature_window(
             require_ready_at_decision_start=mode == "evaluation",
             label_bars=all_bars,
         )
+        if mode == "training":
+            rows = purge_training_rows(rows, evaluation_start=decision_start_utc)
         results[instrument_id] = rows
     return results
 
@@ -1224,6 +1238,7 @@ def _require_projection_order(
 def _require_bar_projection_order(bars: Sequence[BarProjection]) -> None:
     previous_by_instrument: dict[str, int] = {}
     for bar in bars:
+        _require_decision_bar_identity(bar)
         previous = previous_by_instrument.get(bar.instrument_id)
         if previous is not None and bar.ts_event - previous != HOUR_NS:
             raise Stage3DataError(
@@ -1231,6 +1246,19 @@ def _require_bar_projection_order(bars: Sequence[BarProjection]) -> None:
             )
         previous_by_instrument[bar.instrument_id] = _require_next_timestamp(
             bar.ts_event, previous, "label bar"
+        )
+
+
+def _require_decision_bar_identity(bar: BarProjection) -> None:
+    if bar.instrument_id not in STAGE2_INSTRUMENT_IDS:
+        raise Stage3DataError("decision bar instrument is not a stage 3 target")
+    if bar.bar_type != stage2_bar_type_str(bar.instrument_id, "1h"):
+        raise Stage3DataError("decision bar type is not the canonical 1h closed bar")
+    if isinstance(bar.ts_event, bool) or not isinstance(bar.ts_event, int):
+        raise Stage3DataError("decision bar timestamp is invalid")
+    if (bar.ts_event + STAGE2_CLOSE_OFFSET_MS * MS_NS) % HOUR_NS != 0:
+        raise Stage3DataError(
+            "decision bar timestamp is not on the accepted 1h close grid"
         )
 
 
@@ -1512,6 +1540,7 @@ def _bars_from_frame(frame: pl.DataFrame) -> tuple[BarProjection, ...]:
     return tuple(
         BarProjection(
             instrument_id=cast(str, item["instrument_id"]),
+            bar_type=cast(str, item["bar_type"]),
             open=cast(str, item["open"]),
             high=cast(str, item["high"]),
             low=cast(str, item["low"]),
