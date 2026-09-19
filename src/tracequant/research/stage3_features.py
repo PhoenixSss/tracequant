@@ -87,6 +87,8 @@ SERIES_GRID_TOLERANCE_NS: Final = MS_NS
 # must not be stricter than the producer that accepted the data. Funding is bound
 # to the accepted grid at the producer's written tolerance instead.
 FUNDING_GRID_TOLERANCE_NS: Final = STAGE2_FUNDING_SCHEDULE_TOLERANCE_MS * MS_NS
+MARK_CADENCE_NS: Final = STAGE2_INTERVAL_MS["15m"] * MS_NS
+FUNDING_CADENCE_NS: Final = 8 * HOUR_NS
 # An accepted bar closes one millisecond before the next bar opens, so the event
 # timestamp an accepted series is gridded on is its close_time and the open_time
 # an allow-list is written in is not itself a grid timestamp.
@@ -222,6 +224,46 @@ def feature_schema_payload() -> dict[str, object]:
         "features": [dict(item) for item in FEATURE_SCHEMA],
         "mark_as_of_max_age_ns": MARK_MAX_AGE_NS,
         "funding_as_of_max_age_ns": FUNDING_MAX_AGE_NS,
+        "missing_data_policy": {
+            "unapproved_gap": "error, including during warm-up",
+            "silent_fill_interpolate_forward_fill_or_drop": "forbidden",
+            "duplicate_or_out_of_order": "error, including repeated grid slots",
+            "mark": {
+                "cadence_ns": MARK_CADENCE_NS,
+                "grid_tolerance_ns": SERIES_GRID_TOLERANCE_NS,
+                "allowed_gap_event_intervals_ns": [
+                    list(interval) for interval in mark_allowed_gap_ns()
+                ],
+                "required_coverage": "first retained decision bar through decision_ts",
+                "allowed_gap_values": "absent; use causal as-of within age limit",
+            },
+            "funding": {
+                "cadence_ns": FUNDING_CADENCE_NS,
+                "grid_tolerance_ns": FUNDING_GRID_TOLERANCE_NS,
+                "allowed_gaps": [],
+                "required_coverage": "all events in (decision_ts-24h, decision_ts]",
+                "boundary_tolerance": (
+                    "require earliest possibly included slot and every definitely due "
+                    "slot; sum only actual event timestamps in the window"
+                ),
+            },
+            "grid_anchor": {
+                "dataset_start": STAGE2_WINDOW_START_ISO,
+                "dataset_end_exclusive": STAGE2_WINDOW_END_ISO,
+                "mark_first_event_offset_ns": MARK_CADENCE_NS - MS_NS,
+                "funding_first_event_offset_ns": 0,
+            },
+            "warm_up": {
+                "required_contiguous_decision_bars": FEATURE_LOOKBACK_HOURS + 1,
+                "incomplete_bar_history": "warming_up; no values or trading",
+                "training_header": "context only; exclude from training rows",
+                "first_tradable_decision_not_ready": "error",
+                "ready_with_incomplete_auxiliary_coverage": "error",
+            },
+            "future_stale_or_wrong_instrument": "error",
+            "non_finite_input_or_output": "error",
+            "volume_std_24_zero": "error",
+        },
         "parity_atol": FEATURE_ATOL,
         "parity_rtol": FEATURE_RTOL,
     }
@@ -233,7 +275,7 @@ def _canonical_digest(payload: object) -> str:
 
 
 FEATURE_SCHEMA_DIGEST: Final = (
-    "ee2416993244e3f56622da41bcebe47980fc1b959013c22222a806b664eb359e"
+    "6170d256a110effad4da4b97d6f22444d8bd8aac446d341610699f013b0e1f84"
 )
 
 
@@ -498,7 +540,11 @@ def bind_accepted_stage2_catalog(
 
 
 class IncrementalFeatureState:
-    """Finite Stage 3 feature state over one instrument's native projections."""
+    """Finite state consuming every native auxiliary event, including warm-up.
+
+    Sampling just the latest mark/funding at each decision is not sufficient:
+    sequence continuity and the complete funding lookback must be proven too.
+    """
 
     def __init__(self, instrument_id: str) -> None:
         if instrument_id not in STAGE2_INSTRUMENT_IDS:
@@ -510,6 +556,10 @@ class IncrementalFeatureState:
         self._last_bar_ts: int | None = None
         self._last_mark_ts: int | None = None
         self._last_funding_ts: int | None = None
+        self._first_mark_ts: int | None = None
+        self._first_funding_ts: int | None = None
+        self._mark_coverage = _incremental_auxiliary_coverage("mark")
+        self._funding_coverage = _incremental_auxiliary_coverage("funding")
 
     @property
     def retained_event_counts(self) -> tuple[int, int]:
@@ -519,9 +569,11 @@ class IncrementalFeatureState:
     def push_mark(self, event: MarkProjection) -> None:
         self._require_instrument(event.instrument_id)
         value = _finite_positive(event.value, "mark value")
-        self._last_mark_ts = _require_next_timestamp(
-            event.ts_event, self._last_mark_ts, "mark"
+        self._last_mark_ts = _require_next_auxiliary_timestamp(
+            event.ts_event, self._last_mark_ts, self._mark_coverage
         )
+        if self._first_mark_ts is None:
+            self._first_mark_ts = event.ts_event
         # Only the newest mark can be the as-of value of a later decision, so no
         # earlier mark can affect any future row.
         self._marks[:] = ((event.ts_event, value),)
@@ -529,9 +581,11 @@ class IncrementalFeatureState:
     def push_funding(self, event: FundingProjection) -> None:
         self._require_instrument(event.instrument_id)
         value = _finite_float(event.rate, "funding rate")
-        self._last_funding_ts = _require_next_timestamp(
-            event.ts_event, self._last_funding_ts, "funding"
+        self._last_funding_ts = _require_next_auxiliary_timestamp(
+            event.ts_event, self._last_funding_ts, self._funding_coverage
         )
+        if self._first_funding_ts is None:
+            self._first_funding_ts = event.ts_event
         self._funding.append((event.ts_event, value))
 
     def _prune_funding(self, decision_ts: int) -> None:
@@ -608,6 +662,24 @@ class IncrementalFeatureState:
         if decision_ts - funding_ts > FUNDING_MAX_AGE_NS:
             raise Stage3DataError("latest funding is stale at the decision timestamp")
         funding_floor = decision_ts - FUNDING_WINDOW_HOURS * HOUR_NS
+        _require_auxiliary_window(
+            self._mark_coverage,
+            self._first_mark_ts,
+            mark_ts,
+            window_start_ns=bars[0][0],
+            window_end_ns=decision_ts + 1,
+        )
+        # Funding timestamps can drift around the nominal settlement. At the
+        # left boundary retain proof of any slot that could enter the sum; at
+        # the right boundary require only slots whose tolerance has elapsed.
+        # Actual timestamps, never nominal slots, determine the causal sum.
+        _require_auxiliary_window(
+            self._funding_coverage,
+            self._first_funding_ts,
+            funding_ts,
+            window_start_ns=funding_floor - FUNDING_GRID_TOLERANCE_NS + 1,
+            window_end_ns=decision_ts - FUNDING_GRID_TOLERANCE_NS + 1,
+        )
         funding_sum = sum(
             rate
             for ts_event, rate in self._funding
@@ -1055,6 +1127,73 @@ def _require_accepted_catalog_series(
         window_start_ns=window_start_ns,
         window_end_ns=window_end_ns,
     )
+
+
+def _incremental_auxiliary_coverage(
+    name: Literal["mark", "funding"],
+) -> AcceptedSeriesCoverage:
+    """The fixed Stage 2 event grids, without catalog or Nautilus dependencies."""
+    start = datetime_to_nanos(parse_utc(STAGE2_WINDOW_START_ISO))
+    end = datetime_to_nanos(parse_utc(STAGE2_WINDOW_END_ISO))
+    cadence = MARK_CADENCE_NS if name == "mark" else FUNDING_CADENCE_NS
+    first = start + cadence - MS_NS if name == "mark" else start
+    return AcceptedSeriesCoverage(
+        description=name,
+        first_ts_event=first,
+        cadence_ns=cadence,
+        grid_tolerance_ns=(
+            SERIES_GRID_TOLERANCE_NS if name == "mark" else FUNDING_GRID_TOLERANCE_NS
+        ),
+        last_index=(end - 1 - first) // cadence,
+        allowed_gap_indices=frozenset(
+            (omitted - first) // cadence
+            for omitted, _ in (mark_allowed_gap_ns() if name == "mark" else ())
+        ),
+    )
+
+
+def _require_next_auxiliary_timestamp(
+    value: int, previous: int | None, series: AcceptedSeriesCoverage
+) -> int:
+    _require_next_timestamp(value, previous, series.description)
+    index = series.grid_index(value)
+    if index in series.allowed_gap_indices:
+        raise Stage3DataError(
+            f"{series.description} contains a record the accepted coverage omits"
+        )
+    if previous is not None:
+        previous_index = series.grid_index(previous)
+        if index <= previous_index:
+            raise Stage3DataError(
+                f"{series.description} events contain duplicate or out-of-order slots"
+            )
+        approved = sum(
+            previous_index < gap < index for gap in series.allowed_gap_indices
+        )
+        if index - previous_index - 1 != approved:
+            raise Stage3DataError(f"{series.description} contains an unapproved gap")
+    return value
+
+
+def _require_auxiliary_window(
+    series: AcceptedSeriesCoverage,
+    first: int | None,
+    last: int,
+    *,
+    window_start_ns: int,
+    window_end_ns: int,
+) -> None:
+    # Adjacent-slot checks prove the interior even after event values are pruned.
+    # Boundaries additionally reject a late-starting or stopped stream whose
+    # newest event alone would still satisfy the as-of age limit.
+    if (
+        first is None
+        or series.grid_index(first) > series.first_eligible_index(window_start_ns)
+        or series.grid_index(last) < series.last_eligible_index(window_end_ns)
+    ):
+        raise Stage3DataError(
+            f"{series.description} has incomplete required coverage at ready decision"
+        )
 
 
 def _require_projection_order(

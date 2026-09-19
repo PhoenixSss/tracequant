@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -140,22 +141,28 @@ def _bar(index: int, *, instrument_id: str = BTC) -> BarProjection:
 
 def _events(
     count: int,
+    *,
+    start_index: int = 0,
+    instrument_id: str = BTC,
 ) -> tuple[tuple[MarkProjection, ...], tuple[FundingProjection, ...]]:
+    omitted = {start for start, _ in mark_allowed_gap_ns()}
     marks = tuple(
         MarkProjection(
-            instrument_id=BTC,
-            value=f"{100.1 + index * 0.2:.8f}",
-            ts_event=_bar(index).ts_event,
+            instrument_id=instrument_id,
+            value=f"{100.1 + index * 0.05:.8f}",
+            ts_event=MARK_ORIGIN_NS + index * QUARTER_HOUR_NS,
         )
-        for index in range(count)
+        for index in range(start_index * 4, (start_index + count) * 4)
+        if MARK_ORIGIN_NS + index * QUARTER_HOUR_NS not in omitted
     )
     funding = tuple(
         FundingProjection(
-            instrument_id=BTC,
+            instrument_id=instrument_id,
             rate=f"{0.0001 + index * 0.000001:.8f}",
-            ts_event=_bar(index).ts_event,
+            ts_event=DATASET_START_NS + index * HOUR_NS,
         )
-        for index in range(0, count, 8)
+        for index in range(start_index, start_index + count)
+        if index % 8 == 0
     )
     return marks, funding
 
@@ -688,27 +695,9 @@ def test_stage3_features_are_bound_to_accepted_catalog_and_causal(
         row.label_end_ts is not None and row.label_end_ts < boundary for row in purged
     )
 
-    # The approved mark-gap edge is inclusive at exactly 15 minutes; older is stale.
-    boundary_state = IncrementalFeatureState(BTC)
-    for event in funding:
-        if event.ts_event <= bars[168].ts_event:
-            boundary_state.push_funding(event)
-    boundary_state.push_mark(
-        MarkProjection(BTC, "133.7", bars[168].ts_event - MARK_MAX_AGE_NS)
-    )
-    boundary_row = None
-    for bar in bars[:169]:
-        boundary_row = boundary_state.push_bar(bar)
-    assert boundary_row is not None and boundary_row.status == "ready"
-
-    stale_state = IncrementalFeatureState(BTC)
-    stale_state.push_funding(FundingProjection(BTC, "0.0001", bars[168].ts_event))
-    stale_state.push_mark(
-        MarkProjection(BTC, "133.7", bars[168].ts_event - MARK_MAX_AGE_NS - 1)
-    )
+    # A stopped mark stream must not turn ready once its last value is stale.
     with pytest.raises(Stage3DataError, match="mark is stale"):
-        for bar in bars[:169]:
-            stale_state.push_bar(bar)
+        _feed(bars[:169], marks[: 169 * 4 - 2], funding)
 
     with pytest.raises(Stage3DataError, match="instrument"):
         build_feature_rows(
@@ -1057,10 +1046,132 @@ def test_out_of_window_read_reports_the_stage3_error_contract(
         )
 
 
+@pytest.mark.parametrize("instrument_id", [BTC, ETH])
+@pytest.mark.parametrize("missing_index", [19, 20])
+def test_incremental_funding_gap_during_warmup_cannot_become_ready(
+    instrument_id: str, missing_index: int
+) -> None:
+    bars = tuple(_bar(index, instrument_id=instrument_id) for index in range(169))
+    marks, funding = _events(len(bars), instrument_id=instrument_id)
+    funding = tuple(replace(event, rate="0.0001") for event in funding)
+    _, complete = _feed(bars, marks, funding, tradable_from=bars[-1].ts_event)
+    assert complete[-1].tradable
+    assert complete[-1].require_ready()[FEATURE_NAMES.index("funding_sum_24h")] == (
+        pytest.approx(0.0003)
+    )
+    # The 08:00/16:00 settlement is absent, but the newest 00:00 settlement
+    # arrives before the first ready decision. Age checks alone cannot see it.
+    incomplete = funding[:missing_index] + funding[missing_index + 1 :]
+    assert incomplete[-1].ts_event == funding[-1].ts_event
+    with pytest.raises(Stage3DataError, match="funding.*unapproved gap"):
+        _feed(bars, marks, incomplete, tradable_from=bars[-1].ts_event)
+
+
+@pytest.mark.parametrize("instrument_id", [BTC, ETH])
+def test_incremental_mark_gap_during_warmup_cannot_become_ready(
+    instrument_id: str,
+) -> None:
+    bars = tuple(_bar(index, instrument_id=instrument_id) for index in range(169))
+    marks, funding = _events(len(bars), instrument_id=instrument_id)
+    missing = 160 * 4 + 1
+    incomplete = marks[:missing] + marks[missing + 1 :]
+    assert incomplete[-1].ts_event == bars[-1].ts_event
+    with pytest.raises(Stage3DataError, match="mark.*unapproved gap"):
+        _feed(bars, incomplete, funding, tradable_from=bars[-1].ts_event)
+
+
+@pytest.mark.parametrize(
+    ("series", "boundary"),
+    [("funding", "prefix"), ("mark", "prefix"), ("mark", "suffix")],
+)
+def test_incremental_auxiliary_boundaries_need_more_than_a_fresh_latest_event(
+    series: str, boundary: str
+) -> None:
+    bars = tuple(_bar(index) for index in range(169))
+    marks, funding = _events(len(bars))
+    if series == "funding":
+        # Both remaining settlements are fresh but the 08:00 rate is missing.
+        funding = funding[-2:]
+    elif boundary == "prefix":
+        marks = marks[-1:]
+    else:
+        # Age == 15m alone cannot approve an unrecorded mark omission.
+        marks = marks[:-1]
+        assert bars[-1].ts_event - marks[-1].ts_event == MARK_MAX_AGE_NS
+    with pytest.raises(
+        Stage3DataError, match=f"{series}.*incomplete required coverage"
+    ):
+        _feed(bars, marks, funding, tradable_from=bars[-1].ts_event)
+
+
+@pytest.mark.parametrize("instrument_id", [BTC, ETH])
+@pytest.mark.parametrize("gap_index", [0, 1])
+def test_incremental_mark_allows_only_the_two_accepted_omissions(
+    instrument_id: str, gap_index: int
+) -> None:
+    omitted, following = mark_allowed_gap_ns()[gap_index]
+    decision_index = -(-(omitted - BAR_ORIGIN_NS) // HOUR_NS)
+    start_index = decision_index - FEATURE_LOOKBACK_HOURS
+    bars = tuple(
+        _bar(index, instrument_id=instrument_id)
+        for index in range(start_index, decision_index + 2)
+    )
+    marks, funding = _events(
+        len(bars), start_index=start_index, instrument_id=instrument_id
+    )
+    _, rows = _feed(bars, marks, funding, tradable_from=bars[168].ts_event)
+    row = rows[168]
+    latest = next(
+        event for event in reversed(marks) if event.ts_event <= row.decision_ts
+    )
+    assert row.status == "ready" and row.tradable
+    assert row.decision_ts - latest.ts_event == (
+        0 if gap_index == 0 else MARK_MAX_AGE_NS
+    )
+    assert row.require_ready()[FEATURE_NAMES.index("basis_mark_last")] == pytest.approx(
+        float(latest.value) / float(bars[168].close) - 1.0
+    )
+    assert rows[169].status == "ready"  # Also prove continuity after the gap.
+    for extra_omission in (omitted - QUARTER_HOUR_NS, following):
+        with pytest.raises(Stage3DataError, match="mark.*(gap|coverage|stale)"):
+            _feed(
+                bars,
+                tuple(event for event in marks if event.ts_event != extra_omission),
+                funding,
+                tradable_from=bars[168].ts_event,
+            )
+
+
+def test_incremental_funding_tolerance_and_slot_drift() -> None:
+    bars = tuple(_bar(index) for index in range(169))
+    marks, funding = _events(len(bars))
+    tolerance = STAGE2_FUNDING_SCHEDULE_TOLERANCE_MS * MS_NS
+    offsets = (0, -tolerance, 0, tolerance)
+    shifted = tuple(
+        replace(event, ts_event=event.ts_event + offsets[index % len(offsets)])
+        for index, event in enumerate(funding)
+    )
+    _, expected = _feed(bars, marks, funding)
+    _, actual = _feed(bars, marks, shifted)
+    for left, right in zip(expected[168:], actual[168:], strict=True):
+        assert left.require_ready() == pytest.approx(
+            right.require_ready(), abs=FEATURE_ATOL, rel=FEATURE_RTOL
+        )
+
+    state = IncrementalFeatureState(BTC)
+    state.push_funding(funding[0])
+    with pytest.raises(Stage3DataError, match="duplicate or out-of-order slots"):
+        state.push_funding(replace(funding[0], ts_event=funding[0].ts_event + MS_NS))
+    with pytest.raises(Stage3DataError, match="accepted coverage grid"):
+        state.push_funding(
+            replace(funding[1], ts_event=funding[1].ts_event + tolerance + 1)
+        )
+
+
 def test_feature_schema_digest_is_stable_and_sensitive() -> None:
     payload = feature_schema_payload()
     assert FEATURE_SCHEMA_DIGEST == (
-        "ee2416993244e3f56622da41bcebe47980fc1b959013c22222a806b664eb359e"
+        "6170d256a110effad4da4b97d6f22444d8bd8aac446d341610699f013b0e1f84"
     )
     assert feature_schema_digest() == FEATURE_SCHEMA_DIGEST
     # Sensitivity has to be asserted through the digest itself: comparing a
@@ -1069,6 +1180,37 @@ def test_feature_schema_digest_is_stable_and_sensitive() -> None:
     changed = dict(payload)
     changed["mark_as_of_max_age_ns"] = MARK_MAX_AGE_NS - 1
     assert stage3._canonical_digest(changed) != FEATURE_SCHEMA_DIGEST
+
+
+def test_feature_schema_serializes_missing_data_rules_and_binds_them_to_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = feature_schema_payload()
+    assert json.loads(json.dumps(original)) == original
+    policy = cast(dict[str, object], original["missing_data_policy"])
+    assert policy["unapproved_gap"] == "error, including during warm-up"
+    assert policy["silent_fill_interpolate_forward_fill_or_drop"] == "forbidden"
+    assert policy["volume_std_24_zero"] == "error"
+    mark = cast(dict[str, object], policy["mark"])
+    assert mark["allowed_gap_event_intervals_ns"] == [
+        [datetime_to_nanos(parse_utc(start)), datetime_to_nanos(parse_utc(end))]
+        for start, end in (
+            ("2020-01-19T13:29:59.999Z", "2020-01-19T13:44:59.999Z"),
+            ("2023-11-10T03:59:59.999Z", "2023-11-10T04:14:59.999Z"),
+        )
+    ]
+    warm_up = cast(dict[str, object], policy["warm_up"])
+    assert warm_up["required_contiguous_decision_bars"] == 169
+    assert warm_up["first_tradable_decision_not_ready"] == "error"
+    assert warm_up["incomplete_bar_history"] == "warming_up; no values or trading"
+
+    # Exercise the public digest path; no missing-data rule may be excluded.
+    for key in policy:
+        changed = {**original, "missing_data_policy": {**policy, key: "changed"}}
+        monkeypatch.setattr(
+            stage3, "feature_schema_payload", lambda payload=changed: payload
+        )
+        assert feature_schema_digest() != FEATURE_SCHEMA_DIGEST
 
 
 def test_stage3_typed_config_has_no_implicit_path_or_identity_defaults(
@@ -1252,14 +1394,7 @@ def test_typed_config_fails_closed_on_every_enumerated_ac8_branch(
 def test_incremental_feature_state_stays_bounded_by_the_lookbacks() -> None:
     hours = 24 * 30
     bars = tuple(_bar(index) for index in range(hours + 169))
-    marks = tuple(
-        MarkProjection(BTC, f"{100.1 + index * 0.001:.8f}", _bar(index).ts_event)
-        for index in range(len(bars))
-    )
-    funding = tuple(
-        FundingProjection(BTC, f"{0.0001 + index * 0.000001:.8f}", _bar(index).ts_event)
-        for index in range(0, len(bars), 8)
-    )
+    marks, funding = _events(len(bars))
 
     live, live_rows = _feed(bars, marks, funding)
     retained_marks, retained_funding = live.retained_event_counts
