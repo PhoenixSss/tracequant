@@ -11,11 +11,15 @@ product surface described here.
 - CPython: `3.13` (`>=3.13,<3.14`)
 - uv: `0.12.1`
 - build backend: `uv_build>=0.12.1,<0.13.0`
-- runtime dependency: exact official PyPI distributions
-  `nautilus-trader==2.0.0rc4` and `polars==1.44.2`
+- runtime dependencies: exact official PyPI distributions including
+  `nautilus-trader==2.0.0rc4`, `polars==1.44.2`, and `lightgbm==4.7.0`;
+  LightGBM's locked base closure is `numpy`, `scipy`, and `narwhals`, without
+  optional ML/dataframe/GPU extras
 - upstream release: `v2.0.0rc4`, commit
   `a0400251110653b6d8ae6a9b5b89c4543fa85a2d`
 - source-build policy: `uv.toml` rejects builds of `nautilus-trader`
+- native CPU prerequisite: the platform OpenMP runtime used by the official
+  LightGBM wheel (`libgomp1` on Ubuntu)
 
 `uv.lock`, `pyproject.toml`, `uv.toml`, `.python-version`, and CI are the
 mechanical authority for the installed environment. There is no Git, path,
@@ -34,7 +38,10 @@ crossover Strategy, and writes order, fill, position, account, and summary
 reports. `tracequant.source_data` owns the frozen window, checksum, and
 provenance identity; it does not import `nautilus_trader`.
 `tracequant.research` projects catalog Bars and mark prices into read-only
-Polars views with fixed time splits; it does not import `nautilus_trader`.
+Polars views with fixed time splits, produces the finite causal Stage 3
+feature/label contract, and owns deterministic native LightGBM artifact
+training/loading. It does not import `nautilus_trader`; model artifacts remain
+external, immutable, and separate from trading/accounting state.
 
 Importing TraceQuant performs no I/O, environment read, directory creation,
 client construction, background startup, or global singleton initialization.

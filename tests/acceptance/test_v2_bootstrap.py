@@ -140,6 +140,7 @@ def test_clean_bootstrap_uses_pinned_external_nautilus() -> None:
 
     assert pyproject["project"]["requires-python"] == ">=3.13,<3.14"
     assert pyproject["project"]["dependencies"] == [
+        "lightgbm==4.7.0",
         f"nautilus-trader=={EXPECTED_NAUTILUS_VERSION}",
         "polars==1.44.2",
         "zstandard==0.25.0",
@@ -221,6 +222,7 @@ def test_candidate_tree_matches_the_approved_product_and_lck_layout() -> None:
         Path("src/tracequant/integrations/nautilus/strategies/stage3_momentum.py"),
         Path("src/tracequant/research/__init__.py"),
         Path("src/tracequant/research/source_schema.py"),
+        Path("src/tracequant/research/stage3_artifacts.py"),
         Path("src/tracequant/research/stage3_features.py"),
         Path("src/tracequant/research/views.py"),
         Path("src/tracequant/source_data/__init__.py"),
