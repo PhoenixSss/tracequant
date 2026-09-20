@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import ROUND_DOWN, Decimal
 from typing import Final, Literal, cast
@@ -405,10 +407,15 @@ class Stage3MomentumStrategy(Strategy):
         instrument_id: str,
         decision_ts: int,
         close: Decimal,
-        ret_24h: float,
+        ret_24h: float | None,
         signal: Signal,
         target: Decimal,
+        decision_fields: Mapping[str, object] | None = None,
     ) -> None:
+        if (ret_24h is None) == (decision_fields is None):
+            raise Stage3MomentumError(
+                "decision must have exactly one signal-source payload"
+            )
         native_id = self._instrument_ids[instrument_id]
         positions = self.cache.positions_open(instrument_id=native_id)
         if len(positions) > 1:
@@ -420,7 +427,12 @@ class Stage3MomentumStrategy(Strategy):
             "close": str(close),
             "current_qty": str(current),
             "decision_id": _decision_id(
-                instrument_id, decision_ts, signal, target, close
+                instrument_id,
+                decision_ts,
+                signal,
+                target,
+                close,
+                decision_fields=decision_fields,
             ),
             "decision_sequence": self._next_event_sequence(),
             "decision_ts": decision_ts,
@@ -430,10 +442,13 @@ class Stage3MomentumStrategy(Strategy):
             "order_ids": [],
             "order_intents": [],
             "reason": "target_aligned",
-            "ret_24h": repr(ret_24h),
             "signal": signal,
             "target_qty": str(target),
         }
+        if decision_fields is None:
+            record["ret_24h"] = repr(ret_24h)
+        else:
+            record.update(decision_fields)
         reversal = self._reversals.get(instrument_id)
         if reversal is not None and reversal.phase != "opening":
             record["action"] = "reversal_target_update"
@@ -758,6 +773,13 @@ def _decision_id(
     signal: Signal,
     target: Decimal,
     close: Decimal,
+    *,
+    decision_fields: Mapping[str, object] | None = None,
 ) -> str:
-    value = f"{instrument_id}|{decision_ts}|{signal}|{target}|{close}"
+    suffix = (
+        ""
+        if decision_fields is None
+        else "|" + json.dumps(decision_fields, sort_keys=True, separators=(",", ":"))
+    )
+    value = f"{instrument_id}|{decision_ts}|{signal}|{target}|{close}{suffix}"
     return hashlib.sha256(value.encode("utf-8")).hexdigest()

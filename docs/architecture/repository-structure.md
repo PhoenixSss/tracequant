@@ -8,8 +8,9 @@ and runs one Nautilus-native offline MA-cross backtest plus read-only Polars
 research views over that stage 2 catalog. Stage 3 now includes the accepted
 catalog binding, finite causal feature/label contract, and fixed-parameter
 traditional momentum Nautilus Strategy for the single base offline run, plus a
-deterministic single-artifact LightGBM trainer and fail-closed loader; the
-LightGBM Nautilus Strategy remains outside this tree. It does not
+deterministic single-artifact LightGBM trainer and fail-closed loader, and a
+thin LightGBM Nautilus Strategy which reuses the same execution and accounting
+path for the fixed 2022 development run. It does not
 provide an execution connection, Demo mode, or Live mode. LCK is an approved
 repository capability outside that product runtime.
 
@@ -93,10 +94,12 @@ src/tracequant/
       stage1_btcusdt.py
       stage1_backtest.py
       stage2_btceth.py
+      stage3_model.py
       stage3_momentum.py
       strategies/
         __init__.py
         stage1_ma_cross.py
+        stage3_model.py
         stage3_momentum.py
 ```
 
@@ -112,10 +115,14 @@ Stage 1 catalog ingest, the stage 2 BTC/ETH public-data bar catalog, and the
 offline MA-cross backtest live in use-case modules beside that seam; they are
 not a generic adapter, trading domain, or import-time runtime wrapper.
 
-`integrations/nautilus/strategies/` holds the stage 1 MA-cross Strategy and the
-fixed-parameter Stage 3 traditional momentum Strategy. The adjacent
-`integrations/nautilus/stage3_momentum.py` module owns its accepted-catalog
-offline base-run entry and immutable fact outputs. `tracequant.research` owns
+`integrations/nautilus/strategies/` holds the stage 1 MA-cross Strategy, the
+fixed-parameter Stage 3 traditional momentum Strategy, and the thin Stage 3
+LightGBM signal Strategy. The adjacent `integrations/nautilus/stage3_momentum.py`
+and `integrations/nautilus/stage3_model.py` modules own their accepted-catalog
+offline base-run entries and immutable fact outputs. The model Strategy reuses
+the momentum capability's Nautilus order, reversal, fee, funding, account, and
+terminal-state path; it adds no model gateway or parallel trading state.
+`tracequant.research` owns
 read-only Polars views, time splits, the finite Stage 3 causal feature/label
 contract, and the LightGBM training/artifact/loading boundary over the stage 2
 Nautilus catalog. The model boundary writes only caller-selected absolute
@@ -139,14 +146,14 @@ src/tracequant/
   research/                    later model/evaluation capabilities beyond the first artifact
   integrations/nautilus/
     configuration/             concrete Nautilus runtime configuration
-    strategies/                additional strategies beyond stage 1 MA-cross and stage 3 momentum
+    strategies/                additional strategies beyond the implemented stage 1/3 Strategies
   operations/                  admission, observation, alerts, and release
 ```
 
 These remaining capabilities are not implemented today. Listing them here
 assigns ownership only; it creates no scaffolding. `strategies/` already exists
-for the stage 1 MA-cross and Stage 3 traditional momentum Strategies, while
-`configuration/` and `operations/` are absent entirely.
+for the stage 1 MA-cross, Stage 3 traditional momentum, and Stage 3 LightGBM
+signal Strategies, while `configuration/` and `operations/` are absent entirely.
 
 NautilusTrader owns trading types, instruments, orders, positions, portfolio and
 account state, core pre-trade risk, execution, fills/accounting, catalogs,
