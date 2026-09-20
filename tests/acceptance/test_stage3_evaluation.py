@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from datetime import timedelta
 from decimal import Decimal
@@ -16,13 +17,18 @@ from tracequant.integrations.nautilus import stage3_evaluation as evaluation
 from tracequant.integrations.nautilus import stage3_model
 from tracequant.integrations.nautilus.stage3_evaluation import (
     EvaluationFold,
+    EvaluationRun,
     run_stage3_evaluation,
 )
+from tracequant.integrations.nautilus.stage3_momentum import Stage3MomentumReports
 from tracequant.integrations.nautilus.strategies import stage3_model as model_strategy
 from tracequant.research import stage3_artifacts
 from tracequant.research.stage3_artifacts import synthetic_fixture_provenance
 from tracequant.research.stage3_features import Stage3Config
-from tracequant.source_data.stage2_btceth import datetime_to_nanos
+from tracequant.source_data.stage2_btceth import (
+    STAGE2_INSTRUMENT_IDS,
+    datetime_to_nanos,
+)
 
 
 def test_stage3_evaluation_contract_freezes_folds_and_accounting_scenarios() -> None:
@@ -240,6 +246,36 @@ def test_stage3_evaluation_compares_both_strategies_with_accounting_only_sensiti
             assert item["prediction_digest"] == base["prediction_digest"]
     assert first.result_digest == second.result_digest
     assert first.manifest["fold_dispersion"] == second.manifest["fold_dispersion"]
+    frozen = cast(Mapping[str, object], first.manifest["frozen_final_test_config"])
+    frozen_digest_payload = dict(frozen)
+    frozen_digest = frozen_digest_payload.pop("final_test_config_digest")
+    assert frozen_digest == evaluation._digest(frozen_digest_payload)
+    run_config_digests = cast(
+        Mapping[str, Mapping[str, str]], frozen["run_config_digests"]
+    )
+    final_runs = [
+        item
+        for item in base_runs
+        if cast(Mapping[str, object], item["fold"])["role"] == "final_test"
+    ] + sensitivity
+    for item in final_runs:
+        scenario = cast(Mapping[str, str], item["scenario"])["name"]
+        assert (
+            item["config_digest"]
+            == run_config_digests[cast(str, item["strategy"])][scenario]
+        )
+    drifted = {**frozen, "feature_schema_digest": "drifted"}
+    with pytest.raises(
+        evaluation.Stage3EvaluationError,
+        match="frozen final-test config has drifted",
+    ):
+        evaluation._require_frozen_final_test_config(
+            drifted,
+            config=config("drift-check"),
+            fold=evaluation.expanding_folds()[-1],
+            strategy="momentum",
+            scenario=evaluation.base_scenario(),
+        )
     assert (first.partition / "manifest.json").is_file()
     assert (
         cast(
@@ -248,6 +284,25 @@ def test_stage3_evaluation_compares_both_strategies_with_accounting_only_sensiti
         )["status"]
         == "proved_by_forced_taker_fill"
     )
+    for item in final_runs:
+        partition = first.partition / cast(str, item["partition"])
+        account = json.loads((partition / "account.json").read_text(encoding="utf-8"))
+        decisions = json.loads(
+            (partition / "decisions.json").read_text(encoding="utf-8")
+        )
+        assert len(account["equity_curve"]) == len(
+            {decision["decision_ts"] for decision in decisions}
+        )
+        metrics = cast(Mapping[str, object], item["metrics"])
+        assert Decimal(cast(str, metrics["total_pnl"])) == (
+            Decimal(account["equity_curve"][-1]["total"]) - Decimal("100000")
+        )
+        funding = json.loads((partition / "funding.json").read_text(encoding="utf-8"))
+        assert all(
+            "account_delta" in native
+            for event in funding["events"]
+            for native in event["events"]
+        )
 
 
 def test_accounting_fixture_proves_zero_base_and_double_scaling(
@@ -342,3 +397,109 @@ def test_model_sensitivity_replays_frozen_predictions_and_decisions(
     assert Decimal(cast(str, replay.reports.summary["total_commission"])) == (
         Decimal(cast(str, base.reports.summary["total_commission"])) * 2
     )
+
+
+def _reports_with_mark_to_market_and_offsetting_funding() -> Stage3MomentumReports:
+    btc, eth = STAGE2_INSTRUMENT_IDS
+    return Stage3MomentumReports(
+        decisions=(
+            {"decision_ts": 1},
+            {"decision_ts": 2},
+        ),
+        associations=(),
+        orders=(),
+        fills=(),
+        positions=(),
+        account={
+            "equity_curve": [
+                {
+                    "gross_exposure": "0",
+                    "total": "100000",
+                    "ts_event": 1,
+                },
+                {
+                    "gross_exposure": "10000",
+                    "total": "100125",
+                    "ts_event": 2,
+                },
+            ],
+            "total": "100000 USDT",
+        },
+        result={},
+        summary={
+            "fill_count": 0,
+            "total_commission": "0",
+            "total_funding": "0",
+            "trade_count": 0,
+            "turnover": "0",
+        },
+        funding={
+            "events": [
+                {
+                    "events": [
+                        {"account_delta": "5", "instrument_id": btc},
+                        {"account_delta": "-5", "instrument_id": eth},
+                    ],
+                    "ts_event": 1,
+                }
+            ],
+            "total_funding": "0",
+        },
+        terminal={
+            "positions": [
+                {
+                    "instrument_id": btc,
+                    "unrealized_pnl": "125 USDT",
+                }
+            ]
+        },
+    )
+
+
+def test_metrics_use_nautilus_mark_to_market_equity_curve() -> None:
+    reports = _reports_with_mark_to_market_and_offsetting_funding()
+    metrics = evaluation._metrics(reports, fold=evaluation.expanding_folds()[0])
+
+    assert metrics["total_pnl"] == "125"
+    assert metrics["total_return"] == "0.00125"
+
+
+def test_funding_information_uses_per_instrument_native_deltas() -> None:
+    reports = _reports_with_mark_to_market_and_offsetting_funding()
+    run = EvaluationRun(
+        fold=evaluation.expanding_folds()[-1],
+        strategy="momentum",
+        scenario=evaluation.base_scenario(),
+        reports=reports,
+        partition=Path("unused"),
+        fee_provenance=(),
+        artifact=None,
+        predictions=(),
+        decision_digest="decision",
+        prediction_digest=None,
+        scenario_digest="scenario",
+        information_status={},
+        metrics={},
+        run_identity="run",
+        result_digest="result",
+    )
+
+    per_instrument = evaluation._per_instrument_metrics(reports)
+    information = evaluation._sensitivity_information(
+        run, evaluation.sensitivity_scenarios()[2]
+    )
+
+    assert (
+        cast(Mapping[str, object], per_instrument[STAGE2_INSTRUMENT_IDS[0]])["funding"]
+        == "5"
+    )
+    assert (
+        cast(Mapping[str, object], per_instrument[STAGE2_INSTRUMENT_IDS[1]])["funding"]
+        == "-5"
+    )
+    assert information == {
+        "informative": True,
+        "reason": "base run has native per-instrument funding exposure",
+        "status": "informative",
+        "subject": "funding",
+    }

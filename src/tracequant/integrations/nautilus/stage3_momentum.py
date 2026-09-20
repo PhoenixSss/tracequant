@@ -581,9 +581,10 @@ def _collect_reports(
     if account is None:
         raise Stage3MomentumError("Nautilus account result is missing")
     account_events = tuple(_account_event_record(item) for item in account.events)
-    funding = _funding_report(account_events, funding_events)
+    funding = _funding_report(account_events, funding_events, positions)
     account_report: dict[str, object] = {
         "base_currency": str(account.base_currency),
+        "equity_curve": list(strategy.equity_curve),
         "events": list(account_events),
         "free": str(account.balance_free(usdt)),
         "id": str(account.id),
@@ -794,6 +795,7 @@ def _require_runtime_feature_parity(
 def _funding_report(
     account_events: Sequence[Mapping[str, object]],
     funding_events: Sequence[FundingRateUpdate],
+    positions: Sequence[Mapping[str, object]],
 ) -> dict[str, object]:
     funding_by_ts: dict[int, list[dict[str, object]]] = {}
     for item in funding_events:
@@ -806,54 +808,88 @@ def _funding_report(
                 "ts_event": int(item.ts_event),
             }
         )
-    events_by_ts: dict[int, list[Mapping[str, object]]] = {}
-    for event in account_events:
-        events_by_ts.setdefault(cast(int, event["ts_event"]), []).append(event)
+    for events in funding_by_ts.values():
+        events.sort(key=lambda item: cast(str, item["instrument_id"]))
+    reported_deltas: dict[int, list[Decimal]] = {}
     prior = STAGE3_STARTING_USDT
+    for event in account_events:
+        ts_event = cast(int, event["ts_event"])
+        ending = _account_event_total(event)
+        if ts_event in funding_by_ts and event.get("reported") is True:
+            delta = ending - prior
+            if delta != 0:
+                reported_deltas.setdefault(ts_event, []).append(delta)
+        prior = ending
     timeline: list[dict[str, object]] = []
     total = Decimal(0)
-    for ts_event in sorted(events_by_ts):
-        states = events_by_ts[ts_event]
-        funding_delta = Decimal(0)
-        funding_account_event_count = 0
-        for state in states:
-            ending = _account_event_total(state)
-            if ts_event in funding_by_ts and state.get("reported") is True:
-                funding_delta += ending - prior
-                funding_account_event_count += 1
-            prior = ending
-        if ts_event not in funding_by_ts:
-            continue
-        if funding_account_event_count > len(funding_by_ts[ts_event]):
-            raise Stage3MomentumError(
-                "native funding produced more account events than rate updates"
+    for ts_event, native_events in sorted(funding_by_ts.items()):
+        deltas = reported_deltas.get(ts_event, [])
+        exposed = [
+            event
+            for event in native_events
+            if _instrument_has_position_at(
+                cast(str, event["instrument_id"]), ts_event, positions
             )
+        ]
+        if deltas and len(deltas) != len(exposed):
+            raise Stage3MomentumError(
+                "native funding account events cannot be attributed by instrument"
+            )
+        by_instrument = (
+            {
+                cast(str, event["instrument_id"]): delta
+                for event, delta in zip(exposed, deltas, strict=True)
+            }
+            if deltas
+            else {}
+        )
+        enriched: list[dict[str, object]] = []
+        for event in native_events:
+            instrument_id = cast(str, event["instrument_id"])
+            enriched.append(
+                {
+                    **event,
+                    "account_delta": str(by_instrument.get(instrument_id, Decimal(0))),
+                }
+            )
+        funding_delta = sum(by_instrument.values(), Decimal(0))
         total += funding_delta
         timeline.append(
             {
                 "account_delta": str(funding_delta),
-                "events": funding_by_ts[ts_event],
-                "native_account_event_count": funding_account_event_count,
+                "events": enriched,
+                "native_account_event_count": len(deltas),
                 "ts_event": ts_event,
             }
         )
-    for ts_event in sorted(set(funding_by_ts).difference(events_by_ts)):
-        timeline.append(
-            {
-                "account_delta": "0",
-                "events": funding_by_ts[ts_event],
-                "native_account_event_count": 0,
-                "ts_event": ts_event,
-            }
-        )
-    timeline.sort(key=lambda item: cast(int, item["ts_event"]))
     return {
         "derivation": (
-            "Nautilus reported account-state deltas at native funding timestamps"
+            "Nautilus reported per-instrument account-state deltas at native "
+            "funding timestamps"
         ),
         "events": timeline,
         "total_funding": str(total),
     }
+
+
+def _instrument_has_position_at(
+    instrument_id: str,
+    ts_event: int,
+    positions: Sequence[Mapping[str, object]],
+) -> bool:
+    return any(
+        position.get("instrument_id") == instrument_id
+        and isinstance(position.get("ts_opened"), int)
+        and cast(int, position["ts_opened"]) <= ts_event
+        and (
+            position.get("ts_closed") is None
+            or (
+                isinstance(position.get("ts_closed"), int)
+                and ts_event < cast(int, position["ts_closed"])
+            )
+        )
+        for position in positions
+    )
 
 
 def _latest_marks(

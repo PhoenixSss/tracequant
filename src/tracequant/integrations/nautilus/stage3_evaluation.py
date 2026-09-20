@@ -300,6 +300,13 @@ def run_stage3_evaluation(
         _require_parameter_identity(artifact_manifest, frozen.revision, frozen.digest)
         artifacts[fold.fold_id] = (partition, artifact_manifest)
 
+    final_fold = folds[-1]
+    input_digest = _digest(stage3_momentum._config_identity_payload(config))
+    frozen_final_test_config = _freeze_final_test_config(
+        config,
+        fold=final_fold,
+        scenarios=accounting_scenarios(),
+    )
     base_references: list[dict[str, object]] = []
     base_metrics: list[tuple[StrategyName, dict[str, object]]] = []
     final_by_strategy: dict[StrategyName, EvaluationRun] = {}
@@ -314,13 +321,13 @@ def run_stage3_evaluation(
                 parameter_record=parameter_record,
                 fold=fold,
                 strategy=strategy,
+                frozen_final_test_config=frozen_final_test_config,
             )
             base_references.append(run.reference(root=config.run_root))
             base_metrics.append((strategy, run.metrics))
             if fold.role == "final_test":
                 final_by_strategy[strategy] = run
 
-    final_fold = folds[-1]
     if set(final_by_strategy) != {"momentum", "lightgbm"}:
         raise Stage3EvaluationError("final-test base strategy matrix is incomplete")
     sensitivity_references: list[dict[str, object]] = []
@@ -335,6 +342,7 @@ def run_stage3_evaluation(
                 strategy=strategy,
                 scenario=scenario,
                 base=base,
+                frozen_final_test_config=frozen_final_test_config,
             )
             sensitivity_references.append(run.reference(root=config.run_root))
 
@@ -346,18 +354,12 @@ def run_stage3_evaluation(
         fold=final_fold,
     )
     dispersion = _fold_dispersion(base_metrics)
-    input_digest = _digest(stage3_momentum._config_identity_payload(config))
     stable_payload: dict[str, object] = {
         "accounting_fixtures": fixtures,
         "base_runs": base_references,
         "fold_dispersion": dispersion,
         "folds": [fold.payload() for fold in folds],
-        "frozen_final_test_config": {
-            "feature_schema_digest": FEATURE_SCHEMA_DIGEST,
-            "lightgbm_strategy_digest": _strategy_config_digest("lightgbm"),
-            "momentum_strategy_digest": _strategy_config_digest("momentum"),
-            "shared_execution_digest": _shared_execution_digest(),
-        },
+        "frozen_final_test_config": frozen_final_test_config,
         "input_digest": input_digest,
         "sensitivity_runs": sensitivity_references,
         "training_parameter_digest": frozen.digest,
@@ -414,7 +416,15 @@ def _run_base_strategy(
     parameter_record: Path,
     fold: EvaluationFold,
     strategy: StrategyName,
+    frozen_final_test_config: Mapping[str, object] | None = None,
 ) -> EvaluationRun:
+    _require_frozen_final_test_config(
+        frozen_final_test_config,
+        config=config,
+        fold=fold,
+        strategy=strategy,
+        scenario=base_scenario(),
+    )
     stage3_momentum._require_external_run_root(
         config.run_root, catalog_path=config.catalog_path
     )
@@ -503,9 +513,17 @@ def _run_sensitivity_scenario(
     strategy: StrategyName,
     scenario: AccountingScenario,
     base: EvaluationRun,
+    frozen_final_test_config: Mapping[str, object] | None = None,
 ) -> EvaluationRun:
     if scenario.name == "base":
         raise Stage3EvaluationError("base is not a sensitivity replay scenario")
+    _require_frozen_final_test_config(
+        frozen_final_test_config,
+        config=config,
+        fold=fold,
+        strategy=strategy,
+        scenario=scenario,
+    )
     stage3_momentum._require_external_run_root(
         config.run_root, catalog_path=config.catalog_path
     )
@@ -712,25 +730,29 @@ def _metrics(reports: CommonReports, *, fold: EvaluationFold) -> dict[str, objec
     )
     if not decision_times:
         raise Stage3EvaluationError("metrics require target decisions")
-    timeline = [
-        (
-            cast(int, event["ts_event"]),
-            stage3_momentum._account_event_total(event),
-            index,
+    raw_curve = reports.account.get("equity_curve")
+    if not isinstance(raw_curve, list) or not all(
+        isinstance(item, Mapping) for item in raw_curve
+    ):
+        raise Stage3EvaluationError("Nautilus per-decision equity curve is missing")
+    curve = {
+        cast(int, item["ts_event"]): item
+        for item in cast(list[Mapping[str, object]], raw_curve)
+        if isinstance(item.get("ts_event"), int)
+    }
+    if len(curve) != len(raw_curve) or sorted(curve) != decision_times:
+        raise Stage3EvaluationError(
+            "Nautilus equity curve does not match target decisions"
         )
-        for index, event in enumerate(
-            cast(Sequence[Mapping[str, object]], reports.account["events"])
-        )
-    ]
-    timeline.sort(key=lambda item: (item[0], item[2]))
-    equities: list[Decimal] = []
-    event_index = 0
-    current = stage3_momentum.STAGE3_STARTING_USDT
-    for decision_ts in decision_times:
-        while event_index < len(timeline) and timeline[event_index][0] <= decision_ts:
-            current = timeline[event_index][1]
-            event_index += 1
-        equities.append(current)
+    try:
+        equities = [Decimal(cast(str, curve[ts]["total"])) for ts in decision_times]
+        gross_exposures = [
+            Decimal(cast(str, curve[ts]["gross_exposure"])) for ts in decision_times
+        ]
+    except (ArithmeticError, KeyError) as exc:
+        raise Stage3EvaluationError("Nautilus equity curve is invalid") from exc
+    if any(not value.is_finite() for value in (*equities, *gross_exposures)):
+        raise Stage3EvaluationError("Nautilus equity curve is not finite")
     returns = [
         float(equities[index] / equities[index - 1] - 1)
         for index in range(1, len(equities))
@@ -754,18 +776,11 @@ def _metrics(reports: CommonReports, *, fold: EvaluationFold) -> dict[str, objec
         peak = max(peak, equity)
         if peak:
             max_drawdown = max(max_drawdown, (peak - equity) / peak)
-    final_total = _money_amount(cast(str, reports.account["total"]))
+    final_total = equities[-1]
     pnl = final_total - stage3_momentum.STAGE3_STARTING_USDT
-    exposure_by_ts: dict[int, Decimal] = {}
-    for decision in reports.decisions:
-        decision_ts = cast(int, decision["decision_ts"])
-        exposure_by_ts[decision_ts] = exposure_by_ts.get(decision_ts, Decimal(0)) + abs(
-            Decimal(cast(str, decision["current_qty"]))
-            * Decimal(cast(str, decision["close"]))
-        )
     exposure_values = [
-        exposure_by_ts[decision_ts] / equity if equity else Decimal(0)
-        for decision_ts, equity in zip(decision_times, equities, strict=True)
+        gross / equity if equity else Decimal(0)
+        for gross, equity in zip(gross_exposures, equities, strict=True)
     ]
     exposure = (
         sum(exposure_values, Decimal(0)) / len(exposure_values)
@@ -796,6 +811,7 @@ def _metrics(reports: CommonReports, *, fold: EvaluationFold) -> dict[str, objec
 
 def _per_instrument_metrics(reports: CommonReports) -> dict[str, object]:
     result: dict[str, object] = {}
+    funding = _funding_by_instrument(reports)
     terminal = {
         cast(str, item["instrument_id"]): item
         for item in cast(Sequence[Mapping[str, object]], reports.terminal["positions"])
@@ -837,11 +853,43 @@ def _per_instrument_metrics(reports: CommonReports) -> dict[str, object]:
         result[instrument_id] = {
             "commission": str(commission),
             "fill_count": len(fills),
+            "funding": str(funding[instrument_id]),
             "realized_pnl": str(realized),
             "terminal": terminal.get(instrument_id),
             "trade_count": sum(1 for item in positions if item["is_closed"] is True),
             "turnover": str(turnover),
         }
+    return result
+
+
+def _funding_by_instrument(reports: CommonReports) -> dict[str, Decimal]:
+    result = {instrument_id: Decimal(0) for instrument_id in STAGE2_INSTRUMENT_IDS}
+    timeline = reports.funding.get("events")
+    if not isinstance(timeline, list):
+        raise Stage3EvaluationError("Nautilus funding events are missing")
+    for entry in timeline:
+        if not isinstance(entry, Mapping) or not isinstance(entry.get("events"), list):
+            raise Stage3EvaluationError("Nautilus funding event is invalid")
+        for raw in cast(list[object], entry["events"]):
+            if not isinstance(raw, Mapping):
+                raise Stage3EvaluationError("Nautilus funding instrument is invalid")
+            instrument_id = raw.get("instrument_id")
+            delta = raw.get("account_delta")
+            if instrument_id not in result or not isinstance(delta, str):
+                raise Stage3EvaluationError(
+                    "Nautilus per-instrument funding is incomplete"
+                )
+            try:
+                value = Decimal(delta)
+            except ArithmeticError as exc:
+                raise Stage3EvaluationError(
+                    "Nautilus per-instrument funding is invalid"
+                ) from exc
+            if not value.is_finite():
+                raise Stage3EvaluationError(
+                    "Nautilus per-instrument funding is not finite"
+                )
+            result[cast(str, instrument_id)] += value
     return result
 
 
@@ -1068,12 +1116,13 @@ def _sensitivity_information(
         subject = "fee"
         reason = "base run has taker fills" if informative else "base run has no fills"
     else:
-        informative = Decimal(cast(str, base.reports.summary["total_funding"])) != 0
+        funding = _funding_by_instrument(base.reports)
+        informative = any(value != 0 for value in funding.values())
         subject = "funding"
         reason = (
-            "base run has native funding exposure"
+            "base run has native per-instrument funding exposure"
             if informative
-            else "base run has no native funding exposure"
+            else "base run has no native per-instrument funding exposure"
         )
     return {
         "informative": informative,
@@ -1113,6 +1162,61 @@ def _run_config_digest(
             "strategy_digest": _strategy_config_digest(strategy),
         }
     )
+
+
+def _freeze_final_test_config(
+    config: Stage3Config,
+    *,
+    fold: EvaluationFold,
+    scenarios: Sequence[AccountingScenario],
+) -> dict[str, object]:
+    if fold.role != "final_test":
+        raise Stage3EvaluationError("final-test config requires the final fold")
+    run_config_digests = {
+        strategy: {
+            scenario.name: _run_config_digest(fold, strategy, scenario)
+            for scenario in scenarios
+        }
+        for strategy in cast(tuple[StrategyName, ...], ("momentum", "lightgbm"))
+    }
+    payload: dict[str, object] = {
+        "feature_schema_digest": FEATURE_SCHEMA_DIGEST,
+        "input_digest": _digest(stage3_momentum._config_identity_payload(config)),
+        "lightgbm_strategy_digest": _strategy_config_digest("lightgbm"),
+        "momentum_strategy_digest": _strategy_config_digest("momentum"),
+        "run_config_digests": run_config_digests,
+        "shared_execution_digest": _shared_execution_digest(),
+    }
+    return {**payload, "final_test_config_digest": _digest(payload)}
+
+
+def _require_frozen_final_test_config(
+    frozen: Mapping[str, object] | None,
+    *,
+    config: Stage3Config,
+    fold: EvaluationFold,
+    strategy: StrategyName,
+    scenario: AccountingScenario,
+) -> None:
+    if fold.role != "final_test":
+        return
+    expected = _freeze_final_test_config(
+        config,
+        fold=fold,
+        scenarios=accounting_scenarios(),
+    )
+    if frozen is None or dict(frozen) != expected:
+        raise Stage3EvaluationError("frozen final-test config has drifted")
+    run_config_digests = frozen.get("run_config_digests")
+    strategy_digests = (
+        run_config_digests.get(strategy)
+        if isinstance(run_config_digests, Mapping)
+        else None
+    )
+    if not isinstance(strategy_digests, Mapping) or strategy_digests.get(
+        scenario.name
+    ) != _run_config_digest(fold, strategy, scenario):
+        raise Stage3EvaluationError("final-test run config is not frozen")
 
 
 def _shared_execution_digest() -> str:

@@ -207,6 +207,7 @@ class Stage3MomentumStrategy(Strategy):
         )
         self.parameters = parameters
         self.decisions: list[dict[str, object]] = []
+        self.equity_curve: list[dict[str, object]] = []
         self.fatal_error: str | None = None
         self._instrument_ids = {
             value: InstrumentId.from_str(value) for value in parameters.instrument_ids
@@ -406,6 +407,7 @@ class Stage3MomentumStrategy(Strategy):
             signal=signal,
             target=target,
         )
+        self._record_equity(decision_ts)
 
     def on_stop(self) -> None:
         for native_id in self._instrument_ids.values():
@@ -505,6 +507,70 @@ class Stage3MomentumStrategy(Strategy):
         record["reason"] = "awaiting_b1"
         self._pending[instrument_id] = record
         self.decisions.append(record)
+
+    def _record_equity(self, decision_ts: int) -> None:
+        venue = next(iter(self._instrument_ids.values())).venue
+        account = self.cache.account_for_venue(venue)
+        if account is None:
+            raise Stage3MomentumError("Nautilus account is missing at decision time")
+        currency = getattr(account, "base_currency", None)
+        if currency is None:
+            raise Stage3MomentumError("Nautilus account base currency is missing")
+        balance = _native_decimal(
+            account.balance_total(currency),
+            label="Nautilus account balance",
+        )
+        unrealized = Decimal(0)
+        gross_exposure = Decimal(0)
+        positions: list[dict[str, object]] = []
+        for position in sorted(
+            self.cache.positions_open(),
+            key=lambda item: str(getattr(item, "instrument_id")),
+        ):
+            native_id = getattr(position, "instrument_id")
+            instrument_id = str(native_id)
+            if instrument_id not in self._instrument_ids:
+                raise Stage3MomentumError(
+                    "Nautilus equity contains a position outside Stage 3"
+                )
+            mark_state = self.cache.mark_price(native_id)
+            if mark_state is None:
+                raise Stage3MomentumError("Nautilus mark is missing at decision time")
+            mark = getattr(mark_state, "value", mark_state)
+            quantity = _signed_position_quantity(position)
+            position_unrealized = _native_decimal(
+                getattr(position, "unrealized_pnl")(mark),
+                label="Nautilus unrealized PnL",
+            )
+            mark_value = Decimal(str(mark))
+            unrealized += position_unrealized
+            gross_exposure += abs(quantity * mark_value)
+            positions.append(
+                {
+                    "instrument_id": instrument_id,
+                    "mark": str(mark),
+                    "quantity": str(quantity),
+                    "unrealized_pnl": str(position_unrealized),
+                }
+            )
+        snapshot: dict[str, object] = {
+            "balance_total": str(balance),
+            "gross_exposure": str(gross_exposure),
+            "positions": positions,
+            "total": str(balance + unrealized),
+            "ts_event": decision_ts,
+            "unrealized_pnl": str(unrealized),
+            "valuation_source": "Nautilus account and Position.unrealized_pnl(mark)",
+        }
+        last_ts = (
+            cast(int, self.equity_curve[-1]["ts_event"]) if self.equity_curve else None
+        )
+        if last_ts is not None and last_ts > decision_ts:
+            raise Stage3MomentumError("Nautilus equity curve is not chronological")
+        if last_ts == decision_ts:
+            self.equity_curve[-1] = snapshot
+        else:
+            self.equity_curve.append(snapshot)
 
     def _execute_pending(
         self,
@@ -904,6 +970,7 @@ class Stage3DecisionReplayStrategy(Stage3MomentumStrategy):
                 target=target,
                 decision_fields=fields,
             )
+        self._record_equity(decision_ts)
         if self.decisions[-1]["decision_id"] != source.get("decision_id"):
             raise Stage3MomentumError("frozen replay decision digest has drifted")
         self._replayed.add(key)
@@ -920,6 +987,16 @@ def _signed_position_quantity(position: object) -> Decimal:
     if getattr(position, "is_long"):
         return quantity
     raise Stage3MomentumError("open position has unknown side")
+
+
+def _native_decimal(value: object, *, label: str) -> Decimal:
+    as_decimal = getattr(value, "as_decimal", None)
+    if not callable(as_decimal):
+        raise Stage3MomentumError(f"{label} is not decimal-valued")
+    result = cast(Decimal, as_decimal())
+    if not result.is_finite():
+        raise Stage3MomentumError(f"{label} is not finite")
+    return result
 
 
 def _instrument_quantity(instrument: CryptoPerpetual, absolute: Decimal) -> Quantity:

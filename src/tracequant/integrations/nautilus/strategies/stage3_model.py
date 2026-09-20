@@ -265,6 +265,7 @@ class Stage3LightGBMStrategy(Stage3MomentumStrategy):
             target=target,
             decision_fields=decision_fields,
         )
+        self._record_equity(decision_ts)
         prediction["decision_id"] = self.decisions[-1]["decision_id"]
         self.predictions.append(prediction)
 
