@@ -30,6 +30,7 @@ from tracequant.research.stage3_features import (
     STAGE2_SOURCE_MANIFEST_DIGEST,
     STAGE3_CONFIG_SCHEMA,
     Stage3Config,
+    bind_accepted_stage2_catalog,
 )
 from tracequant.source_data.stage2_btceth import (
     STAGE2_DATASET_ID,
@@ -55,6 +56,7 @@ _SENSITIVITY_SCENARIOS: Final = (
     "zero_funding",
     "double_funding",
 )
+_ACCOUNTING_SCENARIOS: Final = ("base", *_SENSITIVITY_SCENARIOS)
 _DIGEST_PATTERN: Final = r"[0-9a-f]{64}"
 _WINDOWS_DRIVE_PATTERN: Final = r"^[A-Za-z]:[\\/]"
 _REBUILD_CONTRACT_PATHS: Final = (
@@ -195,10 +197,16 @@ def _rebuild_stage3_oos(
         repository_root=repository_root,
         allow_synthetic_fixture=allow_synthetic_fixture,
     )
+    bind_accepted_stage2_catalog(
+        config, acceptance_record_path=stage2_acceptance_record_path
+    )
     evaluation = stage3_evaluation.run_stage3_evaluation(
         config,
         acceptance_record_path=stage2_acceptance_record_path,
         provenance=provenance,
+    )
+    bind_accepted_stage2_catalog(
+        config, acceptance_record_path=stage2_acceptance_record_path
     )
     record = _build_acceptance_record(
         config,
@@ -330,6 +338,9 @@ def _build_acceptance_record(
         frozen, "run_config_digests", "frozen final-test config"
     )
     configs = {
+        "artifact_lock_digest": hashlib.sha256(
+            config.artifact_lock_path.read_bytes()
+        ).hexdigest(),
         "feature_schema_digest": _required_digest(
             frozen, "feature_schema_digest", "frozen final-test config"
         ),
@@ -498,9 +509,21 @@ def _artifact_references(
             raise Stage3OosError("fold artifact provenance kind is not approved")
         result: dict[str, object] = {
             "artifact_id": _required_digest(artifact, "artifact_id", "artifact"),
+            "compatibility_digest": _digest(
+                _required_mapping(artifact, "compatibility", "artifact manifest")
+            ),
+            "environment_digest": _digest(
+                _required_mapping(artifact, "environment", "artifact manifest")
+            ),
             "fold_id": fold.fold_id,
             "manifest_relative_filename": relative_filename,
             "model_checksum": _required_digest(model, "checksum_sha256", "model"),
+            "prediction_tolerance_digest": _digest(
+                {
+                    "atol": model.get("prediction_atol"),
+                    "rtol": model.get("prediction_rtol"),
+                }
+            ),
             "provenance_kind": expected_provenance_kind,
             "role": fold.role,
             "training_parameter_digest": _required_digest(
@@ -510,6 +533,7 @@ def _artifact_references(
                 training, "training_parameter_revision", "artifact training"
             ),
         }
+        result["artifact_binding_digest"] = _artifact_binding_digest(result)
         if any(
             run_artifact.get(key) != result[key]
             for key in (
@@ -522,6 +546,30 @@ def _artifact_references(
             raise Stage3OosError("fold artifact output conflicts with evaluation")
         artifacts.append(result)
     return artifacts
+
+
+def _artifact_binding_digest(artifact: Mapping[str, object]) -> str:
+    fields = {
+        "artifact_id",
+        "compatibility_digest",
+        "environment_digest",
+        "fold_id",
+        "manifest_relative_filename",
+        "model_checksum",
+        "prediction_tolerance_digest",
+        "provenance_kind",
+        "role",
+        "training_parameter_digest",
+        "training_parameter_revision",
+    }
+    if not fields.issubset(artifact):
+        raise Stage3OosError("artifact identity binding is incomplete")
+    return _digest(
+        {
+            "artifact": {key: artifact[key] for key in sorted(fields)},
+            "schema": "tracequant-stage3-acceptance-artifact-binding-v1",
+        }
+    )
 
 
 def _common_base_fee_provenance(
@@ -689,7 +737,12 @@ def _require_complete_stage3_acceptance_record(
         allow_synthetic_fixture=allow_synthetic_fixture,
     )
     configs = _required_mapping(record, "configs", "Stage 3 acceptance record")
-    _require_configs(configs, repository_root=repository_root)
+    _require_configs(
+        configs,
+        stage2_input=stage2_input,
+        allow_synthetic_fixture=allow_synthetic_fixture,
+        repository_root=repository_root,
+    )
     fee = _required_mapping(record, "fee_provenance", "Stage 3 acceptance record")
     _require_fee_provenance(fee)
     runs = _require_runs(
@@ -724,6 +777,9 @@ def _require_artifacts(
         fold.fold_id: fold for fold in stage3_evaluation.expanding_folds()
     }
     seen: set[str] = set()
+    seen_artifact_ids: set[str] = set()
+    compatibility_digests: set[str] = set()
+    environment_digests: set[str] = set()
     by_fold: dict[str, Mapping[str, object]] = {}
     expected_provenance = (
         "synthetic_fixture" if allow_synthetic_fixture else "formal_git"
@@ -732,10 +788,14 @@ def _require_artifacts(
         _require_keys(
             artifact,
             {
+                "artifact_binding_digest",
                 "artifact_id",
+                "compatibility_digest",
+                "environment_digest",
                 "fold_id",
                 "manifest_relative_filename",
                 "model_checksum",
+                "prediction_tolerance_digest",
                 "provenance_kind",
                 "role",
                 "training_parameter_digest",
@@ -752,8 +812,32 @@ def _require_artifacts(
             f"artifacts/{fold_id}/manifest.json"
         ):
             raise Stage3OosError("artifact manifest filename is invalid")
-        _required_digest(artifact, "artifact_id", "artifact reference")
+        artifact_id = _required_digest(artifact, "artifact_id", "artifact reference")
         _required_digest(artifact, "model_checksum", "artifact reference")
+        compatibility_digests.add(
+            _required_digest(artifact, "compatibility_digest", "artifact reference")
+        )
+        environment_digests.add(
+            _required_digest(artifact, "environment_digest", "artifact reference")
+        )
+        tolerance_digest = _required_digest(
+            artifact, "prediction_tolerance_digest", "artifact reference"
+        )
+        expected_tolerance_digest = _digest(
+            {
+                "atol": stage3_artifacts.PREDICTION_ATOL,
+                "rtol": stage3_artifacts.PREDICTION_RTOL,
+            }
+        )
+        if tolerance_digest != expected_tolerance_digest:
+            raise Stage3OosError("artifact prediction tolerance has drifted")
+        if artifact_id in seen_artifact_ids:
+            raise Stage3OosError("artifact identity is reused across folds")
+        seen_artifact_ids.add(artifact_id)
+        if artifact.get("artifact_binding_digest") != _artifact_binding_digest(
+            artifact
+        ):
+            raise Stage3OosError("artifact identity binding does not match")
         if (
             artifact.get("training_parameter_revision") != revision
             or artifact.get("training_parameter_digest") != parameter_digest
@@ -765,13 +849,22 @@ def _require_artifacts(
         by_fold[fold_id] = artifact
     if seen != set(expected_by_fold):
         raise Stage3OosError("artifact folds are incomplete")
+    if len(compatibility_digests) != 1 or len(environment_digests) != 1:
+        raise Stage3OosError("fold artifact runtime identity is inconsistent")
     return by_fold
 
 
-def _require_configs(configs: Mapping[str, object], *, repository_root: Path) -> None:
+def _require_configs(
+    configs: Mapping[str, object],
+    *,
+    stage2_input: Mapping[str, object],
+    allow_synthetic_fixture: bool,
+    repository_root: Path,
+) -> None:
     _require_keys(
         configs,
         {
+            "artifact_lock_digest",
             "feature_schema_digest",
             "frozen_final_test_config_digest",
             "input_digest",
@@ -788,7 +881,27 @@ def _require_configs(configs: Mapping[str, object], *, repository_root: Path) ->
         repository_root
     ):
         raise Stage3OosError("rebuild contract digest has drifted")
+    artifact_lock_digest = _required_digest(
+        configs, "artifact_lock_digest", "config digests"
+    )
+    if not allow_synthetic_fixture:
+        lock_path = repository_root / STAGE2_ARTIFACT_LOCK_RELATIVE_PATH
+        if (
+            not lock_path.is_file()
+            or artifact_lock_digest
+            != hashlib.sha256(lock_path.read_bytes()).hexdigest()
+        ):
+            raise Stage3OosError("artifact lock digest has drifted")
+    expected_input_digest = _digest(
+        {**dict(stage2_input), "artifact_lock_sha256": artifact_lock_digest}
+    )
+    if configs.get("input_digest") != expected_input_digest:
+        raise Stage3OosError("Stage 3 input digest does not match")
+    expected_shared_digest = stage3_evaluation._shared_execution_digest()
+    if configs.get("shared_execution_digest") != expected_shared_digest:
+        raise Stage3OosError("shared execution digest does not match")
     for key in (
+        "artifact_lock_digest",
         "frozen_final_test_config_digest",
         "input_digest",
         "rebuild_contract_digest",
@@ -801,13 +914,50 @@ def _require_configs(configs: Mapping[str, object], *, repository_root: Path) ->
     _require_keys(strategy_digests, set(_STRATEGIES), "strategy config digests")
     run_digests = _required_mapping(configs, "run_config_digests", "config digests")
     _require_keys(run_digests, set(_STRATEGIES), "run config digests")
-    expected_scenarios = {"base", *_SENSITIVITY_SCENARIOS}
+    expected_scenarios = set(_ACCOUNTING_SCENARIOS)
+    expected_strategy_digests = {
+        strategy: stage3_evaluation._strategy_config_digest(strategy)
+        for strategy in _STRATEGIES
+    }
+    if dict(strategy_digests) != expected_strategy_digests:
+        raise Stage3OosError("strategy config digests do not match")
+    final_fold = stage3_evaluation.expanding_folds()[-1]
+    scenarios_by_name = {
+        scenario.name: scenario for scenario in stage3_evaluation.accounting_scenarios()
+    }
+    expected_run_digests = {
+        strategy: {
+            scenario: stage3_evaluation._run_config_digest(
+                final_fold,
+                strategy,
+                scenarios_by_name[scenario],
+            )
+            for scenario in _ACCOUNTING_SCENARIOS
+        }
+        for strategy in _STRATEGIES
+    }
     for strategy in _STRATEGIES:
         _required_digest(strategy_digests, strategy, "strategy config digests")
         values = _required_mapping(run_digests, strategy, "run config digests")
         _require_keys(values, expected_scenarios, "strategy run config digests")
         for scenario in expected_scenarios:
             _required_digest(values, scenario, "strategy run config digests")
+    if dict(run_digests) != expected_run_digests:
+        raise Stage3OosError("run config digests do not match")
+    frozen_payload: dict[str, object] = {
+        "feature_schema_digest": FEATURE_SCHEMA_DIGEST,
+        "input_digest": expected_input_digest,
+        "lightgbm_strategy_digest": expected_strategy_digests["lightgbm"],
+        "momentum_strategy_digest": expected_strategy_digests["momentum"],
+        "run_config_digests": expected_run_digests,
+        "shared_execution_digest": expected_shared_digest,
+        "strategy_configs": {
+            strategy: stage3_evaluation._strategy_config_payload(strategy)
+            for strategy in _STRATEGIES
+        },
+    }
+    if configs.get("frozen_final_test_config_digest") != _digest(frozen_payload):
+        raise Stage3OosError("frozen final-test config digest does not match")
 
 
 def _require_fee_provenance(fee: Mapping[str, object]) -> None:
@@ -818,6 +968,7 @@ def _require_fee_provenance(fee: Mapping[str, object]) -> None:
     if fee.get("digest") != _digest(records):
         raise Stage3OosError("fee provenance digest does not match")
     seen: set[str] = set()
+    observed_order: list[str] = []
     for record in records:
         _require_keys(record, _FEE_PROVENANCE_KEYS, "fee provenance record")
         instrument_id = _required_string(
@@ -826,6 +977,7 @@ def _require_fee_provenance(fee: Mapping[str, object]) -> None:
         if instrument_id not in STAGE2_INSTRUMENT_IDS or instrument_id in seen:
             raise Stage3OosError("fee provenance instrument is invalid")
         seen.add(instrument_id)
+        observed_order.append(instrument_id)
         for key in _FEE_PROVENANCE_KEYS - {
             "instrument_id",
             "catalog_maker_fee",
@@ -846,13 +998,63 @@ def _require_fee_provenance(fee: Mapping[str, object]) -> None:
             value = record.get(key)
             if value is not None and not isinstance(value, str):
                 raise Stage3OosError("fee provenance source value is invalid")
+            if isinstance(value, str):
+                _require_non_negative_number_text(
+                    value, f"fee provenance source value {key}"
+                )
         if (
             record.get("effective_maker_fee") != "0.0002"
             or record.get("effective_taker_fee") != "0.0004"
         ):
             raise Stage3OosError("effective base fees are not frozen")
+        if record.get("catalog_maker_matches_base") is not _fee_matches_base(
+            record.get("catalog_maker_fee"), Decimal("0.0002")
+        ):
+            raise Stage3OosError("catalog maker fee comparison is inconsistent")
+        if record.get("catalog_taker_matches_base") is not _fee_matches_base(
+            record.get("catalog_taker_fee"), Decimal("0.0004")
+        ):
+            raise Stage3OosError("catalog taker fee comparison is inconsistent")
+        if record.get("snapshot_maker_matches_base") is not _fee_matches_base(
+            record.get("snapshot_maker_fee"), Decimal("0.0002")
+        ):
+            raise Stage3OosError("snapshot maker fee comparison is inconsistent")
+        if record.get("snapshot_taker_matches_base") is not _fee_matches_base(
+            record.get("snapshot_taker_fee"), Decimal("0.0004")
+        ):
+            raise Stage3OosError("snapshot taker fee comparison is inconsistent")
+        if record.get("catalog_matches_snapshot") is not (
+            record.get("catalog_maker_fee") == record.get("snapshot_maker_fee")
+            and record.get("catalog_taker_fee") == record.get("snapshot_taker_fee")
+        ):
+            raise Stage3OosError("catalog and snapshot fee comparison is inconsistent")
     if seen != set(STAGE2_INSTRUMENT_IDS):
         raise Stage3OosError("fee provenance instruments are incomplete")
+    if observed_order != list(STAGE2_INSTRUMENT_IDS):
+        raise Stage3OosError("fee provenance instruments are not canonical")
+
+
+def _fee_matches_base(value: object, expected: Decimal) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        observed = Decimal(value)
+    except InvalidOperation as exc:
+        raise Stage3OosError("fee provenance source value is not numeric") from exc
+    return observed.is_finite() and observed == expected
+
+
+def _scenario_fee_provenance_digest(
+    records: Sequence[Mapping[str, object]],
+    scenario: stage3_evaluation.AccountingScenario,
+) -> str:
+    projected: list[dict[str, object]] = []
+    for record in records:
+        item = dict(record)
+        item["effective_maker_fee"] = str(scenario.maker_fee)
+        item["effective_taker_fee"] = str(scenario.taker_fee)
+        projected.append(item)
+    return _digest(projected)
 
 
 def _require_runs(
@@ -877,8 +1079,10 @@ def _require_runs(
     observed_base: set[tuple[str, str, str]] = set()
     observed_sensitivity: set[tuple[str, str, str]] = set()
     final_base: dict[str, Mapping[str, object]] = {}
-    fold_roles = {
-        fold.fold_id: fold.role for fold in stage3_evaluation.expanding_folds()
+    folds_by_id = {fold.fold_id: fold for fold in stage3_evaluation.expanding_folds()}
+    fold_roles = {fold_id: fold.role for fold_id, fold in folds_by_id.items()}
+    scenarios_by_name = {
+        scenario.name: scenario for scenario in stage3_evaluation.accounting_scenarios()
     }
     strategy_config_digests = _required_mapping(
         configs, "strategy_config_digests", "config digests"
@@ -887,6 +1091,7 @@ def _require_runs(
         configs, "run_config_digests", "config digests"
     )
     fee_digest = _required_digest(fee, "digest", "fee provenance")
+    fee_records = _mapping_list(fee.get("records"), "fee provenance records")
     fields = {
         "artifact_id",
         "config_digest",
@@ -915,6 +1120,21 @@ def _require_runs(
             raise Stage3OosError("run fold identity is invalid")
         if strategy not in _STRATEGIES:
             raise Stage3OosError("run strategy is invalid")
+        expected_scenario = scenarios_by_name.get(
+            cast(stage3_evaluation.ScenarioName, scenario)
+        )
+        if expected_scenario is None or run.get(
+            "config_digest"
+        ) != stage3_evaluation._run_config_digest(
+            folds_by_id[fold_id],
+            cast(stage3_evaluation.StrategyName, strategy),
+            expected_scenario,
+        ):
+            raise Stage3OosError("run config digest does not match fixed contract")
+        if run.get("fee_provenance_digest") != _scenario_fee_provenance_digest(
+            fee_records, expected_scenario
+        ):
+            raise Stage3OosError("run fee provenance does not match its scenario")
         expected_filename = (
             f"base/{fold_id}/{strategy}/manifest.json"
             if run_type == "base"
@@ -1306,6 +1526,12 @@ def _require_number_text(value: object, description: str) -> None:
         raise Stage3OosError(f"{description} is not numeric") from exc
     if not number.is_finite():
         raise Stage3OosError(f"{description} is not finite")
+
+
+def _require_non_negative_number_text(value: object, description: str) -> None:
+    _require_number_text(value, description)
+    if Decimal(cast(str, value)) < 0:
+        raise Stage3OosError(f"{description} is negative")
 
 
 def _is_digest(value: object) -> bool:

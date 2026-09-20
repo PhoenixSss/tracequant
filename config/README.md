@@ -34,7 +34,8 @@ unknown, or mismatched values must fail closed.
 The final finite `rebuild-oos` entry is deliberately stricter than the earlier
 feature-loader configuration path: it accepts the three absolute paths and every
 locked Stage 2 identity as explicit command arguments. It does not read
-`TRACEQUANT_STAGE3_CONFIG`, and both output paths must identify new nonexistent
-partitions.
+`TRACEQUANT_STAGE3_CONFIG`. `catalog_path` identifies the already installed,
+verified read-only catalog; it is not an output partition. `evidence_root` and
+`run_root` must identify two different new nonexistent partitions.
 
 Secrets live outside Git. They never appear in examples, manifests, or tests.

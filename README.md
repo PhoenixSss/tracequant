@@ -114,9 +114,10 @@ and grants no Demo admission.
 
 ## Stage 3 finite OOS rebuild
 
-Materialize and verify the locked Stage 2 catalog first. Run `rebuild-oos` from
-an identifiable clean commit, with an existing absolute catalog and two new,
-nonexistent external identity partitions. The command has no environment or
+Materialize and verify the locked Stage 2 catalog first. `catalog_path` is that
+existing, installed, read-only input; `evidence_root` and `run_root` are two
+different new, nonexistent external identity partitions. Run `rebuild-oos` from
+an identifiable clean commit. The command has no environment or
 `latest` fallback and writes the immutable compact record to
 `docs/product/stage3-btceth-oos-acceptance.json`:
 
@@ -142,6 +143,10 @@ the command template, and relative external evidence filenames—never models,
 catalog data, full reports, local absolute paths, or secrets. Outcomes remain
 `OFFLINE_BACKTEST_ONLY` and `LIVE_NOT_APPROVED`; poor returns or a model losing
 to momentum do not block software acceptance and never auto-approve Demo.
+Two rebuilds in the same recorded OS/architecture, LightGBM binary build, and
+locked environment must produce the same stable digests. Cross-environment
+model checksums are compared only under the recorded compatibility identity and
+the approved prediction tolerances (`atol = 1e-9`, `rtol = 1e-6`).
 
 ## LCK: an engineering capability within TraceQuant
 
