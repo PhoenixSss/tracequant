@@ -63,6 +63,7 @@ _DIGEST_PATTERN: Final = r"[0-9a-f]{64}"
 _WINDOWS_DRIVE_PATTERN: Final = r"^[A-Za-z]:[\\/]"
 _REBUILD_CONTRACT_PATHS: Final = (
     "docs/product/stage-3-strategy-and-model-requirements.md",
+    "docs/product/stage-3-execution-amendment-r1.md",
     "src/tracequant/integrations/nautilus/stage3_evaluation.py",
     "src/tracequant/integrations/nautilus/stage3_model.py",
     "src/tracequant/integrations/nautilus/stage3_momentum.py",
@@ -199,6 +200,9 @@ def _rebuild_stage3_oos(
         repository_root=repository_root,
         allow_synthetic_fixture=allow_synthetic_fixture,
     )
+    if not allow_synthetic_fixture:
+        provenance = stage3_artifacts.capture_formal_provenance(repository_root)
+    rebuild_contract_digest = _rebuild_contract_digest(repository_root)
     bind_accepted_stage2_catalog(
         config, acceptance_record_path=stage2_acceptance_record_path
     )
@@ -213,8 +217,8 @@ def _rebuild_stage3_oos(
     record = _build_acceptance_record(
         config,
         evaluation=evaluation,
-        repository_root=repository_root,
         expected_provenance_kind=expected_provenance_kind,
+        rebuild_contract_digest=rebuild_contract_digest,
     )
     _require_complete_stage3_acceptance_record(
         record,
@@ -224,6 +228,12 @@ def _rebuild_stage3_oos(
     if allow_synthetic_fixture:
         _write_json_exclusive(record_path, record)
     else:
+        assert provenance is not None
+        _require_unchanged_formal_repository(
+            repository_root,
+            provenance=provenance,
+            rebuild_contract_digest=rebuild_contract_digest,
+        )
         _write_json_replacing(record_path, record)
     return Stage3OosOutcome(
         evaluation=evaluation,
@@ -231,6 +241,24 @@ def _rebuild_stage3_oos(
         acceptance_record=record,
         acceptance_digest=cast(str, record["acceptance_digest"]),
     )
+
+
+def _require_unchanged_formal_repository(
+    repository_root: Path,
+    *,
+    provenance: TrainingProvenance,
+    rebuild_contract_digest: str,
+) -> None:
+    try:
+        current = stage3_artifacts.capture_formal_provenance(repository_root)
+    except stage3_artifacts.Stage3ArtifactError as exc:
+        raise Stage3OosError("formal rebuild repository identity has drifted") from exc
+    if (
+        current.git_sha != provenance.git_sha
+        or current.uv_lock_checksum != provenance.uv_lock_checksum
+        or _rebuild_contract_digest(repository_root) != rebuild_contract_digest
+    ):
+        raise Stage3OosError("formal rebuild repository identity has drifted")
 
 
 def require_complete_stage3_acceptance_record(
@@ -272,8 +300,8 @@ def _build_acceptance_record(
     config: Stage3Config,
     *,
     evaluation: Stage3EvaluationOutcome,
-    repository_root: Path,
     expected_provenance_kind: str,
+    rebuild_contract_digest: str,
 ) -> dict[str, object]:
     manifest = evaluation.manifest
     if evaluation.partition.resolve(strict=False) != config.run_root.resolve(
@@ -353,7 +381,7 @@ def _build_acceptance_record(
             frozen, "final_test_config_digest", "frozen final-test config"
         ),
         "input_digest": _required_digest(manifest, "input_digest", "evaluation"),
-        "rebuild_contract_digest": _rebuild_contract_digest(repository_root),
+        "rebuild_contract_digest": rebuild_contract_digest,
         "run_config_digests": {
             strategy: dict(
                 _required_mapping(

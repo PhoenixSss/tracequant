@@ -257,21 +257,25 @@ def test_stage3_oos_rejects_a_nonempty_acceptance_target_before_evaluation(
         )
 
 
-def test_stage3_oos_formal_rebuild_reaches_evaluation_with_tracked_record(
+def _formal_rebuild_inputs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-) -> None:
+) -> tuple[Stage3Config, Path, Path, Path]:
     catalog, stage2_record, _template, artifact_lock = (
         momentum_fixture._accepted_fixture(monkeypatch, tmp_path)
     )
     repository = tmp_path / "repository"
     (repository / ".git").mkdir(parents=True)
     (repository / "uv.lock").write_text("locked\n", encoding="utf-8")
+    for relative in stage3_oos._REBUILD_CONTRACT_PATHS:
+        contract_file = repository / relative
+        contract_file.parent.mkdir(parents=True, exist_ok=True)
+        contract_file.write_text("frozen contract\n", encoding="utf-8")
     expected_lock = repository / STAGE2_ARTIFACT_LOCK_RELATIVE_PATH
     expected_lock.parent.mkdir(parents=True)
     expected_lock.write_bytes(artifact_lock.read_bytes())
     tracked_record = repository / stage3_oos.STAGE3_ACCEPTANCE_RELATIVE_PATH
-    tracked_record.parent.mkdir(parents=True)
+    tracked_record.parent.mkdir(parents=True, exist_ok=True)
     original = b'{"existing":true}\n'
     tracked_record.write_bytes(original)
     config = Stage3Config(
@@ -289,9 +293,6 @@ def test_stage3_oos_formal_rebuild_reaches_evaluation_with_tracked_record(
         run_root=tmp_path / "formal-output" / "runs",
     )
 
-    class EvaluationStarted(Exception):
-        pass
-
     def clean_git(_repository: Path, *arguments: str) -> str:
         if arguments == ("status", "--porcelain"):
             return ""
@@ -299,18 +300,32 @@ def test_stage3_oos_formal_rebuild_reaches_evaluation_with_tracked_record(
             return "1" * 40
         raise AssertionError(f"unexpected Git arguments: {arguments}")
 
-    def stop_at_evaluation(*_args: object, **kwargs: object) -> None:
-        assert kwargs["provenance"] is None
-        provenance = stage3_artifacts.capture_formal_provenance(repository)
-        assert provenance.kind == "formal_git"
-        assert provenance.git_sha == "1" * 40
-        raise EvaluationStarted
-
     monkeypatch.setattr(stage3_oos, "_repository_root", lambda: repository)
     monkeypatch.setattr(stage3_artifacts, "_run_git", clean_git)
     monkeypatch.setattr(
         stage3_oos, "bind_accepted_stage2_catalog", lambda *_a, **_k: None
     )
+    return config, stage2_record, repository, tracked_record
+
+
+def test_stage3_oos_formal_rebuild_reaches_evaluation_with_tracked_record(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config, stage2_record, _repository, tracked_record = _formal_rebuild_inputs(
+        monkeypatch, tmp_path
+    )
+    original = tracked_record.read_bytes()
+
+    class EvaluationStarted(Exception):
+        pass
+
+    def stop_at_evaluation(*_args: object, **kwargs: object) -> None:
+        provenance = cast(stage3_artifacts.TrainingProvenance, kwargs["provenance"])
+        assert provenance.kind == "formal_git"
+        assert provenance.git_sha == "1" * 40
+        raise EvaluationStarted
+
     monkeypatch.setattr(stage3_evaluation, "run_stage3_evaluation", stop_at_evaluation)
 
     with pytest.raises(EvaluationStarted):
@@ -319,6 +334,74 @@ def test_stage3_oos_formal_rebuild_reaches_evaluation_with_tracked_record(
             stage2_acceptance_record_path=stage2_record,
         )
     assert tracked_record.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "drift", ["dirty_tree", "head", "lock", "contract", "missing_lock", None]
+)
+def test_formal_rebuild_rechecks_repository_immediately_before_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    drift: str | None,
+) -> None:
+    config, stage2_record, repository, target = _formal_rebuild_inputs(
+        monkeypatch, tmp_path
+    )
+    original = target.read_bytes()
+    frozen_contract = stage3_oos._rebuild_contract_digest(repository)
+    candidate: dict[str, object] = {"acceptance_digest": "0" * 64}
+    clean_git = stage3_artifacts._run_git
+
+    def build_record(*_args: object, **kwargs: object) -> dict[str, object]:
+        assert kwargs["rebuild_contract_digest"] == frozen_contract
+        return candidate
+
+    def mutate_after_validation(*_args: object, **_kwargs: object) -> None:
+        if drift == "dirty_tree":
+            monkeypatch.setattr(
+                stage3_artifacts, "_run_git", lambda *_args: " M README.md"
+            )
+        elif drift == "head":
+
+            def changed_head(root: Path, *args: str) -> str:
+                return (
+                    "2" * 40
+                    if args == ("rev-parse", "HEAD")
+                    else clean_git(root, *args)
+                )
+
+            monkeypatch.setattr(stage3_artifacts, "_run_git", changed_head)
+        elif drift == "lock":
+            (repository / "uv.lock").write_text("changed\n", encoding="utf-8")
+        elif drift == "contract":
+            (repository / stage3_oos._REBUILD_CONTRACT_PATHS[0]).write_text(
+                "changed\n", encoding="utf-8"
+            )
+        elif drift == "missing_lock":
+            (repository / "uv.lock").unlink()
+
+    monkeypatch.setattr(
+        stage3_evaluation, "run_stage3_evaluation", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(stage3_oos, "_build_acceptance_record", build_record)
+    monkeypatch.setattr(
+        stage3_oos,
+        "_require_complete_stage3_acceptance_record",
+        mutate_after_validation,
+    )
+
+    if drift is None:
+        stage3_oos.rebuild_stage3_oos(
+            config, stage2_acceptance_record_path=stage2_record
+        )
+        assert json.loads(target.read_text(encoding="utf-8")) == candidate
+    else:
+        with pytest.raises(stage3_oos.Stage3OosError, match="identity has drifted"):
+            stage3_oos.rebuild_stage3_oos(
+                config, stage2_acceptance_record_path=stage2_record
+            )
+        assert target.read_bytes() == original
+    assert not list(target.parent.glob(f".{target.name}.*.tmp"))
 
 
 def test_stage3_oos_atomically_replaces_the_tracked_record(tmp_path: Path) -> None:
@@ -398,9 +481,9 @@ def _directory_digest(root: Path) -> str:
     return digest.hexdigest()
 
 
-def test_stage3_oos_record_is_canonical_json_serializable() -> None:
-    payload = {
-        "schema": stage3_oos.STAGE3_ACCEPTANCE_SCHEMA,
-        "template": stage3_oos.rebuild_command_template(),
-    }
-    assert json.loads(json.dumps(payload, allow_nan=False)) == payload
+def test_committed_stage3_acceptance_record_matches_current_contract() -> None:
+    record_path = (
+        Path(__file__).resolve().parents[2] / stage3_oos.STAGE3_ACCEPTANCE_RELATIVE_PATH
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    stage3_oos.require_complete_stage3_acceptance_record(record)

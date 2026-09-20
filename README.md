@@ -114,11 +114,19 @@ and grants no Demo admission.
 
 ## Stage 3 finite OOS rebuild
 
+The [Stage 3 execution amendment r1](docs/product/stage-3-execution-amendment-r1.md)
+defines the approved B1 price conversion, minimum order checks and native
+funding rounding bound for both strategies. Its digest is bound into the
+run identities and rebuild contract alongside the frozen v0.1 requirements.
+
 Materialize and verify the locked Stage 2 catalog first. `catalog_path` is that
 existing, installed, read-only input; `evidence_root` and `run_root` are two
 different new, nonexistent external identity partitions. Run `rebuild-oos` from
 an identifiable clean commit. The command has no environment or
-`latest` fallback. After the complete rebuild and strict validation succeed, it
+`latest` fallback. It freezes the clean Git SHA, lock checksum, and rebuild
+contract digest before evaluation and rechecks them immediately before
+publication; any drift fails without replacing the tracked record.
+After the complete rebuild and strict validation succeed, it
 atomically replaces the compact tracked record at
 `docs/product/stage3-btceth-oos-acceptance.json`; an existing tracked record is
 left unchanged if the rebuild fails:

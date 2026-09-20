@@ -1280,6 +1280,7 @@ def _shared_execution_digest() -> str:
             },
             "execution": {
                 "bar_execution": True,
+                "amendment_sha256": stage3_momentum.STAGE3_EXECUTION_AMENDMENT_SHA256,
                 "order_type": "MARKET",
                 "terminal": "native_mark_valuation",
             },

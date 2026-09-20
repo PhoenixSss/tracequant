@@ -386,9 +386,13 @@ def test_accounting_fixture_proves_zero_base_and_double_scaling(
     )
 
 
-def test_accounting_fixture_allows_native_funding_settlement_rounding(
+@pytest.mark.parametrize(
+    "difference", ["0", "1E-8", "-1E-8", "2E-8", "-2E-8", "3E-8", "-3E-8"]
+)
+def test_accounting_fixture_bounds_native_funding_settlement_rounding(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    difference: str,
 ) -> None:
     catalog, record_path, template, artifact_lock = momentum_fixture._accepted_fixture(
         monkeypatch, tmp_path
@@ -414,7 +418,7 @@ def test_accounting_fixture_allows_native_funding_settlement_rounding(
         if len(reports) == 4:
             base_funding = Decimal(cast(str, reports[0].summary["total_funding"]))
             summary = dict(report.summary)
-            summary["total_funding"] = str(base_funding * 2 + Decimal("0.00000001"))
+            summary["total_funding"] = str(base_funding * 2 + Decimal(difference))
             report = replace(report, summary=summary)
         reports.append(report)
         return report
@@ -425,12 +429,22 @@ def test_accounting_fixture_allows_native_funding_settlement_rounding(
         rounded_double_funding,
     )
 
+    if abs(Decimal(difference)) > Decimal("2E-8"):
+        with pytest.raises(evaluation.Stage3EvaluationError, match="2x funding"):
+            evaluation._run_accounting_fixtures(
+                config, acceptance_record_path=record_path, fold=fold
+            )
+        return
+
     result = evaluation._run_accounting_fixtures(
         config, acceptance_record_path=record_path, fold=fold
     )
 
     funding = cast(Mapping[str, object], result["funding"])
-    assert funding["double"] != funding["double_expected_before_native_rounding"]
+    assert (
+        Decimal(cast(str, funding["double"]))
+        - Decimal(cast(str, funding["double_expected_before_native_rounding"]))
+    ) == Decimal(difference)
     assert funding["native_rounding_tolerance"] == "2E-8"
 
 

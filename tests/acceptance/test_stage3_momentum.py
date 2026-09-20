@@ -143,6 +143,8 @@ def test_stage3_momentum_runs_from_stage2_catalog_with_nautilus_accounting(
     assert parameters["oms_type"] == "NETTING"
     assert manifest["feature_schema_digest"] == FEATURE_SCHEMA_DIGEST
     assert manifest["requirements_baseline"] == {
+        "execution_amendment_path": momentum.STAGE3_EXECUTION_AMENDMENT_PATH,
+        "execution_amendment_sha256": momentum.STAGE3_EXECUTION_AMENDMENT_SHA256,
         "base_sha": momentum.STAGE3_REQUIREMENTS_BASE_SHA,
         "blob_sha": momentum.STAGE3_REQUIREMENTS_BLOB_SHA,
         "path": momentum.STAGE3_REQUIREMENTS_RELATIVE_PATH,
@@ -396,6 +398,51 @@ def test_bar_open_execution_uses_the_frozen_instrument_price_increment() -> None
     )
 
     assert execution_tick.price == Price.from_str("46796.20")
+    assert bar.open == Price.from_str("46796.15")
+    assert execution_tick.ts_event == 0
+
+
+def test_execution_amendment_requires_the_approved_content(tmp_path: Path) -> None:
+    relative = momentum.STAGE3_EXECUTION_AMENDMENT_PATH
+    source = Path(__file__).resolve().parents[2] / relative
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True)
+    target.write_bytes(source.read_bytes())
+    momentum._require_execution_amendment(tmp_path)
+
+    target.write_bytes(target.read_bytes() + b"changed\n")
+    with pytest.raises(Stage3MomentumError, match="amendment has drifted"):
+        momentum._require_execution_amendment(tmp_path)
+    target.unlink()
+    with pytest.raises(Stage3MomentumError, match="amendment is missing"):
+        momentum._require_execution_amendment(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("quantity", "minimum_notional", "expected"),
+    [
+        ("0.009", None, False),
+        ("0.010", None, True),
+        ("0.499", "50.00000000 USDT", False),
+        ("0.500", "50.00000000 USDT", True),
+        ("0.501", "50.00000000 USDT", True),
+    ],
+)
+def test_minimum_order_boundaries(
+    quantity: str, minimum_notional: str | None, expected: bool
+) -> None:
+    payload = feature_fixture._perpetual(
+        feature_fixture.BTC, "BTCUSDT", "BTC"
+    ).to_dict()
+    payload["min_quantity"] = "0.010"
+    payload["min_notional"] = minimum_notional
+    instrument = CryptoPerpetual.from_dict(payload)
+    assert (
+        strategy_module.meets_minimum_order(
+            instrument, quantity=Decimal(quantity), price=Decimal("100")
+        )
+        is expected
+    )
 
 
 def test_funding_report_attributes_mixed_zero_and_nonzero_native_deltas() -> None:
@@ -643,8 +690,10 @@ def test_unknown_position_side_fails_closed_before_order_submission(
         )
 
 
-def test_reversal_confirmation_submits_only_the_latest_target(
+@pytest.mark.parametrize("latest_target", ["-2.000", "-0.500", "-0.499"])
+def test_reversal_confirmation_submits_only_an_executable_latest_target(
     monkeypatch: pytest.MonkeyPatch,
+    latest_target: str,
 ) -> None:
     decision_ts = HOUR_NS - feature_fixture.MS_NS
 
@@ -662,7 +711,7 @@ def test_reversal_confirmation_submits_only_the_latest_target(
     close = record("close", "1.000")
     close["execution_price"] = "100"
     first_update = record("first", "-1.000")
-    latest_update = record("latest", "-2.000")
+    latest_update = record("latest", latest_target)
     state = strategy_module._ReversalState(
         close_decision=close,
         latest_decision=close,
@@ -721,9 +770,11 @@ def test_reversal_confirmation_submits_only_the_latest_target(
         )
     )
     instrument_id = STAGE2_INSTRUMENT_IDS[0]
-    strategy._instruments[instrument_id] = feature_fixture._perpetual(
+    instrument_payload = feature_fixture._perpetual(
         feature_fixture.BTC, "BTCUSDT", "BTC"
-    )
+    ).to_dict()
+    instrument_payload["min_notional"] = "50.00000000 USDT"
+    strategy._instruments[instrument_id] = CryptoPerpetual.from_dict(instrument_payload)
     strategy._reversals[instrument_id] = state
     monkeypatch.setattr(
         Stage3MomentumStrategy,
@@ -741,6 +792,19 @@ def test_reversal_confirmation_submits_only_the_latest_target(
         lambda _instance, order: submitted.append(order),
     )
 
+    if latest_target == "-0.499":
+        with pytest.raises(
+            Stage3MomentumError, match="reversal target is below minimum"
+        ):
+            strategy._observe_reversal_confirmation(
+                instrument_id,
+                event_ts=decision_ts + feature_fixture.MS_NS,
+                confirmation_kind="PositionClosed",
+            )
+        assert not created
+        assert not submitted
+        return
+
     strategy._observe_reversal_confirmation(
         instrument_id,
         event_ts=decision_ts + feature_fixture.MS_NS,
@@ -750,7 +814,7 @@ def test_reversal_confirmation_submits_only_the_latest_target(
     assert created == [
         {
             "instrument_id": strategy._instrument_ids[instrument_id],
-            "quantity": Decimal("2.000"),
+            "quantity": abs(Decimal(latest_target)),
             "reduce_only": False,
             "side": "SELL",
         }

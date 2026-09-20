@@ -220,6 +220,7 @@ def _require_requirements_baseline() -> None:
     blob_sha = hashlib.sha1(header + content, usedforsecurity=False).hexdigest()
     if blob_sha != STAGE3_REQUIREMENTS_BLOB_SHA:
         raise Stage3ModelError("Stage 3 requirements baseline blob has drifted")
+    shared_runner._require_execution_amendment(_repository_root())
 
 
 def _expected_artifact_window() -> ArtifactWindow:
@@ -479,6 +480,8 @@ def _write_json_exclusive(path: Path, payload: object) -> None:
 
 def _requirements_payload() -> dict[str, str]:
     return {
+        "execution_amendment_path": shared_runner.STAGE3_EXECUTION_AMENDMENT_PATH,
+        "execution_amendment_sha256": shared_runner.STAGE3_EXECUTION_AMENDMENT_SHA256,
         "base_sha": STAGE3_REQUIREMENTS_BASE_SHA,
         "blob_sha": STAGE3_REQUIREMENTS_BLOB_SHA,
         "path": STAGE3_REQUIREMENTS_RELATIVE_PATH,
