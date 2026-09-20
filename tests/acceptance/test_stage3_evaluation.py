@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import polars as pl
 import pytest
@@ -15,6 +16,7 @@ from tests.acceptance import test_stage3_model_strategy as model_fixture
 from tests.acceptance import test_stage3_momentum as momentum_fixture
 from tracequant.integrations.nautilus import stage3_evaluation as evaluation
 from tracequant.integrations.nautilus import stage3_model
+from tracequant.integrations.nautilus import stage3_momentum as momentum_module
 from tracequant.integrations.nautilus.stage3_evaluation import (
     EvaluationFold,
     EvaluationRun,
@@ -382,6 +384,54 @@ def test_accounting_fixture_proves_zero_base_and_double_scaling(
     assert cast(Mapping[str, object], result["funding"])["status"] == (
         "proved_by_position_across_funding_event"
     )
+
+
+def test_accounting_fixture_allows_native_funding_settlement_rounding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    catalog, record_path, template, artifact_lock = momentum_fixture._accepted_fixture(
+        monkeypatch, tmp_path
+    )
+    config = feature_fixture._accepted_config(
+        template,
+        catalog,
+        tmp_path / "fixture-rounding-unused",
+        artifact_lock_path=artifact_lock,
+    )
+    fold = EvaluationFold(
+        "fixture-rounding",
+        "development",
+        feature_fixture.DATASET_START,
+        feature_fixture.EVALUATION_START,
+        feature_fixture.EVALUATION_END,
+    )
+    reports: list[Stage3MomentumReports] = []
+    run_engine = momentum_module._run_engine
+
+    def rounded_double_funding(*args: Any, **kwargs: Any) -> Stage3MomentumReports:
+        report = run_engine(*args, **kwargs)
+        if len(reports) == 4:
+            base_funding = Decimal(cast(str, reports[0].summary["total_funding"]))
+            summary = dict(report.summary)
+            summary["total_funding"] = str(base_funding * 2 + Decimal("0.00000001"))
+            report = replace(report, summary=summary)
+        reports.append(report)
+        return report
+
+    monkeypatch.setattr(
+        momentum_module,
+        "_run_engine",
+        rounded_double_funding,
+    )
+
+    result = evaluation._run_accounting_fixtures(
+        config, acceptance_record_path=record_path, fold=fold
+    )
+
+    funding = cast(Mapping[str, object], result["funding"])
+    assert funding["double"] != funding["double_expected_before_native_rounding"]
+    assert funding["native_rounding_tolerance"] == "2E-8"
 
 
 def test_model_sensitivity_replays_frozen_predictions_and_decisions(

@@ -515,10 +515,11 @@ def _bar_open_trade_ticks(
             - stage3_features.HOUR_NS
             + stage3_features.STAGE2_CLOSE_OFFSET_MS * stage3_features.MS_NS
         )
+        execution_price = instrument.make_price(float(bar.open.as_decimal()))
         ticks.append(
             TradeTick(
                 instrument_id=instrument.id,
-                price=bar.open,
+                price=execution_price,
                 size=Quantity.from_str(f"{capacity:.{instrument.size_precision}f}"),
                 aggressor_side=AggressorSide.NO_AGGRESSOR,
                 trade_id=TradeId.from_str(

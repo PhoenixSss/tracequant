@@ -24,6 +24,7 @@ from nautilus_trader.trading import Strategy
 
 from tests.acceptance import test_stage3_features as feature_fixture
 from tracequant.integrations.nautilus import stage3_momentum as momentum
+from tracequant.integrations.nautilus.stage2_btceth import stage2_bar_type
 from tracequant.integrations.nautilus.stage3_momentum import (
     canonical_business_result,
     run_stage3_momentum_backtest,
@@ -371,6 +372,32 @@ def test_b1_open_fill_precedes_funding_inside_the_execution_bar(
     assert Decimal(cast(str, funding["account_delta"])) != 0
 
 
+def test_bar_open_execution_uses_the_frozen_instrument_price_increment() -> None:
+    instrument_payload = feature_fixture._perpetual(
+        feature_fixture.BTC, "BTCUSDT", "BTC"
+    ).to_dict()
+    instrument_payload["price_increment"] = "0.10"
+    instrument = CryptoPerpetual.from_dict(instrument_payload)
+    bar = Bar(
+        bar_type=stage2_bar_type(feature_fixture.BTC, "1h"),
+        open=Price.from_str("46796.15"),
+        high=Price.from_str("46800.00"),
+        low=Price.from_str("46700.00"),
+        close=Price.from_str("46750.00"),
+        volume=Quantity.from_str("10.000"),
+        ts_event=HOUR_NS - feature_fixture.MS_NS,
+        ts_init=HOUR_NS - feature_fixture.MS_NS,
+    )
+
+    (execution_tick,) = momentum._bar_open_trade_ticks(
+        (bar,),
+        (instrument,),
+        target_notional=Decimal("10000"),
+    )
+
+    assert execution_tick.price == Price.from_str("46796.20")
+
+
 def test_funding_report_attributes_mixed_zero_and_nonzero_native_deltas() -> None:
     btc, eth = STAGE2_INSTRUMENT_IDS
     ts_event = HOUR_NS
@@ -482,18 +509,26 @@ def test_unknown_order_state_fails_closed() -> None:
 
 
 @pytest.mark.parametrize(
-    ("current_at_decision", "current_at_b1", "expected_reason"),
+    (
+        "current_at_decision",
+        "current_at_b1",
+        "min_notional",
+        "expected_reason",
+    ),
     [
-        ("1.000", None, "target_aligned"),
-        ("0.995", None, "delta_below_minimum"),
-        (None, "1.000", "target_aligned_at_b1"),
-        (None, "0.995", "delta_below_minimum_at_b1"),
+        ("1.000", None, None, "target_aligned"),
+        ("0.995", None, None, "delta_below_minimum"),
+        ("0.600", None, "50.00000000 USDT", "delta_below_minimum"),
+        (None, "1.000", None, "target_aligned_at_b1"),
+        (None, "0.995", None, "delta_below_minimum_at_b1"),
+        (None, "0.600", "50.00000000 USDT", "delta_below_minimum_at_b1"),
     ],
 )
 def test_zero_and_too_small_deltas_never_reach_the_order_boundary(
     monkeypatch: pytest.MonkeyPatch,
     current_at_decision: str | None,
     current_at_b1: str | None,
+    min_notional: str | None,
     expected_reason: str,
 ) -> None:
     def position(quantity: str) -> SimpleNamespace:
@@ -520,6 +555,7 @@ def test_zero_and_too_small_deltas_never_reach_the_order_boundary(
         feature_fixture.BTC, "BTCUSDT", "BTC"
     ).to_dict()
     instrument_payload["min_quantity"] = "0.010"
+    instrument_payload["min_notional"] = min_notional
     instrument = CryptoPerpetual.from_dict(instrument_payload)
     strategy = Stage3MomentumStrategy(
         Stage3MomentumParameters(

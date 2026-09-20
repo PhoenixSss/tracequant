@@ -12,7 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Final, Literal, cast
 
-from nautilus_trader.model import Bar, CryptoPerpetual
+from nautilus_trader.model import Bar, CryptoPerpetual, Currency
 
 from tracequant.integrations.nautilus import stage3_model, stage3_momentum
 from tracequant.integrations.nautilus.stage3_model import (
@@ -993,6 +993,9 @@ def _run_accounting_fixtures(
     bind_accepted_stage2_catalog(config, acceptance_record_path=acceptance_record_path)
     base_commission = Decimal(cast(str, reports["base"].summary["total_commission"]))
     base_funding = Decimal(cast(str, reports["base"].summary["total_funding"]))
+    double_funding = Decimal(
+        cast(str, reports["double_funding"].summary["total_funding"])
+    )
     if base_commission <= 0:
         raise Stage3EvaluationError("fee fixture did not produce a taker fill")
     if Decimal(cast(str, reports["zero_fee"].summary["total_commission"])) != 0:
@@ -1006,10 +1009,8 @@ def _run_accounting_fixtures(
         raise Stage3EvaluationError("funding fixture did not cross a funding event")
     if Decimal(cast(str, reports["zero_funding"].summary["total_funding"])) != 0:
         raise Stage3EvaluationError("zero-funding fixture did not produce 0x funding")
-    if (
-        Decimal(cast(str, reports["double_funding"].summary["total_funding"]))
-        != base_funding * 2
-    ):
+    funding_rounding_tolerance = _native_funding_rounding_tolerance(reports["base"])
+    if abs(double_funding - base_funding * 2) > funding_rounding_tolerance:
         raise Stage3EvaluationError("double-funding fixture did not produce 2x funding")
     return {
         "decision_digest": _decision_digest(decisions, "momentum"),
@@ -1021,11 +1022,32 @@ def _run_accounting_fixtures(
         },
         "funding": {
             "base": str(base_funding),
-            "double": str(base_funding * 2),
+            "double": str(double_funding),
+            "double_expected_before_native_rounding": str(base_funding * 2),
+            "native_rounding_tolerance": str(funding_rounding_tolerance),
             "status": "proved_by_position_across_funding_event",
             "zero": "0",
         },
     }
+
+
+def _native_funding_rounding_tolerance(report: Stage3MomentumReports) -> Decimal:
+    """Bound 2x comparisons by one settlement quantum per native event."""
+    raw_events = report.funding.get("events")
+    if not isinstance(raw_events, list):
+        raise Stage3EvaluationError("funding fixture events are invalid")
+    native_event_count = 0
+    for raw_event in raw_events:
+        if not isinstance(raw_event, Mapping):
+            raise Stage3EvaluationError("funding fixture event is invalid")
+        count = raw_event.get("native_account_event_count")
+        if type(count) is not int or count < 0:
+            raise Stage3EvaluationError("funding fixture native event count is invalid")
+        native_event_count += count
+    if native_event_count == 0:
+        raise Stage3EvaluationError("funding fixture has no native account events")
+    settlement_quantum = Decimal(1).scaleb(-Currency.from_str("USDT").precision)
+    return settlement_quantum * native_event_count
 
 
 def _fixture_decisions(
