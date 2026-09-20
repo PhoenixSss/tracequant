@@ -216,6 +216,7 @@ class EvaluationRun:
                 self.fold, self.strategy, self.scenario
             ),
             "decision_digest": self.decision_digest,
+            "fee_provenance": [dict(item) for item in self.fee_provenance],
             "fee_provenance_digest": _digest(self.fee_provenance),
             "fold": self.fold.payload(),
             "metrics": self.metrics,
@@ -517,6 +518,10 @@ def _run_sensitivity_scenario(
 ) -> EvaluationRun:
     if scenario.name == "base":
         raise Stage3EvaluationError("base is not a sensitivity replay scenario")
+    if fold.role != "final_test":
+        raise Stage3EvaluationError(
+            "sensitivity replay is only approved for the final_test fold"
+        )
     _require_frozen_final_test_config(
         frozen_final_test_config,
         config=config,
@@ -666,6 +671,7 @@ def _write_run_partition(run: EvaluationRun) -> None:
         "schema": STAGE3_EVALUATION_RUN_SCHEMA,
         "artifact": run.artifact,
         "decision_digest": run.decision_digest,
+        "fee_provenance": [dict(item) for item in run.fee_provenance],
         "fee_provenance_digest": _digest(run.fee_provenance),
         "fold": run.fold.payload(),
         "metrics": run.metrics,
@@ -862,8 +868,10 @@ def _per_instrument_metrics(reports: CommonReports) -> dict[str, object]:
     return result
 
 
-def _funding_by_instrument(reports: CommonReports) -> dict[str, Decimal]:
-    result = {instrument_id: Decimal(0) for instrument_id in STAGE2_INSTRUMENT_IDS}
+def _funding_account_deltas(
+    reports: CommonReports,
+) -> tuple[tuple[str, Decimal], ...]:
+    result: list[tuple[str, Decimal]] = []
     timeline = reports.funding.get("events")
     if not isinstance(timeline, list):
         raise Stage3EvaluationError("Nautilus funding events are missing")
@@ -875,7 +883,7 @@ def _funding_by_instrument(reports: CommonReports) -> dict[str, Decimal]:
                 raise Stage3EvaluationError("Nautilus funding instrument is invalid")
             instrument_id = raw.get("instrument_id")
             delta = raw.get("account_delta")
-            if instrument_id not in result or not isinstance(delta, str):
+            if instrument_id not in STAGE2_INSTRUMENT_IDS or not isinstance(delta, str):
                 raise Stage3EvaluationError(
                     "Nautilus per-instrument funding is incomplete"
                 )
@@ -889,7 +897,14 @@ def _funding_by_instrument(reports: CommonReports) -> dict[str, Decimal]:
                 raise Stage3EvaluationError(
                     "Nautilus per-instrument funding is not finite"
                 )
-            result[cast(str, instrument_id)] += value
+            result.append((cast(str, instrument_id), value))
+    return tuple(result)
+
+
+def _funding_by_instrument(reports: CommonReports) -> dict[str, Decimal]:
+    result = {instrument_id: Decimal(0) for instrument_id in STAGE2_INSTRUMENT_IDS}
+    for instrument_id, value in _funding_account_deltas(reports):
+        result[instrument_id] += value
     return result
 
 
@@ -1116,8 +1131,9 @@ def _sensitivity_information(
         subject = "fee"
         reason = "base run has taker fills" if informative else "base run has no fills"
     else:
-        funding = _funding_by_instrument(base.reports)
-        informative = any(value != 0 for value in funding.values())
+        informative = any(
+            value != 0 for _, value in _funding_account_deltas(base.reports)
+        )
         subject = "funding"
         reason = (
             "base run has native per-instrument funding exposure"

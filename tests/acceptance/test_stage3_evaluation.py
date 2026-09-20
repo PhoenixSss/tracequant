@@ -290,6 +290,33 @@ def test_stage3_evaluation_compares_both_strategies_with_accounting_only_sensiti
         decisions = json.loads(
             (partition / "decisions.json").read_text(encoding="utf-8")
         )
+        fee_provenance = json.loads(
+            (partition / "fee-provenance.json").read_text(encoding="utf-8")
+        )
+        run_manifest = json.loads(
+            (partition / "manifest.json").read_text(encoding="utf-8")
+        )
+        assert item["fee_provenance"] == fee_provenance
+        assert run_manifest["fee_provenance"] == fee_provenance
+        assert item["fee_provenance_digest"] == evaluation._digest(fee_provenance)
+        assert all(
+            {
+                "catalog_maker_fee",
+                "catalog_maker_matches_base",
+                "catalog_matches_snapshot",
+                "catalog_taker_fee",
+                "catalog_taker_matches_base",
+                "effective_maker_fee",
+                "effective_taker_fee",
+                "instrument_id",
+                "snapshot_maker_fee",
+                "snapshot_maker_matches_base",
+                "snapshot_taker_fee",
+                "snapshot_taker_matches_base",
+            }
+            <= provenance.keys()
+            for provenance in fee_provenance
+        )
         assert len(account["equity_curve"]) == len(
             {decision["decision_ts"] for decision in decisions}
         )
@@ -359,15 +386,22 @@ def test_model_sensitivity_replays_frozen_predictions_and_decisions(
         artifact_partition=artifact,
         parameter_record_path=parameters,
     )
-    fold = EvaluationFold(
+    development_fold = EvaluationFold(
         "fixture",
         "development",
         feature_fixture.DATASET_START,
         feature_fixture.EVALUATION_START,
         feature_fixture.EVALUATION_END,
     )
+    final_fold = EvaluationFold(
+        "fixture",
+        "final_test",
+        feature_fixture.DATASET_START,
+        feature_fixture.EVALUATION_START,
+        feature_fixture.EVALUATION_END,
+    )
     base = evaluation._build_run(
-        fold=fold,
+        fold=final_fold,
         strategy="lightgbm",
         scenario=evaluation.base_scenario(),
         reports=outcome.reports,
@@ -382,13 +416,33 @@ def test_model_sensitivity_replays_frozen_predictions_and_decisions(
         tmp_path / "model-double-fee",
         artifact_lock_path=artifact_lock,
     )
+    with pytest.raises(
+        evaluation.Stage3EvaluationError,
+        match="only approved for the final_test fold",
+    ):
+        evaluation._run_sensitivity_scenario(
+            replay_config,
+            acceptance_record_path=record_path,
+            fold=development_fold,
+            strategy="lightgbm",
+            scenario=evaluation.sensitivity_scenarios()[1],
+            base=base,
+        )
+    assert not replay_config.run_root.exists()
+
+    frozen = evaluation._freeze_final_test_config(
+        replay_config,
+        fold=final_fold,
+        scenarios=evaluation.accounting_scenarios(),
+    )
     replay = evaluation._run_sensitivity_scenario(
         replay_config,
         acceptance_record_path=record_path,
-        fold=fold,
+        fold=final_fold,
         strategy="lightgbm",
         scenario=evaluation.sensitivity_scenarios()[1],
         base=base,
+        frozen_final_test_config=frozen,
     )
 
     assert replay.decision_digest == base.decision_digest
@@ -438,10 +492,16 @@ def _reports_with_mark_to_market_and_offsetting_funding() -> Stage3MomentumRepor
                 {
                     "events": [
                         {"account_delta": "5", "instrument_id": btc},
-                        {"account_delta": "-5", "instrument_id": eth},
                     ],
                     "ts_event": 1,
-                }
+                },
+                {
+                    "events": [
+                        {"account_delta": "-5", "instrument_id": btc},
+                        {"account_delta": "0", "instrument_id": eth},
+                    ],
+                    "ts_event": 2,
+                },
             ],
             "total_funding": "0",
         },
@@ -456,6 +516,60 @@ def _reports_with_mark_to_market_and_offsetting_funding() -> Stage3MomentumRepor
     )
 
 
+def test_run_manifests_embed_fee_provenance_with_missing_values(
+    tmp_path: Path,
+) -> None:
+    provenance: tuple[dict[str, object], ...] = (
+        {
+            "catalog_maker_fee": None,
+            "catalog_maker_matches_base": False,
+            "catalog_matches_snapshot": True,
+            "catalog_taker_fee": None,
+            "catalog_taker_matches_base": False,
+            "effective_maker_fee": "0.0002",
+            "effective_taker_fee": "0.0004",
+            "instrument_id": STAGE2_INSTRUMENT_IDS[0],
+            "snapshot_maker_fee": None,
+            "snapshot_maker_matches_base": False,
+            "snapshot_taker_fee": None,
+            "snapshot_taker_matches_base": False,
+        },
+    )
+    partition = tmp_path / "run"
+    partition.mkdir()
+    run = EvaluationRun(
+        fold=evaluation.expanding_folds()[-1],
+        strategy="momentum",
+        scenario=evaluation.base_scenario(),
+        reports=_reports_with_mark_to_market_and_offsetting_funding(),
+        partition=partition,
+        fee_provenance=provenance,
+        artifact=None,
+        predictions=(),
+        decision_digest="decision",
+        prediction_digest=None,
+        scenario_digest="scenario",
+        information_status={"status": "not_applicable"},
+        metrics={},
+        run_identity="run",
+        result_digest="result",
+    )
+
+    evaluation._write_run_partition(run)
+
+    expected = [dict(provenance[0])]
+    reference = run.reference(root=tmp_path)
+    manifest = json.loads((partition / "manifest.json").read_text(encoding="utf-8"))
+    assert reference["fee_provenance"] == expected
+    assert manifest["fee_provenance"] == expected
+    assert (
+        cast(list[Mapping[str, object]], manifest["fee_provenance"])[0][
+            "catalog_maker_fee"
+        ]
+        is None
+    )
+
+
 def test_metrics_use_nautilus_mark_to_market_equity_curve() -> None:
     reports = _reports_with_mark_to_market_and_offsetting_funding()
     metrics = evaluation._metrics(reports, fold=evaluation.expanding_folds()[0])
@@ -464,7 +578,7 @@ def test_metrics_use_nautilus_mark_to_market_equity_curve() -> None:
     assert metrics["total_return"] == "0.00125"
 
 
-def test_funding_information_uses_per_instrument_native_deltas() -> None:
+def test_funding_information_uses_nonzero_native_events_before_netting() -> None:
     reports = _reports_with_mark_to_market_and_offsetting_funding()
     run = EvaluationRun(
         fold=evaluation.expanding_folds()[-1],
@@ -491,11 +605,11 @@ def test_funding_information_uses_per_instrument_native_deltas() -> None:
 
     assert (
         cast(Mapping[str, object], per_instrument[STAGE2_INSTRUMENT_IDS[0]])["funding"]
-        == "5"
+        == "0"
     )
     assert (
         cast(Mapping[str, object], per_instrument[STAGE2_INSTRUMENT_IDS[1]])["funding"]
-        == "-5"
+        == "0"
     )
     assert information == {
         "informative": True,
