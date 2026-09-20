@@ -287,6 +287,36 @@ def test_code_inventory_digest_tracks_the_runtime_gate_closure(
     assert artifacts._code_digest(original) != artifacts._code_digest(drifted)
 
 
+def test_lightgbm_distribution_identity_covers_executed_python_and_native_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lightgbm = artifacts._load_lightgbm()
+    runtime = artifacts._runtime_identity(lightgbm, repository_root=REPOSITORY_ROOT)
+    environment = cast(dict[str, object], runtime["environment"])
+    compatibility = cast(dict[str, object], runtime["compatibility"])
+    distribution = cast(dict[str, object], environment["lightgbm_distribution"])
+    files = cast(list[dict[str, object]], distribution["files"])
+    paths = {cast(str, item["relative_path"]) for item in files}
+
+    assert {"lightgbm/basic.py", "lightgbm/engine.py"} <= paths
+    assert (
+        compatibility["lightgbm_distribution_digest"]
+        == distribution["file_inventory_digest"]
+    )
+
+    basic_path = Path(lightgbm.basic.__file__).resolve()
+    original_sha256_file = sha256_file
+
+    def drifted_sha256_file(path: Path) -> str:
+        if Path(path).resolve() == basic_path:
+            return "f" * 64
+        return original_sha256_file(path)
+
+    monkeypatch.setattr(artifacts, "sha256_file", drifted_sha256_file)
+    with pytest.raises(Stage3ArtifactError, match="does not match RECORD"):
+        artifacts._runtime_identity(lightgbm, repository_root=REPOSITORY_ROOT)
+
+
 def test_formal_trainer_reuses_the_accepted_window_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -459,6 +489,23 @@ def test_parameter_record_is_closed_frozen_and_alias_free(tmp_path: Path) -> Non
             parameter_path,
             revision="r2",
             parameters=default_effective_parameters(),
+            repository_root=REPOSITORY_ROOT,
+        )
+
+
+@pytest.mark.parametrize("key", ["is_enable_sparse", "enable_bundle"])
+def test_dataset_construction_defaults_are_explicit_and_required(
+    tmp_path: Path, key: str
+) -> None:
+    parameters = default_effective_parameters()
+    assert parameters[key] is False
+    parameters.pop(key)
+
+    with pytest.raises(Stage3ArtifactError, match="missing, unknown, or alias"):
+        freeze_training_parameters(
+            tmp_path / f"{key}.json",
+            revision="stage3-lgbm-r1",
+            parameters=parameters,
             repository_root=REPOSITORY_ROOT,
         )
 

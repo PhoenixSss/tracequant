@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib
 import importlib.metadata
@@ -65,6 +66,9 @@ PREDICTION_ATOL: Final = 1e-9
 PREDICTION_RTOL: Final = 1e-6
 CANONICAL_JSON_RULE: Final = "utf8-sort-keys-compact-ascii-no-nan-v1"
 CODE_INVENTORY_SCHEMA: Final = "tracequant-stage3-model-code-inventory-v1"
+LIGHTGBM_DISTRIBUTION_INVENTORY_SCHEMA: Final = (
+    "tracequant-stage3-lightgbm-distribution-files-v1"
+)
 
 RUNTIME_DEPENDENCIES: Final = ("lightgbm", "narwhals", "numpy", "scipy")
 PARAMETER_KEYS: Final = (
@@ -97,6 +101,8 @@ PARAMETER_KEYS: Final = (
     "use_missing",
     "zero_as_missing",
     "feature_pre_filter",
+    "is_enable_sparse",
+    "enable_bundle",
     "seed",
     "bagging_seed",
     "feature_fraction_seed",
@@ -234,6 +240,8 @@ def default_effective_parameters() -> dict[str, ParameterValue]:
         "use_missing": False,
         "zero_as_missing": False,
         "feature_pre_filter": True,
+        "is_enable_sparse": False,
+        "enable_bundle": False,
         "seed": 362,
         "bagging_seed": 362,
         "feature_fraction_seed": 362,
@@ -664,6 +672,8 @@ def _validate_training_parameters(
         "use_missing": False,
         "zero_as_missing": False,
         "feature_pre_filter": True,
+        "is_enable_sparse": False,
+        "enable_bundle": False,
         "extra_trees": False,
         "linear_tree": False,
         "deterministic": True,
@@ -1061,6 +1071,16 @@ def _runtime_identity(lightgbm: Any, *, repository_root: Path) -> dict[str, obje
     metadata_text = distribution.read_text("METADATA")
     if metadata_text is None:
         raise Stage3ArtifactError("LightGBM distribution metadata is missing")
+    distribution_identity = _lightgbm_distribution_identity(
+        distribution,
+        metadata_text=metadata_text,
+        required_runtime_paths={
+            "lightgbm.__init__": _module_path(lightgbm),
+            "lightgbm.basic": _module_path(lightgbm.basic),
+            "lightgbm.engine": _module_path(importlib.import_module("lightgbm.engine")),
+            "lightgbm.native_library": native_path,
+        },
+    )
     nautilus_version = importlib.metadata.version("nautilus-trader")
     if nautilus_version != NAUTILUS_VERSION:
         raise Stage3ArtifactError("installed Nautilus version does not match")
@@ -1085,13 +1105,7 @@ def _runtime_identity(lightgbm: Any, *, repository_root: Path) -> dict[str, obje
         "architecture": platform.machine(),
         "polars_version": pl.__version__,
         "nautilus_version": nautilus_version,
-        "lightgbm_distribution": {
-            "name": "lightgbm",
-            "version": distribution.version,
-            "metadata_checksum_sha256": hashlib.sha256(
-                metadata_text.encode("utf-8")
-            ).hexdigest(),
-        },
+        "lightgbm_distribution": distribution_identity,
         "lightgbm_native_library": {
             "filename": native_path.name,
             "checksum_sha256": sha256_file(native_path),
@@ -1103,11 +1117,99 @@ def _runtime_identity(lightgbm: Any, *, repository_root: Path) -> dict[str, obje
         "code_inventory": code_inventory,
         "code_inventory_order": "fixed-module-order-v1",
         "code_digest": _code_digest(code_inventory),
+        "lightgbm_distribution_digest": distribution_identity["file_inventory_digest"],
         "runtime_dependencies": dependencies,
         "runtime_dependency_order": "normalized-name-ascending-v1",
         "runtime_dependency_digest": _digest(dependency_payload),
     }
     return {"environment": environment, "compatibility": compatibility}
+
+
+def _lightgbm_distribution_identity(
+    distribution: importlib.metadata.Distribution,
+    *,
+    metadata_text: str,
+    required_runtime_paths: Mapping[str, Path],
+) -> dict[str, object]:
+    files = distribution.files
+    if not files:
+        raise Stage3ArtifactError("LightGBM distribution file inventory is missing")
+    ordered_files = sorted(files, key=lambda item: item.as_posix())
+    relative_paths = [item.as_posix() for item in ordered_files]
+    if len(relative_paths) != len(set(relative_paths)):
+        raise Stage3ArtifactError("LightGBM distribution file inventory is ambiguous")
+
+    entries: list[dict[str, object]] = []
+    installed_paths: dict[Path, str] = {}
+    record_count = 0
+    for item, relative_path in zip(ordered_files, relative_paths, strict=True):
+        relative = Path(relative_path)
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise Stage3ArtifactError("LightGBM distribution file path is unsafe")
+        installed_path = Path(str(distribution.locate_file(item)))
+        if installed_path.is_symlink() or not installed_path.is_file():
+            raise Stage3ArtifactError("LightGBM distribution file is missing or linked")
+        resolved_path = installed_path.resolve()
+        if resolved_path in installed_paths:
+            raise Stage3ArtifactError(
+                "LightGBM distribution file inventory aliases a file"
+            )
+        installed_paths[resolved_path] = relative_path
+
+        checksum = sha256_file(resolved_path)
+        size = resolved_path.stat().st_size
+        if relative_path.endswith(".dist-info/RECORD"):
+            record_count += 1
+            if item.hash is not None or item.size is not None:
+                raise Stage3ArtifactError("LightGBM RECORD identity is malformed")
+        else:
+            recorded_hash = item.hash
+            if (
+                recorded_hash is None
+                or recorded_hash.mode != "sha256"
+                or item.size != size
+                or recorded_hash.value
+                != base64.urlsafe_b64encode(bytes.fromhex(checksum))
+                .decode("ascii")
+                .rstrip("=")
+            ):
+                raise Stage3ArtifactError(
+                    "LightGBM distribution file checksum does not match RECORD"
+                )
+        entries.append(
+            {
+                "relative_path": relative_path,
+                "size": size,
+                "checksum_sha256": checksum,
+            }
+        )
+    if record_count != 1:
+        raise Stage3ArtifactError(
+            "LightGBM distribution RECORD is missing or ambiguous"
+        )
+
+    required_files: dict[str, str] = {}
+    for role, required_path in required_runtime_paths.items():
+        required_relative_path = installed_paths.get(Path(required_path).resolve())
+        if required_relative_path is None:
+            raise Stage3ArtifactError(
+                "LightGBM runtime file is absent from the distribution inventory"
+            )
+        required_files[role] = required_relative_path
+
+    payload: dict[str, object] = {
+        "schema": LIGHTGBM_DISTRIBUTION_INVENTORY_SCHEMA,
+        "name": "lightgbm",
+        "version": distribution.version,
+        "metadata_checksum_sha256": hashlib.sha256(
+            metadata_text.encode("utf-8")
+        ).hexdigest(),
+        "file_order": "relative-path-ascending-v1",
+        "files": entries,
+        "required_runtime_files": required_files,
+    }
+    payload["file_inventory_digest"] = _digest(payload)
+    return payload
 
 
 def _code_inventory(repository_root: Path) -> list[dict[str, object]]:
