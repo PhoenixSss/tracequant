@@ -174,15 +174,27 @@ Nautilus reports, so the tracked record can verify those bindings without
 embedding the reports. Missing, changed or conflicting outputs leave the
 previous tracked record untouched.
 
-The record with acceptance digest
-`f8df1359595ad1ba53ab3cf23f40c8c1b825ffae0023206abaff05d5afeedb4f`
-predates this output-verification repair and is retained unchanged as historical
-evidence. It fails the current contract validator and does not establish current
-Stage 3 acceptance. Review finding E1 remains pending: after LCK creates the
-clean repaired head, two full formal rebuilds must regenerate the record and
-provide both external evaluation manifests, artifact provenance/environment,
-and matching stable digests for fresh Independent Review. Fixture tests prove
-failure behavior and repeatability only; passing CI does not satisfy E1.
+Formal evidence was regenerated twice from clean implementation commit
+`75e3de9ec96085b4394f52536009b2763183292c`, using distinct new external partitions
+in the same recorded environment. Each rebuild completed four fold artifacts,
+eight base runs and eight sensitivity runs, passed strict acceptance validation,
+and left the locked catalog unchanged. Both produced evaluation result digest
+`53e7929a716e763df8b0442e4f909cf6f6b01009b053f56e2b6c6789735de8d3`.
+The complete compact records agree after excluding only `acceptance_digest`
+and `evaluation.manifest_digest`, which retain distinct creation-time evidence.
+The tracked record is the second rebuild's generated output, with acceptance
+digest `bc9449100eb2b79b720f4d65ab11609115fb0b4181472dbd86a3f9e5bc5bbcd8`.
+
+The retained external evidence bundle `75e3de9ec960-20260921-e1-r1/` contains
+`acceptance-first.json`, `acceptance-second.json`, both evaluation manifests at
+`runs-first/manifest.json` and `runs-second/manifest.json`, and the fold artifacts
+with formal provenance/environment under `evidence-first/` and `evidence-second/`.
+It also contains file inventories with SHA-256 checksums and `comparison.json`
+(SHA-256 `aacc8c5943a0669d1c90dab2fedbb08792d0689c201618c81089e39dc6ad8db8`),
+which binds the implementation, lock, environment, run times and comparison.
+These are the completed formal rebuild evidence for Review finding E1; their
+acceptance remains subject to fresh Independent Review. Software acceptance
+still grants no Demo or Live admission.
 
 ## LCK: an engineering capability within TraceQuant
 

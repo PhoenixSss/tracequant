@@ -687,23 +687,9 @@ def _directory_digest(root: Path) -> str:
     return digest.hexdigest()
 
 
-def test_committed_stage3_acceptance_record_is_current_or_rejected_as_historical() -> (
-    None
-):
+def test_committed_stage3_acceptance_record_matches_current_contract() -> None:
     record_path = (
         Path(__file__).resolve().parents[2] / stage3_oos.STAGE3_ACCEPTANCE_RELATIVE_PATH
     )
     record = json.loads(record_path.read_text(encoding="utf-8"))
-    # Review E1 requires two formal rebuilds from the repaired clean head. That
-    # head does not exist until LCK commits this repair. Preserve this one known
-    # historical record unchanged; never relabel it as current acceptance.
-    if record["acceptance_digest"] == (
-        "f8df1359595ad1ba53ab3cf23f40c8c1b825ffae0023206abaff05d5afeedb4f"
-    ):
-        assert (
-            stage3_oos.stage3_acceptance_digest(record) == record["acceptance_digest"]
-        )
-        with pytest.raises(stage3_oos.Stage3OosError, match="rebuild contract"):
-            stage3_oos.require_complete_stage3_acceptance_record(record)
-        return
     stage3_oos.require_complete_stage3_acceptance_record(record)
