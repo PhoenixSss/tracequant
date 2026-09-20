@@ -92,10 +92,12 @@ STAGE3_MOMENTUM_END: Final = "2023-01-01T00:00:00Z"
 class _FixedDecimals:
     STARTING_USDT: Final = Decimal("100000")
     DEFAULT_LEVERAGE: Final = Decimal("1")
+    BASE_FUNDING_MULTIPLIER: Final = Decimal("1")
 
 
 STAGE3_STARTING_USDT: Final = _FixedDecimals.STARTING_USDT
 STAGE3_DEFAULT_LEVERAGE: Final = _FixedDecimals.DEFAULT_LEVERAGE
+STAGE3_BASE_FUNDING_MULTIPLIER: Final = _FixedDecimals.BASE_FUNDING_MULTIPLIER
 STAGE3_TRADER_ID: Final = "TRACEQUANT-STAGE3-001"
 STAGE3_VENUE: Final = "BINANCE"
 OFFLINE_BACKTEST_ONLY: Final = True
@@ -282,7 +284,12 @@ def _load_native_stage3_data(
     *,
     start: datetime,
     end: datetime,
+    maker_fee: Decimal = BASE_MAKER_FEE,
+    taker_fee: Decimal = BASE_TAKER_FEE,
+    funding_multiplier: Decimal = STAGE3_BASE_FUNDING_MULTIPLIER,
 ) -> _LoadedStage3Data:
+    if maker_fee < 0 or taker_fee < 0 or funding_multiplier < 0:
+        raise Stage3MomentumError("accounting inputs must be non-negative")
     catalog = ParquetDataCatalog(str(catalog_path))
     catalog_instruments = tuple(
         item for item in catalog.instruments() if str(item.id) in STAGE2_INSTRUMENT_IDS
@@ -305,10 +312,10 @@ def _load_native_stage3_data(
         snapshot_payload = snapshot_by_id[str(item.id)]
         snapshot_maker = snapshot_payload.get("maker_fee")
         snapshot_taker = snapshot_payload.get("taker_fee")
-        payload["maker_fee"] = str(BASE_MAKER_FEE)
-        payload["taker_fee"] = str(BASE_TAKER_FEE)
+        payload["maker_fee"] = str(maker_fee)
+        payload["taker_fee"] = str(taker_fee)
         bound = CryptoPerpetual.from_dict(payload)
-        if bound.maker_fee != BASE_MAKER_FEE or bound.taker_fee != BASE_TAKER_FEE:
+        if bound.maker_fee != maker_fee or bound.taker_fee != taker_fee:
             raise Stage3MomentumError("effective fee binding did not round-trip")
         effective.append(bound)
         provenance.append(
@@ -368,7 +375,9 @@ def _load_native_stage3_data(
             funding.append(
                 FundingRateUpdate(
                     instrument_id=InstrumentId.from_str(instrument_id),
-                    rate=Decimal(_required_row_string(row, "rate")),
+                    rate=(
+                        Decimal(_required_row_string(row, "rate")) * funding_multiplier
+                    ),
                     ts_event=_required_row_int(row, "ts_event"),
                     ts_init=_required_row_int(row, "ts_init"),
                     interval=_optional_row_int(row, "interval"),
@@ -542,7 +551,13 @@ def _collect_reports(
     native_orders = tuple(engine.cache.orders())
     orders = tuple(_order_record(item, usdt) for item in native_orders)
     fills = _native_fill_records(native_orders, strategy.fill_event_sequences)
-    _require_fee_and_execution_contract(strategy.decisions, orders, fills, usdt)
+    _require_fee_and_execution_contract(
+        strategy.decisions,
+        orders,
+        fills,
+        usdt,
+        expected_taker_fee=strategy.parameters.taker_fee,
+    )
     if strategy.pending_reversal_count:
         raise Stage3MomentumError("terminal state contains unresolved reversal intent")
     native_positions = tuple(engine.cache.positions())
@@ -639,6 +654,8 @@ def _require_fee_and_execution_contract(
     orders: Sequence[Mapping[str, object]],
     fills: Sequence[Mapping[str, object]],
     currency: Currency,
+    *,
+    expected_taker_fee: Decimal = BASE_TAKER_FEE,
 ) -> None:
     by_order = {cast(str, item["client_order_id"]): item for item in orders}
     fills_by_order: dict[str, list[Mapping[str, object]]] = {}
@@ -722,7 +739,7 @@ def _require_fee_and_execution_contract(
                 expected_amount = (
                     Decimal(cast(str, fill["last_qty"]))
                     * Decimal(cast(str, fill["last_px"]))
-                    * BASE_TAKER_FEE
+                    * expected_taker_fee
                 )
                 expected = Money.from_str(f"{expected_amount} {currency}").as_decimal()
                 if _money_amount(cast(str, commission)) != expected:
