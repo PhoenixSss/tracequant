@@ -357,7 +357,7 @@ def run_stage3_evaluation(
         fold=final_fold,
     )
     dispersion = _fold_dispersion(base_metrics)
-    stable_payload: dict[str, object] = {
+    result_payload: dict[str, object] = {
         "accounting_fixtures": fixtures,
         "base_runs": base_references,
         "fold_dispersion": dispersion,
@@ -368,10 +368,10 @@ def run_stage3_evaluation(
         "training_parameter_digest": frozen.digest,
         "training_parameter_revision": frozen.revision,
     }
-    result_digest = _digest(stable_payload)
+    result_digest = _evaluation_result_digest(result_payload)
     manifest: dict[str, object] = {
         "schema": STAGE3_EVALUATION_SCHEMA,
-        **stable_payload,
+        **result_payload,
         "evidence": {
             "artifact_partitions": {
                 fold_id: (Path("artifacts") / fold_id).as_posix()
@@ -389,6 +389,32 @@ def run_stage3_evaluation(
         manifest=manifest,
         result_digest=result_digest,
     )
+
+
+def _evaluation_result_digest(manifest: Mapping[str, object]) -> str:
+    """Hash repeatable results while preserving exact evidence in the manifest."""
+    payload = {
+        key: value
+        for key, value in manifest.items()
+        if key not in {"schema", "evidence", "result_digest", "manifest_digest"}
+    }
+    for collection in ("base_runs", "sensitivity_runs"):
+        references: list[dict[str, object]] = []
+        for reference in cast(Sequence[Mapping[str, object]], payload[collection]):
+            stable = dict(reference)
+            artifact = stable.get("artifact")
+            if isinstance(artifact, Mapping):
+                # The full artifact manifest binds provenance.created_at. Its
+                # digest is still required for evidence integrity, but cannot
+                # participate in the result identity across independent rebuilds.
+                stable["artifact"] = {
+                    key: value
+                    for key, value in artifact.items()
+                    if key != "manifest_digest"
+                }
+            references.append(stable)
+        payload[collection] = references
+    return _digest(payload)
 
 
 def _train_fold_artifact(

@@ -325,12 +325,8 @@ def _build_acceptance_record(
         raise Stage3OosError("evaluation manifest digest does not match")
     if manifest.get("result_digest") != evaluation.result_digest:
         raise Stage3OosError("evaluation result digest changed")
-    if manifest.get("result_digest") != _digest(
-        {
-            key: value
-            for key, value in manifest.items()
-            if key not in {"schema", "evidence", "result_digest", "manifest_digest"}
-        }
+    if manifest.get("result_digest") != stage3_evaluation._evaluation_result_digest(
+        manifest
     ):
         raise Stage3OosError("evaluation result identity is inconsistent")
     partition_identity = {

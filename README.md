@@ -155,7 +155,13 @@ catalog data, full reports, local absolute paths, or secrets. Outcomes remain
 `OFFLINE_BACKTEST_ONLY` and `LIVE_NOT_APPROVED`; poor returns or a model losing
 to momentum do not block software acceptance and never auto-approve Demo.
 Two rebuilds in the same recorded OS/architecture, LightGBM binary build, and
-locked environment must produce the same stable digests. Cross-environment
+locked environment must produce the same stable artifact, decision, scenario,
+metric and result digests. The evaluation `result_digest` excludes artifact
+manifest digests because those bind creation-time provenance. Full artifact
+references remain in the evaluation manifest and are verified against the
+external evidence. Consequently, exact evaluation `manifest_digest` and tracked
+`acceptance_digest` can differ across creation times; compare the stable result
+digests and compact artifact/run/metric records for repeatability. Cross-environment
 model checksums are compared only under the recorded compatibility identity and
 the approved prediction tolerances (`atol = 1e-9`, `rtol = 1e-6`).
 

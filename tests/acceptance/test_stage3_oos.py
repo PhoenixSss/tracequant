@@ -47,7 +47,6 @@ def test_stage3_oos_rebuild_compares_both_strategies_from_one_catalog(
         momentum_fixture._accepted_fixture(monkeypatch, tmp_path)
     )
     evaluation_fixture._install_real_fixture_matrix(monkeypatch)
-    provenance = synthetic_fixture_provenance(created_at="2026-01-01T00:00:00Z")
     catalog_digest = _directory_digest(catalog)
 
     def config(name: str) -> Stage3Config:
@@ -62,18 +61,60 @@ def test_stage3_oos_rebuild_compares_both_strategies_from_one_catalog(
         config("first"),
         stage2_acceptance_record_path=stage2_record,
         stage3_acceptance_record_path=tmp_path / "first-stage3-acceptance.json",
-        provenance=provenance,
+        provenance=synthetic_fixture_provenance(created_at="2026-01-01T00:00:00Z"),
     )
     second = stage3_oos._rebuild_stage3_oos_fixture(
         config("second"),
         stage2_acceptance_record_path=stage2_record,
         stage3_acceptance_record_path=tmp_path / "second-stage3-acceptance.json",
-        provenance=provenance,
+        provenance=synthetic_fixture_provenance(created_at="2026-01-02T00:00:00Z"),
     )
 
     assert first.evaluation.result_digest == second.evaluation.result_digest
-    assert first.acceptance_digest == second.acceptance_digest
-    assert first.acceptance_record == second.acceptance_record
+    # Exact evidence digests retain creation-time provenance. All business
+    # identities and results must still agree across these distinct rebuilds.
+    assert first.acceptance_digest != second.acceptance_digest
+    first_stable = copy.deepcopy(first.acceptance_record)
+    second_stable = copy.deepcopy(second.acceptance_record)
+    for stable in (first_stable, second_stable):
+        del stable["acceptance_digest"]
+        del cast(dict[str, object], stable["evaluation"])["manifest_digest"]
+    assert first_stable == second_stable
+    assert (
+        first.evaluation.manifest["manifest_digest"]
+        != second.evaluation.manifest["manifest_digest"]
+    )
+    for fold in stage3_evaluation.expanding_folds():
+        relative = Path("artifacts") / fold.fold_id / "manifest.json"
+        first_artifact = json.loads(
+            (first.evaluation.evidence_partition / relative).read_text("utf-8")
+        )
+        second_artifact = json.loads(
+            (second.evaluation.evidence_partition / relative).read_text("utf-8")
+        )
+        assert first_artifact["artifact_id"] == second_artifact["artifact_id"]
+        assert first_artifact["provenance"]["created_at"] == "2026-01-01T00:00:00Z"
+        assert second_artifact["provenance"]["created_at"] == "2026-01-02T00:00:00Z"
+        assert first_artifact["manifest_digest"] != second_artifact["manifest_digest"]
+    for collection in ("base_runs", "sensitivity_runs"):
+        for field in (
+            "artifact_id",
+            "model_checksum",
+            "training_parameter_digest",
+            "training_parameter_revision",
+            "window",
+        ):
+            changed = copy.deepcopy(first.evaluation.manifest)
+            reference = next(
+                run
+                for run in cast(list[dict[str, object]], changed[collection])
+                if run["strategy"] == "lightgbm"
+            )
+            cast(dict[str, object], reference["artifact"])[field] = "changed"
+            assert (
+                stage3_evaluation._evaluation_result_digest(changed)
+                != first.evaluation.result_digest
+            ), (collection, field)
     assert _directory_digest(catalog) == catalog_digest
     assert first.acceptance_record_path.is_file()
     assert second.acceptance_record_path.is_file()
@@ -337,6 +378,31 @@ def test_stage3_oos_checks_persisted_outputs_before_replacing_acceptance(
             finally:
                 path.write_bytes(original)
                 target.unlink(missing_ok=True)
+
+    # Excluding time-derived hashes from result identity must not permit a
+    # different, internally valid artifact manifest to replace the loaded one.
+    artifact_path = config.evidence_root / "artifacts" / first_fold / "manifest.json"
+    original_artifact = artifact_path.read_bytes()
+    artifact_payload = json.loads(original_artifact)
+    artifact_payload["provenance"]["created_at"] = "2026-01-02T00:00:00Z"
+    artifact_payload["manifest_digest"] = stage3_oos._digest(
+        {
+            key: value
+            for key, value in artifact_payload.items()
+            if key != "manifest_digest"
+        }
+    )
+    stage3_artifacts._validate_manifest_envelope(artifact_payload)
+    artifact_path.write_text(json.dumps(artifact_payload), encoding="utf-8")
+    try:
+        with pytest.raises(
+            stage3_oos.Stage3OosError, match="conflicts with loaded artifact"
+        ):
+            rebuild()
+        assert target.read_bytes() == original_record
+    finally:
+        artifact_path.write_bytes(original_artifact)
+        target.unlink(missing_ok=True)
 
     manifest_path = config.run_root / "base" / first_fold / "lightgbm" / "manifest.json"
     original = manifest_path.read_bytes()
