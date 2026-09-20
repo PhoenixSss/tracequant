@@ -11,17 +11,32 @@ import pytest
 from tests.acceptance import test_stage3_evaluation as evaluation_fixture
 from tests.acceptance import test_stage3_features as feature_fixture
 from tests.acceptance import test_stage3_momentum as momentum_fixture
-from tracequant.integrations.nautilus import stage3_evaluation, stage3_oos
+from tracequant.integrations.nautilus import (
+    UPSTREAM_RELEASE_IDENTITY,
+    stage3_evaluation,
+    stage3_oos,
+)
+from tracequant.research import stage3_artifacts
 from tracequant.research.stage3_artifacts import (
     PREDICTION_ATOL,
     PREDICTION_RTOL,
     synthetic_fixture_provenance,
 )
 from tracequant.research.stage3_features import (
+    STAGE2_ACCEPTANCE_DIGEST,
+    STAGE2_ARTIFACT_LOCK_RELATIVE_PATH,
+    STAGE2_DATASET_DIGEST,
+    STAGE2_INSTRUMENT_SNAPSHOT_CHECKSUM,
+    STAGE2_MARKET_DATA_MANIFEST_DIGEST,
+    STAGE2_SOURCE_MANIFEST_DIGEST,
+    STAGE3_CONFIG_SCHEMA,
     Stage3Config,
     Stage3DataError,
 )
-from tracequant.source_data.stage2_btceth import STAGE2_INSTRUMENT_SNAPSHOT_FILENAME
+from tracequant.source_data.stage2_btceth import (
+    STAGE2_DATASET_ID,
+    STAGE2_INSTRUMENT_SNAPSHOT_FILENAME,
+)
 
 
 def test_stage3_oos_rebuild_compares_both_strategies_from_one_catalog(
@@ -199,6 +214,19 @@ def test_stage3_oos_rebuild_compares_both_strategies_from_one_catalog(
             repository_root=Path(stage3_oos.__file__).resolve().parents[4],
         )
 
+    conflicting_run_identity = copy.deepcopy(first.acceptance_record)
+    conflicting_runs = cast(list[dict[str, object]], conflicting_run_identity["runs"])
+    conflicting_runs[0]["run_identity"] = "0" * 64
+    conflicting_run_identity["acceptance_digest"] = stage3_oos.stage3_acceptance_digest(
+        conflicting_run_identity
+    )
+    with pytest.raises(stage3_oos.Stage3OosError, match="config/result identity"):
+        stage3_oos._require_complete_stage3_acceptance_record(
+            conflicting_run_identity,
+            allow_synthetic_fixture=True,
+            repository_root=Path(stage3_oos.__file__).resolve().parents[4],
+        )
+
 
 def test_stage3_oos_rejects_a_nonempty_acceptance_target_before_evaluation(
     monkeypatch: pytest.MonkeyPatch,
@@ -226,6 +254,100 @@ def test_stage3_oos_rejects_a_nonempty_acceptance_target_before_evaluation(
             stage2_acceptance_record_path=stage2_record,
             stage3_acceptance_record_path=target,
             provenance=synthetic_fixture_provenance(created_at="2026-01-01T00:00:00Z"),
+        )
+
+
+def test_stage3_oos_formal_rebuild_reaches_evaluation_with_tracked_record(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    catalog, stage2_record, _template, artifact_lock = (
+        momentum_fixture._accepted_fixture(monkeypatch, tmp_path)
+    )
+    repository = tmp_path / "repository"
+    (repository / ".git").mkdir(parents=True)
+    (repository / "uv.lock").write_text("locked\n", encoding="utf-8")
+    expected_lock = repository / STAGE2_ARTIFACT_LOCK_RELATIVE_PATH
+    expected_lock.parent.mkdir(parents=True)
+    expected_lock.write_bytes(artifact_lock.read_bytes())
+    tracked_record = repository / stage3_oos.STAGE3_ACCEPTANCE_RELATIVE_PATH
+    tracked_record.parent.mkdir(parents=True)
+    original = b'{"existing":true}\n'
+    tracked_record.write_bytes(original)
+    config = Stage3Config(
+        schema=STAGE3_CONFIG_SCHEMA,
+        dataset_id=STAGE2_DATASET_ID,
+        acceptance_digest=STAGE2_ACCEPTANCE_DIGEST,
+        dataset_digest=STAGE2_DATASET_DIGEST,
+        source_manifest_digest=STAGE2_SOURCE_MANIFEST_DIGEST,
+        market_data_manifest_digest=STAGE2_MARKET_DATA_MANIFEST_DIGEST,
+        instrument_snapshot_checksum=STAGE2_INSTRUMENT_SNAPSHOT_CHECKSUM,
+        runtime_identity=UPSTREAM_RELEASE_IDENTITY,
+        artifact_lock_path=expected_lock,
+        catalog_path=catalog,
+        evidence_root=tmp_path / "formal-output" / "evidence",
+        run_root=tmp_path / "formal-output" / "runs",
+    )
+
+    class EvaluationStarted(Exception):
+        pass
+
+    def clean_git(_repository: Path, *arguments: str) -> str:
+        if arguments == ("status", "--porcelain"):
+            return ""
+        if arguments == ("rev-parse", "HEAD"):
+            return "1" * 40
+        raise AssertionError(f"unexpected Git arguments: {arguments}")
+
+    def stop_at_evaluation(*_args: object, **kwargs: object) -> None:
+        assert kwargs["provenance"] is None
+        provenance = stage3_artifacts.capture_formal_provenance(repository)
+        assert provenance.kind == "formal_git"
+        assert provenance.git_sha == "1" * 40
+        raise EvaluationStarted
+
+    monkeypatch.setattr(stage3_oos, "_repository_root", lambda: repository)
+    monkeypatch.setattr(stage3_artifacts, "_run_git", clean_git)
+    monkeypatch.setattr(
+        stage3_oos, "bind_accepted_stage2_catalog", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(stage3_evaluation, "run_stage3_evaluation", stop_at_evaluation)
+
+    with pytest.raises(EvaluationStarted):
+        stage3_oos.rebuild_stage3_oos(
+            config,
+            stage2_acceptance_record_path=stage2_record,
+        )
+    assert tracked_record.read_bytes() == original
+
+
+def test_stage3_oos_atomically_replaces_the_tracked_record(tmp_path: Path) -> None:
+    target = tmp_path / "stage3-acceptance.json"
+    target.write_text('{"old":true}\n', encoding="utf-8")
+
+    stage3_oos._write_json_replacing(target, {"new": True})
+
+    assert json.loads(target.read_text(encoding="utf-8")) == {"new": True}
+    assert not list(tmp_path.glob(f".{target.name}.*.tmp"))
+
+
+@pytest.mark.parametrize("suffix", [Path(), Path("new-partition")])
+def test_stage3_oos_rejects_a_lexical_latest_symlink_before_resolution(
+    tmp_path: Path,
+    suffix: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    concrete = tmp_path / "catalog-r1"
+    concrete.mkdir()
+    latest = tmp_path / "latest"
+    latest.symlink_to(concrete, target_is_directory=True)
+
+    with pytest.raises(stage3_oos.Stage3OosError, match="latest alias"):
+        stage3_oos._external_path(
+            latest / suffix,
+            repository_root=repository,
+            name="catalog_path",
         )
 
 

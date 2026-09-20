@@ -118,8 +118,10 @@ Materialize and verify the locked Stage 2 catalog first. `catalog_path` is that
 existing, installed, read-only input; `evidence_root` and `run_root` are two
 different new, nonexistent external identity partitions. Run `rebuild-oos` from
 an identifiable clean commit. The command has no environment or
-`latest` fallback and writes the immutable compact record to
-`docs/product/stage3-btceth-oos-acceptance.json`:
+`latest` fallback. After the complete rebuild and strict validation succeed, it
+atomically replaces the compact tracked record at
+`docs/product/stage3-btceth-oos-acceptance.json`; an existing tracked record is
+left unchanged if the rebuild fails:
 
 ```bash
 uv run --frozen python -m tracequant.integrations.nautilus.stage3_oos rebuild-oos \
@@ -136,8 +138,9 @@ uv run --frozen python -m tracequant.integrations.nautilus.stage3_oos rebuild-oo
 ```
 
 The evidence and run targets must not exist, overlap each other or the catalog,
-or live in this checkout. A failed or partial run is never resumed; repair the
-input and rerun into different empty partitions. The tracked record contains
+or live in this checkout. Those external partitions remain immutable. A failed
+or partial run is never resumed; repair the input and rerun into different empty
+partitions. The tracked record contains
 only strict identities, digests, window roles, metric summaries, fee provenance,
 the command template, and relative external evidence filenames—never models,
 catalog data, full reports, local absolute paths, or secrets. Outcomes remain

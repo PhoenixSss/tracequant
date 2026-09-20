@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -137,7 +139,7 @@ def rebuild_stage3_oos(
     *,
     stage2_acceptance_record_path: Path,
 ) -> Stage3OosOutcome:
-    """Run one formal rebuild and exclusively create the fixed tracked record."""
+    """Run one formal rebuild and atomically publish the fixed tracked record."""
     repository_root = _repository_root()
     return _rebuild_stage3_oos(
         config,
@@ -219,7 +221,10 @@ def _rebuild_stage3_oos(
         allow_synthetic_fixture=allow_synthetic_fixture,
         repository_root=repository_root,
     )
-    _write_json_exclusive(record_path, record)
+    if allow_synthetic_fixture:
+        _write_json_exclusive(record_path, record)
+    else:
+        _write_json_replacing(record_path, record)
     return Stage3OosOutcome(
         evaluation=evaluation,
         acceptance_record_path=record_path,
@@ -1153,6 +1158,17 @@ def _require_runs(
             "strategy",
         }:
             _required_digest(run, digest_key, "run reference")
+        expected_run_identity = _digest(
+            {
+                "config_digest": run["config_digest"],
+                "result_digest": run["result_digest"],
+                "schema": stage3_evaluation.STAGE3_EVALUATION_RUN_SCHEMA,
+            }
+        )
+        if run.get("run_identity") != expected_run_identity:
+            raise Stage3OosError(
+                "run identity does not match its config/result identity"
+            )
         artifact_id = run.get("artifact_id")
         prediction_digest = run.get("prediction_digest")
         if strategy == "lightgbm":
@@ -1343,6 +1359,8 @@ def _require_config_paths(
     ):
         if not raw.is_absolute():
             raise Stage3OosError(f"{name} must be an absolute external path")
+        if any(part.lower() == "latest" for part in raw.parts):
+            raise Stage3OosError(f"{name} must not use a latest alias")
         path = raw.resolve(strict=False)
         if path == repository or repository in path.parents:
             raise Stage3OosError(f"{name} must not be inside the repository")
@@ -1427,8 +1445,12 @@ def _require_record_target(
             )
     elif resolved != tracked_target:
         raise Stage3OosError("formal Stage 3 acceptance target is not the tracked path")
-    if resolved.exists() or resolved.is_symlink():
+    if target.is_symlink():
+        raise Stage3OosError("Stage 3 acceptance target must not be a symlink")
+    if allow_synthetic_fixture and resolved.exists():
         raise Stage3OosError("Stage 3 acceptance target must not already exist")
+    if not allow_synthetic_fixture and resolved.exists() and not resolved.is_file():
+        raise Stage3OosError("tracked Stage 3 acceptance target is not a regular file")
     if not resolved.parent.is_dir():
         raise Stage3OosError("Stage 3 acceptance target parent is missing")
     for other in (config.catalog_path, config.evidence_root, config.run_root):
@@ -1557,6 +1579,32 @@ def _write_json_exclusive(path: Path, payload: Mapping[str, object]) -> None:
         raise Stage3OosError("Stage 3 acceptance target is immutable") from exc
 
 
+def _write_json_replacing(path: Path, payload: Mapping[str, object]) -> None:
+    temporary_path: Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        )
+        temporary_path = Path(temporary_name)
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            json.dump(payload, stream, ensure_ascii=True, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary_path.chmod(0o644)
+        os.replace(temporary_path, path)
+        temporary_path = None
+    except OSError as exc:
+        raise Stage3OosError(
+            "tracked Stage 3 acceptance record could not be published atomically"
+        ) from exc
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def _digest(payload: object) -> str:
     try:
         encoded = json.dumps(
@@ -1577,6 +1625,8 @@ def _external_path(value: Path, *, repository_root: Path, name: str) -> Path:
     path = Path(value)
     if not path.is_absolute():
         raise Stage3OosError(f"{name} must be an absolute external path")
+    if any(part.lower() == "latest" for part in path.parts):
+        raise Stage3OosError(f"{name} must not use a latest alias")
     resolved = path.resolve(strict=False)
     repository = repository_root.resolve()
     if resolved == repository or repository in resolved.parents:
