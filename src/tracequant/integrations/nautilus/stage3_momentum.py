@@ -92,10 +92,12 @@ STAGE3_MOMENTUM_END: Final = "2023-01-01T00:00:00Z"
 class _FixedDecimals:
     STARTING_USDT: Final = Decimal("100000")
     DEFAULT_LEVERAGE: Final = Decimal("1")
+    BASE_FUNDING_MULTIPLIER: Final = Decimal("1")
 
 
 STAGE3_STARTING_USDT: Final = _FixedDecimals.STARTING_USDT
 STAGE3_DEFAULT_LEVERAGE: Final = _FixedDecimals.DEFAULT_LEVERAGE
+STAGE3_BASE_FUNDING_MULTIPLIER: Final = _FixedDecimals.BASE_FUNDING_MULTIPLIER
 STAGE3_TRADER_ID: Final = "TRACEQUANT-STAGE3-001"
 STAGE3_VENUE: Final = "BINANCE"
 OFFLINE_BACKTEST_ONLY: Final = True
@@ -282,7 +284,12 @@ def _load_native_stage3_data(
     *,
     start: datetime,
     end: datetime,
+    maker_fee: Decimal = BASE_MAKER_FEE,
+    taker_fee: Decimal = BASE_TAKER_FEE,
+    funding_multiplier: Decimal = STAGE3_BASE_FUNDING_MULTIPLIER,
 ) -> _LoadedStage3Data:
+    if maker_fee < 0 or taker_fee < 0 or funding_multiplier < 0:
+        raise Stage3MomentumError("accounting inputs must be non-negative")
     catalog = ParquetDataCatalog(str(catalog_path))
     catalog_instruments = tuple(
         item for item in catalog.instruments() if str(item.id) in STAGE2_INSTRUMENT_IDS
@@ -305,10 +312,10 @@ def _load_native_stage3_data(
         snapshot_payload = snapshot_by_id[str(item.id)]
         snapshot_maker = snapshot_payload.get("maker_fee")
         snapshot_taker = snapshot_payload.get("taker_fee")
-        payload["maker_fee"] = str(BASE_MAKER_FEE)
-        payload["taker_fee"] = str(BASE_TAKER_FEE)
+        payload["maker_fee"] = str(maker_fee)
+        payload["taker_fee"] = str(taker_fee)
         bound = CryptoPerpetual.from_dict(payload)
-        if bound.maker_fee != BASE_MAKER_FEE or bound.taker_fee != BASE_TAKER_FEE:
+        if bound.maker_fee != maker_fee or bound.taker_fee != taker_fee:
             raise Stage3MomentumError("effective fee binding did not round-trip")
         effective.append(bound)
         provenance.append(
@@ -368,7 +375,9 @@ def _load_native_stage3_data(
             funding.append(
                 FundingRateUpdate(
                     instrument_id=InstrumentId.from_str(instrument_id),
-                    rate=Decimal(_required_row_string(row, "rate")),
+                    rate=(
+                        Decimal(_required_row_string(row, "rate")) * funding_multiplier
+                    ),
                     ts_event=_required_row_int(row, "ts_event"),
                     ts_init=_required_row_int(row, "ts_init"),
                     interval=_optional_row_int(row, "interval"),
@@ -542,7 +551,13 @@ def _collect_reports(
     native_orders = tuple(engine.cache.orders())
     orders = tuple(_order_record(item, usdt) for item in native_orders)
     fills = _native_fill_records(native_orders, strategy.fill_event_sequences)
-    _require_fee_and_execution_contract(strategy.decisions, orders, fills, usdt)
+    _require_fee_and_execution_contract(
+        strategy.decisions,
+        orders,
+        fills,
+        usdt,
+        expected_taker_fee=strategy.parameters.taker_fee,
+    )
     if strategy.pending_reversal_count:
         raise Stage3MomentumError("terminal state contains unresolved reversal intent")
     native_positions = tuple(engine.cache.positions())
@@ -566,9 +581,10 @@ def _collect_reports(
     if account is None:
         raise Stage3MomentumError("Nautilus account result is missing")
     account_events = tuple(_account_event_record(item) for item in account.events)
-    funding = _funding_report(account_events, funding_events)
+    funding = _funding_report(account_events, funding_events, positions)
     account_report: dict[str, object] = {
         "base_currency": str(account.base_currency),
+        "equity_curve": list(strategy.equity_curve),
         "events": list(account_events),
         "free": str(account.balance_free(usdt)),
         "id": str(account.id),
@@ -639,6 +655,8 @@ def _require_fee_and_execution_contract(
     orders: Sequence[Mapping[str, object]],
     fills: Sequence[Mapping[str, object]],
     currency: Currency,
+    *,
+    expected_taker_fee: Decimal = BASE_TAKER_FEE,
 ) -> None:
     by_order = {cast(str, item["client_order_id"]): item for item in orders}
     fills_by_order: dict[str, list[Mapping[str, object]]] = {}
@@ -722,7 +740,7 @@ def _require_fee_and_execution_contract(
                 expected_amount = (
                     Decimal(cast(str, fill["last_qty"]))
                     * Decimal(cast(str, fill["last_px"]))
-                    * BASE_TAKER_FEE
+                    * expected_taker_fee
                 )
                 expected = Money.from_str(f"{expected_amount} {currency}").as_decimal()
                 if _money_amount(cast(str, commission)) != expected:
@@ -777,6 +795,7 @@ def _require_runtime_feature_parity(
 def _funding_report(
     account_events: Sequence[Mapping[str, object]],
     funding_events: Sequence[FundingRateUpdate],
+    positions: Sequence[Mapping[str, object]],
 ) -> dict[str, object]:
     funding_by_ts: dict[int, list[dict[str, object]]] = {}
     for item in funding_events:
@@ -789,54 +808,94 @@ def _funding_report(
                 "ts_event": int(item.ts_event),
             }
         )
-    events_by_ts: dict[int, list[Mapping[str, object]]] = {}
-    for event in account_events:
-        events_by_ts.setdefault(cast(int, event["ts_event"]), []).append(event)
+    for events in funding_by_ts.values():
+        events.sort(key=lambda item: cast(str, item["instrument_id"]))
+    reported_deltas: dict[int, list[Decimal]] = {}
     prior = STAGE3_STARTING_USDT
+    for event in account_events:
+        ts_event = cast(int, event["ts_event"])
+        ending = _account_event_total(event)
+        if ts_event in funding_by_ts and event.get("reported") is True:
+            delta = ending - prior
+            reported_deltas.setdefault(ts_event, []).append(delta)
+        prior = ending
     timeline: list[dict[str, object]] = []
     total = Decimal(0)
-    for ts_event in sorted(events_by_ts):
-        states = events_by_ts[ts_event]
-        funding_delta = Decimal(0)
-        funding_account_event_count = 0
-        for state in states:
-            ending = _account_event_total(state)
-            if ts_event in funding_by_ts and state.get("reported") is True:
-                funding_delta += ending - prior
-                funding_account_event_count += 1
-            prior = ending
-        if ts_event not in funding_by_ts:
-            continue
-        if funding_account_event_count > len(funding_by_ts[ts_event]):
-            raise Stage3MomentumError(
-                "native funding produced more account events than rate updates"
+    for ts_event, native_events in sorted(funding_by_ts.items()):
+        reported = reported_deltas.get(ts_event, [])
+        exposed = [
+            event
+            for event in native_events
+            if _instrument_has_position_at(
+                cast(str, event["instrument_id"]), ts_event, positions
             )
+        ]
+        nonzero = [delta for delta in reported if delta != 0]
+        if len(reported) == len(exposed):
+            deltas = reported
+        elif len(nonzero) == len(exposed):
+            deltas = nonzero
+        elif reported:
+            raise Stage3MomentumError(
+                "native funding account events cannot be attributed by instrument"
+            )
+        else:
+            deltas = []
+        by_instrument = (
+            {
+                cast(str, event["instrument_id"]): delta
+                for event, delta in zip(exposed, deltas, strict=True)
+            }
+            if deltas
+            else {}
+        )
+        enriched: list[dict[str, object]] = []
+        for event in native_events:
+            instrument_id = cast(str, event["instrument_id"])
+            enriched.append(
+                {
+                    **event,
+                    "account_delta": str(by_instrument.get(instrument_id, Decimal(0))),
+                }
+            )
+        funding_delta = sum(by_instrument.values(), Decimal(0))
         total += funding_delta
         timeline.append(
             {
                 "account_delta": str(funding_delta),
-                "events": funding_by_ts[ts_event],
-                "native_account_event_count": funding_account_event_count,
+                "events": enriched,
+                "native_account_event_count": len(deltas),
                 "ts_event": ts_event,
             }
         )
-    for ts_event in sorted(set(funding_by_ts).difference(events_by_ts)):
-        timeline.append(
-            {
-                "account_delta": "0",
-                "events": funding_by_ts[ts_event],
-                "native_account_event_count": 0,
-                "ts_event": ts_event,
-            }
-        )
-    timeline.sort(key=lambda item: cast(int, item["ts_event"]))
     return {
         "derivation": (
-            "Nautilus reported account-state deltas at native funding timestamps"
+            "Nautilus reported per-instrument account-state deltas at native "
+            "funding timestamps"
         ),
         "events": timeline,
         "total_funding": str(total),
     }
+
+
+def _instrument_has_position_at(
+    instrument_id: str,
+    ts_event: int,
+    positions: Sequence[Mapping[str, object]],
+) -> bool:
+    return any(
+        position.get("instrument_id") == instrument_id
+        and isinstance(position.get("ts_opened"), int)
+        and cast(int, position["ts_opened"]) <= ts_event
+        and (
+            position.get("ts_closed") is None
+            or (
+                isinstance(position.get("ts_closed"), int)
+                and ts_event < cast(int, position["ts_closed"])
+            )
+        )
+        for position in positions
+    )
 
 
 def _latest_marks(

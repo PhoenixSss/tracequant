@@ -94,6 +94,7 @@ src/tracequant/
       stage1_btcusdt.py
       stage1_backtest.py
       stage2_btceth.py
+      stage3_evaluation.py
       stage3_model.py
       stage3_momentum.py
       strategies/
@@ -119,7 +120,10 @@ not a generic adapter, trading domain, or import-time runtime wrapper.
 fixed-parameter Stage 3 traditional momentum Strategy, and the thin Stage 3
 LightGBM signal Strategy. The adjacent `integrations/nautilus/stage3_momentum.py`
 and `integrations/nautilus/stage3_model.py` modules own their accepted-catalog
-offline base-run entries and immutable fact outputs. The model Strategy reuses
+offline base-run entries and immutable fact outputs. The finite
+`integrations/nautilus/stage3_evaluation.py` use case composes those boundaries
+into the fixed expanding-window matrix and accounting-only replay; it is not a
+generic workflow engine or strategy adapter. The model Strategy reuses
 the momentum capability's Nautilus order, reversal, fee, funding, account, and
 terminal-state path; it adds no model gateway or parallel trading state.
 `tracequant.research` owns

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_DOWN, Decimal
 from typing import Final, Literal, cast
@@ -40,6 +40,7 @@ from tracequant.source_data.stage2_btceth import (
     stage2_bar_type_str,
 )
 
+MOMENTUM_INPUT_FEATURE: Final = "ret_24h"
 MOMENTUM_LOOKBACK_HOURS: Final = 24
 STAGE3_BAR_OPEN_TRADE_ID_PREFIX: Final = "S3-BAR-OPEN-"
 
@@ -75,9 +76,10 @@ class Stage3MomentumParameters:
     target_notional_usdt: Decimal = MOMENTUM_TARGET_NOTIONAL_USDT
     maker_fee: Decimal = BASE_MAKER_FEE
     taker_fee: Decimal = BASE_TAKER_FEE
+    accounting_only_replay: bool = False
 
     def validate(self) -> None:
-        if FEATURE_NAMES[_RET_24H_INDEX] != "ret_24h":
+        if FEATURE_NAMES[_RET_24H_INDEX] != MOMENTUM_INPUT_FEATURE:
             raise Stage3MomentumError(
                 "Stage 3 feature order no longer matches momentum"
             )
@@ -89,7 +91,17 @@ class Stage3MomentumParameters:
             raise Stage3MomentumError("momentum threshold is not the frozen 0.5%")
         if self.target_notional_usdt != MOMENTUM_TARGET_NOTIONAL_USDT:
             raise Stage3MomentumError("target notional is not the frozen 10000 USDT")
-        if self.maker_fee != BASE_MAKER_FEE or self.taker_fee != BASE_TAKER_FEE:
+        approved_fees = {
+            (Decimal(0), Decimal(0)),
+            (BASE_MAKER_FEE, BASE_TAKER_FEE),
+            (BASE_MAKER_FEE * 2, BASE_TAKER_FEE * 2),
+        }
+        if self.accounting_only_replay:
+            if (self.maker_fee, self.taker_fee) not in approved_fees:
+                raise Stage3MomentumError(
+                    "replay fees are not an approved accounting-only scenario"
+                )
+        elif self.maker_fee != BASE_MAKER_FEE or self.taker_fee != BASE_TAKER_FEE:
             raise Stage3MomentumError("momentum fees do not match the frozen base fees")
         if self.evaluation_end_ns <= self.evaluation_start_ns:
             raise Stage3MomentumError("momentum evaluation window is inverted")
@@ -196,6 +208,7 @@ class Stage3MomentumStrategy(Strategy):
         )
         self.parameters = parameters
         self.decisions: list[dict[str, object]] = []
+        self.equity_curve: list[dict[str, object]] = []
         self.fatal_error: str | None = None
         self._instrument_ids = {
             value: InstrumentId.from_str(value) for value in parameters.instrument_ids
@@ -395,6 +408,7 @@ class Stage3MomentumStrategy(Strategy):
             signal=signal,
             target=target,
         )
+        self._record_equity(decision_ts)
 
     def on_stop(self) -> None:
         for native_id in self._instrument_ids.values():
@@ -494,6 +508,70 @@ class Stage3MomentumStrategy(Strategy):
         record["reason"] = "awaiting_b1"
         self._pending[instrument_id] = record
         self.decisions.append(record)
+
+    def _record_equity(self, decision_ts: int) -> None:
+        venue = next(iter(self._instrument_ids.values())).venue
+        account = self.cache.account_for_venue(venue)
+        if account is None:
+            raise Stage3MomentumError("Nautilus account is missing at decision time")
+        currency = getattr(account, "base_currency", None)
+        if currency is None:
+            raise Stage3MomentumError("Nautilus account base currency is missing")
+        balance = _native_decimal(
+            account.balance_total(currency),
+            label="Nautilus account balance",
+        )
+        unrealized = Decimal(0)
+        gross_exposure = Decimal(0)
+        positions: list[dict[str, object]] = []
+        for position in sorted(
+            self.cache.positions_open(),
+            key=lambda item: str(getattr(item, "instrument_id")),
+        ):
+            native_id = getattr(position, "instrument_id")
+            instrument_id = str(native_id)
+            if instrument_id not in self._instrument_ids:
+                raise Stage3MomentumError(
+                    "Nautilus equity contains a position outside Stage 3"
+                )
+            mark_state = self.cache.mark_price(native_id)
+            if mark_state is None:
+                raise Stage3MomentumError("Nautilus mark is missing at decision time")
+            mark = getattr(mark_state, "value", mark_state)
+            quantity = _signed_position_quantity(position)
+            position_unrealized = _native_decimal(
+                getattr(position, "unrealized_pnl")(mark),
+                label="Nautilus unrealized PnL",
+            )
+            mark_value = Decimal(str(mark))
+            unrealized += position_unrealized
+            gross_exposure += abs(quantity * mark_value)
+            positions.append(
+                {
+                    "instrument_id": instrument_id,
+                    "mark": str(mark),
+                    "quantity": str(quantity),
+                    "unrealized_pnl": str(position_unrealized),
+                }
+            )
+        snapshot: dict[str, object] = {
+            "balance_total": str(balance),
+            "gross_exposure": str(gross_exposure),
+            "positions": positions,
+            "total": str(balance + unrealized),
+            "ts_event": decision_ts,
+            "unrealized_pnl": str(unrealized),
+            "valuation_source": "Nautilus account and Position.unrealized_pnl(mark)",
+        }
+        last_ts = (
+            cast(int, self.equity_curve[-1]["ts_event"]) if self.equity_curve else None
+        )
+        if last_ts is not None and last_ts > decision_ts:
+            raise Stage3MomentumError("Nautilus equity curve is not chronological")
+        if last_ts == decision_ts:
+            self.equity_curve[-1] = snapshot
+        else:
+            self.equity_curve.append(snapshot)
 
     def _execute_pending(
         self,
@@ -745,6 +823,164 @@ class Stage3MomentumStrategy(Strategy):
         return self._event_sequence
 
 
+_MODEL_DECISION_FIELDS: Final = (
+    "artifact_id",
+    "base_round_trip_cost_threshold",
+    "decision_ts",
+    "feature_schema_digest",
+    "instrument_id",
+    "ordered_feature_digest",
+    "prediction_id",
+    "score",
+    "target_qty",
+    "target_state",
+)
+
+
+class Stage3DecisionReplayStrategy(Stage3MomentumStrategy):
+    """Finite consumer for frozen Stage 3 target decisions.
+
+    This Strategy deliberately does not build features or invoke a model.  It
+    reuses only the accepted execution state machine while fee and funding
+    inputs are varied by the accounting-only evaluation runner.
+    """
+
+    def __new__(
+        cls,
+        parameters: Stage3MomentumParameters,
+        *,
+        frozen_decisions: Sequence[Mapping[str, object]],
+    ) -> Stage3DecisionReplayStrategy:
+        return super().__new__(cls)
+
+    def __init__(
+        self,
+        parameters: Stage3MomentumParameters,
+        *,
+        frozen_decisions: Sequence[Mapping[str, object]],
+    ) -> None:
+        if not parameters.accounting_only_replay:
+            raise Stage3MomentumError(
+                "decision replay requires the accounting-only replay boundary"
+            )
+        source: dict[tuple[str, int], dict[str, object]] = {}
+        for raw in frozen_decisions:
+            decision = dict(raw)
+            instrument_id = decision.get("instrument_id")
+            decision_ts = decision.get("decision_ts")
+            if (
+                not isinstance(instrument_id, str)
+                or instrument_id not in parameters.instrument_ids
+                or isinstance(decision_ts, bool)
+                or not isinstance(decision_ts, int)
+                or not (
+                    parameters.evaluation_start_ns
+                    <= decision_ts
+                    < parameters.evaluation_end_ns
+                )
+            ):
+                raise Stage3MomentumError("frozen replay decision identity is invalid")
+            key = (instrument_id, decision_ts)
+            if key in source:
+                raise Stage3MomentumError(
+                    "frozen replay decision identity is duplicated"
+                )
+            source[key] = decision
+        if not source:
+            raise Stage3MomentumError("frozen replay decision sequence is empty")
+        self._replay_source = source
+        self._replayed: set[tuple[str, int]] = set()
+        super().__init__(parameters)
+
+    def on_mark_price(self, event: MarkPriceUpdate) -> None:
+        # Mark events still reach Nautilus accounting.  The replay consumer has
+        # no feature state and therefore intentionally ignores the callback.
+        return None
+
+    def on_funding_rate(self, event: FundingRateUpdate) -> None:
+        # Funding is processed by the engine/account; it is not a signal input
+        # during accounting-only replay.
+        return None
+
+    def _handle_bar(self, bar: Bar) -> None:
+        instrument_id = str(bar.bar_type.instrument_id)
+        if bar.bar_type != self._bar_types.get(instrument_id):
+            raise Stage3MomentumError("replay bar is outside the Stage 3 contract")
+        decision_ts = int(bar.ts_event)
+        if not (
+            self.parameters.evaluation_start_ns
+            <= decision_ts
+            < self.parameters.evaluation_end_ns
+        ):
+            return
+        key = (instrument_id, decision_ts)
+        source = self._replay_source.get(key)
+        if source is None:
+            raise Stage3MomentumError("frozen replay decision is missing")
+        if key in self._replayed:
+            raise Stage3MomentumError("frozen replay decision was consumed twice")
+        if source.get("feature_schema_digest") != FEATURE_SCHEMA_DIGEST:
+            raise Stage3MomentumError("frozen replay feature identity has drifted")
+        if source.get("close") != str(bar.close):
+            raise Stage3MomentumError("frozen replay close input has drifted")
+        signal = source.get("signal")
+        if signal not in {"long", "flat", "short"}:
+            raise Stage3MomentumError("frozen replay target state is invalid")
+        target_raw = source.get("target_qty")
+        if not isinstance(target_raw, str):
+            raise Stage3MomentumError("frozen replay target quantity is invalid")
+        try:
+            target = Decimal(target_raw)
+        except ArithmeticError as exc:
+            raise Stage3MomentumError(
+                "frozen replay target quantity is invalid"
+            ) from exc
+        if not target.is_finite():
+            raise Stage3MomentumError("frozen replay target quantity is invalid")
+
+        if "ret_24h" in source:
+            return_raw = source["ret_24h"]
+            if not isinstance(return_raw, str):
+                raise Stage3MomentumError("frozen momentum replay input is invalid")
+            try:
+                replay_return = Decimal(return_raw)
+            except ArithmeticError as exc:
+                raise Stage3MomentumError(
+                    "frozen momentum replay input is invalid"
+                ) from exc
+            if not replay_return.is_finite():
+                raise Stage3MomentumError("frozen momentum replay input is invalid")
+            self._queue_decision(
+                instrument_id=instrument_id,
+                decision_ts=decision_ts,
+                close=Decimal(str(bar.close)),
+                ret_24h=float(replay_return),
+                signal=signal,
+                target=target,
+            )
+        else:
+            fields = {name: source.get(name) for name in _MODEL_DECISION_FIELDS}
+            if any(value is None for value in fields.values()):
+                raise Stage3MomentumError("frozen model replay identity is incomplete")
+            self._queue_decision(
+                instrument_id=instrument_id,
+                decision_ts=decision_ts,
+                close=Decimal(str(bar.close)),
+                ret_24h=None,
+                signal=signal,
+                target=target,
+                decision_fields=fields,
+            )
+        self._record_equity(decision_ts)
+        if self.decisions[-1]["decision_id"] != source.get("decision_id"):
+            raise Stage3MomentumError("frozen replay decision digest has drifted")
+        self._replayed.add(key)
+
+    def require_complete_replay(self) -> None:
+        if self._replayed != set(self._replay_source):
+            raise Stage3MomentumError("frozen replay decision sequence is incomplete")
+
+
 def _signed_position_quantity(position: object) -> Decimal:
     quantity = cast(Quantity, getattr(position, "quantity")).as_decimal()
     if getattr(position, "is_short"):
@@ -752,6 +988,16 @@ def _signed_position_quantity(position: object) -> Decimal:
     if getattr(position, "is_long"):
         return quantity
     raise Stage3MomentumError("open position has unknown side")
+
+
+def _native_decimal(value: object, *, label: str) -> Decimal:
+    as_decimal = getattr(value, "as_decimal", None)
+    if not callable(as_decimal):
+        raise Stage3MomentumError(f"{label} is not decimal-valued")
+    result = cast(Decimal, as_decimal())
+    if not result.is_finite():
+        raise Stage3MomentumError(f"{label} is not finite")
+    return result
 
 
 def _instrument_quantity(instrument: CryptoPerpetual, absolute: Decimal) -> Quantity:

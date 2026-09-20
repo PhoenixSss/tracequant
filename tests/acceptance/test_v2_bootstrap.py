@@ -216,6 +216,7 @@ def test_candidate_tree_matches_the_approved_product_and_lck_layout() -> None:
         Path("src/tracequant/integrations/nautilus/stage2_artifact.py"),
         Path("src/tracequant/integrations/nautilus/stage2_btceth.py"),
         Path("src/tracequant/integrations/nautilus/stage2_source_artifact.py"),
+        Path("src/tracequant/integrations/nautilus/stage3_evaluation.py"),
         Path("src/tracequant/integrations/nautilus/stage3_model.py"),
         Path("src/tracequant/integrations/nautilus/stage3_momentum.py"),
         Path("src/tracequant/integrations/nautilus/strategies/__init__.py"),
