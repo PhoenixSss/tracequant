@@ -303,7 +303,11 @@ def _build_acceptance_record(
     expected_provenance_kind: str,
     rebuild_contract_digest: str,
 ) -> dict[str, object]:
-    manifest = evaluation.manifest
+    manifest = _read_json_object(
+        evaluation.partition / "manifest.json", "evaluation manifest"
+    )
+    if manifest != evaluation.manifest:
+        raise Stage3OosError("evaluation manifest conflicts with completed evaluation")
     if evaluation.partition.resolve(strict=False) != config.run_root.resolve(
         strict=False
     ) or evaluation.evidence_partition.resolve(
@@ -321,10 +325,39 @@ def _build_acceptance_record(
         raise Stage3OosError("evaluation manifest digest does not match")
     if manifest.get("result_digest") != evaluation.result_digest:
         raise Stage3OosError("evaluation result digest changed")
+    if manifest.get("result_digest") != _digest(
+        {
+            key: value
+            for key, value in manifest.items()
+            if key not in {"schema", "evidence", "result_digest", "manifest_digest"}
+        }
+    ):
+        raise Stage3OosError("evaluation result identity is inconsistent")
+    partition_identity = {
+        "acceptance_digest": config.acceptance_digest,
+        "dataset_id": config.dataset_id,
+        "runtime_identity": config.runtime_identity,
+    }
+    for root in (evaluation.partition, evaluation.evidence_partition):
+        if (
+            _read_json_object(
+                root / "stage3_partition_identity.json", "evaluation partition identity"
+            )
+            != partition_identity
+        ):
+            raise Stage3OosError("evaluation partition identity is inconsistent")
     folds = _mapping_list(manifest.get("folds"), "evaluation folds")
     expected_folds = [fold.payload() for fold in stage3_evaluation.expanding_folds()]
     if folds != expected_folds:
         raise Stage3OosError("evaluation fold matrix is incomplete")
+    if manifest.get("evidence") != {
+        "artifact_partitions": {
+            fold.fold_id: f"artifacts/{fold.fold_id}"
+            for fold in stage3_evaluation.expanding_folds()
+        },
+        "parameter_record": "training-parameters.json",
+    }:
+        raise Stage3OosError("evaluation evidence references are inconsistent")
     base = _mapping_list(manifest.get("base_runs"), "evaluation base runs")
     sensitivity = _mapping_list(
         manifest.get("sensitivity_runs"), "evaluation sensitivity runs"
@@ -460,16 +493,24 @@ def _compact_run_reference(
     ):
         raise Stage3OosError("evaluation run manifest digest does not match")
     comparison = {
-        "config_digest": reference.get("config_digest"),
-        "decision_digest": reference.get("decision_digest"),
-        "fee_provenance_digest": reference.get("fee_provenance_digest"),
-        "result_digest": reference.get("result_digest"),
-        "run_identity": reference.get("run_identity"),
-        "scenario_digest": reference.get("scenario_digest"),
-        "strategy_config_digest": reference.get("strategy_config_digest"),
+        key: value
+        for key, value in reference.items()
+        if key not in {"partition", "run_type", "artifact"}
     }
+    comparison.setdefault("prediction_digest", None)
+    comparison["schema"] = stage3_evaluation.STAGE3_EVALUATION_RUN_SCHEMA
+    _require_keys(
+        run_manifest,
+        {*comparison, "artifact", "manifest_digest"},
+        "evaluation run manifest",
+    )
     if any(run_manifest.get(key) != value for key, value in comparison.items()):
         raise Stage3OosError("evaluation run output conflicts with its summary")
+    _require_run_outputs(
+        evaluation.partition / relative_partition,
+        manifest=run_manifest,
+        reference=reference,
+    )
     artifact = reference.get("artifact")
     artifact_id: str | None = None
     if artifact is not None:
@@ -488,6 +529,7 @@ def _compact_run_reference(
         ),
         "fold_id": fold_id,
         "manifest_relative_filename": relative_manifest,
+        "nautilus_digest": _required_digest(reference, "nautilus_digest", "run"),
         "prediction_digest": prediction_digest,
         "result_digest": _required_digest(reference, "result_digest", "run"),
         "role": role,
@@ -500,6 +542,102 @@ def _compact_run_reference(
             reference, "strategy_config_digest", "run"
         ),
     }
+
+
+def _require_output_files(partition: Path, names: set[str]) -> None:
+    if (
+        partition.is_symlink()
+        or not partition.is_dir()
+        or {item.name for item in partition.iterdir()} != names
+    ):
+        raise Stage3OosError("evaluation output file set is incomplete or unexpected")
+
+
+def _require_run_outputs(
+    partition: Path,
+    *,
+    manifest: Mapping[str, object],
+    reference: Mapping[str, object],
+) -> None:
+    """Rehash the persisted reports, not the objects used by the earlier run."""
+    names = {
+        "account",
+        "associations",
+        "decisions",
+        "fills",
+        "funding",
+        "orders",
+        "positions",
+        "result",
+        "summary",
+        "terminal",
+    }
+    model = reference.get("strategy") == "lightgbm"
+    if model and reference.get("run_type") == "base":
+        names.update({"feature_references", "predictions"})
+    filenames = {f"{name.replace('_', '-')}.json" for name in names}
+    filenames.update({"manifest.json", "metrics.json", "fee-provenance.json"})
+    if model:
+        filenames.update({"artifact.json", "predictions.json"})
+    _require_output_files(partition, filenames)
+    reports = {
+        name: _read_output_json(
+            partition / f"{name.replace('_', '-')}.json", f"run {name} output"
+        )
+        for name in names
+    }
+    if _digest(reports) != manifest.get("nautilus_digest"):
+        raise Stage3OosError("run Nautilus output digest does not match")
+    metrics = _read_json_object(partition / "metrics.json", "run metrics")
+    if metrics != manifest.get("metrics"):
+        raise Stage3OosError("run metrics output conflicts with its manifest")
+    fees = _read_output_json(partition / "fee-provenance.json", "run fee provenance")
+    if fees != manifest.get("fee_provenance") or _digest(fees) != manifest.get(
+        "fee_provenance_digest"
+    ):
+        raise Stage3OosError("run fee provenance output conflicts with its manifest")
+    decisions = _mapping_list(reports["decisions"], "run decisions")
+    if stage3_evaluation._decision_digest(
+        decisions, cast(stage3_evaluation.StrategyName, reference["strategy"])
+    ) != manifest.get("decision_digest"):
+        raise Stage3OosError("run decision output digest does not match")
+    artifact_id: object = None
+    if model:
+        artifact = _read_json_object(partition / "artifact.json", "run artifact")
+        compact_artifact = _required_mapping(reference, "artifact", "run reference")
+        if artifact != manifest.get("artifact") or artifact != compact_artifact:
+            raise Stage3OosError("run artifact output conflicts with its summary")
+        artifact_id = artifact.get("artifact_id")
+        predictions = _read_output_json(
+            partition / "predictions.json", "run predictions"
+        )
+        if _digest(predictions) != manifest.get("prediction_digest"):
+            raise Stage3OosError("run prediction output digest does not match")
+    elif (
+        manifest.get("artifact") is not None
+        or manifest.get("prediction_digest") is not None
+    ):
+        raise Stage3OosError("momentum run contains model identity")
+    if _run_result_digest(
+        manifest, metrics=metrics, artifact_id=artifact_id
+    ) != manifest.get("result_digest"):
+        raise Stage3OosError("run result identity conflicts with its outputs")
+
+
+def _run_result_digest(
+    run: Mapping[str, object], *, metrics: Mapping[str, object], artifact_id: object
+) -> str:
+    return _digest(
+        {
+            "artifact_id": artifact_id,
+            "decision_digest": run.get("decision_digest"),
+            "metrics": stage3_evaluation._result_metrics(metrics),
+            "nautilus_digest": run.get("nautilus_digest"),
+            "prediction_digest": run.get("prediction_digest"),
+            "scenario_digest": run.get("scenario_digest"),
+            "strategy": run.get("strategy"),
+        }
+    )
 
 
 def _artifact_references(
@@ -536,10 +674,27 @@ def _artifact_references(
         provenance = _required_mapping(artifact, "provenance", "artifact manifest")
         training = _required_mapping(artifact, "training", "artifact manifest")
         model = _required_mapping(artifact, "model", "artifact manifest")
+        artifact_partition = (
+            evaluation.evidence_partition / Path(relative_filename).parent
+        )
+        _require_output_files(
+            artifact_partition,
+            {stage3_artifacts.MANIFEST_FILENAME, stage3_artifacts.MODEL_FILENAME},
+        )
+        model_bytes = _read_output_bytes(
+            artifact_partition / stage3_artifacts.MODEL_FILENAME,
+            "fold artifact model",
+        )
+        if hashlib.sha256(model_bytes).hexdigest() != model.get("checksum_sha256"):
+            raise Stage3OosError("fold artifact model checksum does not match")
         if artifact.get("stage2_input") != stage2_input:
             raise Stage3OosError("fold artifact Stage 2 identity has drifted")
         if provenance.get("kind") != expected_provenance_kind:
             raise Stage3OosError("fold artifact provenance kind is not approved")
+        if run_artifact.get("manifest_digest") != artifact.get("manifest_digest"):
+            raise Stage3OosError(
+                "fold artifact manifest conflicts with loaded artifact"
+            )
         result: dict[str, object] = {
             "artifact_id": _required_digest(artifact, "artifact_id", "artifact"),
             "compatibility_digest": _digest(
@@ -1132,6 +1287,7 @@ def _require_runs(
         "fee_provenance_digest",
         "fold_id",
         "manifest_relative_filename",
+        "nautilus_digest",
         "prediction_digest",
         "result_digest",
         "role",
@@ -1276,6 +1432,9 @@ def _require_metrics(
     if len(base) != len(expected_base) or len(sensitivity) != len(expected_sensitivity):
         raise Stage3OosError("metric summary matrix has duplicates or omissions")
     observed_base: set[tuple[str, str]] = set()
+    runs_by_key = {
+        (run["fold_id"], run["strategy"], run["scenario"]): run for run in runs
+    }
     for item in base:
         _require_keys(item, {"fold_id", "strategy", "summary"}, "base metrics")
         base_key = (
@@ -1288,6 +1447,7 @@ def _require_metrics(
         summary = _required_mapping(item, "summary", "base metrics")
         _require_metric_summary(summary)
         _require_metric_window(summary, fold_id=base_key[0])
+        _require_metric_result_binding(runs_by_key.get((*base_key, "base")), summary)
     observed_sensitivity: set[tuple[str, str, str]] = set()
     for item in sensitivity:
         _require_keys(
@@ -1306,9 +1466,21 @@ def _require_metrics(
         summary = _required_mapping(item, "summary", "sensitivity metrics")
         _require_metric_summary(summary)
         _require_metric_window(summary, fold_id=sensitivity_key[0])
+        _require_metric_result_binding(runs_by_key.get(sensitivity_key), summary)
     if observed_base != expected_base or observed_sensitivity != expected_sensitivity:
         raise Stage3OosError("metric summary matrix is incomplete")
     dispersion = _required_mapping(metrics, "fold_dispersion", "metric summaries")
+    expected_dispersion = stage3_evaluation._fold_dispersion(
+        [
+            (
+                cast(stage3_evaluation.StrategyName, item["strategy"]),
+                _required_mapping(item, "summary", "base metrics"),
+            )
+            for item in base
+        ]
+    )
+    if dispersion != expected_dispersion:
+        raise Stage3OosError("fold dispersion conflicts with base metrics")
     _require_keys(dispersion, set(_STRATEGIES), "fold dispersion")
     for strategy in _STRATEGIES:
         values = _required_mapping(dispersion, strategy, "fold dispersion")
@@ -1319,6 +1491,19 @@ def _require_metrics(
             _require_keys(value, {"max", "min", "range"}, "fold dispersion value")
             for number in value.values():
                 _require_number_text(number, "fold dispersion value")
+
+
+def _require_metric_result_binding(
+    run: Mapping[str, object] | None, metrics: Mapping[str, object]
+) -> None:
+    if run is None or _run_result_digest(
+        run,
+        metrics={**metrics, "fold_id": run["fold_id"]},
+        artifact_id=run.get("artifact_id"),
+    ) != run.get("result_digest"):
+        raise Stage3OosError(
+            "run result identity conflicts with its metric/scenario summary"
+        )
 
 
 def _require_metric_summary(summary: Mapping[str, object]) -> None:
@@ -1589,13 +1774,24 @@ def _is_digest(value: object) -> bool:
 
 
 def _read_json_object(path: Path, description: str) -> dict[str, object]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise Stage3OosError(f"{description} is missing or invalid") from exc
+    payload = _read_output_json(path, description)
     if not isinstance(payload, dict):
         raise Stage3OosError(f"{description} is not an object")
     return cast(dict[str, object], payload)
+
+
+def _read_output_bytes(path: Path, description: str) -> bytes:
+    try:
+        return stage3_artifacts._read_regular_unlinked_bytes(path, description)
+    except stage3_artifacts.Stage3ArtifactError as exc:
+        raise Stage3OosError(f"{description} is missing or invalid") from exc
+
+
+def _read_output_json(path: Path, description: str) -> object:
+    try:
+        return json.loads(_read_output_bytes(path, description))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise Stage3OosError(f"{description} is missing or invalid") from exc
 
 
 def _write_json_exclusive(path: Path, payload: Mapping[str, object]) -> None:

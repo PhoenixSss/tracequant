@@ -159,6 +159,25 @@ locked environment must produce the same stable digests. Cross-environment
 model checksums are compared only under the recorded compatibility identity and
 the approved prediction tolerances (`atol = 1e-9`, `rtol = 1e-6`).
 
+Before publication the command rereads the evaluation manifest, partition
+identities, training parameters, fold manifests and model bytes, and every
+required run output. It checks report contents and complete run references
+against the completed evaluation. Each result identity binds the compact
+metrics, scenario, decisions, predictions, artifact and a digest of the full
+Nautilus reports, so the tracked record can verify those bindings without
+embedding the reports. Missing, changed or conflicting outputs leave the
+previous tracked record untouched.
+
+The record with acceptance digest
+`f8df1359595ad1ba53ab3cf23f40c8c1b825ffae0023206abaff05d5afeedb4f`
+predates this output-verification repair and is retained unchanged as historical
+evidence. It fails the current contract validator and does not establish current
+Stage 3 acceptance. Review finding E1 remains pending: after LCK creates the
+clean repaired head, two full formal rebuilds must regenerate the record and
+provide both external evaluation manifests, artifact provenance/environment,
+and matching stable digests for fresh Independent Review. Fixture tests prove
+failure behavior and repeatability only; passing CI does not satisfy E1.
+
 ## LCK: an engineering capability within TraceQuant
 
 While building and maintaining TraceQuant, the project is developing the Local

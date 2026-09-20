@@ -213,6 +213,10 @@ class EvaluationRun:
     run_identity: str
     result_digest: str
 
+    @property
+    def nautilus_digest(self) -> str:
+        return _digest(_reports_payload(self.reports))
+
     def reference(self, *, root: Path) -> dict[str, object]:
         result: dict[str, object] = {
             "config_digest": _run_config_digest(
@@ -223,6 +227,7 @@ class EvaluationRun:
             "fee_provenance_digest": _digest(self.fee_provenance),
             "fold": self.fold.payload(),
             "metrics": self.metrics,
+            "nautilus_digest": self.nautilus_digest,
             "partition": self.partition.relative_to(root).as_posix(),
             "result_digest": self.result_digest,
             "run_type": ("base" if self.scenario.name == "base" else "sensitivity"),
@@ -235,15 +240,7 @@ class EvaluationRun:
             "sensitivity_information": self.information_status,
         }
         if self.artifact is not None:
-            result["artifact"] = {
-                key: self.artifact[key]
-                for key in (
-                    "artifact_id",
-                    "model_checksum",
-                    "training_parameter_digest",
-                    "training_parameter_revision",
-                )
-            }
+            result["artifact"] = dict(self.artifact)
             result["prediction_digest"] = self.prediction_digest
         return result
 
@@ -616,8 +613,8 @@ def _build_run(
             else None
         ),
         "decision_digest": decision_digest,
-        "metrics": metrics,
-        "nautilus": _reports_payload(reports),
+        "metrics": _result_metrics(metrics),
+        "nautilus_digest": _digest(_reports_payload(reports)),
         "prediction_digest": prediction_digest,
         "scenario_digest": scenario_digest,
         "strategy": strategy,
@@ -647,6 +644,20 @@ def _build_run(
         run_identity=run_identity,
         result_digest=result_digest,
     )
+
+
+def _result_metrics(metrics: Mapping[str, object]) -> dict[str, object]:
+    """Keep result metrics portable; terminal positions are bound by Nautilus."""
+    per_instrument = cast(Mapping[str, Mapping[str, object]], metrics["per_instrument"])
+    return {
+        **metrics,
+        "per_instrument": {
+            instrument: {
+                key: value for key, value in values.items() if key != "terminal"
+            }
+            for instrument, values in per_instrument.items()
+        },
+    }
 
 
 def _write_run_partition(run: EvaluationRun) -> None:
@@ -681,6 +692,7 @@ def _write_run_partition(run: EvaluationRun) -> None:
         "fee_provenance_digest": _digest(run.fee_provenance),
         "fold": run.fold.payload(),
         "metrics": run.metrics,
+        "nautilus_digest": run.nautilus_digest,
         "prediction_digest": run.prediction_digest,
         "result_digest": run.result_digest,
         "run_identity": run.run_identity,

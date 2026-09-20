@@ -227,6 +227,146 @@ def test_stage3_oos_rebuild_compares_both_strategies_from_one_catalog(
             repository_root=Path(stage3_oos.__file__).resolve().parents[4],
         )
 
+    for changed_field in ("scenario_digest", "nautilus_digest", "metric"):
+        conflicting = copy.deepcopy(first.acceptance_record)
+        changed_run = next(
+            run
+            for run in cast(list[dict[str, object]], conflicting["runs"])
+            if run["scenario"] == "zero_fee"
+        )
+        if changed_field == "metric":
+            metrics = cast(dict[str, object], conflicting["metrics"])
+            summaries = cast(list[dict[str, object]], metrics["sensitivity"])
+            changed_summary = next(
+                item
+                for item in summaries
+                if item["strategy"] == changed_run["strategy"]
+                and item["scenario"] == "zero_fee"
+            )
+            cast(dict[str, object], changed_summary["summary"])["total_pnl"] = "123.5"
+            metrics["summary_digest"] = stage3_oos._digest(
+                {
+                    key: value
+                    for key, value in metrics.items()
+                    if key != "summary_digest"
+                }
+            )
+        else:
+            changed_run[changed_field] = "0" * 64
+        conflicting["acceptance_digest"] = stage3_oos.stage3_acceptance_digest(
+            conflicting
+        )
+        with pytest.raises(
+            stage3_oos.Stage3OosError, match="result identity conflicts"
+        ):
+            stage3_oos._require_complete_stage3_acceptance_record(
+                conflicting,
+                allow_synthetic_fixture=True,
+                repository_root=Path(stage3_oos.__file__).resolve().parents[4],
+            )
+
+
+def test_stage3_oos_checks_persisted_outputs_before_replacing_acceptance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    catalog, stage2_record, template, artifact_lock = (
+        momentum_fixture._accepted_fixture(monkeypatch, tmp_path)
+    )
+    evaluation_fixture._install_real_fixture_matrix(monkeypatch)
+    config = feature_fixture._accepted_config(
+        template, catalog, tmp_path / "output", artifact_lock_path=artifact_lock
+    )
+    provenance = synthetic_fixture_provenance(created_at="2026-01-01T00:00:00Z")
+    completed = stage3_evaluation.run_stage3_evaluation(
+        config, acceptance_record_path=stage2_record, provenance=provenance
+    )
+    target = tmp_path / "acceptance.json"
+    original_record = b'{"previous_acceptance":true}\n'
+
+    def finished_evaluation(
+        *_args: object, **_kwargs: object
+    ) -> stage3_evaluation.Stage3EvaluationOutcome:
+        # Inject the completed output at the publication boundary. Exercise the
+        # same replacement writer as formal rebuilds, retaining fixture identity.
+        target.write_bytes(original_record)
+        return completed
+
+    monkeypatch.setattr(stage3_evaluation, "run_stage3_evaluation", finished_evaluation)
+    monkeypatch.setattr(
+        stage3_oos, "_write_json_exclusive", stage3_oos._write_json_replacing
+    )
+
+    def rebuild() -> None:
+        stage3_oos._rebuild_stage3_oos_fixture(
+            config,
+            stage2_acceptance_record_path=stage2_record,
+            stage3_acceptance_record_path=target,
+            provenance=provenance,
+        )
+
+    # Prove this publication path succeeds when every persisted output is intact.
+    rebuild()
+    assert target.read_bytes() != original_record
+    target.unlink()
+
+    paths = [
+        config.run_root / "manifest.json",
+        config.run_root / "stage3_partition_identity.json",
+        config.evidence_root / "stage3_partition_identity.json",
+        config.evidence_root / "training-parameters.json",
+    ]
+    first_fold = stage3_evaluation.expanding_folds()[0].fold_id
+    paths.extend(sorted((config.evidence_root / "artifacts" / first_fold).iterdir()))
+    paths.extend(sorted((config.run_root / "base" / first_fold / "lightgbm").iterdir()))
+    paths.extend(
+        sorted((config.run_root / "sensitivity" / "lightgbm" / "zero_fee").iterdir())
+    )
+    for path in paths:
+        original = path.read_bytes()
+        for missing in (True, False):
+            if missing:
+                path.unlink()
+            elif path.suffix == ".json":
+                path.write_text('{"corrupt":true}\n', encoding="utf-8")
+            else:
+                path.write_bytes(b"corrupted model\n")
+            try:
+                with pytest.raises(stage3_oos.Stage3OosError):
+                    rebuild()
+                assert target.read_bytes() == original_record, path
+            finally:
+                path.write_bytes(original)
+                target.unlink(missing_ok=True)
+
+    manifest_path = config.run_root / "base" / first_fold / "lightgbm" / "manifest.json"
+    original = manifest_path.read_bytes()
+    for field in (
+        "artifact",
+        "prediction_digest",
+        "metrics",
+        "fold",
+        "scenario",
+        "strategy",
+        "strategy_config",
+        "fee_provenance",
+        "nautilus_digest",
+    ):
+        payload = json.loads(original)
+        payload[field] = "0" * 64
+        payload["manifest_digest"] = stage3_oos._digest(
+            {key: value for key, value in payload.items() if key != "manifest_digest"}
+        )
+        manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+        try:
+            with pytest.raises(
+                stage3_oos.Stage3OosError, match="conflicts with its summary"
+            ):
+                rebuild()
+            assert target.read_bytes() == original_record
+        finally:
+            manifest_path.write_bytes(original)
+            target.unlink(missing_ok=True)
+
 
 def test_stage3_oos_rejects_a_nonempty_acceptance_target_before_evaluation(
     monkeypatch: pytest.MonkeyPatch,
@@ -481,9 +621,23 @@ def _directory_digest(root: Path) -> str:
     return digest.hexdigest()
 
 
-def test_committed_stage3_acceptance_record_matches_current_contract() -> None:
+def test_committed_stage3_acceptance_record_is_current_or_rejected_as_historical() -> (
+    None
+):
     record_path = (
         Path(__file__).resolve().parents[2] / stage3_oos.STAGE3_ACCEPTANCE_RELATIVE_PATH
     )
     record = json.loads(record_path.read_text(encoding="utf-8"))
+    # Review E1 requires two formal rebuilds from the repaired clean head. That
+    # head does not exist until LCK commits this repair. Preserve this one known
+    # historical record unchanged; never relabel it as current acceptance.
+    if record["acceptance_digest"] == (
+        "f8df1359595ad1ba53ab3cf23f40c8c1b825ffae0023206abaff05d5afeedb4f"
+    ):
+        assert (
+            stage3_oos.stage3_acceptance_digest(record) == record["acceptance_digest"]
+        )
+        with pytest.raises(stage3_oos.Stage3OosError, match="rebuild contract"):
+            stage3_oos.require_complete_stage3_acceptance_record(record)
+        return
     stage3_oos.require_complete_stage3_acceptance_record(record)
