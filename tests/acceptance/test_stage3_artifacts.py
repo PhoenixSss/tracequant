@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import tomllib
@@ -493,12 +494,55 @@ def test_parameter_record_is_closed_frozen_and_alias_free(tmp_path: Path) -> Non
         )
 
 
-@pytest.mark.parametrize("key", ["is_enable_sparse", "enable_bundle"])
+def test_lightgbm_4_7_cpu_gbdt_effective_defaults_are_expanded() -> None:
+    parameters = default_effective_parameters()
+    assert {
+        key: parameters[key]
+        for key in (
+            "histogram_pool_size",
+            "max_bin_by_feature",
+            "monotone_constraints",
+            "feature_contri",
+            "forcedsplits_filename",
+            "cegb_tradeoff",
+            "cegb_penalty_split",
+            "cegb_penalty_feature_lazy",
+            "cegb_penalty_feature_coupled",
+            "interaction_constraints",
+            "forcedbins_filename",
+            "early_stopping_round",
+            "use_quantized_grad",
+        )
+    } == {
+        "histogram_pool_size": -1.0,
+        "max_bin_by_feature": (255,) * len(FEATURE_NAMES),
+        "monotone_constraints": (0,) * len(FEATURE_NAMES),
+        "feature_contri": (1.0,) * len(FEATURE_NAMES),
+        "forcedsplits_filename": "",
+        "cegb_tradeoff": 1.0,
+        "cegb_penalty_split": 0.0,
+        "cegb_penalty_feature_lazy": (0.0,) * len(FEATURE_NAMES),
+        "cegb_penalty_feature_coupled": (0.0,) * len(FEATURE_NAMES),
+        "interaction_constraints": "",
+        "forcedbins_filename": "",
+        "early_stopping_round": 0,
+        "use_quantized_grad": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "is_enable_sparse",
+        "enable_bundle",
+        "max_bin_by_feature",
+        "use_quantized_grad",
+    ],
+)
 def test_dataset_construction_defaults_are_explicit_and_required(
     tmp_path: Path, key: str
 ) -> None:
     parameters = default_effective_parameters()
-    assert parameters[key] is False
     parameters.pop(key)
 
     with pytest.raises(Stage3ArtifactError, match="missing, unknown, or alias"):
@@ -638,6 +682,56 @@ def test_loader_rejects_manifest_model_parameter_and_runtime_drift(
             partition,
             parameter_record_path=parameter_path,
         )
+
+
+@pytest.mark.parametrize("member_name", [MANIFEST_FILENAME, MODEL_FILENAME])
+@pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+def test_loader_rejects_linked_artifact_members(
+    tmp_path: Path,
+    member_name: str,
+    link_kind: str,
+) -> None:
+    partition, parameter_path, _ = _train(tmp_path / f"{member_name}-{link_kind}")
+    member_path = partition / member_name
+    link_target = tmp_path / f"{member_name}-{link_kind}-target"
+    link_target.write_bytes(member_path.read_bytes())
+    member_path.unlink()
+    if link_kind == "symlink":
+        member_path.symlink_to(link_target)
+    else:
+        member_path.hardlink_to(link_target)
+
+    with pytest.raises(Stage3ArtifactError, match="unlinked regular file"):
+        _load_fixture(partition, parameter_record_path=parameter_path)
+
+
+def test_loader_parses_the_same_model_bytes_it_hashes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    partition, parameter_path, manifest = _train(tmp_path)
+    model_path = partition / MODEL_FILENAME
+    lightgbm = artifacts._load_lightgbm()
+    original_booster = lightgbm.Booster
+    captured: dict[str, str] = {}
+
+    def replace_path_before_parse(*args: object, **kwargs: object) -> object:
+        assert not args
+        assert "model_file" not in kwargs
+        model_text = cast(str, kwargs["model_str"])
+        captured["checksum"] = hashlib.sha256(model_text.encode("utf-8")).hexdigest()
+        model_path.write_text("replacement after immutable read\n", encoding="utf-8")
+        return original_booster(model_str=model_text)
+
+    monkeypatch.setattr(lightgbm, "Booster", replace_path_before_parse)
+    predictor = _load_fixture(partition, parameter_record_path=parameter_path)
+
+    expected_checksum = cast(dict[str, object], manifest["model"])["checksum_sha256"]
+    assert captured["checksum"] == expected_checksum
+    assert predictor._booster.num_feature() == len(FEATURE_NAMES)
+    assert (
+        model_path.read_text(encoding="utf-8") == "replacement after immutable read\n"
+    )
 
 
 def test_loader_reports_provenance_but_rejects_stage2_drift(tmp_path: Path) -> None:

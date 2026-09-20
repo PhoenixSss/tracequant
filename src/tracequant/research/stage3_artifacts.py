@@ -8,6 +8,7 @@ import json
 import math
 import os
 import platform
+import stat
 import subprocess
 import sysconfig
 from collections.abc import Mapping, Sequence
@@ -93,9 +94,20 @@ PARAMETER_KEYS: Final = (
     "path_smooth",
     "extra_trees",
     "linear_tree",
+    "histogram_pool_size",
     "max_bin",
+    "max_bin_by_feature",
     "min_data_in_bin",
     "bin_construct_sample_cnt",
+    "monotone_constraints",
+    "feature_contri",
+    "forcedsplits_filename",
+    "cegb_tradeoff",
+    "cegb_penalty_split",
+    "cegb_penalty_feature_lazy",
+    "cegb_penalty_feature_coupled",
+    "interaction_constraints",
+    "forcedbins_filename",
     "boost_from_average",
     "reg_sqrt",
     "use_missing",
@@ -103,6 +115,8 @@ PARAMETER_KEYS: Final = (
     "feature_pre_filter",
     "is_enable_sparse",
     "enable_bundle",
+    "early_stopping_round",
+    "use_quantized_grad",
     "seed",
     "bagging_seed",
     "feature_fraction_seed",
@@ -127,7 +141,7 @@ ARTIFACT_IDENTITY_FIELDS: Final = (
     "model",
 )
 
-ParameterValue = bool | int | float | str
+ParameterValue = bool | int | float | str | tuple[int, ...] | tuple[float, ...]
 WindowRole = Literal["development", "validation", "final_test"]
 ProvenanceKind = Literal["formal_git", "synthetic_fixture"]
 CodeInventoryPath = tuple[str, Path, tuple[str, ...]]
@@ -232,9 +246,20 @@ def default_effective_parameters() -> dict[str, ParameterValue]:
         "path_smooth": 0.0,
         "extra_trees": False,
         "linear_tree": False,
+        "histogram_pool_size": -1.0,
         "max_bin": 255,
+        "max_bin_by_feature": (255,) * len(FEATURE_NAMES),
         "min_data_in_bin": 3,
         "bin_construct_sample_cnt": 200_000,
+        "monotone_constraints": (0,) * len(FEATURE_NAMES),
+        "feature_contri": (1.0,) * len(FEATURE_NAMES),
+        "forcedsplits_filename": "",
+        "cegb_tradeoff": 1.0,
+        "cegb_penalty_split": 0.0,
+        "cegb_penalty_feature_lazy": (0.0,) * len(FEATURE_NAMES),
+        "cegb_penalty_feature_coupled": (0.0,) * len(FEATURE_NAMES),
+        "interaction_constraints": "",
+        "forcedbins_filename": "",
         "boost_from_average": True,
         "reg_sqrt": False,
         "use_missing": False,
@@ -242,6 +267,8 @@ def default_effective_parameters() -> dict[str, ParameterValue]:
         "feature_pre_filter": True,
         "is_enable_sparse": False,
         "enable_bundle": False,
+        "early_stopping_round": 0,
+        "use_quantized_grad": False,
         "seed": 362,
         "bagging_seed": 362,
         "feature_fraction_seed": 362,
@@ -591,7 +618,9 @@ def _load_lightgbm_artifact(
         or {item.name for item in partition.iterdir()} != expected_files
     ):
         raise Stage3ArtifactError("artifact partition contents do not match the schema")
-    manifest = _read_json_object(partition / MANIFEST_FILENAME, "artifact manifest")
+    manifest = _read_regular_json_object(
+        partition / MANIFEST_FILENAME, "artifact manifest"
+    )
     _validate_manifest_envelope(manifest)
     provenance = _required_mapping(manifest, "provenance", "artifact manifest")
     if provenance["kind"] != expected_provenance_kind:
@@ -604,10 +633,13 @@ def _load_lightgbm_artifact(
 
     frozen = load_training_parameters(parameter_record_path)
     training = _required_mapping(manifest, "training", "artifact manifest")
+    manifest_parameters = _validate_training_parameters(
+        cast(Mapping[str, object], training["parameters"])
+    )
     if (
         training["training_parameter_revision"] != frozen.revision
         or training["training_parameter_digest"] != frozen.digest
-        or training["parameters"] != frozen.parameter_map()
+        or manifest_parameters != frozen.parameter_map()
         or training["parameter_record_schema"] != PARAMETER_RECORD_SCHEMA
     ):
         raise Stage3ArtifactError("artifact parameters do not match the frozen record")
@@ -630,10 +662,12 @@ def _load_lightgbm_artifact(
 
     model = _required_mapping(manifest, "model", "artifact manifest")
     model_path = partition / MODEL_FILENAME
-    if model["checksum_sha256"] != sha256_file(model_path):
+    model_bytes = _read_regular_unlinked_bytes(model_path, "artifact model")
+    if model["checksum_sha256"] != hashlib.sha256(model_bytes).hexdigest():
         raise Stage3ArtifactError("artifact model checksum does not match")
     try:
-        booster = lightgbm.Booster(model_file=str(model_path))
+        model_text = model_bytes.decode("utf-8")
+        booster = lightgbm.Booster(model_str=model_text)
     except Exception as exc:
         raise Stage3ArtifactError("artifact model file cannot be loaded") from exc
     if tuple(booster.feature_name()) != FEATURE_NAMES:
@@ -666,6 +700,13 @@ def _validate_training_parameters(
     for key, expected_string in expected_strings.items():
         if normalized[key] != expected_string:
             raise Stage3ArtifactError(f"training parameter {key} is unsupported")
+    for key in (
+        "forcedsplits_filename",
+        "interaction_constraints",
+        "forcedbins_filename",
+    ):
+        if normalized[key] != "":
+            raise Stage3ArtifactError(f"training parameter {key} is unsupported")
     for key, expected_boolean in {
         "boost_from_average": True,
         "reg_sqrt": False,
@@ -674,6 +715,7 @@ def _validate_training_parameters(
         "feature_pre_filter": True,
         "is_enable_sparse": False,
         "enable_bundle": False,
+        "use_quantized_grad": False,
         "extra_trees": False,
         "linear_tree": False,
         "deterministic": True,
@@ -687,6 +729,7 @@ def _validate_training_parameters(
         "max_depth": (-1, None),
         "min_data_in_leaf": (1, None),
         "bagging_freq": (0, None),
+        "early_stopping_round": (0, 0),
         "max_bin": (2, None),
         "min_data_in_bin": (1, None),
         "bin_construct_sample_cnt": (1, None),
@@ -706,6 +749,33 @@ def _validate_training_parameters(
         raise Stage3ArtifactError("training parameter num_threads must be one")
     if normalized["verbosity"] != -1 or type(normalized["verbosity"]) is not int:
         raise Stage3ArtifactError("training parameter verbosity is unsupported")
+    for key, expected_value in {
+        "histogram_pool_size": -1.0,
+        "cegb_tradeoff": 1.0,
+        "cegb_penalty_split": 0.0,
+    }.items():
+        if normalized[key] != expected_value or type(normalized[key]) is not float:
+            raise Stage3ArtifactError(f"training parameter {key} is unsupported")
+    expected_vectors: dict[str, tuple[int, ...] | tuple[float, ...]] = {
+        "max_bin_by_feature": (255,) * len(FEATURE_NAMES),
+        "monotone_constraints": (0,) * len(FEATURE_NAMES),
+        "feature_contri": (1.0,) * len(FEATURE_NAMES),
+        "cegb_penalty_feature_lazy": (0.0,) * len(FEATURE_NAMES),
+        "cegb_penalty_feature_coupled": (0.0,) * len(FEATURE_NAMES),
+    }
+    for key, expected_vector in expected_vectors.items():
+        value = normalized[key]
+        if (
+            not isinstance(value, (list, tuple))
+            or len(value) != len(expected_vector)
+            or any(
+                type(item) is not type(expected)
+                for item, expected in zip(value, expected_vector)
+            )
+            or tuple(value) != expected_vector
+        ):
+            raise Stage3ArtifactError(f"training parameter {key} is unsupported")
+        normalized[key] = expected_vector
     finite_nonnegative = (
         "min_sum_hessian_in_leaf",
         "lambda_l1",
@@ -1444,6 +1514,37 @@ def _read_json_object(path: Path, description: str) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise Stage3ArtifactError(f"{description} must be a JSON object")
     return cast(dict[str, object], payload)
+
+
+def _read_regular_json_object(path: Path, description: str) -> dict[str, object]:
+    try:
+        payload = json.loads(_read_regular_unlinked_bytes(path, description))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise Stage3ArtifactError(f"{description} is not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise Stage3ArtifactError(f"{description} must be a JSON object")
+    return cast(dict[str, object], payload)
+
+
+def _read_regular_unlinked_bytes(path: Path, description: str) -> bytes:
+    """Read one path snapshot while rejecting symlinks, hard links, and special files."""
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise Stage3ArtifactError(
+            f"{description} must be an unlinked regular file"
+        ) from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise Stage3ArtifactError(f"{description} must be an unlinked regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            return stream.read()
+    except OSError as exc:
+        raise Stage3ArtifactError(f"{description} could not be read") from exc
+    finally:
+        os.close(descriptor)
 
 
 def _require_external_file_target(

@@ -511,7 +511,9 @@ evaluation 之前——包含 2022 development fold 与 `rebuild-oos` 的任一�
 - Git SHA 与完整 `uv.lock` checksum（provenance，§6.3）；
 - 相关 producer / consumer code digest、模型运行依赖子集 digest；
 - model filename 与 model checksum；
-- decision / sizing contract（§3.5 阈值、目标名义金额、position mode）。
+- 模型 artifact 不包含 decision / sizing / account / execution contract；§3.5 的阈值、
+  目标名义金额与 position mode 属于 strategy/evaluation config 和 run identity，由后续
+  expanding-window/OOS 消费方绑定，不进入模型 artifact identity。
 
 artifact identity 由稳定 manifest 字段与 model checksum 推导；`created_at`、墙钟耗时、
 本机绝对路径不参与业务 identity。
