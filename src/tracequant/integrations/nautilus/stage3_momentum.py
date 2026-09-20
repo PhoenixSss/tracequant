@@ -409,6 +409,8 @@ def _snapshot_instruments(catalog_path: Path) -> dict[str, Mapping[str, object]]
 def _run_engine(
     loaded: _LoadedStage3Data,
     parameters: Stage3MomentumParameters,
+    *,
+    strategy: Stage3MomentumStrategy | None = None,
 ) -> Stage3MomentumReports:
     usdt = Currency.from_str("USDT")
     venue = Venue(STAGE3_VENUE)
@@ -460,16 +462,19 @@ def _run_engine(
         ),
     )
     engine.add_data(events, sort=True)
-    strategy = Stage3MomentumStrategy(parameters)
-    engine.add_strategy(strategy)
+    active_strategy = (
+        Stage3MomentumStrategy(parameters) if strategy is None else strategy
+    )
+    engine.add_strategy(active_strategy)
     try:
         engine.run()
-        if strategy.fatal_error is not None:
+        if active_strategy.fatal_error is not None:
             raise Stage3MomentumError(
-                f"momentum Strategy stopped on an event error: {strategy.fatal_error}"
+                "Stage 3 Strategy stopped on an event error: "
+                f"{active_strategy.fatal_error}"
             )
         reports = _collect_reports(
-            engine, strategy, loaded.marks, loaded.funding, venue, usdt
+            engine, active_strategy, loaded.marks, loaded.funding, venue, usdt
         )
     finally:
         engine.dispose()
