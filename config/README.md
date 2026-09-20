@@ -31,4 +31,10 @@ Nautilus runtime identity
 `2.0.0rc4+a0400251110653b6d8ae6a9b5b89c4543fa85a2d`. Missing, relative,
 unknown, or mismatched values must fail closed.
 
+The final finite `rebuild-oos` entry is deliberately stricter than the earlier
+feature-loader configuration path: it accepts the three absolute paths and every
+locked Stage 2 identity as explicit command arguments. It does not read
+`TRACEQUANT_STAGE3_CONFIG`, and both output paths must identify new nonexistent
+partitions.
+
 Secrets live outside Git. They never appear in examples, manifests, or tests.
