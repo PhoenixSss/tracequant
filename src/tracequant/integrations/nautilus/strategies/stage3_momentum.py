@@ -40,6 +40,7 @@ from tracequant.source_data.stage2_btceth import (
     stage2_bar_type_str,
 )
 
+MOMENTUM_INPUT_FEATURE: Final = "ret_24h"
 MOMENTUM_LOOKBACK_HOURS: Final = 24
 STAGE3_BAR_OPEN_TRADE_ID_PREFIX: Final = "S3-BAR-OPEN-"
 
@@ -78,7 +79,7 @@ class Stage3MomentumParameters:
     accounting_only_replay: bool = False
 
     def validate(self) -> None:
-        if FEATURE_NAMES[_RET_24H_INDEX] != "ret_24h":
+        if FEATURE_NAMES[_RET_24H_INDEX] != MOMENTUM_INPUT_FEATURE:
             raise Stage3MomentumError(
                 "Stage 3 feature order no longer matches momentum"
             )

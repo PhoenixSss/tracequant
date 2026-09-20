@@ -27,7 +27,10 @@ from tracequant.integrations.nautilus.strategies.stage3_model import (
     Stage3ModelParameters,
 )
 from tracequant.integrations.nautilus.strategies.stage3_momentum import (
+    MOMENTUM_INPUT_FEATURE,
+    MOMENTUM_LOOKBACK_HOURS,
     MOMENTUM_TARGET_NOTIONAL_USDT,
+    MOMENTUM_THRESHOLD,
     Stage3DecisionReplayStrategy,
     Stage3MomentumError,
     Stage3MomentumParameters,
@@ -227,6 +230,8 @@ class EvaluationRun:
             "scenario": self.scenario.payload(),
             "scenario_digest": self.scenario_digest,
             "strategy": self.strategy,
+            "strategy_config": _strategy_config_payload(self.strategy),
+            "strategy_config_digest": _strategy_config_digest(self.strategy),
             "sensitivity_information": self.information_status,
         }
         if self.artifact is not None:
@@ -670,6 +675,7 @@ def _write_run_partition(run: EvaluationRun) -> None:
     manifest: dict[str, object] = {
         "schema": STAGE3_EVALUATION_RUN_SCHEMA,
         "artifact": run.artifact,
+        "config_digest": _run_config_digest(run.fold, run.strategy, run.scenario),
         "decision_digest": run.decision_digest,
         "fee_provenance": [dict(item) for item in run.fee_provenance],
         "fee_provenance_digest": _digest(run.fee_provenance),
@@ -682,6 +688,8 @@ def _write_run_partition(run: EvaluationRun) -> None:
         "scenario_digest": run.scenario_digest,
         "sensitivity_information": run.information_status,
         "strategy": run.strategy,
+        "strategy_config": _strategy_config_payload(run.strategy),
+        "strategy_config_digest": _strategy_config_digest(run.strategy),
     }
     manifest["manifest_digest"] = _digest(manifest)
     _write_json_exclusive(run.partition / "manifest.json", manifest)
@@ -1175,7 +1183,7 @@ def _run_config_digest(
             "fold": fold.payload(),
             "scenario": scenario.payload(),
             "shared_execution_digest": _shared_execution_digest(),
-            "strategy_digest": _strategy_config_digest(strategy),
+            "strategy_config_digest": _strategy_config_digest(strategy),
         }
     )
 
@@ -1202,6 +1210,10 @@ def _freeze_final_test_config(
         "momentum_strategy_digest": _strategy_config_digest("momentum"),
         "run_config_digests": run_config_digests,
         "shared_execution_digest": _shared_execution_digest(),
+        "strategy_configs": {
+            strategy: _strategy_config_payload(strategy)
+            for strategy in cast(tuple[StrategyName, ...], ("momentum", "lightgbm"))
+        },
     }
     return {**payload, "final_test_config_digest": _digest(payload)}
 
@@ -1254,18 +1266,31 @@ def _shared_execution_digest() -> str:
     )
 
 
+def _strategy_config_payload(strategy: StrategyName) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "feature_schema_digest": FEATURE_SCHEMA_DIGEST,
+        "strategy": strategy,
+    }
+    if strategy == "momentum":
+        payload.update(
+            {
+                "deadband": {
+                    "lower_inclusive": str(-MOMENTUM_THRESHOLD),
+                    "upper_inclusive": str(MOMENTUM_THRESHOLD),
+                },
+                "signal_input": {
+                    "feature": MOMENTUM_INPUT_FEATURE,
+                    "lookback_hours": MOMENTUM_LOOKBACK_HOURS,
+                },
+            }
+        )
+    else:
+        payload["base_round_trip_cost_threshold"] = str(BASE_ROUND_TRIP_COST_THRESHOLD)
+    return payload
+
+
 def _strategy_config_digest(strategy: StrategyName) -> str:
-    return _digest(
-        {
-            "feature_schema_digest": FEATURE_SCHEMA_DIGEST,
-            "strategy": strategy,
-            "threshold": (
-                "0.005"
-                if strategy == "momentum"
-                else str(BASE_ROUND_TRIP_COST_THRESHOLD)
-            ),
-        }
-    )
+    return _digest(_strategy_config_payload(strategy))
 
 
 def _require_parameter_identity(

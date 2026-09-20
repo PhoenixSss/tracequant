@@ -11,7 +11,15 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from nautilus_trader.model import Bar, CryptoPerpetual, Currency, Price, Quantity
+from nautilus_trader.model import (
+    Bar,
+    CryptoPerpetual,
+    Currency,
+    FundingRateUpdate,
+    InstrumentId,
+    Price,
+    Quantity,
+)
 from nautilus_trader.trading import Strategy
 
 from tests.acceptance import test_stage3_features as feature_fixture
@@ -361,6 +369,54 @@ def test_b1_open_fill_precedes_funding_inside_the_execution_bar(
         if item["ts_event"] == in_bar_funding
     )
     assert Decimal(cast(str, funding["account_delta"])) != 0
+
+
+def test_funding_report_attributes_mixed_zero_and_nonzero_native_deltas() -> None:
+    btc, eth = STAGE2_INSTRUMENT_IDS
+    ts_event = HOUR_NS
+    funding_events = tuple(
+        FundingRateUpdate(
+            instrument_id=InstrumentId.from_str(instrument_id),
+            rate=rate,
+            ts_event=ts_event,
+            ts_init=ts_event,
+            interval=480,
+            next_funding_ns=ts_event,
+        )
+        for instrument_id, rate in (
+            (btc, Decimal("0.0001")),
+            (eth, Decimal(0)),
+        )
+    )
+    account_events = (
+        {
+            "balances": [{"currency": "USDT", "total": "100005"}],
+            "reported": True,
+            "ts_event": ts_event,
+        },
+        {
+            "balances": [{"currency": "USDT", "total": "100005"}],
+            "reported": True,
+            "ts_event": ts_event,
+        },
+    )
+    positions = (
+        {"instrument_id": btc, "ts_closed": None, "ts_opened": 0},
+        {"instrument_id": eth, "ts_closed": None, "ts_opened": 0},
+    )
+
+    report = momentum._funding_report(account_events, funding_events, positions)
+
+    event = cast(list[dict[str, object]], report["events"])[0]
+    native = {
+        cast(str, item["instrument_id"]): item
+        for item in cast(list[dict[str, object]], event["events"])
+    }
+    assert event["native_account_event_count"] == 2
+    assert event["account_delta"] == "5"
+    assert native[btc]["account_delta"] == "5"
+    assert native[eth]["account_delta"] == "0"
+    assert report["total_funding"] == "5"
 
 
 @pytest.mark.parametrize("status", ["INITIALIZED", "SUBMITTED", "PENDING_UPDATE"])

@@ -24,7 +24,7 @@ from tracequant.integrations.nautilus.stage3_momentum import Stage3MomentumRepor
 from tracequant.integrations.nautilus.strategies import stage3_model as model_strategy
 from tracequant.research import stage3_artifacts
 from tracequant.research.stage3_artifacts import synthetic_fixture_provenance
-from tracequant.research.stage3_features import Stage3Config
+from tracequant.research.stage3_features import FEATURE_SCHEMA_DIGEST, Stage3Config
 from tracequant.source_data.stage2_btceth import (
     STAGE2_INSTRUMENT_IDS,
     datetime_to_nanos,
@@ -253,6 +253,18 @@ def test_stage3_evaluation_compares_both_strategies_with_accounting_only_sensiti
     run_config_digests = cast(
         Mapping[str, Mapping[str, str]], frozen["run_config_digests"]
     )
+    strategy_configs = cast(
+        Mapping[str, Mapping[str, object]], frozen["strategy_configs"]
+    )
+    assert strategy_configs["momentum"] == {
+        "deadband": {
+            "lower_inclusive": "-0.005",
+            "upper_inclusive": "0.005",
+        },
+        "feature_schema_digest": FEATURE_SCHEMA_DIGEST,
+        "signal_input": {"feature": "ret_24h", "lookback_hours": 24},
+        "strategy": "momentum",
+    }
     final_runs = [
         item
         for item in base_runs
@@ -299,6 +311,14 @@ def test_stage3_evaluation_compares_both_strategies_with_accounting_only_sensiti
         assert item["fee_provenance"] == fee_provenance
         assert run_manifest["fee_provenance"] == fee_provenance
         assert item["fee_provenance_digest"] == evaluation._digest(fee_provenance)
+        strategy_config = cast(Mapping[str, object], item["strategy_config"])
+        assert run_manifest["strategy_config"] == strategy_config
+        assert item["strategy_config_digest"] == evaluation._digest(strategy_config)
+        assert run_manifest["strategy_config_digest"] == evaluation._digest(
+            strategy_config
+        )
+        if item["strategy"] == "momentum":
+            assert strategy_config == strategy_configs["momentum"]
         assert all(
             {
                 "catalog_maker_fee",

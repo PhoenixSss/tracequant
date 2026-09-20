@@ -817,13 +817,12 @@ def _funding_report(
         ending = _account_event_total(event)
         if ts_event in funding_by_ts and event.get("reported") is True:
             delta = ending - prior
-            if delta != 0:
-                reported_deltas.setdefault(ts_event, []).append(delta)
+            reported_deltas.setdefault(ts_event, []).append(delta)
         prior = ending
     timeline: list[dict[str, object]] = []
     total = Decimal(0)
     for ts_event, native_events in sorted(funding_by_ts.items()):
-        deltas = reported_deltas.get(ts_event, [])
+        reported = reported_deltas.get(ts_event, [])
         exposed = [
             event
             for event in native_events
@@ -831,10 +830,17 @@ def _funding_report(
                 cast(str, event["instrument_id"]), ts_event, positions
             )
         ]
-        if deltas and len(deltas) != len(exposed):
+        nonzero = [delta for delta in reported if delta != 0]
+        if len(reported) == len(exposed):
+            deltas = reported
+        elif len(nonzero) == len(exposed):
+            deltas = nonzero
+        elif reported:
             raise Stage3MomentumError(
                 "native funding account events cannot be attributed by instrument"
             )
+        else:
+            deltas = []
         by_instrument = (
             {
                 cast(str, event["instrument_id"]): delta
