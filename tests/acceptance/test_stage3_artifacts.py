@@ -251,8 +251,8 @@ def test_formal_trainer_reuses_the_accepted_window_gate(
     result = train_lightgbm_artifact(
         config,
         acceptance_record_path=tmp_path / "acceptance.json",
-        output_partition=tmp_path / "artifact",
-        parameter_record_path=tmp_path / "parameters.json",
+        output_partition=config.evidence_root / "artifact",
+        parameter_record_path=config.evidence_root / "parameters.json",
         window=_window(),
         provenance=TrainingProvenance(
             kind="formal_git",
@@ -274,6 +274,89 @@ def test_formal_trainer_reuses_the_accepted_window_gate(
             synthetic_fixture_provenance(created_at="2026-09-20T00:00:00Z"),
             repository_root=REPOSITORY_ROOT,
             fixture_mode=False,
+        )
+
+
+def test_formal_trainer_confines_outputs_to_the_configured_evidence_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    identity = locked_stage2_identity()
+    config = Stage3Config(
+        schema="tracequant-stage3-features-v1",
+        dataset_id=identity.dataset_id,
+        acceptance_digest=identity.acceptance_digest,
+        dataset_digest=identity.dataset_digest,
+        source_manifest_digest=identity.source_manifest_digest,
+        market_data_manifest_digest=identity.market_data_manifest_digest,
+        instrument_snapshot_checksum=identity.instrument_snapshot_checksum,
+        runtime_identity=identity.runtime_identity,
+        artifact_lock_path=tmp_path / "artifact-lock.json",
+        catalog_path=tmp_path / "catalog",
+        evidence_root=tmp_path / "evidence",
+        run_root=tmp_path / "run",
+    )
+
+    def unexpected_loader(*args: object, **kwargs: object) -> object:
+        raise AssertionError("the accepted catalog must not be read for unsafe outputs")
+
+    monkeypatch.setattr(artifacts, "load_accepted_feature_window", unexpected_loader)
+
+    def train(output_partition: Path, parameter_record_path: Path) -> None:
+        train_lightgbm_artifact(
+            config,
+            acceptance_record_path=tmp_path / "acceptance.json",
+            output_partition=output_partition,
+            parameter_record_path=parameter_record_path,
+            window=_window(),
+            provenance=TrainingProvenance(
+                kind="formal_git",
+                git_sha="0" * 40,
+                uv_lock_checksum="0" * 64,
+                created_at="2026-09-20T00:00:00Z",
+            ),
+            repository_root=REPOSITORY_ROOT,
+        )
+
+    with pytest.raises(Stage3ArtifactError, match="inside the configured evidence"):
+        train(
+            config.catalog_path / "model-fold-1",
+            config.evidence_root / "parameters.json",
+        )
+    with pytest.raises(Stage3ArtifactError, match="inside the configured evidence"):
+        train(
+            config.evidence_root / "model-fold-1",
+            config.run_root / "parameters.json",
+        )
+
+
+def test_artifact_partition_claim_is_exclusive(tmp_path: Path) -> None:
+    partition = tmp_path / "contended-artifact"
+    claim_path = artifacts._claim_artifact_partition(partition)
+    assert claim_path.is_file()
+    with pytest.raises(Stage3ArtifactError, match="already claimed"):
+        artifacts._claim_artifact_partition(partition)
+
+
+def test_existing_latest_symlink_is_rejected_before_resolution(tmp_path: Path) -> None:
+    concrete = tmp_path / "concrete"
+    concrete.mkdir()
+    latest = tmp_path / "latest"
+    latest.symlink_to(concrete, target_is_directory=True)
+
+    with pytest.raises(Stage3ArtifactError, match="latest alias"):
+        freeze_training_parameters(
+            latest / "parameters.json",
+            revision="stage3-lgbm-r1",
+            parameters=default_effective_parameters(),
+            repository_root=REPOSITORY_ROOT,
+        )
+
+    parameter_path = _freeze(tmp_path / "valid")
+    with pytest.raises(Stage3ArtifactError, match="latest alias"):
+        _train_fixture(
+            _training_frame(),
+            output_partition=latest / "artifact",
+            parameter_record_path=parameter_path,
         )
 
 

@@ -5,6 +5,7 @@ import importlib
 import importlib.metadata
 import json
 import math
+import os
 import platform
 import subprocess
 import sysconfig
@@ -54,6 +55,8 @@ PARAMETER_RECORD_SCHEMA: Final = "tracequant-stage3-lightgbm-parameters-v1"
 ARTIFACT_MANIFEST_SCHEMA: Final = "tracequant-stage3-lightgbm-artifact-v1"
 MODEL_FILENAME: Final = "model.txt"
 MANIFEST_FILENAME: Final = "manifest.json"
+ARTIFACT_CLAIM_FILENAME: Final = ".tracequant-artifact-claim"
+PENDING_MODEL_DIRECTORY: Final = ".tracequant-model-pending"
 PREDICTION_ATOL: Final = 1e-9
 PREDICTION_RTOL: Final = 1e-6
 CANONICAL_JSON_RULE: Final = "utf8-sort-keys-compact-ascii-no-nan-v1"
@@ -367,6 +370,12 @@ def train_lightgbm_artifact(
     repository_root: Path,
 ) -> dict[str, object]:
     """Train from the complete accepted Stage 2 gate owned by Stage 3 features."""
+    output_partition, parameter_record_path = _require_formal_evidence_paths(
+        config,
+        output_partition=output_partition,
+        parameter_record_path=parameter_record_path,
+        repository_root=repository_root,
+    )
     if window.train_end != window.evaluation_start:
         raise Stage3ArtifactError(
             "formal artifact training requires the evaluation boundary at train_end"
@@ -476,14 +485,32 @@ def _train_lightgbm_artifact(
     if booster.num_feature() != len(FEATURE_NAMES):
         raise Stage3ArtifactError("trained Booster feature count does not match")
 
-    partition.mkdir(parents=True, exist_ok=True)
+    claim_path = _claim_artifact_partition(partition)
     model_path = partition / MODEL_FILENAME
     manifest_path = partition / MANIFEST_FILENAME
+    pending_directory = partition / PENDING_MODEL_DIRECTORY
+    try:
+        pending_directory.mkdir()
+    except FileExistsError as exc:
+        raise Stage3ArtifactError(
+            "artifact model publication is already pending"
+        ) from exc
+    pending_model_path = pending_directory / MODEL_FILENAME
     booster.save_model(
-        str(model_path),
+        str(pending_model_path),
         num_iteration=booster.current_iteration(),
         importance_type="split",
     )
+    try:
+        os.link(pending_model_path, model_path)
+    except FileExistsError as exc:
+        raise Stage3ArtifactError("artifact model would overwrite a file") from exc
+    except OSError as exc:
+        raise Stage3ArtifactError(
+            "artifact model could not be published atomically"
+        ) from exc
+    pending_model_path.unlink()
+    pending_directory.rmdir()
     model_checksum = sha256_file(model_path)
     manifest = _build_manifest(
         stage2_identity=stage2_identity,
@@ -500,6 +527,12 @@ def _train_lightgbm_artifact(
             stream.write("\n")
     except FileExistsError as exc:
         raise Stage3ArtifactError("artifact manifest would overwrite a file") from exc
+    try:
+        claim_path.unlink()
+    except OSError as exc:
+        raise Stage3ArtifactError(
+            "artifact partition claim could not be released"
+        ) from exc
     return manifest
 
 
@@ -1247,16 +1280,84 @@ def _read_json_object(path: Path, description: str) -> dict[str, object]:
 def _require_external_file_target(
     path: Path, *, repository_root: Path, description: str
 ) -> Path:
+    """Reject lexical ``latest``; allow other symlinks only to a safe resolved target."""
     target = Path(path)
     if not target.is_absolute():
         raise Stage3ArtifactError(f"{description} path must be absolute")
+    if any(part.lower() == "latest" for part in target.parts):
+        raise Stage3ArtifactError(f"{description} must not use a latest alias")
     resolved = target.resolve(strict=False)
+    if any(part.lower() == "latest" for part in resolved.parts):
+        raise Stage3ArtifactError(f"{description} must not use a latest alias")
     root = Path(repository_root).resolve()
     if resolved == root or root in resolved.parents:
         raise Stage3ArtifactError(f"{description} must be outside the repository")
-    if any(part.lower() == "latest" for part in resolved.parts):
-        raise Stage3ArtifactError(f"{description} must not use a latest alias")
     return resolved
+
+
+def _require_formal_evidence_paths(
+    config: Stage3Config,
+    *,
+    output_partition: Path,
+    parameter_record_path: Path,
+    repository_root: Path,
+) -> tuple[Path, Path]:
+    root = Path(repository_root).resolve()
+    evidence_root = _require_external_file_target(
+        config.evidence_root,
+        repository_root=root,
+        description="configured evidence root",
+    )
+    catalog_root = _require_external_file_target(
+        config.catalog_path,
+        repository_root=root,
+        description="configured Nautilus catalog",
+    )
+    run_root = _require_external_file_target(
+        config.run_root,
+        repository_root=root,
+        description="configured run root",
+    )
+    for description, configured_root in (
+        ("configured Nautilus catalog", catalog_root),
+        ("configured run root", run_root),
+    ):
+        if _paths_overlap(evidence_root, configured_root):
+            raise Stage3ArtifactError(
+                f"configured evidence root must not overlap the {description}"
+            )
+
+    partition = _require_external_file_target(
+        output_partition,
+        repository_root=root,
+        description="artifact partition",
+    )
+    parameter_record = _require_external_file_target(
+        parameter_record_path,
+        repository_root=root,
+        description="parameter record",
+    )
+    for target, description in (
+        (partition, "artifact partition"),
+        (parameter_record, "parameter record"),
+    ):
+        if evidence_root not in target.parents:
+            raise Stage3ArtifactError(
+                f"{description} must be inside the configured evidence root"
+            )
+        for configured_root, root_description in (
+            (catalog_root, "configured Nautilus catalog"),
+            (run_root, "configured run root"),
+        ):
+            if _paths_overlap(target, configured_root):
+                raise Stage3ArtifactError(
+                    f"{description} must not overlap the {root_description}"
+                )
+    return partition, parameter_record
+
+
+def _paths_overlap(first: Path, second: Path) -> bool:
+    return first == second or first in second.parents or second in first.parents
 
 
 def _require_external_partition(
@@ -1270,6 +1371,30 @@ def _require_external_partition(
     if require_empty and partition.is_dir() and any(partition.iterdir()):
         raise Stage3ArtifactError("artifact partition must be empty")
     return partition
+
+
+def _claim_artifact_partition(partition: Path) -> Path:
+    partition.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        partition.mkdir()
+    except FileExistsError:
+        if not partition.is_dir():
+            raise Stage3ArtifactError("artifact partition must be a directory")
+    claim_path = partition / ARTIFACT_CLAIM_FILENAME
+    if claim_path.exists():
+        raise Stage3ArtifactError("artifact partition is already claimed")
+    if any(partition.iterdir()):
+        raise Stage3ArtifactError("artifact partition must be empty")
+
+    try:
+        with claim_path.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write("tracequant-stage3-lightgbm-artifact-claim-v1\n")
+    except FileExistsError as exc:
+        raise Stage3ArtifactError("artifact partition is already claimed") from exc
+    if {item.name for item in partition.iterdir()} != {ARTIFACT_CLAIM_FILENAME}:
+        claim_path.unlink()
+        raise Stage3ArtifactError("artifact partition changed while being claimed")
+    return claim_path
 
 
 def _require_keys(
