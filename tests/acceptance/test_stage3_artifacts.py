@@ -10,6 +10,7 @@ from typing import Any, cast
 import polars as pl
 import pytest
 
+from tracequant.integrations.nautilus import stage2_artifact
 from tracequant.integrations.nautilus.stage2_artifact import sha256_file
 from tracequant.research import stage3_artifacts as artifacts
 from tracequant.research.stage3_artifacts import (
@@ -142,6 +143,25 @@ def _train_fixture(
     )
 
 
+def _load_fixture(
+    artifact_partition: Path,
+    *,
+    parameter_record_path: Path,
+    expected_stage2_identity: Stage2ArtifactIdentity | None = None,
+) -> artifacts.LightGBMArtifactPredictor:
+    return artifacts._load_lightgbm_artifact(
+        artifact_partition,
+        parameter_record_path=parameter_record_path,
+        expected_stage2_identity=(
+            locked_stage2_identity()
+            if expected_stage2_identity is None
+            else expected_stage2_identity
+        ),
+        repository_root=REPOSITORY_ROOT,
+        expected_provenance_kind="synthetic_fixture",
+    )
+
+
 def _rewrite_manifest(partition: Path, manifest: dict[str, object]) -> None:
     manifest["artifact_id"] = artifacts._artifact_id(manifest)
     manifest["manifest_digest"] = artifacts._manifest_digest(manifest)
@@ -172,11 +192,9 @@ def test_stage3_lightgbm_artifact_round_trips_with_locked_identity(
             )
         )
         predictors.append(
-            load_lightgbm_artifact(
+            _load_fixture(
                 partition,
                 parameter_record_path=parameter_path,
-                expected_stage2_identity=locked_stage2_identity(),
-                repository_root=REPOSITORY_ROOT,
             )
         )
 
@@ -205,6 +223,68 @@ def test_stage3_lightgbm_artifact_round_trips_with_locked_identity(
     assert tuple(cast(list[str], manifests[0]["artifact_identity_fields"])) == (
         ARTIFACT_IDENTITY_FIELDS
     )
+
+
+def test_production_loader_rejects_synthetic_fixture_artifacts(
+    tmp_path: Path,
+) -> None:
+    partition, parameter_path, _ = _train(tmp_path)
+
+    with pytest.raises(Stage3ArtifactError, match="requires formal_git provenance"):
+        load_lightgbm_artifact(
+            partition,
+            parameter_record_path=parameter_path,
+            expected_stage2_identity=locked_stage2_identity(),
+            repository_root=REPOSITORY_ROOT,
+        )
+
+
+def test_code_inventory_digest_tracks_the_runtime_gate_closure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = artifacts._code_inventory(REPOSITORY_ROOT)
+    expected_modules = (
+        "tracequant.integrations.nautilus",
+        "tracequant.integrations.nautilus.stage2_artifact",
+        "tracequant.integrations.nautilus.stage2_btceth",
+        "tracequant.research.stage3_artifacts",
+        "tracequant.research.source_schema",
+        "tracequant.research.stage3_features",
+        "tracequant.research.views",
+        "tracequant.source_data.stage2_btceth",
+    )
+    assert tuple(item["module"] for item in original) == expected_modules
+
+    assert stage2_artifact.__file__ is not None
+    target_path = Path(stage2_artifact.__file__).resolve()
+    original_checksums = {
+        cast(str, item["module"]): cast(str, item["checksum_sha256"])
+        for item in original
+    }
+    target_module = "tracequant.integrations.nautilus.stage2_artifact"
+    replacement = (
+        "f" * 64 if original_checksums[target_module] != "f" * 64 else "0" * 64
+    )
+    original_sha256_file = sha256_file
+
+    def drifted_sha256_file(path: Path) -> str:
+        if Path(path).resolve() == target_path:
+            return replacement
+        return original_sha256_file(path)
+
+    monkeypatch.setattr(artifacts, "sha256_file", drifted_sha256_file)
+    drifted = artifacts._code_inventory(REPOSITORY_ROOT)
+    drifted_checksums = {
+        cast(str, item["module"]): cast(str, item["checksum_sha256"])
+        for item in drifted
+    }
+
+    assert {
+        module
+        for module in expected_modules
+        if original_checksums[module] != drifted_checksums[module]
+    } == {target_module}
+    assert artifacts._code_digest(original) != artifacts._code_digest(drifted)
 
 
 def test_formal_trainer_reuses_the_accepted_window_gate(
@@ -440,11 +520,9 @@ def test_loader_rejects_manifest_model_parameter_and_runtime_drift(
     tampered["artifact_id"] = "0" * 64
     manifest_path.write_text(json.dumps(tampered), encoding="utf-8")
     with pytest.raises(Stage3ArtifactError, match="manifest digest"):
-        load_lightgbm_artifact(
+        _load_fixture(
             partition,
             parameter_record_path=parameter_path,
-            expected_stage2_identity=locked_stage2_identity(),
-            repository_root=REPOSITORY_ROOT,
         )
 
     manifest_path.write_text(
@@ -453,11 +531,9 @@ def test_loader_rejects_manifest_model_parameter_and_runtime_drift(
     model_path = partition / MODEL_FILENAME
     model_path.write_text(model_path.read_text(encoding="utf-8") + "tamper\n")
     with pytest.raises(Stage3ArtifactError, match="model checksum"):
-        load_lightgbm_artifact(
+        _load_fixture(
             partition,
             parameter_record_path=parameter_path,
-            expected_stage2_identity=locked_stage2_identity(),
-            repository_root=REPOSITORY_ROOT,
         )
 
     parameter_partition, _, _ = _train(tmp_path / "parameter-drift", name="artifact")
@@ -469,11 +545,9 @@ def test_loader_rejects_manifest_model_parameter_and_runtime_drift(
         repository_root=REPOSITORY_ROOT,
     )
     with pytest.raises(Stage3ArtifactError, match="frozen record"):
-        load_lightgbm_artifact(
+        _load_fixture(
             parameter_partition,
             parameter_record_path=replacement_parameters,
-            expected_stage2_identity=locked_stage2_identity(),
-            repository_root=REPOSITORY_ROOT,
         )
 
     feature_partition, feature_parameters, _ = _train(
@@ -494,11 +568,9 @@ def test_loader_rejects_manifest_model_parameter_and_runtime_drift(
     feature_model["checksum_sha256"] = sha256_file(feature_model_path)
     _rewrite_manifest(feature_partition, feature_manifest)
     with pytest.raises(Stage3ArtifactError, match="feature names"):
-        load_lightgbm_artifact(
+        _load_fixture(
             feature_partition,
             parameter_record_path=feature_parameters,
-            expected_stage2_identity=locked_stage2_identity(),
-            repository_root=REPOSITORY_ROOT,
         )
 
     partition, parameter_path, _ = _train(tmp_path / "runtime", name="artifact")
@@ -515,21 +587,17 @@ def test_loader_rejects_manifest_model_parameter_and_runtime_drift(
 
     monkeypatch.setattr(artifacts, "_runtime_identity", drifted_runtime)
     with pytest.raises(Stage3ArtifactError, match="code or dependency"):
-        load_lightgbm_artifact(
+        _load_fixture(
             partition,
             parameter_record_path=parameter_path,
-            expected_stage2_identity=locked_stage2_identity(),
-            repository_root=REPOSITORY_ROOT,
         )
 
 
 def test_loader_reports_provenance_but_rejects_stage2_drift(tmp_path: Path) -> None:
     partition, parameter_path, _ = _train(tmp_path)
-    predictor = load_lightgbm_artifact(
+    predictor = _load_fixture(
         partition,
         parameter_record_path=parameter_path,
-        expected_stage2_identity=locked_stage2_identity(),
-        repository_root=REPOSITORY_ROOT,
     )
     assert predictor.provenance_differences
     identity = locked_stage2_identity()
@@ -543,21 +611,18 @@ def test_loader_reports_provenance_but_rejects_stage2_drift(tmp_path: Path) -> N
         runtime_identity=identity.runtime_identity,
     )
     with pytest.raises(Stage3ArtifactError, match="Stage 2"):
-        load_lightgbm_artifact(
+        _load_fixture(
             partition,
             parameter_record_path=parameter_path,
             expected_stage2_identity=wrong_identity,
-            repository_root=REPOSITORY_ROOT,
         )
 
 
 def test_prediction_rejects_schema_dtype_and_nonfinite_inputs(tmp_path: Path) -> None:
     partition, parameter_path, _ = _train(tmp_path)
-    predictor = load_lightgbm_artifact(
+    predictor = _load_fixture(
         partition,
         parameter_record_path=parameter_path,
-        expected_stage2_identity=locked_stage2_identity(),
-        repository_root=REPOSITORY_ROOT,
     )
     frame = _training_frame().select(FEATURE_NAMES).head(2)
     with pytest.raises(Stage3ArtifactError, match="digest"):

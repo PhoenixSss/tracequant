@@ -9,7 +9,7 @@ import os
 import platform
 import subprocess
 import sysconfig
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,12 +17,15 @@ from typing import Any, Final, Literal, cast
 
 import polars as pl
 
+from tracequant.integrations import nautilus as nautilus_integration
 from tracequant.integrations.nautilus import (
     EXPECTED_VERSION as NAUTILUS_VERSION,
 )
-from tracequant.integrations.nautilus import UPSTREAM_RELEASE_IDENTITY
+from tracequant.integrations.nautilus import UPSTREAM_RELEASE_IDENTITY, stage2_artifact
+from tracequant.integrations.nautilus import stage2_btceth as nautilus_stage2_btceth
 from tracequant.integrations.nautilus.stage2_artifact import sha256_file
-from tracequant.research import stage3_features
+from tracequant.research import source_schema, stage3_features
+from tracequant.research import views as research_views
 from tracequant.research.stage3_features import (
     FEATURE_LOOKBACK_HOURS,
     FEATURE_NAMES,
@@ -42,6 +45,7 @@ from tracequant.research.stage3_features import (
     load_accepted_feature_window,
     require_feature_frame_schema,
 )
+from tracequant.source_data import stage2_btceth as source_stage2_btceth
 from tracequant.source_data.stage2_btceth import (
     STAGE2_DATASET_ID,
     STAGE2_INSTRUMENT_IDS,
@@ -60,6 +64,7 @@ PENDING_MODEL_DIRECTORY: Final = ".tracequant-model-pending"
 PREDICTION_ATOL: Final = 1e-9
 PREDICTION_RTOL: Final = 1e-6
 CANONICAL_JSON_RULE: Final = "utf8-sort-keys-compact-ascii-no-nan-v1"
+CODE_INVENTORY_SCHEMA: Final = "tracequant-stage3-model-code-inventory-v1"
 
 RUNTIME_DEPENDENCIES: Final = ("lightgbm", "narwhals", "numpy", "scipy")
 PARAMETER_KEYS: Final = (
@@ -119,6 +124,7 @@ ARTIFACT_IDENTITY_FIELDS: Final = (
 ParameterValue = bool | int | float | str
 WindowRole = Literal["development", "validation", "final_test"]
 ProvenanceKind = Literal["formal_git", "synthetic_fixture"]
+CodeInventoryPath = tuple[str, Path, tuple[str, ...]]
 
 
 class Stage3ArtifactError(ValueError):
@@ -543,7 +549,25 @@ def load_lightgbm_artifact(
     expected_stage2_identity: Stage2ArtifactIdentity,
     repository_root: Path,
 ) -> LightGBMArtifactPredictor:
-    """Load and validate one explicitly named local native model artifact."""
+    """Load one formal artifact through the production inference boundary."""
+    return _load_lightgbm_artifact(
+        artifact_partition,
+        parameter_record_path=parameter_record_path,
+        expected_stage2_identity=expected_stage2_identity,
+        repository_root=repository_root,
+        expected_provenance_kind="formal_git",
+    )
+
+
+def _load_lightgbm_artifact(
+    artifact_partition: Path,
+    *,
+    parameter_record_path: Path,
+    expected_stage2_identity: Stage2ArtifactIdentity,
+    repository_root: Path,
+    expected_provenance_kind: ProvenanceKind,
+) -> LightGBMArtifactPredictor:
+    """Shared loader used by the formal boundary and fixture-only tests."""
     root = Path(repository_root).resolve()
     partition = _require_external_partition(
         artifact_partition, repository_root=root, require_empty=False
@@ -561,6 +585,11 @@ def load_lightgbm_artifact(
         raise Stage3ArtifactError("artifact partition contents do not match the schema")
     manifest = _read_json_object(partition / MANIFEST_FILENAME, "artifact manifest")
     _validate_manifest_envelope(manifest)
+    provenance = _required_mapping(manifest, "provenance", "artifact manifest")
+    if provenance["kind"] != expected_provenance_kind:
+        raise Stage3ArtifactError(
+            f"artifact loader requires {expected_provenance_kind} provenance"
+        )
     if manifest["stage2_input"] != _stage2_identity_payload(expected_stage2_identity):
         raise Stage3ArtifactError("artifact Stage 2 input identity does not match")
     _require_locked_stage2_identity(expected_stage2_identity)
@@ -606,9 +635,7 @@ def load_lightgbm_artifact(
     return LightGBMArtifactPredictor(
         _booster=booster,
         artifact_id=cast(str, manifest["artifact_id"]),
-        provenance_differences=_provenance_differences(
-            _required_mapping(manifest, "provenance", "artifact manifest"), root
-        ),
+        provenance_differences=_provenance_differences(provenance, root),
     )
 
 
@@ -1049,10 +1076,6 @@ def _runtime_identity(lightgbm: Any, *, repository_root: Path) -> dict[str, obje
         "packages": dependencies,
     }
     code_inventory = _code_inventory(repository_root)
-    code_payload: dict[str, object] = {
-        "schema": "tracequant-stage3-model-code-inventory-v1",
-        "entries": code_inventory,
-    }
     environment = {
         "python_version": platform.python_version(),
         "python_implementation": platform.python_implementation(),
@@ -1079,7 +1102,7 @@ def _runtime_identity(lightgbm: Any, *, repository_root: Path) -> dict[str, obje
         "feature_schema_digest": FEATURE_SCHEMA_DIGEST,
         "code_inventory": code_inventory,
         "code_inventory_order": "fixed-module-order-v1",
-        "code_digest": _digest(code_payload),
+        "code_digest": _code_digest(code_inventory),
         "runtime_dependencies": dependencies,
         "runtime_dependency_order": "normalized-name-ascending-v1",
         "runtime_dependency_digest": _digest(dependency_payload),
@@ -1089,20 +1112,8 @@ def _runtime_identity(lightgbm: Any, *, repository_root: Path) -> dict[str, obje
 
 def _code_inventory(repository_root: Path) -> list[dict[str, object]]:
     root = Path(repository_root).resolve()
-    paths = (
-        (
-            "tracequant.research.stage3_artifacts",
-            Path(__file__).resolve(),
-            ["trainer", "artifact_loader", "prediction_wrapper"],
-        ),
-        (
-            "tracequant.research.stage3_features",
-            Path(stage3_features.__file__).resolve(),
-            ["feature_schema", "label_contract", "accepted_input_gate"],
-        ),
-    )
     entries: list[dict[str, object]] = []
-    for module, path, roles in paths:
+    for module, path, roles in _code_inventory_paths():
         try:
             relative = path.relative_to(root).as_posix()
         except ValueError as exc:
@@ -1113,11 +1124,67 @@ def _code_inventory(repository_root: Path) -> list[dict[str, object]]:
             {
                 "module": module,
                 "relative_path": relative,
-                "roles": roles,
+                "roles": list(roles),
                 "checksum_sha256": sha256_file(path),
             }
         )
     return entries
+
+
+def _code_inventory_paths() -> tuple[CodeInventoryPath, ...]:
+    return (
+        (
+            "tracequant.integrations.nautilus",
+            _module_path(nautilus_integration),
+            ("stage2_runtime_identity",),
+        ),
+        (
+            "tracequant.integrations.nautilus.stage2_artifact",
+            _module_path(stage2_artifact),
+            ("checksum_gate", "accepted_artifact_lock_gate"),
+        ),
+        (
+            "tracequant.integrations.nautilus.stage2_btceth",
+            _module_path(nautilus_stage2_btceth),
+            ("catalog_identity_gate", "catalog_reader"),
+        ),
+        (
+            "tracequant.research.stage3_artifacts",
+            Path(__file__).resolve(),
+            ("trainer", "artifact_loader", "prediction_wrapper"),
+        ),
+        (
+            "tracequant.research.source_schema",
+            _module_path(source_schema),
+            ("query_window_gate", "timestamp_gate"),
+        ),
+        (
+            "tracequant.research.stage3_features",
+            _module_path(stage3_features),
+            ("feature_schema", "label_contract", "accepted_input_gate"),
+        ),
+        (
+            "tracequant.research.views",
+            _module_path(research_views),
+            ("accepted_catalog_reader",),
+        ),
+        (
+            "tracequant.source_data.stage2_btceth",
+            _module_path(source_stage2_btceth),
+            ("stage2_identity_contract", "time_and_bar_identity_gate"),
+        ),
+    )
+
+
+def _module_path(module: Any) -> Path:
+    path = getattr(module, "__file__", None)
+    if not isinstance(path, str):
+        raise Stage3ArtifactError("model code module has no repository path")
+    return Path(path).resolve()
+
+
+def _code_digest(inventory: Sequence[Mapping[str, object]]) -> str:
+    return _digest({"schema": CODE_INVENTORY_SCHEMA, "entries": list(inventory)})
 
 
 def _feature_payload() -> dict[str, object]:
