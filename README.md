@@ -185,16 +185,17 @@ and `evaluation.manifest_digest`, which retain distinct creation-time evidence.
 The tracked record is the second rebuild's generated output, with acceptance
 digest `bc9449100eb2b79b720f4d65ab11609115fb0b4181472dbd86a3f9e5bc5bbcd8`.
 
-The retained external evidence bundle `75e3de9ec960-20260921-e1-r1/` contains
-`acceptance-first.json`, `acceptance-second.json`, both evaluation manifests at
-`runs-first/manifest.json` and `runs-second/manifest.json`, and the fold artifacts
-with formal provenance/environment under `evidence-first/` and `evidence-second/`.
-It also contains file inventories with SHA-256 checksums and `comparison.json`
-(SHA-256 `aacc8c5943a0669d1c90dab2fedbb08792d0689c201618c81089e39dc6ad8db8`),
-which binds the implementation, lock, environment, run times and comparison.
-These are the completed formal rebuild evidence for Review finding E1; their
-acceptance remains subject to fresh Independent Review. Software acceptance
-still grants no Demo or Live admission.
+The review-accessible bounded receipt
+`docs/product/stage3-btceth-oos-rebuild-receipt.json` records two further
+successful formal rebuilds from clean implementation commit `e5c59151bca40725595f7ab3caa2ff8dee4fe7c0`.
+It binds the distinct initially empty partitions, pre/post catalog verification,
+formal provenance, artifact manifests, complete 4/8/8 matrices, full external
+partition inventories, and stable-payload comparison to the tracked acceptance
+record. The receipt carries its own canonical SHA-256 and no external absolute
+path, model, full report, catalog data, secret, or derived market data. These are
+the completed formal rebuild evidence for Review finding E1; their acceptance
+remains subject to fresh Independent Review. Software acceptance still grants no
+Demo or Live admission.
 
 ## LCK: an engineering capability within TraceQuant
 

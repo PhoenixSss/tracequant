@@ -687,9 +687,166 @@ def _directory_digest(root: Path) -> str:
     return digest.hexdigest()
 
 
+def _canonical_digest(value: object) -> str:
+    encoded = json.dumps(
+        value, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def test_committed_stage3_acceptance_record_matches_current_contract() -> None:
     record_path = (
         Path(__file__).resolve().parents[2] / stage3_oos.STAGE3_ACCEPTANCE_RELATIVE_PATH
     )
     record = json.loads(record_path.read_text(encoding="utf-8"))
     stage3_oos.require_complete_stage3_acceptance_record(record)
+
+
+def test_committed_stage3_rebuild_receipt_binds_two_formal_executions() -> None:
+    repository = Path(__file__).resolve().parents[2]
+    acceptance_path = repository / stage3_oos.STAGE3_ACCEPTANCE_RELATIVE_PATH
+    receipt_path = repository / "docs/product/stage3-btceth-oos-rebuild-receipt.json"
+    acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+    assert set(receipt) == {
+        "catalog",
+        "comparison",
+        "executions",
+        "product_status",
+        "receipt_digest",
+        "review_id",
+        "schema",
+        "source",
+        "tracked_acceptance",
+        "training_parameters",
+    }
+    assert receipt["schema"] == "tracequant-stage3-rebuild-receipt-v1"
+    digest_payload = copy.deepcopy(receipt)
+    del digest_payload["receipt_digest"]
+    assert receipt["receipt_digest"] == _canonical_digest(digest_payload)
+    assert not _absolute_strings(receipt)
+
+    stable_acceptance = copy.deepcopy(acceptance)
+    del stable_acceptance["acceptance_digest"]
+    del cast(dict[str, object], stable_acceptance["evaluation"])["manifest_digest"]
+    stable_digest = _canonical_digest(stable_acceptance)
+    tracked = cast(dict[str, object], receipt["tracked_acceptance"])
+    assert tracked == {
+        "acceptance_digest": acceptance["acceptance_digest"],
+        "path": stage3_oos.STAGE3_ACCEPTANCE_RELATIVE_PATH,
+        "sha256": hashlib.sha256(acceptance_path.read_bytes()).hexdigest(),
+        "stable_payload_digest": stable_digest,
+    }
+    catalog = cast(dict[str, object], receipt["catalog"])
+    assert catalog["identity"] == acceptance["stage2_input"]
+    source = cast(dict[str, object], receipt["source"])
+    assert (
+        source["rebuild_contract_digest"]
+        == cast(dict[str, object], acceptance["configs"])["rebuild_contract_digest"]
+    )
+    training = cast(dict[str, object], receipt["training_parameters"])
+    tracked_training = cast(dict[str, object], acceptance["training_parameters"])
+    assert training == {
+        "digest": tracked_training["training_parameter_digest"],
+        "revision": tracked_training["training_parameter_revision"],
+    }
+    assert receipt["product_status"] == acceptance["product_status"]
+
+    executions = cast(list[dict[str, object]], receipt["executions"])
+    assert len(executions) == 2
+    assert {execution["id"] for execution in executions} == {
+        "formal-a",
+        "formal-b",
+    }
+    expected_artifacts = {
+        artifact["fold_id"]: artifact["artifact_id"]
+        for artifact in cast(list[dict[str, object]], acceptance["artifacts"])
+    }
+    for execution in executions:
+        assert set(execution) == {
+            "acceptance",
+            "artifact_manifests",
+            "catalog_verified_after",
+            "catalog_verified_before",
+            "completed",
+            "evaluation",
+            "id",
+            "inventories",
+            "matrix",
+            "partitions",
+            "provenance",
+        }
+        assert execution["completed"] is True
+        assert execution["catalog_verified_before"] is True
+        assert execution["catalog_verified_after"] is True
+        assert execution["matrix"] == {
+            "artifact_count": 4,
+            "base_run_count": 8,
+            "sensitivity_run_count": 8,
+        }
+        partitions = cast(dict[str, object], execution["partitions"])
+        assert partitions["evidence_initially_empty"] is True
+        assert partitions["run_initially_empty"] is True
+        provenance = cast(dict[str, object], execution["provenance"])
+        assert provenance["kind"] == "formal_git"
+        assert provenance["git_sha"] == source["git_commit"]
+        assert provenance["uv_lock_checksum"] == source["uv_lock_checksum"]
+        execution_acceptance = cast(dict[str, object], execution["acceptance"])
+        assert execution_acceptance["stable_payload_digest"] == stable_digest
+        evaluation = cast(dict[str, object], execution["evaluation"])
+        assert (
+            evaluation["result_digest"]
+            == cast(dict[str, object], acceptance["evaluation"])["result_digest"]
+        )
+        artifacts = cast(list[dict[str, object]], execution["artifact_manifests"])
+        assert len(artifacts) == 4
+        assert {item["fold_id"]: item["artifact_id"] for item in artifacts} == (
+            expected_artifacts
+        )
+        assert all(
+            set(item) == {"artifact_id", "fold_id", "manifest_digest", "sha256"}
+            for item in artifacts
+        )
+        inventories = cast(dict[str, dict[str, object]], execution["inventories"])
+        assert set(inventories) == {"evidence", "runs"}
+        for inventory in inventories.values():
+            assert set(inventory) == {"digest", "file_count", "total_bytes"}
+            assert cast(int, inventory["file_count"]) > 0
+            assert cast(int, inventory["total_bytes"]) > 0
+
+    first, second = executions
+    assert (
+        cast(dict[str, object], first["partitions"])["evidence_identity"]
+        != cast(dict[str, object], second["partitions"])["evidence_identity"]
+    )
+    assert (
+        cast(dict[str, object], first["partitions"])["run_identity"]
+        != cast(dict[str, object], second["partitions"])["run_identity"]
+    )
+    assert (
+        cast(dict[str, object], first["acceptance"])["digest"]
+        != cast(dict[str, object], second["acceptance"])["digest"]
+    )
+    assert (
+        cast(dict[str, object], first["evaluation"])["manifest_digest"]
+        != cast(dict[str, object], second["evaluation"])["manifest_digest"]
+    )
+    assert (
+        cast(dict[str, object], first["provenance"])["created_at"]
+        != cast(dict[str, object], second["provenance"])["created_at"]
+    )
+
+    comparison = cast(dict[str, object], receipt["comparison"])
+    assert comparison == {
+        "evaluation_result_digest": cast(dict[str, object], acceptance["evaluation"])[
+            "result_digest"
+        ],
+        "execution_payloads_equal": True,
+        "excluded_creation_time_fields": [
+            "acceptance_digest",
+            "evaluation.manifest_digest",
+        ],
+        "stable_payload_digest": stable_digest,
+        "tracked_payload_equal": True,
+    }

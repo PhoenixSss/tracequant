@@ -1,0 +1,195 @@
+{
+  "catalog": {
+    "identity": {
+      "acceptance_digest": "5909c878a81f0cdea85a8b8f86efd36d9c9bad5b3f3fb4c0f9960bb0551609cd",
+      "dataset_digest": "e17c6294e0a0e6714e56a44624ade37cff46125c46d8b0ee81ede6093711579c",
+      "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+      "instrument_snapshot_checksum": "dd7fab59448a3b530ab70871ec57c375f6758e409004f9673d9d0cac7ee630bd",
+      "market_data_manifest_digest": "a0d9a36bb65ec7c2ec41f47cdf6ba7d20f57ad28d8d3494a69624c60d6d0a110",
+      "runtime_identity": "2.0.0rc4+a0400251110653b6d8ae6a9b5b89c4543fa85a2d",
+      "source_manifest_digest": "de86d44c73117e17af2bbcb655cf1c8d4290043fa8854636cc0e4e592a1dc790"
+    },
+    "verification": "the accepted Stage 2 catalog binding was verified before evaluation and reverified after evaluation in each successful rebuild"
+  },
+  "comparison": {
+    "evaluation_result_digest": "53e7929a716e763df8b0442e4f909cf6f6b01009b053f56e2b6c6789735de8d3",
+    "execution_payloads_equal": true,
+    "excluded_creation_time_fields": [
+      "acceptance_digest",
+      "evaluation.manifest_digest"
+    ],
+    "stable_payload_digest": "e0dcfd2e321c0c1871210a101b9c1e1e8fd02129a5bc24947d3e5aa666fa248f",
+    "tracked_payload_equal": true
+  },
+  "executions": [
+    {
+      "acceptance": {
+        "digest": "9b49aeed1d746853bbbe28469b3dff1132b5bdddfc9f8015bb68c9f97a221972",
+        "sha256": "2544da5248de798d448edfb17857e43e6e7ee50ff8d2e6727b272873216ebf01",
+        "stable_payload_digest": "e0dcfd2e321c0c1871210a101b9c1e1e8fd02129a5bc24947d3e5aa666fa248f"
+      },
+      "artifact_manifests": [
+        {
+          "artifact_id": "de354d3bb5aa2aaf0a3599649d3c9905028f549e6c6e2c9f2a1e212127f9a808",
+          "fold_id": "development-2022",
+          "manifest_digest": "0f42fcb4c92b886ae3d2b64894e48b2996615086da3acbc81cade29d4d19a15e",
+          "sha256": "b9f2511709c89d36bd0e105d8ed1a2704c78128c27db44975e70b28a6492a920"
+        },
+        {
+          "artifact_id": "bcfaa3055b2a14bb7678bb3ab03438f759a6ea6fa19d1558d555289d99116401",
+          "fold_id": "development-2023",
+          "manifest_digest": "13e1dd23d6d1cdd378df53415d4cb5d83510844c020b3237acd65234c14a31b8",
+          "sha256": "434122377861b489ed347b16284c4139386d1ce9a28982cfcfe5ec4de8c7fc70"
+        },
+        {
+          "artifact_id": "f49a1a390bfee7e5adb04e323004c588e97c39525c28b1d1a3186b074cb66917",
+          "fold_id": "final-test-2025-2026",
+          "manifest_digest": "6f387085fb4d13d1ffe9f0a382c715112bd290cdd89b61da8a921e61fc69440a",
+          "sha256": "818f3b276efdf5cecd543de96a7e5da93c057f930f173ed71f53420c16f43350"
+        },
+        {
+          "artifact_id": "06db2ff79ace35e586f24ee142b2daa18dae4f113d9137bf0da4efac2c7ee605",
+          "fold_id": "validation-2024",
+          "manifest_digest": "c4ce1cc1c45cd006d5edf43ec4889fcbc98df51b6cf64d716031bf34644a17dd",
+          "sha256": "4ed419c9ed447182ec8495e4147ed90def89aa9b5c57e4374c7311937ffb4787"
+        }
+      ],
+      "catalog_verified_after": true,
+      "catalog_verified_before": true,
+      "completed": true,
+      "evaluation": {
+        "manifest_digest": "ca779cdae0ecb3bfebc0c59c8abd09bd5e78ce21eee4cfefbdb83ffe176a278d",
+        "manifest_sha256": "6bde9577d71409c7a7a11a2eb3d1a9a1d94141461fd8ad47e9ca908893d0379d",
+        "result_digest": "53e7929a716e763df8b0442e4f909cf6f6b01009b053f56e2b6c6789735de8d3"
+      },
+      "id": "formal-a",
+      "inventories": {
+        "evidence": {
+          "digest": "be184d2edc2de0ff1926372515d2f41a45159459868f61b058bc2d71aeffa891",
+          "file_count": 10,
+          "total_bytes": 856183
+        },
+        "runs": {
+          "digest": "c4f9f203039e59ab6b1c6276d998a281c53e2d09c1b67279382ab4ce3d858190",
+          "file_count": 230,
+          "total_bytes": 962217950
+        }
+      },
+      "matrix": {
+        "artifact_count": 4,
+        "base_run_count": 8,
+        "sensitivity_run_count": 8
+      },
+      "partitions": {
+        "evidence_identity": "formal-a-evidence",
+        "evidence_initially_empty": true,
+        "run_identity": "formal-a-runs",
+        "run_initially_empty": true
+      },
+      "provenance": {
+        "compatibility_digest": "336abdfd94c227f7838206f353cd5f891a08060f90303cc25a8905a4ab0ac92a",
+        "created_at": "2026-09-21T02:40:58.337512Z",
+        "environment_digest": "82029c26d541784ccdafac04d8c1a8c1a0493f75f77e834db73742a29ae14a8d",
+        "git_sha": "e5c59151bca40725595f7ab3caa2ff8dee4fe7c0",
+        "kind": "formal_git",
+        "uv_lock_checksum": "6d60736318973ce5491af7053a0cf9cc8f46bd40be1d95e9a4ca7b97273b0645"
+      }
+    },
+    {
+      "acceptance": {
+        "digest": "c0b76f4c323ed3b4907d9ab7a29763c00fd616766793327141f072672c3e1506",
+        "sha256": "57bac9f74400e101a0a60107a2264d8c94fc7173f5e2af166fe21d015f013322",
+        "stable_payload_digest": "e0dcfd2e321c0c1871210a101b9c1e1e8fd02129a5bc24947d3e5aa666fa248f"
+      },
+      "artifact_manifests": [
+        {
+          "artifact_id": "de354d3bb5aa2aaf0a3599649d3c9905028f549e6c6e2c9f2a1e212127f9a808",
+          "fold_id": "development-2022",
+          "manifest_digest": "9916a3e63af44b96b565cf3cbaf96f724987b17f8e08f0db1c534469932c4d88",
+          "sha256": "44ae3f71d736734a90220331c0e4012809f8b6dee3d0dfa9da8ca2c1de6edbbf"
+        },
+        {
+          "artifact_id": "bcfaa3055b2a14bb7678bb3ab03438f759a6ea6fa19d1558d555289d99116401",
+          "fold_id": "development-2023",
+          "manifest_digest": "e185ec9bcc3315bdd30dfc84b937af07a18d423065daf3e5a3ffc10248f3ff61",
+          "sha256": "b5a3fd12e50a6d3da64202c9eaae982f6e1e30ec82a6e70bf758800bf2d186e7"
+        },
+        {
+          "artifact_id": "f49a1a390bfee7e5adb04e323004c588e97c39525c28b1d1a3186b074cb66917",
+          "fold_id": "final-test-2025-2026",
+          "manifest_digest": "6b1bb3aa39f605f000aa3da81fcd67a713b4e9f785d86837d070fbb70e71a4d0",
+          "sha256": "72092003321b55d3faf501a9a07ab2f63566027968dfcffb3f009865864b67a7"
+        },
+        {
+          "artifact_id": "06db2ff79ace35e586f24ee142b2daa18dae4f113d9137bf0da4efac2c7ee605",
+          "fold_id": "validation-2024",
+          "manifest_digest": "4e81e9f6486d188105e10398177debe2b5595d34215aca512d58a011d00013ef",
+          "sha256": "7482c89e220e1084aea3f5f11656f1e57160867f5ead7e52201209a7728a96ed"
+        }
+      ],
+      "catalog_verified_after": true,
+      "catalog_verified_before": true,
+      "completed": true,
+      "evaluation": {
+        "manifest_digest": "8dc5ac23fa20531ef6d4374b262d6b34b33627fa6a959de3f687634bc4b0990d",
+        "manifest_sha256": "90102ac02cbac0ec246fb810451f8742b5cfd46083d572ac915b8ec503c7eba7",
+        "result_digest": "53e7929a716e763df8b0442e4f909cf6f6b01009b053f56e2b6c6789735de8d3"
+      },
+      "id": "formal-b",
+      "inventories": {
+        "evidence": {
+          "digest": "1269f1e4f7485ab2d56029bb181b5f505ade70f64380cd696379715c6e7b05b7",
+          "file_count": 10,
+          "total_bytes": 856183
+        },
+        "runs": {
+          "digest": "9c1e2c247e083edb61c27fac85a4de9b65352f96cf29a24dac9de256505539c5",
+          "file_count": 230,
+          "total_bytes": 962217950
+        }
+      },
+      "matrix": {
+        "artifact_count": 4,
+        "base_run_count": 8,
+        "sensitivity_run_count": 8
+      },
+      "partitions": {
+        "evidence_identity": "formal-b-evidence",
+        "evidence_initially_empty": true,
+        "run_identity": "formal-b-runs",
+        "run_initially_empty": true
+      },
+      "provenance": {
+        "compatibility_digest": "336abdfd94c227f7838206f353cd5f891a08060f90303cc25a8905a4ab0ac92a",
+        "created_at": "2026-09-21T02:43:31.878668Z",
+        "environment_digest": "82029c26d541784ccdafac04d8c1a8c1a0493f75f77e834db73742a29ae14a8d",
+        "git_sha": "e5c59151bca40725595f7ab3caa2ff8dee4fe7c0",
+        "kind": "formal_git",
+        "uv_lock_checksum": "6d60736318973ce5491af7053a0cf9cc8f46bd40be1d95e9a4ca7b97273b0645"
+      }
+    }
+  ],
+  "product_status": [
+    "OFFLINE_BACKTEST_ONLY",
+    "LIVE_NOT_APPROVED"
+  ],
+  "receipt_digest": "a5430901ac1efd508abd6db5fc5a455cada2ee85b8ccde7696f37f650ef19c71",
+  "review_id": "556f425092354e89b8b44a0e9e1c8985",
+  "schema": "tracequant-stage3-rebuild-receipt-v1",
+  "source": {
+    "git_commit": "e5c59151bca40725595f7ab3caa2ff8dee4fe7c0",
+    "git_tree": "5edfe5f909131fc8e5c0b58e78d8706770897e81",
+    "rebuild_contract_digest": "8ea502b7ed5a09aecc711553c234669622abc9ec189e624355f0c8f5ba75b21d",
+    "uv_lock_checksum": "6d60736318973ce5491af7053a0cf9cc8f46bd40be1d95e9a4ca7b97273b0645"
+  },
+  "tracked_acceptance": {
+    "acceptance_digest": "bc9449100eb2b79b720f4d65ab11609115fb0b4181472dbd86a3f9e5bc5bbcd8",
+    "path": "docs/product/stage3-btceth-oos-acceptance.json",
+    "sha256": "aea8e64ada288232ec571def669c82fbe9859a6b9687f8cd9e44d9f4658e04be",
+    "stable_payload_digest": "e0dcfd2e321c0c1871210a101b9c1e1e8fd02129a5bc24947d3e5aa666fa248f"
+  },
+  "training_parameters": {
+    "digest": "5f65a9167f80c1290edab420123ceaa9488cb1836d699ccd09d99db31189fb92",
+    "revision": "stage3-lgbm-r1"
+  }
+}
