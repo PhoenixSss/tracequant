@@ -187,7 +187,7 @@ network client 创建前完成；任一步不可证明或不相等都以 `identi
 | `ST4-REQ-009` | ExecTester 只执行 §4.2 的两个互斥 attempt；当前 rc4 缺少 order-type-specific deferred quantity 与 staged terminal-reconciliation cleanup capability 时不得联网下单，特殊 risk bypass 不得进入普通 Strategy。 |
 | `ST4-REQ-010` | Demo Strategy 只执行 §4.3 的固定顺序，不读取阶段 3 模型、不产生 alpha、不做 portfolio sizing。 |
 | `ST4-REQ-011` | Strategy 只使用 §5 的固定前进状态；终态只有 `COMPLETE` 或 `HALTED`，不得抽象为可配置工作流引擎。 |
-| `ST4-REQ-012` | 最终验收按 §4.4 从全新外部分区依次消费 DataTester、ExecTester、Strategy 证据，并在同一 identity 下聚合。 |
+| `ST4-REQ-012` | 最终验收按 §4.4 从四个全新外部分区依次消费 DataTester、两个独立 ExecTester attempt、Strategy 证据，并在同一 batch/identity 下聚合。 |
 | `ST4-REQ-013` | 成功矩阵只包括 data、market complete fill、passive limit accepted/canceled、long/short、reduce-only close 和最终清场。 |
 | `ST4-REQ-014` | 阶段 4 完成后停止扩展并保持 `LIVE_NOT_APPROVED`；§11 的能力只能由阶段 5 或以后承接。 |
 
@@ -307,7 +307,9 @@ LiveNode、ExecTester、repo 外 evidence partition 和唯一 strategy/order tag
 
 两个 attempt 的证据共同构成一个 `exec_tester` required scenario；任一个失败都会使该 scenario
 `FAIL/HALTED`，后一个不得用来弥补前一个。两者绝不同时运行，所以 active/pending order cap 仍为
-1。rc4 的 `LiveNode.add_builtin_strategy("ExecTester", config)` 返回 `None`，也没有公开 strategy
+1。每个 attempt 都是独立运行，并分别生成一份 §9.1 canonical evidence record；不得把两次运行
+包进一个无 child identity/digest 的 ExecTester envelope。rc4 的
+`LiveNode.add_builtin_strategy("ExecTester", config)` 返回 `None`，也没有公开 strategy
 getter；薄封装不得声称持有 tester 或读取其 callback 参数。场景边界只能由薄封装按 §8.1 只读
 轮询 `LiveNode.cache` 识别：market leg 是唯一新增且完整 filled 的 market order；close leg 是唯一
 新增且完整 filled 的 reduce-only order 且 `positions_open()` 为空；passive leg 是唯一新增、先
@@ -346,8 +348,11 @@ position 或 sizing 参数。
 ### 4.4 最终证据聚合与发布
 
 在同一 source commit/source-tree digest、dependency lock、已通过 §1.2/§4.2 gates 的精确 runtime
-和 frozen config identity 上，使用三个
-全新且初始为空的 repo 外分区依次运行 DataTester、ExecTester 和 Strategy。聚合器只验证既有
+和 frozen config identity 上，使用四个
+全新且初始为空的 repo 外分区依次运行 DataTester、ExecTester market-close attempt、ExecTester
+passive-cancel attempt 和 Strategy。四个分区的逻辑 ID 必须分别为 `data_tester`、
+`exec_tester_market_close`、`exec_tester_passive_cancel`、`demo_strategy`，每个分区恰好产生一份
+§9.1 canonical evidence record。聚合器只验证既有
 证据，不创建客户端或订单。所有 required scenario 为 `PASS`、所有 identity/digest 一致且最终
 order/position/unknown 清场后，才可原子发布
 `docs/product/stage4-binance-demo-acceptance.json`。任何失败不得创建新成功文件，也不得覆盖
@@ -548,9 +553,10 @@ schema 只允许以下顶层事实：
 | `runtime` | §1.4 的 distribution/version、upstream commit、实际 wheel filename/hash/tag、installed-tree digest 和按冻结投影得到的 identity digest |
 | `environment` | 固定 `BINANCE_DEMO_USD_M` |
 | `config_digest` | §9.3 脱敏冻结配置 digest |
-| `account_reference_digest` | DataTester 为 `null`；order-enabled 运行使用同一 acceptance batch 内稳定、跨 batch 不可关联的加盐 digest；不得保存 account ID |
+| `acceptance_batch_id` | §9.3 batch key 按冻结投影导出的 64 位小写 SHA-256；四份 run record 必须完全相同 |
+| `account_reference_digest` | DataTester 为 `null`；三个 order-enabled 运行严格按 §9.3 从各自公开 Account identity 和同一 batch key 导出；不得保存 account ID |
 | `instrument` | 固定 `BTCUSDT-PERP.BINANCE` 及本次 constraints digest |
-| `scenario` | `data_tester`、`exec_tester` 或 `demo_strategy` |
+| `scenario` | 恰为 `data_tester`、`exec_tester_market_close`、`exec_tester_passive_cancel` 或 `demo_strategy`，并与分区逻辑 ID 相同 |
 | `started_at` / `ended_at` | 运行边界 |
 | `result` / `terminal_state` | `PASS`/`FAIL` 与 `COMPLETE`/`HALTED` |
 | `observations` | §8 最小 order/fill/position/balance 分类和 scenario-specific counts/digests |
@@ -560,24 +566,54 @@ schema 只允许以下顶层事实：
 
 `run_id` 和 `evidence_digest` 严格按上述两个投影依序导出，避免循环身份。
 DataTester 的 order/fill/position/balance observations 必须明确为 `not_applicable`；这是合同明确
-排除该事实的 marker，不是 §8 reconciliation 分类，也不能伪造空成功。ExecTester 和 Strategy
-必须包含全部四类观察及 cleanup。ExecTester 与 Strategy 在同一 acceptance batch 中必须产生
-相同 `account_reference_digest`，但最终 tracked record 不保存该值。
+排除该事实的 marker，不是 §8 reconciliation 分类，也不能伪造空成功。两个 ExecTester attempt
+和 Strategy 必须包含全部四类观察及 cleanup。三个 order-enabled record 的
+`account_reference_digest` 必须逐 byte 相同，DataTester 必须为 `null`；最终 tracked record 不保存
+该 digest 或任何 account identity。
 
 ### 9.2 `tracequant-stage4-demo-acceptance-v1`
 
-最终 tracked record 只包含：schema、source commit/source-tree digest、dependency lock digest、runtime identity、
-environment、config/instrument constraints digest、三个 source evidence digest、required scenario
-矩阵结果、最终 order/fill/position/balance 分类、cleanup counts、`LIVE_NOT_APPROVED`、生成时间和
-acceptance digest。它不得嵌入原始事件、日志或 account reference。相同输入按 §9.1 的
+最终 tracked record 只包含：schema、`acceptance_batch_id`、source commit/source-tree digest、
+dependency lock digest、runtime identity、environment、config/instrument constraints digest、按
+`data_tester`、`exec_tester_market_close`、`exec_tester_passive_cancel`、`demo_strategy` 固定 key
+保存的四个 source evidence digest、同样四项的 required run matrix（其中两个 ExecTester 项再共同
+归约为 `exec_tester` required scenario）、最终 order/fill/position/balance 分类、cleanup counts、
+`LIVE_NOT_APPROVED`、生成时间和 acceptance digest。两个 ExecTester run 必须各自存在且为 `PASS`；
+不得用一个 digest 填两个 key，也不得用 envelope 或 scenario-level digest 替代任一 run digest。
+它不得嵌入原始事件、日志、batch key 或 account reference。相同输入按 §9.1 的
 acceptance 投影必须得到相同 acceptance digest。
 
-### 9.3 分区、脱敏和发布
+### 9.3 分区、batch account reference、脱敏和发布
 
-- 每次联网运行使用新的、显式命名且初始为空的 repo 外 evidence partition；运行只记录逻辑
-  partition ID，任何 tracked record 不得出现绝对本机路径；
+- batch initializer 在任何联网运行前创建一个全新、初始为空、repo 外且仅当前用户可访问的 batch
+  root；在其中以 OS CSPRNG 生成恰好 32 bytes 的 `batch_key`，并用 exclusive create 写入权限为
+  `0600` 的 `account-reference.key`，文件内容只含这 32 个原始 bytes。已存在、长度/权限不符或无法
+  独占创建的文件必须使 batch 在创建任何 client 前失败；key 不得来自 CLI、credential、account ID、
+  source/config digest 或可预测 PRNG。
+- `acceptance_batch_id = SHA256(UTF8("tracequant-stage4-acceptance-batch-v1") || 0x00 || batch_key)`，输出
+  64 位小写 hex。initializer 通过 `TRACEQUANT_STAGE4_BATCH_ID` 向四个顺序运行的进程传递该值；只向
+  三个 order-enabled 进程另传 `TRACEQUANT_STAGE4_ACCOUNT_REFERENCE_KEY_FILE`，其值是上述 repo 外
+  key file 的路径。batch ID 只写入 schema 指定的 `acceptance_batch_id` 字段；key bytes、key-file
+  path 和两个环境变量名不得写入 frozen config、evidence、日志或 tracked record。order-enabled
+  进程必须读取恰好 32 bytes，并复算 batch ID，一旦缺失或不相等就在创建 order 前 `HALTED`。
+- 每个 order-enabled 进程从当前入口 §8 public observation profile 的唯一 Account 对象取得
+  `account_reference = NFC(str(account.id)).encode("utf-8")`；空值、多 Account、不可编码或不同
+  observation surface 的 identity 均为 `HALTED`。该明文只可在进程内用于下式，禁止写入磁盘、
+  evidence 或日志：
+  `account_reference_digest = HMAC-SHA256(batch_key, UTF8("tracequant-stage4-account-reference-v1") || 0x00 || UTF8("BINANCE_DEMO_USD_M") || 0x00 || account_reference)`，结果编码为 64 位小写 hex。
+- 聚合器要求四份 record 的 `acceptance_batch_id` 相同、DataTester 的
+  `account_reference_digest` 为 `null`，并以 constant-time equality 比较三个 order-enabled digest；
+  任一缺失或不相等都拒绝发布。聚合完成、拒绝或正常 failure 后，batch owner 必须在 `finally`
+  路径关闭 handle、清除持有的 byte buffer 并 unlink key file；进程崩溃留下的 key/root 使该 batch
+  永久失效，只能由操作者删除，任何新 batch 都不得读取或复用。batch key 只用于本批 HMAC，不是
+  venue credential，生命周期不得跨 batch。
+- 每次联网运行使用新的、显式命名且初始为空的 repo 外 evidence partition；四个逻辑 partition ID
+  固定为 `data_tester`、`exec_tester_market_close`、`exec_tester_passive_cancel`、`demo_strategy`，
+  并与 record 的 `scenario` 一致。运行只记录逻辑 partition ID，任何 tracked record 不得出现绝对
+  本机路径；
 - frozen config digest 的 payload 包含 runtime、environment、product、instrument、account-mode
-  declaration、limits 和 deadlines；只记录 credential **变量名**，不含值；
+  declaration、limits 和 deadlines；只记录 credential **变量名**，不含值；batch ID、key、key-file
+  path 和 account reference 都不属于 config payload；
 - secret、完整账户标识、签名请求、认证 header/cookie、可重放认证材料和未脱敏 raw payload
   不得进入配置文件、Issue、日志或 tracked record；
 - 原始成功和失败证据都留在外部分区；仓库只发布通过 §9.2 的脱敏 acceptance record；
@@ -591,12 +627,12 @@ acceptance 投影必须得到相同 acceptance digest。
 | `ST4-EVID-001` | 准入成功输出不含 secret 的 frozen config payload 和 digest，失败不输出可冒充成功的 digest。 |
 | `ST4-EVID-002` | 所有 run evidence 使用 `tracequant-stage4-demo-evidence-v1`，并绑定 §1.4/§9.1 对实际 source、lock、wheel 和 installed distribution bytes 验证得到的完整 identity；预期常量不能自证。 |
 | `ST4-EVID-003` | order/fill/position/balance 只用 §8 为当前入口冻结的 rc4 public observation profile 分类；ExecTester 使用可检索 cache object graph，Strategy 使用 callback/cache/account；非 `consistent` 必定阻止成功。 |
-| `ST4-EVID-004` | 原始证据只写全新 repo 外分区；tracked 内容必须脱敏、只含逻辑引用和 digest。 |
+| `ST4-EVID-004` | 原始证据只写四个全新 repo 外分区；batch key 按 §9.3 生成、传递、使用和销毁，tracked 内容必须脱敏、只含逻辑引用和 digest。 |
 | `ST4-EVID-005` | 跨运行 identity、config 或 digest 不一致时禁止拼接证据，失败证据必须保留在外部分区。 |
 | `ST4-EVID-006` | DataTester 证据包含 quote/trade counts、instrument constraints 和 timestamp 检查结果，不含执行事实。 |
-| `ST4-EVID-007` | capability gate 解除后，ExecTester 证据用 §8.1 的可检索 cache object graph 分别绑定 §4.2 两个 attempt 的 market fill/reduce-only flat 与 passive accepted/canceled，并共同证明最终清场；gate 未解除时只允许 `FAIL/HALTED` capability diagnostic。 |
+| `ST4-EVID-007` | capability gate 解除后，两个 ExecTester attempt 各自产生独立 record/partition/digest，用 §8.1 的可检索 cache object graph 分别绑定 market fill/reduce-only flat 与 passive accepted/canceled，并共同证明最终清场；gate 未解除时只允许 `FAIL/HALTED` capability diagnostic。 |
 | `ST4-EVID-008` | Strategy 证据绑定固定状态序列、每个 order/fill、fault protection 和最终 reconciliation/cleanup。 |
-| `ST4-EVID-009` | 最终 record 使用 `tracequant-stage4-demo-acceptance-v1`，完整聚合三个新分区且声明 `LIVE_NOT_APPROVED`。 |
+| `ST4-EVID-009` | 最终 record 使用 `tracequant-stage4-demo-acceptance-v1`，完整聚合四个新分区/四个 source digest，验证同一 `acceptance_batch_id` 与三个 order-enabled account digest 相等，并声明 `LIVE_NOT_APPROVED`。 |
 | `ST4-EVID-010` | acceptance digest 对同一输入稳定；任何失败、漂移或未清场不得创建或覆盖成功记录。 |
 
 ## 10. #386–#391 唯一映射
