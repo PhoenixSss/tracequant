@@ -174,6 +174,26 @@ def minimum_order_quantity(instrument: CryptoPerpetual) -> Decimal:
     return max(increment, instrument.min_quantity.as_decimal())
 
 
+def meets_minimum_order(
+    instrument: CryptoPerpetual,
+    *,
+    quantity: Decimal,
+    price: Decimal,
+) -> bool:
+    """Return whether an order satisfies the native quantity/notional floors."""
+    if quantity < minimum_order_quantity(instrument):
+        return False
+    if price <= 0:
+        raise Stage3MomentumError("order price must be positive")
+    if instrument.min_notional is None:
+        return True
+    minimum_notional = _native_decimal(
+        instrument.min_notional,
+        label="instrument minimum notional",
+    )
+    return quantity * price >= minimum_notional
+
+
 def unsettled_orders(
     cache: object,
     *,
@@ -500,7 +520,11 @@ class Stage3MomentumStrategy(Strategy):
             return
 
         instrument = self._instruments[instrument_id]
-        if abs(delta) < minimum_order_quantity(instrument):
+        if not meets_minimum_order(
+            instrument,
+            quantity=abs(delta),
+            price=close,
+        ):
             record["reason"] = "delta_below_minimum"
             self.decisions.append(record)
             return
@@ -609,7 +633,11 @@ class Stage3MomentumStrategy(Strategy):
         reversing = current != 0 and target != 0 and (current > 0) != (target > 0)
         executable_delta = -current if reversing else delta
         absolute = abs(executable_delta)
-        if absolute < minimum_order_quantity(instrument):
+        if not meets_minimum_order(
+            instrument,
+            quantity=absolute,
+            price=execution_price,
+        ):
             record["action"] = "none"
             record["reason"] = "delta_below_minimum_at_b1"
             return
@@ -755,7 +783,11 @@ class Stage3MomentumStrategy(Strategy):
             return
         instrument = self._instruments[instrument_id]
         absolute = abs(target)
-        if absolute < minimum_order_quantity(instrument):
+        if not meets_minimum_order(
+            instrument,
+            quantity=absolute,
+            price=execution_price,
+        ):
             raise Stage3MomentumError("reversal target is below minimum")
         quantity = _instrument_quantity(instrument, absolute)
         if (

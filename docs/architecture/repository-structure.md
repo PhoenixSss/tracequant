@@ -5,12 +5,11 @@ bootstrap and its repository engineering tooling. The product runtime pins
 NautilusTrader, owns source provenance, implements the stage 1 BTCUSDT 1h
 catalog path and the accepted stage 2 BTC/ETH Nautilus-homologous dataset path,
 and runs one Nautilus-native offline MA-cross backtest plus read-only Polars
-research views over that stage 2 catalog. Stage 3 now includes the accepted
-catalog binding, finite causal feature/label contract, and fixed-parameter
-traditional momentum Nautilus Strategy for the single base offline run, plus a
-deterministic single-artifact LightGBM trainer and fail-closed loader, and a
-thin LightGBM Nautilus Strategy which reuses the same execution and accounting
-path for the fixed 2022 development run. It does not
+research views over that stage 2 catalog. Stage 3 includes the accepted catalog
+binding, finite causal feature/label contract, both fixed Strategies,
+deterministic LightGBM artifacts, the fixed expanding-window and accounting-only
+sensitivity evaluation, and the finite synchronous OOS rebuild which projects
+that evidence into a strict compact acceptance record. It does not
 provide an execution connection, Demo mode, or Live mode. LCK is an approved
 repository capability outside that product runtime.
 
@@ -97,6 +96,7 @@ src/tracequant/
       stage3_evaluation.py
       stage3_model.py
       stage3_momentum.py
+      stage3_oos.py
       strategies/
         __init__.py
         stage1_ma_cross.py
@@ -126,6 +126,11 @@ into the fixed expanding-window matrix and accounting-only replay; it is not a
 generic workflow engine or strategy adapter. The model Strategy reuses
 the momentum capability's Nautilus order, reversal, fee, funding, account, and
 terminal-state path; it adds no model gateway or parallel trading state.
+`integrations/nautilus/stage3_oos.py` is the finite product use case which
+sequentially invokes those existing Stage 3 capabilities. It accepts only
+explicit locked identity and absolute external roots, creates no scheduler or
+resume layer, and writes only the compact tracked acceptance projection in the
+checkout; models and full run evidence remain external.
 `tracequant.research` owns
 read-only Polars views, time splits, the finite Stage 3 causal feature/label
 contract, and the LightGBM training/artifact/loading boundary over the stage 2

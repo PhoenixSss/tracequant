@@ -12,7 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Final, Literal, cast
 
-from nautilus_trader.model import Bar, CryptoPerpetual
+from nautilus_trader.model import Bar, CryptoPerpetual, Currency
 
 from tracequant.integrations.nautilus import stage3_model, stage3_momentum
 from tracequant.integrations.nautilus.stage3_model import (
@@ -213,6 +213,10 @@ class EvaluationRun:
     run_identity: str
     result_digest: str
 
+    @property
+    def nautilus_digest(self) -> str:
+        return _digest(_reports_payload(self.reports))
+
     def reference(self, *, root: Path) -> dict[str, object]:
         result: dict[str, object] = {
             "config_digest": _run_config_digest(
@@ -223,6 +227,7 @@ class EvaluationRun:
             "fee_provenance_digest": _digest(self.fee_provenance),
             "fold": self.fold.payload(),
             "metrics": self.metrics,
+            "nautilus_digest": self.nautilus_digest,
             "partition": self.partition.relative_to(root).as_posix(),
             "result_digest": self.result_digest,
             "run_type": ("base" if self.scenario.name == "base" else "sensitivity"),
@@ -235,15 +240,7 @@ class EvaluationRun:
             "sensitivity_information": self.information_status,
         }
         if self.artifact is not None:
-            result["artifact"] = {
-                key: self.artifact[key]
-                for key in (
-                    "artifact_id",
-                    "model_checksum",
-                    "training_parameter_digest",
-                    "training_parameter_revision",
-                )
-            }
+            result["artifact"] = dict(self.artifact)
             result["prediction_digest"] = self.prediction_digest
         return result
 
@@ -360,7 +357,7 @@ def run_stage3_evaluation(
         fold=final_fold,
     )
     dispersion = _fold_dispersion(base_metrics)
-    stable_payload: dict[str, object] = {
+    result_payload: dict[str, object] = {
         "accounting_fixtures": fixtures,
         "base_runs": base_references,
         "fold_dispersion": dispersion,
@@ -371,10 +368,10 @@ def run_stage3_evaluation(
         "training_parameter_digest": frozen.digest,
         "training_parameter_revision": frozen.revision,
     }
-    result_digest = _digest(stable_payload)
+    result_digest = _evaluation_result_digest(result_payload)
     manifest: dict[str, object] = {
         "schema": STAGE3_EVALUATION_SCHEMA,
-        **stable_payload,
+        **result_payload,
         "evidence": {
             "artifact_partitions": {
                 fold_id: (Path("artifacts") / fold_id).as_posix()
@@ -392,6 +389,32 @@ def run_stage3_evaluation(
         manifest=manifest,
         result_digest=result_digest,
     )
+
+
+def _evaluation_result_digest(manifest: Mapping[str, object]) -> str:
+    """Hash repeatable results while preserving exact evidence in the manifest."""
+    payload = {
+        key: value
+        for key, value in manifest.items()
+        if key not in {"schema", "evidence", "result_digest", "manifest_digest"}
+    }
+    for collection in ("base_runs", "sensitivity_runs"):
+        references: list[dict[str, object]] = []
+        for reference in cast(Sequence[Mapping[str, object]], payload[collection]):
+            stable = dict(reference)
+            artifact = stable.get("artifact")
+            if isinstance(artifact, Mapping):
+                # The full artifact manifest binds provenance.created_at. Its
+                # digest is still required for evidence integrity, but cannot
+                # participate in the result identity across independent rebuilds.
+                stable["artifact"] = {
+                    key: value
+                    for key, value in artifact.items()
+                    if key != "manifest_digest"
+                }
+            references.append(stable)
+        payload[collection] = references
+    return _digest(payload)
 
 
 def _train_fold_artifact(
@@ -616,8 +639,8 @@ def _build_run(
             else None
         ),
         "decision_digest": decision_digest,
-        "metrics": metrics,
-        "nautilus": _reports_payload(reports),
+        "metrics": _result_metrics(metrics),
+        "nautilus_digest": _digest(_reports_payload(reports)),
         "prediction_digest": prediction_digest,
         "scenario_digest": scenario_digest,
         "strategy": strategy,
@@ -647,6 +670,20 @@ def _build_run(
         run_identity=run_identity,
         result_digest=result_digest,
     )
+
+
+def _result_metrics(metrics: Mapping[str, object]) -> dict[str, object]:
+    """Keep result metrics portable; terminal positions are bound by Nautilus."""
+    per_instrument = cast(Mapping[str, Mapping[str, object]], metrics["per_instrument"])
+    return {
+        **metrics,
+        "per_instrument": {
+            instrument: {
+                key: value for key, value in values.items() if key != "terminal"
+            }
+            for instrument, values in per_instrument.items()
+        },
+    }
 
 
 def _write_run_partition(run: EvaluationRun) -> None:
@@ -681,6 +718,7 @@ def _write_run_partition(run: EvaluationRun) -> None:
         "fee_provenance_digest": _digest(run.fee_provenance),
         "fold": run.fold.payload(),
         "metrics": run.metrics,
+        "nautilus_digest": run.nautilus_digest,
         "prediction_digest": run.prediction_digest,
         "result_digest": run.result_digest,
         "run_identity": run.run_identity,
@@ -993,6 +1031,9 @@ def _run_accounting_fixtures(
     bind_accepted_stage2_catalog(config, acceptance_record_path=acceptance_record_path)
     base_commission = Decimal(cast(str, reports["base"].summary["total_commission"]))
     base_funding = Decimal(cast(str, reports["base"].summary["total_funding"]))
+    double_funding = Decimal(
+        cast(str, reports["double_funding"].summary["total_funding"])
+    )
     if base_commission <= 0:
         raise Stage3EvaluationError("fee fixture did not produce a taker fill")
     if Decimal(cast(str, reports["zero_fee"].summary["total_commission"])) != 0:
@@ -1006,10 +1047,8 @@ def _run_accounting_fixtures(
         raise Stage3EvaluationError("funding fixture did not cross a funding event")
     if Decimal(cast(str, reports["zero_funding"].summary["total_funding"])) != 0:
         raise Stage3EvaluationError("zero-funding fixture did not produce 0x funding")
-    if (
-        Decimal(cast(str, reports["double_funding"].summary["total_funding"]))
-        != base_funding * 2
-    ):
+    funding_rounding_tolerance = _native_funding_rounding_tolerance(reports["base"])
+    if abs(double_funding - base_funding * 2) > funding_rounding_tolerance:
         raise Stage3EvaluationError("double-funding fixture did not produce 2x funding")
     return {
         "decision_digest": _decision_digest(decisions, "momentum"),
@@ -1021,11 +1060,32 @@ def _run_accounting_fixtures(
         },
         "funding": {
             "base": str(base_funding),
-            "double": str(base_funding * 2),
+            "double": str(double_funding),
+            "double_expected_before_native_rounding": str(base_funding * 2),
+            "native_rounding_tolerance": str(funding_rounding_tolerance),
             "status": "proved_by_position_across_funding_event",
             "zero": "0",
         },
     }
+
+
+def _native_funding_rounding_tolerance(report: Stage3MomentumReports) -> Decimal:
+    """Bound 2x comparisons by one settlement quantum per native event."""
+    raw_events = report.funding.get("events")
+    if not isinstance(raw_events, list):
+        raise Stage3EvaluationError("funding fixture events are invalid")
+    native_event_count = 0
+    for raw_event in raw_events:
+        if not isinstance(raw_event, Mapping):
+            raise Stage3EvaluationError("funding fixture event is invalid")
+        count = raw_event.get("native_account_event_count")
+        if type(count) is not int or count < 0:
+            raise Stage3EvaluationError("funding fixture native event count is invalid")
+        native_event_count += count
+    if native_event_count == 0:
+        raise Stage3EvaluationError("funding fixture has no native account events")
+    settlement_quantum = Decimal(1).scaleb(-Currency.from_str("USDT").precision)
+    return settlement_quantum * native_event_count
 
 
 def _fixture_decisions(
@@ -1258,6 +1318,7 @@ def _shared_execution_digest() -> str:
             },
             "execution": {
                 "bar_execution": True,
+                "amendment_sha256": stage3_momentum.STAGE3_EXECUTION_AMENDMENT_SHA256,
                 "order_type": "MARKET",
                 "terminal": "native_mark_valuation",
             },

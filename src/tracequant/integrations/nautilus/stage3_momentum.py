@@ -85,6 +85,12 @@ STAGE3_REQUIREMENTS_RELATIVE_PATH: Final = (
 )
 STAGE3_REQUIREMENTS_BASE_SHA: Final = "cb863767ca7d2ef48b1e6ce3dd5c85d941b7a5a4"
 STAGE3_REQUIREMENTS_BLOB_SHA: Final = "bceb070e4c15580b3a4987f29bbfbee705e51659"
+STAGE3_EXECUTION_AMENDMENT_PATH: Final = (
+    "docs/product/stage-3-execution-amendment-r1.md"
+)
+STAGE3_EXECUTION_AMENDMENT_SHA256: Final = (
+    "ff81927d01c27b192c518329ebe7efc890ff93d0963f07619ea925d187dea103"
+)
 STAGE3_MOMENTUM_START: Final = "2022-01-01T00:00:00Z"
 STAGE3_MOMENTUM_END: Final = "2023-01-01T00:00:00Z"
 
@@ -234,6 +240,18 @@ def _require_requirements_baseline() -> None:
     blob_sha = hashlib.sha1(header + content, usedforsecurity=False).hexdigest()
     if blob_sha != STAGE3_REQUIREMENTS_BLOB_SHA:
         raise Stage3MomentumError("Stage 3 requirements baseline blob has drifted")
+    _require_execution_amendment(repository_root)
+
+
+def _require_execution_amendment(repository_root: Path) -> None:
+    path = repository_root / STAGE3_EXECUTION_AMENDMENT_PATH
+    if not path.is_file():
+        raise Stage3MomentumError("Stage 3 execution amendment is missing")
+    if (
+        hashlib.sha256(path.read_bytes()).hexdigest()
+        != STAGE3_EXECUTION_AMENDMENT_SHA256
+    ):
+        raise Stage3MomentumError("Stage 3 execution amendment has drifted")
 
 
 def _require_empty_run_root(run_root: Path) -> None:
@@ -515,10 +533,11 @@ def _bar_open_trade_ticks(
             - stage3_features.HOUR_NS
             + stage3_features.STAGE2_CLOSE_OFFSET_MS * stage3_features.MS_NS
         )
+        execution_price = instrument.make_price(float(bar.open.as_decimal()))
         ticks.append(
             TradeTick(
                 instrument_id=instrument.id,
-                price=bar.open,
+                price=execution_price,
                 size=Quantity.from_str(f"{capacity:.{instrument.size_precision}f}"),
                 aggressor_side=AggressorSide.NO_AGGRESSOR,
                 trade_id=TradeId.from_str(
@@ -1162,6 +1181,8 @@ def _config_identity_payload(config: Stage3Config) -> dict[str, object]:
 
 def _requirements_payload() -> dict[str, str]:
     return {
+        "execution_amendment_path": STAGE3_EXECUTION_AMENDMENT_PATH,
+        "execution_amendment_sha256": STAGE3_EXECUTION_AMENDMENT_SHA256,
         "base_sha": STAGE3_REQUIREMENTS_BASE_SHA,
         "blob_sha": STAGE3_REQUIREMENTS_BLOB_SHA,
         "path": STAGE3_REQUIREMENTS_RELATIVE_PATH,

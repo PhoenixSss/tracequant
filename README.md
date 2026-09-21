@@ -12,14 +12,12 @@ historical Bar path into Nautilus `ParquetDataCatalog` and one Nautilus-native
 SMA crossover offline backtest. Stage 2 imports the accepted BTC/ETH
 `binance-usdm-btceth-202001-202608-r1` dataset — 15m/1h/4h Bars, 15m mark price,
 and funding — into one Nautilus catalog, and serves both the read-only Polars
-research views and `BacktestNode` from that same catalog. Stage 3 is not
-complete: this tree contains the accepted-input binding, finite causal
-feature/label contract, and fixed-parameter traditional momentum Nautilus
-Strategy for the single base offline run. It also provides the deterministic
-LightGBM training, immutable single-artifact manifest, strict local loader, and
-prediction wrapper needed by the later model Strategy and OOS tasks; that
-Strategy and the complete fold evaluation are not implemented yet. There is no
-Demo mode or Live mode in this tree. The project remains
+research views and `BacktestNode` from that same catalog. Stage 3 binds that
+accepted input to a finite causal feature/label contract, a traditional momentum
+Strategy, deterministic LightGBM artifacts and Strategy, the fixed
+expanding-window/accounting-sensitivity matrix, and a finite `rebuild-oos`
+entry which emits a compact tracked acceptance record. There is no Demo mode or
+Live mode in this tree. The project remains
 `OFFLINE_BACKTEST_ONLY` and `LIVE_NOT_APPROVED`; live trading cannot be enabled
 by configuration.
 
@@ -65,17 +63,17 @@ uv run --frozen pytest tests/acceptance/test_stage1_backtest.py::test_stage1_nat
 
 ## Current stage status
 
-Stage 1 and stage 2 are implemented and accepted. Stage 3 includes its
-trusted-input and causal feature/label capability plus the traditional momentum
-base-run strategy and deterministic single-artifact LightGBM train/load
-capability; the model Strategy, full evaluation, and OOS capabilities remain
-unimplemented.
+Stages 1 and 2 are implemented and accepted. Stage 3's bounded software
+capability is implemented through the trusted-input, feature/label, two-Strategy,
+artifact, fixed evaluation, and OOS rebuild paths. A formal rebuild writes the
+tracked Stage 3 acceptance record; its research metrics may be negative without
+invalidating software acceptance or granting Demo admission.
 
 | Stage | Status | Where it lives |
 | --- | --- | --- |
 | Stage 1: minimal offline loop | complete | [stage 1 backtest](#stage-1-offline-backtest) above |
 | Stage 2: Nautilus-homologous data | complete and accepted | [stage 2 requirements](docs/product/stage-2-data-and-research-requirements.md) |
-| Stage 3: strategy and model loop | trusted input + feature/label + traditional momentum base run + LightGBM artifact capability implemented; remaining capabilities pending | [stage 3 artifact module](src/tracequant/research/stage3_artifacts.py) and [requirements](docs/product/stage-3-strategy-and-model-requirements.md) |
+| Stage 3: strategy and model loop | bounded software capability implemented; formal results remain offline research evidence | [finite OOS rebuild](src/tracequant/integrations/nautilus/stage3_oos.py) and [requirements](docs/product/stage-3-strategy-and-model-requirements.md) |
 
 The accepted stage 2 dataset identity is tracked in
 [`docs/product/stage2-btceth-dataset-acceptance.json`](docs/product/stage2-btceth-dataset-acceptance.json).
@@ -113,6 +111,91 @@ copy outside temporary directories.
 Both statuses above stay offline: `OFFLINE_BACKTEST_ONLY` and
 `LIVE_NOT_APPROVED`. Reaching the end of stage 3 requires no profit threshold
 and grants no Demo admission.
+
+## Stage 3 finite OOS rebuild
+
+The [Stage 3 execution amendment r1](docs/product/stage-3-execution-amendment-r1.md)
+defines the approved B1 price conversion, minimum order checks and native
+funding rounding bound for both strategies. Its digest is bound into the
+run identities and rebuild contract alongside the frozen v0.1 requirements.
+
+Materialize and verify the locked Stage 2 catalog first. `catalog_path` is that
+existing, installed, read-only input; `evidence_root` and `run_root` are two
+different new, nonexistent external identity partitions. Run `rebuild-oos` from
+an identifiable clean commit. The command has no environment or
+`latest` fallback. It freezes the clean Git SHA, lock checksum, and rebuild
+contract digest before evaluation and rechecks them immediately before
+publication; any drift fails without replacing the tracked record.
+After the complete rebuild and strict validation succeed, it
+atomically replaces the compact tracked record at
+`docs/product/stage3-btceth-oos-acceptance.json`; an existing tracked record is
+left unchanged if the rebuild fails:
+
+```bash
+uv run --frozen python -m tracequant.integrations.nautilus.stage3_oos rebuild-oos \
+  --catalog-path <ABSOLUTE_CATALOG_PATH> \
+  --evidence-root <ABSOLUTE_NEW_EVIDENCE_PARTITION> \
+  --run-root <ABSOLUTE_NEW_RUN_PARTITION> \
+  --dataset-id binance-usdm-btceth-202001-202608-r1 \
+  --acceptance-digest 5909c878a81f0cdea85a8b8f86efd36d9c9bad5b3f3fb4c0f9960bb0551609cd \
+  --dataset-digest e17c6294e0a0e6714e56a44624ade37cff46125c46d8b0ee81ede6093711579c \
+  --source-manifest-digest de86d44c73117e17af2bbcb655cf1c8d4290043fa8854636cc0e4e592a1dc790 \
+  --market-data-manifest-digest a0d9a36bb65ec7c2ec41f47cdf6ba7d20f57ad28d8d3494a69624c60d6d0a110 \
+  --instrument-snapshot-checksum dd7fab59448a3b530ab70871ec57c375f6758e409004f9673d9d0cac7ee630bd \
+  --runtime-identity 2.0.0rc4+a0400251110653b6d8ae6a9b5b89c4543fa85a2d
+```
+
+The evidence and run targets must not exist, overlap each other or the catalog,
+or live in this checkout. Those external partitions remain immutable. A failed
+or partial run is never resumed; repair the input and rerun into different empty
+partitions. The tracked record contains
+only strict identities, digests, window roles, metric summaries, fee provenance,
+the command template, and relative external evidence filenames—never models,
+catalog data, full reports, local absolute paths, or secrets. Outcomes remain
+`OFFLINE_BACKTEST_ONLY` and `LIVE_NOT_APPROVED`; poor returns or a model losing
+to momentum do not block software acceptance and never auto-approve Demo.
+Two rebuilds in the same recorded OS/architecture, LightGBM binary build, and
+locked environment must produce the same stable artifact, decision, scenario,
+metric and result digests. The evaluation `result_digest` excludes artifact
+manifest digests because those bind creation-time provenance. Full artifact
+references remain in the evaluation manifest and are verified against the
+external evidence. Consequently, exact evaluation `manifest_digest` and tracked
+`acceptance_digest` can differ across creation times; compare the stable result
+digests and compact artifact/run/metric records for repeatability. Cross-environment
+model checksums are compared only under the recorded compatibility identity and
+the approved prediction tolerances (`atol = 1e-9`, `rtol = 1e-6`).
+
+Before publication the command rereads the evaluation manifest, partition
+identities, training parameters, fold manifests and model bytes, and every
+required run output. It checks report contents and complete run references
+against the completed evaluation. Each result identity binds the compact
+metrics, scenario, decisions, predictions, artifact and a digest of the full
+Nautilus reports, so the tracked record can verify those bindings without
+embedding the reports. Missing, changed or conflicting outputs leave the
+previous tracked record untouched.
+
+Formal evidence was regenerated twice from clean implementation commit
+`75e3de9ec96085b4394f52536009b2763183292c`, using distinct new external partitions
+in the same recorded environment. Each rebuild completed four fold artifacts,
+eight base runs and eight sensitivity runs, passed strict acceptance validation,
+and left the locked catalog unchanged. Both produced evaluation result digest
+`53e7929a716e763df8b0442e4f909cf6f6b01009b053f56e2b6c6789735de8d3`.
+The complete compact records agree after excluding only `acceptance_digest`
+and `evaluation.manifest_digest`, which retain distinct creation-time evidence.
+The tracked record is the second rebuild's generated output, with acceptance
+digest `bc9449100eb2b79b720f4d65ab11609115fb0b4181472dbd86a3f9e5bc5bbcd8`.
+
+The review-accessible bounded receipt
+`docs/product/stage3-btceth-oos-rebuild-receipt.json` records two further
+successful formal rebuilds from clean implementation commit `e5c59151bca40725595f7ab3caa2ff8dee4fe7c0`.
+It binds the distinct initially empty partitions, pre/post catalog verification,
+formal provenance, artifact manifests, complete 4/8/8 matrices, full external
+partition inventories, and stable-payload comparison to the tracked acceptance
+record. The receipt carries its own canonical SHA-256 and no external absolute
+path, model, full report, catalog data, secret, or derived market data. These are
+the completed formal rebuild evidence for Review finding E1; their acceptance
+remains subject to fresh Independent Review. Software acceptance still grants no
+Demo or Live admission.
 
 ## LCK: an engineering capability within TraceQuant
 

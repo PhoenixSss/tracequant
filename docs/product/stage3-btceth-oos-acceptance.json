@@ -1,0 +1,1221 @@
+{
+  "acceptance_digest": "bc9449100eb2b79b720f4d65ab11609115fb0b4181472dbd86a3f9e5bc5bbcd8",
+  "artifacts": [
+    {
+      "artifact_binding_digest": "23f505a9ef4a49d757d0e7fcbdfe58e3e99bbf70a10e95e9ccd133001b29d625",
+      "artifact_id": "de354d3bb5aa2aaf0a3599649d3c9905028f549e6c6e2c9f2a1e212127f9a808",
+      "compatibility_digest": "336abdfd94c227f7838206f353cd5f891a08060f90303cc25a8905a4ab0ac92a",
+      "environment_digest": "82029c26d541784ccdafac04d8c1a8c1a0493f75f77e834db73742a29ae14a8d",
+      "fold_id": "development-2022",
+      "manifest_relative_filename": "artifacts/development-2022/manifest.json",
+      "model_checksum": "3e761409b865697279f6d9b1f9c48a22bc8cbc10809498c34f44af2772f0cafe",
+      "prediction_tolerance_digest": "7ee5953f8669ef32fa16f68e763d3c4507f8e386fdbd25502ce2f1f43d5265dc",
+      "provenance_kind": "formal_git",
+      "role": "development",
+      "training_parameter_digest": "5f65a9167f80c1290edab420123ceaa9488cb1836d699ccd09d99db31189fb92",
+      "training_parameter_revision": "stage3-lgbm-r1"
+    },
+    {
+      "artifact_binding_digest": "bcb7ea3253f65934301b2ef7fa9524098a49e319adf0cf5166af2fb67ebfd237",
+      "artifact_id": "bcfaa3055b2a14bb7678bb3ab03438f759a6ea6fa19d1558d555289d99116401",
+      "compatibility_digest": "336abdfd94c227f7838206f353cd5f891a08060f90303cc25a8905a4ab0ac92a",
+      "environment_digest": "82029c26d541784ccdafac04d8c1a8c1a0493f75f77e834db73742a29ae14a8d",
+      "fold_id": "development-2023",
+      "manifest_relative_filename": "artifacts/development-2023/manifest.json",
+      "model_checksum": "6f72c263741bebe6bb9a1197ca1f49c1a420c17b8c5a299cdc00822fff920e32",
+      "prediction_tolerance_digest": "7ee5953f8669ef32fa16f68e763d3c4507f8e386fdbd25502ce2f1f43d5265dc",
+      "provenance_kind": "formal_git",
+      "role": "development",
+      "training_parameter_digest": "5f65a9167f80c1290edab420123ceaa9488cb1836d699ccd09d99db31189fb92",
+      "training_parameter_revision": "stage3-lgbm-r1"
+    },
+    {
+      "artifact_binding_digest": "8a0baccbfd490fac17ca3e5660810964e36b3156a448e0d4d90d2e043b2b630d",
+      "artifact_id": "06db2ff79ace35e586f24ee142b2daa18dae4f113d9137bf0da4efac2c7ee605",
+      "compatibility_digest": "336abdfd94c227f7838206f353cd5f891a08060f90303cc25a8905a4ab0ac92a",
+      "environment_digest": "82029c26d541784ccdafac04d8c1a8c1a0493f75f77e834db73742a29ae14a8d",
+      "fold_id": "validation-2024",
+      "manifest_relative_filename": "artifacts/validation-2024/manifest.json",
+      "model_checksum": "0eff8742645eb9cdeea3b15c64e8190fb065488f55f728e4ea86fb526eac35e0",
+      "prediction_tolerance_digest": "7ee5953f8669ef32fa16f68e763d3c4507f8e386fdbd25502ce2f1f43d5265dc",
+      "provenance_kind": "formal_git",
+      "role": "validation",
+      "training_parameter_digest": "5f65a9167f80c1290edab420123ceaa9488cb1836d699ccd09d99db31189fb92",
+      "training_parameter_revision": "stage3-lgbm-r1"
+    },
+    {
+      "artifact_binding_digest": "c6aa7b84edd0e44f2aab5a587fd9491220d2838a38fcfc9e3a83f854ff63b8ec",
+      "artifact_id": "f49a1a390bfee7e5adb04e323004c588e97c39525c28b1d1a3186b074cb66917",
+      "compatibility_digest": "336abdfd94c227f7838206f353cd5f891a08060f90303cc25a8905a4ab0ac92a",
+      "environment_digest": "82029c26d541784ccdafac04d8c1a8c1a0493f75f77e834db73742a29ae14a8d",
+      "fold_id": "final-test-2025-2026",
+      "manifest_relative_filename": "artifacts/final-test-2025-2026/manifest.json",
+      "model_checksum": "1f5c6663cc42083c00812aa3a99eb9de270a4e3c172972327258707b0c5d193e",
+      "prediction_tolerance_digest": "7ee5953f8669ef32fa16f68e763d3c4507f8e386fdbd25502ce2f1f43d5265dc",
+      "provenance_kind": "formal_git",
+      "role": "final_test",
+      "training_parameter_digest": "5f65a9167f80c1290edab420123ceaa9488cb1836d699ccd09d99db31189fb92",
+      "training_parameter_revision": "stage3-lgbm-r1"
+    }
+  ],
+  "configs": {
+    "artifact_lock_digest": "8afa251b2c5418ce14ac03d5bd983c553867409157f0c4acf488eebef6fdad67",
+    "feature_schema_digest": "6170d256a110effad4da4b97d6f22444d8bd8aac446d341610699f013b0e1f84",
+    "frozen_final_test_config_digest": "b317f2fdcc6432b4c56df374eb22e1134855a2599190c79f5e126e217e7dbb9c",
+    "input_digest": "90ac96847a0f5a51bd20b279f20c83734a6d058a33096f34cc9208974dc64b93",
+    "rebuild_contract_digest": "8ea502b7ed5a09aecc711553c234669622abc9ec189e624355f0c8f5ba75b21d",
+    "run_config_digests": {
+      "lightgbm": {
+        "base": "1ddaecec9478d13869a5ebff171ab73d7fdf9c124c94f0659a0f6dcf2e99f7e3",
+        "double_fee": "6bd48fb125fedbbb48a8574199c8e7f771e2875e997412fcba11608d3e84da6e",
+        "double_funding": "17ba38fadf8f973e5ab4b5af3c3ac786363186b99689050aa59fd91074cfe024",
+        "zero_fee": "585537607b612b636baffc3e3b3e61fe70aeb6d24d676b268b4256284e167998",
+        "zero_funding": "8852dfa47c92004c3a6e428e5adb8c1a451cd7a04051cefe0bc0e66925d0467d"
+      },
+      "momentum": {
+        "base": "6e70fd92b9906ac968df7c2f51ac9d3e37ff4085ce9ad042ff0a837342cc1780",
+        "double_fee": "a28b2c777fd84a9230e021e23da87552c205a3086f4afc9a74bf053f7c57d520",
+        "double_funding": "07f39fb835c37801d6b1dc86602ec9769712a6b2769c6ed97045440e928141bd",
+        "zero_fee": "6154edb81119f3bd617189e8962d2a6ff807b88da5fcf16289154e5e4ea052d5",
+        "zero_funding": "6fc9cf066a203e51748b1aa74b3c07aed471edc296c99b90ca9ef2d5fff0f99f"
+      }
+    },
+    "shared_execution_digest": "f2fcb110f30575de49c06fb74b447ef52034bbb23ece42250e54509b55e28eba",
+    "strategy_config_digests": {
+      "lightgbm": "03b23c1775bb08e2dcc740734f1b370b46492ead5fcb2b755b55aefd1606b501",
+      "momentum": "d595b219a57ce8d6538cf0f0c7887294199779991848be1f5429d6c296f977bd"
+    }
+  },
+  "evaluation": {
+    "manifest_digest": "cb7b1a8c8d32a7b0a5ebd6940e7fe371a9dfbe41b5a8b85f152d1175e6e4515b",
+    "manifest_relative_filename": "manifest.json",
+    "result_digest": "53e7929a716e763df8b0442e4f909cf6f6b01009b053f56e2b6c6789735de8d3"
+  },
+  "fee_provenance": {
+    "digest": "60060760a024e37cb9b3cd3119afd07bb408e3bc8476fd3e49c9ecd8cff7d5e1",
+    "records": [
+      {
+        "catalog_maker_fee": "0.0002",
+        "catalog_maker_matches_base": true,
+        "catalog_matches_snapshot": true,
+        "catalog_taker_fee": "0.0005",
+        "catalog_taker_matches_base": false,
+        "effective_maker_fee": "0.0002",
+        "effective_taker_fee": "0.0004",
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "snapshot_maker_fee": "0.0002",
+        "snapshot_maker_matches_base": true,
+        "snapshot_taker_fee": "0.0005",
+        "snapshot_taker_matches_base": false
+      },
+      {
+        "catalog_maker_fee": "0.0002",
+        "catalog_maker_matches_base": true,
+        "catalog_matches_snapshot": true,
+        "catalog_taker_fee": "0.0005",
+        "catalog_taker_matches_base": false,
+        "effective_maker_fee": "0.0002",
+        "effective_taker_fee": "0.0004",
+        "instrument_id": "ETHUSDT-PERP.BINANCE",
+        "snapshot_maker_fee": "0.0002",
+        "snapshot_maker_matches_base": true,
+        "snapshot_taker_fee": "0.0005",
+        "snapshot_taker_matches_base": false
+      }
+    ]
+  },
+  "folds": [
+    {
+      "evaluation_end": "2023-01-01T00:00:00Z",
+      "evaluation_start": "2022-01-01T00:00:00Z",
+      "fold_id": "development-2022",
+      "purge_boundary": "2022-01-01T00:00:00Z",
+      "role": "development",
+      "train_end": "2022-01-01T00:00:00Z",
+      "train_start": "2020-01-01T00:00:00Z"
+    },
+    {
+      "evaluation_end": "2024-01-01T00:00:00Z",
+      "evaluation_start": "2023-01-01T00:00:00Z",
+      "fold_id": "development-2023",
+      "purge_boundary": "2023-01-01T00:00:00Z",
+      "role": "development",
+      "train_end": "2023-01-01T00:00:00Z",
+      "train_start": "2020-01-01T00:00:00Z"
+    },
+    {
+      "evaluation_end": "2025-01-01T00:00:00Z",
+      "evaluation_start": "2024-01-01T00:00:00Z",
+      "fold_id": "validation-2024",
+      "purge_boundary": "2024-01-01T00:00:00Z",
+      "role": "validation",
+      "train_end": "2024-01-01T00:00:00Z",
+      "train_start": "2020-01-01T00:00:00Z"
+    },
+    {
+      "evaluation_end": "2026-09-01T00:00:00Z",
+      "evaluation_start": "2025-01-01T00:00:00Z",
+      "fold_id": "final-test-2025-2026",
+      "purge_boundary": "2025-01-01T00:00:00Z",
+      "role": "final_test",
+      "train_end": "2025-01-01T00:00:00Z",
+      "train_start": "2020-01-01T00:00:00Z"
+    }
+  ],
+  "metrics": {
+    "base": [
+      {
+        "fold_id": "development-2022",
+        "strategy": "momentum",
+        "summary": {
+          "commission": "12902.35461623",
+          "exposure": "0.1695522245622958419018808701",
+          "funding": "-257.25904134",
+          "max_drawdown": "0.1260779715044268916323250170",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "6463.07026732",
+              "fill_count": 3405,
+              "funding": "-102.40464275",
+              "realized_pnl": "-6087.05380999",
+              "trade_count": 799,
+              "turnover": "161.576756683"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "6439.28434891",
+              "fill_count": 6333,
+              "funding": "-154.85439859",
+              "realized_pnl": "-520.24664748",
+              "trade_count": 786,
+              "turnover": "160.9821087232"
+            }
+          },
+          "sharpe": "-0.4440573928287058",
+          "sortino": "-0.6475748346143828",
+          "total_pnl": "-6607.30045747",
+          "total_return": "-0.0660730045747",
+          "trade_count": 1585,
+          "turnover": "322.5588654062",
+          "window": {
+            "end": "2023-01-01T00:00:00Z",
+            "role": "development",
+            "start": "2022-01-01T00:00:00Z"
+          }
+        }
+      },
+      {
+        "fold_id": "development-2022",
+        "strategy": "lightgbm",
+        "summary": {
+          "commission": "13552.44857482",
+          "exposure": "0.07682379545554718149138014086",
+          "funding": "36.52455855",
+          "max_drawdown": "0.1157841342006294997504011290",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "5846.21787260",
+              "fill_count": 2079,
+              "funding": "-76.73827637",
+              "realized_pnl": "-3968.52484897",
+              "trade_count": 728,
+              "turnover": "146.155446815"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "7706.23070222",
+              "fill_count": 3955,
+              "funding": "113.26283492",
+              "realized_pnl": "-6140.28308722",
+              "trade_count": 954,
+              "turnover": "192.6557675542"
+            }
+          },
+          "sharpe": "-1.0711525004163338",
+          "sortino": "-1.445178695956833",
+          "total_pnl": "-10108.80793619",
+          "total_return": "-0.1010880793619",
+          "trade_count": 1682,
+          "turnover": "338.8112143692",
+          "window": {
+            "end": "2023-01-01T00:00:00Z",
+            "role": "development",
+            "start": "2022-01-01T00:00:00Z"
+          }
+        }
+      },
+      {
+        "fold_id": "development-2023",
+        "strategy": "momentum",
+        "summary": {
+          "commission": "12431.99755380",
+          "exposure": "0.1467334006846392279149327267",
+          "funding": "-138.82517367",
+          "max_drawdown": "0.2070148440199161425985900532",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "6014.78318928",
+              "fill_count": 2609,
+              "funding": "-50.42438462",
+              "realized_pnl": "-5572.30277396",
+              "trade_count": 748,
+              "turnover": "150.369579732"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "6417.21436452",
+              "fill_count": 4433,
+              "funding": "-88.40078905",
+              "realized_pnl": "-10135.55004380",
+              "trade_count": 794,
+              "turnover": "160.4303591077"
+            }
+          },
+          "sharpe": "-2.1597834800059363",
+          "sortino": "-3.3199046746733867",
+          "total_pnl": "-15705.41423533",
+          "total_return": "-0.1570541423533",
+          "trade_count": 1542,
+          "turnover": "310.7999388397",
+          "window": {
+            "end": "2024-01-01T00:00:00Z",
+            "role": "development",
+            "start": "2023-01-01T00:00:00Z"
+          }
+        }
+      },
+      {
+        "fold_id": "development-2023",
+        "strategy": "lightgbm",
+        "summary": {
+          "commission": "1781.20110932",
+          "exposure": "0.006174948997199240710313895299",
+          "funding": "-64.33215109",
+          "max_drawdown": "0.02914735612738456864469230045",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "906.41098412",
+              "fill_count": 283,
+              "funding": "-26.69607756",
+              "realized_pnl": "-124.49676168",
+              "trade_count": 113,
+              "turnover": "22.660274603"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "874.79012520",
+              "fill_count": 329,
+              "funding": "-37.63607353",
+              "realized_pnl": "-1748.60406872",
+              "trade_count": 109,
+              "turnover": "21.8697531297"
+            }
+          },
+          "sharpe": "-0.8827182584728483",
+          "sortino": "-1.1400103584605983",
+          "total_pnl": "-1873.10083040",
+          "total_return": "-0.018731008304",
+          "trade_count": 222,
+          "turnover": "44.5300277327",
+          "window": {
+            "end": "2024-01-01T00:00:00Z",
+            "role": "development",
+            "start": "2023-01-01T00:00:00Z"
+          }
+        }
+      },
+      {
+        "fold_id": "validation-2024",
+        "strategy": "momentum",
+        "summary": {
+          "commission": "13126.30327185",
+          "exposure": "0.1734796874771368955974430477",
+          "funding": "-416.19595573",
+          "max_drawdown": "0.1890515448125458830639787700",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "6374.74287640",
+              "fill_count": 4155,
+              "funding": "-219.79218991",
+              "realized_pnl": "-7289.15886663",
+              "trade_count": 788,
+              "turnover": "159.36857191"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "6751.56039545",
+              "fill_count": 5850,
+              "funding": "-196.40376582",
+              "realized_pnl": "-10156.47880105",
+              "trade_count": 830,
+              "turnover": "168.7890098958"
+            }
+          },
+          "sharpe": "-1.7638544903902507",
+          "sortino": "-2.5880064738656463",
+          "total_pnl": "-17473.92953240",
+          "total_return": "-0.174739295324",
+          "trade_count": 1618,
+          "turnover": "328.1575818058",
+          "window": {
+            "end": "2025-01-01T00:00:00Z",
+            "role": "validation",
+            "start": "2024-01-01T00:00:00Z"
+          }
+        }
+      },
+      {
+        "fold_id": "validation-2024",
+        "strategy": "lightgbm",
+        "summary": {
+          "commission": "3299.34914980",
+          "exposure": "0.01198473435049879240495235178",
+          "funding": "-106.38207689",
+          "max_drawdown": "0.02768595697127665391557426506",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "1272.44112220",
+              "fill_count": 451,
+              "funding": "-44.83670469",
+              "realized_pnl": "3207.07467312",
+              "trade_count": 159,
+              "turnover": "31.811028055"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "2026.90802760",
+              "fill_count": 773,
+              "funding": "-61.54537220",
+              "realized_pnl": "-2171.82849979",
+              "trade_count": 252,
+              "turnover": "50.6727006898"
+            }
+          },
+          "sharpe": "0.3282434039334776",
+          "sortino": "0.4877844837459404",
+          "total_pnl": "1035.24617333",
+          "total_return": "0.0103524617333",
+          "trade_count": 411,
+          "turnover": "82.4837287448",
+          "window": {
+            "end": "2025-01-01T00:00:00Z",
+            "role": "validation",
+            "start": "2024-01-01T00:00:00Z"
+          }
+        }
+      },
+      {
+        "fold_id": "final-test-2025-2026",
+        "strategy": "momentum",
+        "summary": {
+          "commission": "20873.26013185",
+          "exposure": "0.1962499007763462115835843971",
+          "funding": "-294.42561317",
+          "max_drawdown": "0.3008905963789098481825527396",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "9927.18744436",
+              "fill_count": 5702,
+              "funding": "-47.26583501",
+              "realized_pnl": "-11150.41717939",
+              "trade_count": 1231,
+              "turnover": "248.179686109"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "10946.07268749",
+              "fill_count": 9642,
+              "funding": "-247.15977816",
+              "realized_pnl": "-13646.35849584",
+              "trade_count": 1345,
+              "turnover": "273.6518171819"
+            }
+          },
+          "sharpe": "-1.4087244574143762",
+          "sortino": "-2.1072206814034167",
+          "total_pnl": "-24796.77567523",
+          "total_return": "-0.2479677567523",
+          "trade_count": 2576,
+          "turnover": "521.8315032909",
+          "window": {
+            "end": "2026-09-01T00:00:00Z",
+            "role": "final_test",
+            "start": "2025-01-01T00:00:00Z"
+          }
+        }
+      },
+      {
+        "fold_id": "final-test-2025-2026",
+        "strategy": "lightgbm",
+        "summary": {
+          "commission": "4518.05952424",
+          "exposure": "0.01143007399092605355298969144",
+          "funding": "-20.55291649",
+          "max_drawdown": "0.03092110253056100688196793891",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "1089.71361360",
+              "fill_count": 406,
+              "funding": "1.74824636",
+              "realized_pnl": "-1054.01076726",
+              "trade_count": 136,
+              "turnover": "27.24284034"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "3428.34591064",
+              "fill_count": 1426,
+              "funding": "-22.30116285",
+              "realized_pnl": "1831.84087648",
+              "trade_count": 426,
+              "turnover": "85.7086477659"
+            }
+          },
+          "sharpe": "0.15906663658884027",
+          "sortino": "0.23339197976523327",
+          "total_pnl": "777.83010922",
+          "total_return": "0.0077783010922",
+          "trade_count": 562,
+          "turnover": "112.9514881059",
+          "window": {
+            "end": "2026-09-01T00:00:00Z",
+            "role": "final_test",
+            "start": "2025-01-01T00:00:00Z"
+          }
+        }
+      }
+    ],
+    "fold_dispersion": {
+      "lightgbm": {
+        "commission": {
+          "max": "13552.44857482",
+          "min": "1781.20110932",
+          "range": "11771.24746550"
+        },
+        "exposure": {
+          "max": "0.07682379545554718149138014086",
+          "min": "0.006174948997199240710313895299",
+          "range": "0.07064884645834794078106624556"
+        },
+        "funding": {
+          "max": "36.52455855",
+          "min": "-106.38207689",
+          "range": "142.90663544"
+        },
+        "max_drawdown": {
+          "max": "0.1157841342006294997504011290",
+          "min": "0.02768595697127665391557426506",
+          "range": "0.08809817722935284583482686394"
+        },
+        "sharpe": {
+          "max": "0.3282434039334776",
+          "min": "-1.0711525004163338",
+          "range": "1.3993959043498114"
+        },
+        "sortino": {
+          "max": "0.4877844837459404",
+          "min": "-1.445178695956833",
+          "range": "1.9329631797027734"
+        },
+        "total_pnl": {
+          "max": "1035.24617333",
+          "min": "-10108.80793619",
+          "range": "11144.05410952"
+        },
+        "total_return": {
+          "max": "0.0103524617333",
+          "min": "-0.1010880793619",
+          "range": "0.1114405410952"
+        },
+        "trade_count": {
+          "max": "1682",
+          "min": "222",
+          "range": "1460"
+        },
+        "turnover": {
+          "max": "338.8112143692",
+          "min": "44.5300277327",
+          "range": "294.2811866365"
+        }
+      },
+      "momentum": {
+        "commission": {
+          "max": "20873.26013185",
+          "min": "12431.99755380",
+          "range": "8441.26257805"
+        },
+        "exposure": {
+          "max": "0.1962499007763462115835843971",
+          "min": "0.1467334006846392279149327267",
+          "range": "0.0495165000917069836686516704"
+        },
+        "funding": {
+          "max": "-138.82517367",
+          "min": "-416.19595573",
+          "range": "277.37078206"
+        },
+        "max_drawdown": {
+          "max": "0.3008905963789098481825527396",
+          "min": "0.1260779715044268916323250170",
+          "range": "0.1748126248744829565502277226"
+        },
+        "sharpe": {
+          "max": "-0.4440573928287058",
+          "min": "-2.1597834800059363",
+          "range": "1.7157260871772305"
+        },
+        "sortino": {
+          "max": "-0.6475748346143828",
+          "min": "-3.3199046746733867",
+          "range": "2.6723298400590039"
+        },
+        "total_pnl": {
+          "max": "-6607.30045747",
+          "min": "-24796.77567523",
+          "range": "18189.47521776"
+        },
+        "total_return": {
+          "max": "-0.0660730045747",
+          "min": "-0.2479677567523",
+          "range": "0.1818947521776"
+        },
+        "trade_count": {
+          "max": "2576",
+          "min": "1542",
+          "range": "1034"
+        },
+        "turnover": {
+          "max": "521.8315032909",
+          "min": "310.7999388397",
+          "range": "211.0315644512"
+        }
+      }
+    },
+    "sensitivity": [
+      {
+        "fold_id": "final-test-2025-2026",
+        "scenario": "zero_fee",
+        "strategy": "momentum",
+        "summary": {
+          "commission": "0E-8",
+          "exposure": "0.1727284149381229250179529110",
+          "funding": "-294.42561317",
+          "max_drawdown": "0.1656223423967167015261746060",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "0E-8",
+              "fill_count": 5702,
+              "funding": "-47.26583501",
+              "realized_pnl": "-1223.22973503",
+              "trade_count": 1231,
+              "turnover": "248.179686109"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "0E-8",
+              "fill_count": 9642,
+              "funding": "-247.15977816",
+              "realized_pnl": "-2700.28580835",
+              "trade_count": 1345,
+              "turnover": "273.6518171819"
+            }
+          },
+          "sharpe": "-0.18002295192667178",
+          "sortino": "-0.27121386332391906",
+          "total_pnl": "-3923.51554338",
+          "total_return": "-0.0392351554338",
+          "trade_count": 2576,
+          "turnover": "521.8315032909",
+          "window": {
+            "end": "2026-09-01T00:00:00Z",
+            "role": "final_test",
+            "start": "2025-01-01T00:00:00Z"
+          }
+        }
+      },
+      {
+        "fold_id": "final-test-2025-2026",
+        "scenario": "double_fee",
+        "strategy": "momentum",
+        "summary": {
+          "commission": "41746.52026304",
+          "exposure": "0.2308698292292933066871938730",
+          "funding": "-294.42561317",
+          "max_drawdown": "0.4921448424996394977072429477",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "19854.37488872",
+              "fill_count": 5702,
+              "funding": "-47.26583501",
+              "realized_pnl": "-21077.60462375",
+              "trade_count": 1231,
+              "turnover": "248.179686109"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "21892.14537432",
+              "fill_count": 9642,
+              "funding": "-247.15977816",
+              "realized_pnl": "-24592.43118267",
+              "trade_count": 1345,
+              "turnover": "273.6518171819"
+            }
+          },
+          "sharpe": "-2.611867553268153",
+          "sortino": "-3.8832345246692137",
+          "total_pnl": "-45670.03580642",
+          "total_return": "-0.4567003580642",
+          "trade_count": 2576,
+          "turnover": "521.8315032909",
+          "window": {
+            "end": "2026-09-01T00:00:00Z",
+            "role": "final_test",
+            "start": "2025-01-01T00:00:00Z"
+          }
+        }
+      },
+      {
+        "fold_id": "final-test-2025-2026",
+        "scenario": "zero_funding",
+        "strategy": "momentum",
+        "summary": {
+          "commission": "20873.26013185",
+          "exposure": "0.1958716727160625982377292860",
+          "funding": "0E-8",
+          "max_drawdown": "0.2984929285544830076115339306",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "9927.18744436",
+              "fill_count": 5702,
+              "funding": "0E-8",
+              "realized_pnl": "-11103.15134438",
+              "trade_count": 1231,
+              "turnover": "248.179686109"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "10946.07268749",
+              "fill_count": 9642,
+              "funding": "0E-8",
+              "realized_pnl": "-13399.19871768",
+              "trade_count": 1345,
+              "turnover": "273.6518171819"
+            }
+          },
+          "sharpe": "-1.391292063056341",
+          "sortino": "-2.081386434797057",
+          "total_pnl": "-24502.35006206",
+          "total_return": "-0.2450235006206",
+          "trade_count": 2576,
+          "turnover": "521.8315032909",
+          "window": {
+            "end": "2026-09-01T00:00:00Z",
+            "role": "final_test",
+            "start": "2025-01-01T00:00:00Z"
+          }
+        }
+      },
+      {
+        "fold_id": "final-test-2025-2026",
+        "scenario": "double_funding",
+        "strategy": "momentum",
+        "summary": {
+          "commission": "20873.26013185",
+          "exposure": "0.1966301159611239538904208553",
+          "funding": "-588.85122599",
+          "max_drawdown": "0.3032887688986299522331254861",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "9927.18744436",
+              "fill_count": 5702,
+              "funding": "-94.53167000",
+              "realized_pnl": "-11197.68301438",
+              "trade_count": 1231,
+              "turnover": "248.179686109"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "10946.07268749",
+              "fill_count": 9642,
+              "funding": "-494.31955599",
+              "realized_pnl": "-13893.51827367",
+              "trade_count": 1345,
+              "turnover": "273.6518171819"
+            }
+          },
+          "sharpe": "-1.4261410958938905",
+          "sortino": "-2.1330211878663543",
+          "total_pnl": "-25091.20128805",
+          "total_return": "-0.2509120128805",
+          "trade_count": 2576,
+          "turnover": "521.8315032909",
+          "window": {
+            "end": "2026-09-01T00:00:00Z",
+            "role": "final_test",
+            "start": "2025-01-01T00:00:00Z"
+          }
+        }
+      },
+      {
+        "fold_id": "final-test-2025-2026",
+        "scenario": "zero_fee",
+        "strategy": "lightgbm",
+        "summary": {
+          "commission": "0E-8",
+          "exposure": "0.01115269435001244522835828012",
+          "funding": "-20.55291649",
+          "max_drawdown": "0.02027639180461762864737295965",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "0E-8",
+              "fill_count": 406,
+              "funding": "1.74824636",
+              "realized_pnl": "35.70284634",
+              "trade_count": 136,
+              "turnover": "27.24284034"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "0E-8",
+              "fill_count": 1426,
+              "funding": "-22.30116285",
+              "realized_pnl": "5260.18678712",
+              "trade_count": 426,
+              "turnover": "85.7086477659"
+            }
+          },
+          "sharpe": "0.9863265605828396",
+          "sortino": "1.4665539251171773",
+          "total_pnl": "5295.88963346",
+          "total_return": "0.0529588963346",
+          "trade_count": 562,
+          "turnover": "112.9514881059",
+          "window": {
+            "end": "2026-09-01T00:00:00Z",
+            "role": "final_test",
+            "start": "2025-01-01T00:00:00Z"
+          }
+        }
+      },
+      {
+        "fold_id": "final-test-2025-2026",
+        "scenario": "double_fee",
+        "strategy": "lightgbm",
+        "summary": {
+          "commission": "9036.11904854",
+          "exposure": "0.01172588301396147422752841034",
+          "funding": "-20.55291649",
+          "max_drawdown": "0.0591118128862",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "2179.42722720",
+              "fill_count": 406,
+              "funding": "1.74824636",
+              "realized_pnl": "-2143.72438086",
+              "trade_count": 136,
+              "turnover": "27.24284034"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "6856.69182134",
+              "fill_count": 1426,
+              "funding": "-22.30116285",
+              "realized_pnl": "-1596.50503422",
+              "trade_count": 426,
+              "turnover": "85.7086477659"
+            }
+          },
+          "sharpe": "-0.6701733513968693",
+          "sortino": "-0.9700823519831135",
+          "total_pnl": "-3740.22941508",
+          "total_return": "-0.0374022941508",
+          "trade_count": 562,
+          "turnover": "112.9514881059",
+          "window": {
+            "end": "2026-09-01T00:00:00Z",
+            "role": "final_test",
+            "start": "2025-01-01T00:00:00Z"
+          }
+        }
+      },
+      {
+        "fold_id": "final-test-2025-2026",
+        "scenario": "zero_funding",
+        "strategy": "lightgbm",
+        "summary": {
+          "commission": "4518.05952424",
+          "exposure": "0.01142795321175010745160782052",
+          "funding": "0E-8",
+          "max_drawdown": "0.03079389793170330909854383300",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "1089.71361360",
+              "fill_count": 406,
+              "funding": "0E-8",
+              "realized_pnl": "-1055.75901362",
+              "trade_count": 136,
+              "turnover": "27.24284034"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "3428.34591064",
+              "fill_count": 1426,
+              "funding": "0E-8",
+              "realized_pnl": "1854.14203933",
+              "trade_count": 426,
+              "turnover": "85.7086477659"
+            }
+          },
+          "sharpe": "0.1628382924156002",
+          "sortino": "0.23896661314997364",
+          "total_pnl": "798.38302571",
+          "total_return": "0.0079838302571",
+          "trade_count": 562,
+          "turnover": "112.9514881059",
+          "window": {
+            "end": "2026-09-01T00:00:00Z",
+            "role": "final_test",
+            "start": "2025-01-01T00:00:00Z"
+          }
+        }
+      },
+      {
+        "fold_id": "final-test-2025-2026",
+        "scenario": "double_funding",
+        "strategy": "lightgbm",
+        "summary": {
+          "commission": "4518.05952424",
+          "exposure": "0.01143219574434516707261466894",
+          "funding": "-41.10583283",
+          "max_drawdown": "0.03104835760307828569819478704",
+          "per_instrument": {
+            "BTCUSDT-PERP.BINANCE": {
+              "commission": "1089.71361360",
+              "fill_count": 406,
+              "funding": "3.49649276",
+              "realized_pnl": "-1052.26252086",
+              "trade_count": 136,
+              "turnover": "27.24284034"
+            },
+            "ETHUSDT-PERP.BINANCE": {
+              "commission": "3428.34591064",
+              "fill_count": 1426,
+              "funding": "-44.60232559",
+              "realized_pnl": "1809.53971374",
+              "trade_count": 426,
+              "turnover": "85.7086477659"
+            }
+          },
+          "sharpe": "0.1552942278841774",
+          "sortino": "0.22781784931389354",
+          "total_pnl": "757.27719288",
+          "total_return": "0.0075727719288",
+          "trade_count": 562,
+          "turnover": "112.9514881059",
+          "window": {
+            "end": "2026-09-01T00:00:00Z",
+            "role": "final_test",
+            "start": "2025-01-01T00:00:00Z"
+          }
+        }
+      }
+    ],
+    "summary_digest": "43a1cacde9d5c6fb08f25ba546cae4d7c9dda83e4b73b5e3526ef76f98bd8af6"
+  },
+  "product_status": [
+    "OFFLINE_BACKTEST_ONLY",
+    "LIVE_NOT_APPROVED"
+  ],
+  "rebuild_command": "uv run --frozen python -m tracequant.integrations.nautilus.stage3_oos rebuild-oos --catalog-path <ABSOLUTE_CATALOG_PATH> --evidence-root <ABSOLUTE_NEW_EVIDENCE_PARTITION> --run-root <ABSOLUTE_NEW_RUN_PARTITION> --dataset-id binance-usdm-btceth-202001-202608-r1 --acceptance-digest 5909c878a81f0cdea85a8b8f86efd36d9c9bad5b3f3fb4c0f9960bb0551609cd --dataset-digest e17c6294e0a0e6714e56a44624ade37cff46125c46d8b0ee81ede6093711579c --source-manifest-digest de86d44c73117e17af2bbcb655cf1c8d4290043fa8854636cc0e4e592a1dc790 --market-data-manifest-digest a0d9a36bb65ec7c2ec41f47cdf6ba7d20f57ad28d8d3494a69624c60d6d0a110 --instrument-snapshot-checksum dd7fab59448a3b530ab70871ec57c375f6758e409004f9673d9d0cac7ee630bd --runtime-identity 2.0.0rc4+a0400251110653b6d8ae6a9b5b89c4543fa85a2d",
+  "runs": [
+    {
+      "artifact_id": null,
+      "config_digest": "05bf247867323195aa59b5838c71e823884a686fc078726c18bcd59abf3ab609",
+      "decision_digest": "b3bc15887faea25af1d036d174fb41f0c69c29e3e290f0cdc2573e128692555b",
+      "fee_provenance_digest": "60060760a024e37cb9b3cd3119afd07bb408e3bc8476fd3e49c9ecd8cff7d5e1",
+      "fold_id": "development-2022",
+      "manifest_relative_filename": "base/development-2022/momentum/manifest.json",
+      "nautilus_digest": "ee5deb58bb39eb58fcd0285d7132a0796dcc06be04bc080d28c1959606d43520",
+      "prediction_digest": null,
+      "result_digest": "28186674ebbaba8c6467a198a190e52d8657ac85287d03630f862c4ac05ba145",
+      "role": "development",
+      "run_identity": "6cb1dd4dd74112182bc97e4b4f32b97c453209274088719574db9fe1225246c7",
+      "run_type": "base",
+      "scenario": "base",
+      "scenario_digest": "db9aa0c38a9f84c13e839e28b837c39bb8d5ba0aa8179207b059b30a6df4819e",
+      "strategy": "momentum",
+      "strategy_config_digest": "d595b219a57ce8d6538cf0f0c7887294199779991848be1f5429d6c296f977bd"
+    },
+    {
+      "artifact_id": "de354d3bb5aa2aaf0a3599649d3c9905028f549e6c6e2c9f2a1e212127f9a808",
+      "config_digest": "dcff047c7c27de1a25959c85293f41574a4f1fbed953d2e5997199850b0f49ce",
+      "decision_digest": "af8e8187250ac88743b2ef7ab96dafcf5697869d919d0d5bf180fecf1d11a1e6",
+      "fee_provenance_digest": "60060760a024e37cb9b3cd3119afd07bb408e3bc8476fd3e49c9ecd8cff7d5e1",
+      "fold_id": "development-2022",
+      "manifest_relative_filename": "base/development-2022/lightgbm/manifest.json",
+      "nautilus_digest": "16bd05105111405a11edafeaee1e64e9c7a40f3bc587e90e9417efe622673a15",
+      "prediction_digest": "f8fe34b002e367ad327fa8bd04d527faf2b7fce6ff929f7cae56a4c4457304ee",
+      "result_digest": "ae77cbc18a9149c1e684af2694796d09577764851812c4ceab63f872d916da33",
+      "role": "development",
+      "run_identity": "ba5396ea0af7e4f0e5c6350a6c901103f654b2a8de53360a4c2e4f88e7c6ae0a",
+      "run_type": "base",
+      "scenario": "base",
+      "scenario_digest": "db9aa0c38a9f84c13e839e28b837c39bb8d5ba0aa8179207b059b30a6df4819e",
+      "strategy": "lightgbm",
+      "strategy_config_digest": "03b23c1775bb08e2dcc740734f1b370b46492ead5fcb2b755b55aefd1606b501"
+    },
+    {
+      "artifact_id": null,
+      "config_digest": "162705d7580da920ed9be64d41fabb3b5bd1c701adcd8adcbcefe2ba64e9cc00",
+      "decision_digest": "353a11b542c098ba6b959c6c864cf11791c066dc1772b75e6809e4312fd36862",
+      "fee_provenance_digest": "60060760a024e37cb9b3cd3119afd07bb408e3bc8476fd3e49c9ecd8cff7d5e1",
+      "fold_id": "development-2023",
+      "manifest_relative_filename": "base/development-2023/momentum/manifest.json",
+      "nautilus_digest": "f249d77c69d4fbf16238aed960aeeb2edc32d45af2997125d2814eb815a33706",
+      "prediction_digest": null,
+      "result_digest": "7c441d447816c24255bc422c1052af3d2308b49566c0c257c24208e0fca64bdf",
+      "role": "development",
+      "run_identity": "1db4b182762df117ce9aa783949ba1668d19604482bc33163bdc68a61d763f28",
+      "run_type": "base",
+      "scenario": "base",
+      "scenario_digest": "3e2123ba4dd7a5ab5b4d22355ab0e4db398042b072f9a5f73a2f50c78582777b",
+      "strategy": "momentum",
+      "strategy_config_digest": "d595b219a57ce8d6538cf0f0c7887294199779991848be1f5429d6c296f977bd"
+    },
+    {
+      "artifact_id": "bcfaa3055b2a14bb7678bb3ab03438f759a6ea6fa19d1558d555289d99116401",
+      "config_digest": "b39e52baac5b0b2c90e5900a07a6ff52d37bff0e61dbbcc732d1a01a0320b607",
+      "decision_digest": "c0ca3887064baa0dbb167397c8bbcaf5ddb8e2b291aa4f5bbc7a2ecf63923fb3",
+      "fee_provenance_digest": "60060760a024e37cb9b3cd3119afd07bb408e3bc8476fd3e49c9ecd8cff7d5e1",
+      "fold_id": "development-2023",
+      "manifest_relative_filename": "base/development-2023/lightgbm/manifest.json",
+      "nautilus_digest": "547418b6ab402c9e3c89b1cf963f5eb233f2b6812f0707907c4388b80dc0208e",
+      "prediction_digest": "2993411eafd91965084d8f2d350cc34125a739f4ac353f773ff473a2ac5b3333",
+      "result_digest": "97f9f3f40923e307753af2495b90b6c7256cc90143a11ab3269c862061719409",
+      "role": "development",
+      "run_identity": "5b251cfe5c160693f49a3efccfb9c6626855fd6c204fed83fd11822496fe84e7",
+      "run_type": "base",
+      "scenario": "base",
+      "scenario_digest": "3e2123ba4dd7a5ab5b4d22355ab0e4db398042b072f9a5f73a2f50c78582777b",
+      "strategy": "lightgbm",
+      "strategy_config_digest": "03b23c1775bb08e2dcc740734f1b370b46492ead5fcb2b755b55aefd1606b501"
+    },
+    {
+      "artifact_id": null,
+      "config_digest": "5b673c176858c79b289c13121d4b22ec32bf72b442aa40004dcab2d9a297ccaf",
+      "decision_digest": "7eaefbb39084b62b018cbfc7f7f442ac1576134b58dcd8382e68c7b18a19b266",
+      "fee_provenance_digest": "60060760a024e37cb9b3cd3119afd07bb408e3bc8476fd3e49c9ecd8cff7d5e1",
+      "fold_id": "validation-2024",
+      "manifest_relative_filename": "base/validation-2024/momentum/manifest.json",
+      "nautilus_digest": "79ad3d8e04c0339e536e828e8a4a29a906a8f4634f7ce925127ec33fe8db7dc3",
+      "prediction_digest": null,
+      "result_digest": "d9b8188c99be3f14bbea3312732182a3dedcb284f1f3aff2ef2edbaed1fa9871",
+      "role": "validation",
+      "run_identity": "02e9b0f88b083bf10eb2471c5c9699030090181609063ccc7a2268f8c3177b7a",
+      "run_type": "base",
+      "scenario": "base",
+      "scenario_digest": "6b8f68a2e56aeb00f1e1ea4d96c7ed62d74684d12580472e3fd7722ee9fa02d3",
+      "strategy": "momentum",
+      "strategy_config_digest": "d595b219a57ce8d6538cf0f0c7887294199779991848be1f5429d6c296f977bd"
+    },
+    {
+      "artifact_id": "06db2ff79ace35e586f24ee142b2daa18dae4f113d9137bf0da4efac2c7ee605",
+      "config_digest": "90f377c4584e6f58146d6d3c78e424aa43f95069b8a4221c5d7abee34fdd5a1e",
+      "decision_digest": "b59fd5dd7b397a862dfb1975849dfb0dabdd20b0baf3adb8f6c4e117cc88925f",
+      "fee_provenance_digest": "60060760a024e37cb9b3cd3119afd07bb408e3bc8476fd3e49c9ecd8cff7d5e1",
+      "fold_id": "validation-2024",
+      "manifest_relative_filename": "base/validation-2024/lightgbm/manifest.json",
+      "nautilus_digest": "6a3ec6527f8e5fc0c26f916e26eea24671ce3d00acee9796feb469e116813d04",
+      "prediction_digest": "a3c8caa1143480df6d2588d10a209951b2dc99775ef720a50afb9750d37067ad",
+      "result_digest": "afe03e6334f5a7b2db377f3c1b5f7db8be76df5cfa11e464c2e5de081ec516f4",
+      "role": "validation",
+      "run_identity": "3f84813695870dc122e0376f3755e749f9678644fc152c28415bfd2281e49d08",
+      "run_type": "base",
+      "scenario": "base",
+      "scenario_digest": "6b8f68a2e56aeb00f1e1ea4d96c7ed62d74684d12580472e3fd7722ee9fa02d3",
+      "strategy": "lightgbm",
+      "strategy_config_digest": "03b23c1775bb08e2dcc740734f1b370b46492ead5fcb2b755b55aefd1606b501"
+    },
+    {
+      "artifact_id": null,
+      "config_digest": "6e70fd92b9906ac968df7c2f51ac9d3e37ff4085ce9ad042ff0a837342cc1780",
+      "decision_digest": "081295b5c608df58f0a0727f0bbc87eec0683378531cb1cc54d94ebc81df3e2d",
+      "fee_provenance_digest": "60060760a024e37cb9b3cd3119afd07bb408e3bc8476fd3e49c9ecd8cff7d5e1",
+      "fold_id": "final-test-2025-2026",
+      "manifest_relative_filename": "base/final-test-2025-2026/momentum/manifest.json",
+      "nautilus_digest": "d634bc13974d32d5c8d37472aca02c3b3b28916e65375ecdc716c4e66a805c99",
+      "prediction_digest": null,
+      "result_digest": "982fbee32806b8998f1721a9ba41ef0b949b2e4c576c394b294299f76eb84960",
+      "role": "final_test",
+      "run_identity": "55013695a8db501b8592783cf62706ba40c7ef40171e315a60e79a9696b4bde9",
+      "run_type": "base",
+      "scenario": "base",
+      "scenario_digest": "f144e3bf1d01816152eada88af55b203f469864ccab16fa4f277dfb1c7d3a6da",
+      "strategy": "momentum",
+      "strategy_config_digest": "d595b219a57ce8d6538cf0f0c7887294199779991848be1f5429d6c296f977bd"
+    },
+    {
+      "artifact_id": "f49a1a390bfee7e5adb04e323004c588e97c39525c28b1d1a3186b074cb66917",
+      "config_digest": "1ddaecec9478d13869a5ebff171ab73d7fdf9c124c94f0659a0f6dcf2e99f7e3",
+      "decision_digest": "c8c54b18e00d9f60a978e503edbbbe643cd95e7168fb6ca6ad23ef9e9addd1f1",
+      "fee_provenance_digest": "60060760a024e37cb9b3cd3119afd07bb408e3bc8476fd3e49c9ecd8cff7d5e1",
+      "fold_id": "final-test-2025-2026",
+      "manifest_relative_filename": "base/final-test-2025-2026/lightgbm/manifest.json",
+      "nautilus_digest": "518c9d6e3cebdf0035b46b96bee8333fc2293984e0f3ffc3141037402d771d36",
+      "prediction_digest": "9089aa131e448232712c9954197b88753e2b646157fe92edec14f1a1b1e8fd6d",
+      "result_digest": "c48a36cdeb3bb893e654069455815db880f979d3a870275b85d1feb50771da50",
+      "role": "final_test",
+      "run_identity": "8bef5ef4a178ec0b219e7ffe09a59576b405fc7622e35a01ee14231d610e5abf",
+      "run_type": "base",
+      "scenario": "base",
+      "scenario_digest": "f144e3bf1d01816152eada88af55b203f469864ccab16fa4f277dfb1c7d3a6da",
+      "strategy": "lightgbm",
+      "strategy_config_digest": "03b23c1775bb08e2dcc740734f1b370b46492ead5fcb2b755b55aefd1606b501"
+    },
+    {
+      "artifact_id": null,
+      "config_digest": "6154edb81119f3bd617189e8962d2a6ff807b88da5fcf16289154e5e4ea052d5",
+      "decision_digest": "081295b5c608df58f0a0727f0bbc87eec0683378531cb1cc54d94ebc81df3e2d",
+      "fee_provenance_digest": "439aea8c5c3d74a79754e2bcea71cc7dd15b3864efc896dbfcf18266326f5207",
+      "fold_id": "final-test-2025-2026",
+      "manifest_relative_filename": "sensitivity/momentum/zero_fee/manifest.json",
+      "nautilus_digest": "f55fff0ab2a78394196307afaaa5ff6d7ec63699ac418b3e2894729e2c01077c",
+      "prediction_digest": null,
+      "result_digest": "8d31f25972501aecaafe5fe629aa19d3a7483f2e76d797f5fcf7b316a7eae20c",
+      "role": "final_test",
+      "run_identity": "8514d21544e1a51accbd358c89a028a3dab2b4af612f4daf21e8f8c30e1441ec",
+      "run_type": "sensitivity",
+      "scenario": "zero_fee",
+      "scenario_digest": "25df7d18e6194bb1f34afcf6c89a1227137f06523a72f176ac1d94e561ba43ce",
+      "strategy": "momentum",
+      "strategy_config_digest": "d595b219a57ce8d6538cf0f0c7887294199779991848be1f5429d6c296f977bd"
+    },
+    {
+      "artifact_id": null,
+      "config_digest": "a28b2c777fd84a9230e021e23da87552c205a3086f4afc9a74bf053f7c57d520",
+      "decision_digest": "081295b5c608df58f0a0727f0bbc87eec0683378531cb1cc54d94ebc81df3e2d",
+      "fee_provenance_digest": "71e70f0fe1eed0da4afbb2bccfc5f927d0097fb3d3f61a8bc460b97145f61501",
+      "fold_id": "final-test-2025-2026",
+      "manifest_relative_filename": "sensitivity/momentum/double_fee/manifest.json",
+      "nautilus_digest": "370c9a5fccc305915e961b8ec665e45efe75ccd61c7f83cc63a2943e91915280",
+      "prediction_digest": null,
+      "result_digest": "2358bb37872f2859ef9de5e6a8ee5b49fc5ddb62054f12d6a833021ad6708419",
+      "role": "final_test",
+      "run_identity": "d497afabdcdf31614e7f529a562a158d234451a22d5918316891141beed8925d",
+      "run_type": "sensitivity",
+      "scenario": "double_fee",
+      "scenario_digest": "b63fe996b3ab3331d1c50193fac8d3849ae05287829ec46332aebdb29a6b3e12",
+      "strategy": "momentum",
+      "strategy_config_digest": "d595b219a57ce8d6538cf0f0c7887294199779991848be1f5429d6c296f977bd"
+    },
+    {
+      "artifact_id": null,
+      "config_digest": "6fc9cf066a203e51748b1aa74b3c07aed471edc296c99b90ca9ef2d5fff0f99f",
+      "decision_digest": "081295b5c608df58f0a0727f0bbc87eec0683378531cb1cc54d94ebc81df3e2d",
+      "fee_provenance_digest": "60060760a024e37cb9b3cd3119afd07bb408e3bc8476fd3e49c9ecd8cff7d5e1",
+      "fold_id": "final-test-2025-2026",
+      "manifest_relative_filename": "sensitivity/momentum/zero_funding/manifest.json",
+      "nautilus_digest": "ee71c869b6e9cbd7faa4f8a0dd117277e54e1d0cc9c51751194238ba85ebf57b",
+      "prediction_digest": null,
+      "result_digest": "e46aeb1c7bcd682f854914e2ff3a5dd2801da449ed9babca5992eb018b7b811d",
+      "role": "final_test",
+      "run_identity": "a61dec37ee64efc78ca4aeb3d689240794f9761ce29913df0e520de71e525cd0",
+      "run_type": "sensitivity",
+      "scenario": "zero_funding",
+      "scenario_digest": "7d41a7703b9025be040a5423dab0bbb170cff206e7ce3b55320c6fb932c9f6d9",
+      "strategy": "momentum",
+      "strategy_config_digest": "d595b219a57ce8d6538cf0f0c7887294199779991848be1f5429d6c296f977bd"
+    },
+    {
+      "artifact_id": null,
+      "config_digest": "07f39fb835c37801d6b1dc86602ec9769712a6b2769c6ed97045440e928141bd",
+      "decision_digest": "081295b5c608df58f0a0727f0bbc87eec0683378531cb1cc54d94ebc81df3e2d",
+      "fee_provenance_digest": "60060760a024e37cb9b3cd3119afd07bb408e3bc8476fd3e49c9ecd8cff7d5e1",
+      "fold_id": "final-test-2025-2026",
+      "manifest_relative_filename": "sensitivity/momentum/double_funding/manifest.json",
+      "nautilus_digest": "ebad4be9cfd1b3498583acd57ee737acfb55951ea26fdbc82ac83038b4e51468",
+      "prediction_digest": null,
+      "result_digest": "b225c84011dd91b928f835b7d7bfa83f131e61cb98352cf5a41e8c8f29658082",
+      "role": "final_test",
+      "run_identity": "b589d4734a9543ed7cc3b76b247c119f5a4ad88749915b153459d77d568e9d20",
+      "run_type": "sensitivity",
+      "scenario": "double_funding",
+      "scenario_digest": "9178650925ab0688766e9f9416da10930b0fd1a3d85e4bd8f020c3a85708243d",
+      "strategy": "momentum",
+      "strategy_config_digest": "d595b219a57ce8d6538cf0f0c7887294199779991848be1f5429d6c296f977bd"
+    },
+    {
+      "artifact_id": "f49a1a390bfee7e5adb04e323004c588e97c39525c28b1d1a3186b074cb66917",
+      "config_digest": "585537607b612b636baffc3e3b3e61fe70aeb6d24d676b268b4256284e167998",
+      "decision_digest": "c8c54b18e00d9f60a978e503edbbbe643cd95e7168fb6ca6ad23ef9e9addd1f1",
+      "fee_provenance_digest": "439aea8c5c3d74a79754e2bcea71cc7dd15b3864efc896dbfcf18266326f5207",
+      "fold_id": "final-test-2025-2026",
+      "manifest_relative_filename": "sensitivity/lightgbm/zero_fee/manifest.json",
+      "nautilus_digest": "6101547fda6ddec3ea5d45a97cf06485891e48205e0a198c6656f7ce1175c32a",
+      "prediction_digest": "9089aa131e448232712c9954197b88753e2b646157fe92edec14f1a1b1e8fd6d",
+      "result_digest": "d8af79a03d509430fff56fb84bdebd9b386a0e8c15e86b4dcadc391101a769e7",
+      "role": "final_test",
+      "run_identity": "8dc9a24165c715b9b4f0d4397880c2cd431307d28c404f24761f6742571ac344",
+      "run_type": "sensitivity",
+      "scenario": "zero_fee",
+      "scenario_digest": "25df7d18e6194bb1f34afcf6c89a1227137f06523a72f176ac1d94e561ba43ce",
+      "strategy": "lightgbm",
+      "strategy_config_digest": "03b23c1775bb08e2dcc740734f1b370b46492ead5fcb2b755b55aefd1606b501"
+    },
+    {
+      "artifact_id": "f49a1a390bfee7e5adb04e323004c588e97c39525c28b1d1a3186b074cb66917",
+      "config_digest": "6bd48fb125fedbbb48a8574199c8e7f771e2875e997412fcba11608d3e84da6e",
+      "decision_digest": "c8c54b18e00d9f60a978e503edbbbe643cd95e7168fb6ca6ad23ef9e9addd1f1",
+      "fee_provenance_digest": "71e70f0fe1eed0da4afbb2bccfc5f927d0097fb3d3f61a8bc460b97145f61501",
+      "fold_id": "final-test-2025-2026",
+      "manifest_relative_filename": "sensitivity/lightgbm/double_fee/manifest.json",
+      "nautilus_digest": "d603f556db4d4def9e9cf98774594773c155005c433b0a0c12c7a24faac6593d",
+      "prediction_digest": "9089aa131e448232712c9954197b88753e2b646157fe92edec14f1a1b1e8fd6d",
+      "result_digest": "fd8d674035f5a2f5383330def80a9488312aab80c89d9c3e7e7e1bc49b20d367",
+      "role": "final_test",
+      "run_identity": "e8dc2c91ebee587d0b67ead8e86fa3798dd3cb37e1c9ac8e041af84011bfc10b",
+      "run_type": "sensitivity",
+      "scenario": "double_fee",
+      "scenario_digest": "b63fe996b3ab3331d1c50193fac8d3849ae05287829ec46332aebdb29a6b3e12",
+      "strategy": "lightgbm",
+      "strategy_config_digest": "03b23c1775bb08e2dcc740734f1b370b46492ead5fcb2b755b55aefd1606b501"
+    },
+    {
+      "artifact_id": "f49a1a390bfee7e5adb04e323004c588e97c39525c28b1d1a3186b074cb66917",
+      "config_digest": "8852dfa47c92004c3a6e428e5adb8c1a451cd7a04051cefe0bc0e66925d0467d",
+      "decision_digest": "c8c54b18e00d9f60a978e503edbbbe643cd95e7168fb6ca6ad23ef9e9addd1f1",
+      "fee_provenance_digest": "60060760a024e37cb9b3cd3119afd07bb408e3bc8476fd3e49c9ecd8cff7d5e1",
+      "fold_id": "final-test-2025-2026",
+      "manifest_relative_filename": "sensitivity/lightgbm/zero_funding/manifest.json",
+      "nautilus_digest": "52103419e0d2f8f2a9d0866b2604f07eba59ad3944de2b6c4b66a2dfb27499fb",
+      "prediction_digest": "9089aa131e448232712c9954197b88753e2b646157fe92edec14f1a1b1e8fd6d",
+      "result_digest": "a047bd3bf1ebe8ef56888bbcc33ff61aed587eb0ae72f54da3fb5672f5bba7bf",
+      "role": "final_test",
+      "run_identity": "e61a1f8fd1da78e8be5e11f7051fdc62e2ff6a337e3ac86d0332932d26fcbb82",
+      "run_type": "sensitivity",
+      "scenario": "zero_funding",
+      "scenario_digest": "7d41a7703b9025be040a5423dab0bbb170cff206e7ce3b55320c6fb932c9f6d9",
+      "strategy": "lightgbm",
+      "strategy_config_digest": "03b23c1775bb08e2dcc740734f1b370b46492ead5fcb2b755b55aefd1606b501"
+    },
+    {
+      "artifact_id": "f49a1a390bfee7e5adb04e323004c588e97c39525c28b1d1a3186b074cb66917",
+      "config_digest": "17ba38fadf8f973e5ab4b5af3c3ac786363186b99689050aa59fd91074cfe024",
+      "decision_digest": "c8c54b18e00d9f60a978e503edbbbe643cd95e7168fb6ca6ad23ef9e9addd1f1",
+      "fee_provenance_digest": "60060760a024e37cb9b3cd3119afd07bb408e3bc8476fd3e49c9ecd8cff7d5e1",
+      "fold_id": "final-test-2025-2026",
+      "manifest_relative_filename": "sensitivity/lightgbm/double_funding/manifest.json",
+      "nautilus_digest": "3974f2d463e0ec6d1684212c982e15d04c795def32e4d43992331d1fd82ca1ca",
+      "prediction_digest": "9089aa131e448232712c9954197b88753e2b646157fe92edec14f1a1b1e8fd6d",
+      "result_digest": "7f3e2f476b0eefc141f80cb4b3e21ff36fc4bbca60fd03a2ee44a54e0479567e",
+      "role": "final_test",
+      "run_identity": "08aab4746c8684c030113224b78414769b3097999e7915850eac9ab923a64616",
+      "run_type": "sensitivity",
+      "scenario": "double_funding",
+      "scenario_digest": "9178650925ab0688766e9f9416da10930b0fd1a3d85e4bd8f020c3a85708243d",
+      "strategy": "lightgbm",
+      "strategy_config_digest": "03b23c1775bb08e2dcc740734f1b370b46492ead5fcb2b755b55aefd1606b501"
+    }
+  ],
+  "schema": "tracequant-stage3-acceptance-v1",
+  "stage2_input": {
+    "acceptance_digest": "5909c878a81f0cdea85a8b8f86efd36d9c9bad5b3f3fb4c0f9960bb0551609cd",
+    "dataset_digest": "e17c6294e0a0e6714e56a44624ade37cff46125c46d8b0ee81ede6093711579c",
+    "dataset_id": "binance-usdm-btceth-202001-202608-r1",
+    "instrument_snapshot_checksum": "dd7fab59448a3b530ab70871ec57c375f6758e409004f9673d9d0cac7ee630bd",
+    "market_data_manifest_digest": "a0d9a36bb65ec7c2ec41f47cdf6ba7d20f57ad28d8d3494a69624c60d6d0a110",
+    "runtime_identity": "2.0.0rc4+a0400251110653b6d8ae6a9b5b89c4543fa85a2d",
+    "source_manifest_digest": "de86d44c73117e17af2bbcb655cf1c8d4290043fa8854636cc0e4e592a1dc790"
+  },
+  "training_parameters": {
+    "record_relative_filename": "training-parameters.json",
+    "training_parameter_digest": "5f65a9167f80c1290edab420123ceaa9488cb1836d699ccd09d99db31189fb92",
+    "training_parameter_revision": "stage3-lgbm-r1"
+  },
+  "verification_test": "tests/acceptance/test_stage3_oos.py::test_stage3_oos_rebuild_compares_both_strategies_from_one_catalog"
+}
