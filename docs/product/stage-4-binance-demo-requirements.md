@@ -93,12 +93,19 @@ order-enabled 场景与 #391 成功发布保持 blocked。
 ### 1.3 最小有效数量
 
 每个 order-enabled 场景都必须从本次 attempt 加载的 Nautilus instrument 计算数量，不接受配置
-中的静态 quantity。设 `step` 为 size increment，`min_qty` 为 minimum quantity；若存在
-`min_notional`，用提交前最新且未 stale 的同侧可成交价格计算满足 notional 的最小 step 倍数。
-最终 quantity 是同时满足 `step`、`min_qty`、precision 和 `min_notional` 的最小值，并由
-Nautilus instrument 的 quantity 构造/校验路径生成。缺少 constraint、缺少有效价格或无法得到
-唯一最小值时停止；不得猜测或扩大为 portfolio sizing。这里的“最新且未 stale”只能按 §3.1
-判定，quantity 计算和紧接其后的提交必须使用同一份合格 quote snapshot。
+中的静态 quantity。先按订单类型选择适用的 size increment、minimum quantity、precision 和
+minimum notional constraints，再冻结本次提交的 `notional_price`：limit order 必须先从 §3.1
+合格 quote 推导并通过 tick/price constraints 校验**精确提交价格**（passive buy 即校验后的
+`best bid - 1 price increment`），并以该提交价格计算 minimum notional；market order 没有提交
+价格，必须使用 §3.1 中同 instrument 的合格 mark-price sample。不得用 buy ask、sell bid 或预期
+成交价替代这两个 order-type-specific 输入。
+
+最终 quantity 是满足全部适用 constraints 的最小 step 倍数，并由 Nautilus instrument 的 quantity
+构造/校验路径生成。缺少 order-type-specific constraint、limit 提交价格、公开 mark-price 输入或
+无法得到唯一最小值时停止；不得猜测、保守放大或扩大为 portfolio sizing。quantity 计算、订单构造
+与紧接其后的提交前复核必须绑定同一份已识别的价格输入；limit order 绑定同一 quote snapshot 和
+由它推导的提交价格，market order 绑定同一 mark-price sample。该规则同样适用于 reduce-only
+cleanup。
 
 该合同也适用于官方 ExecTester；固定 rc4 的 `ExecTesterConfig.order_qty` 和
 `open_position_on_start_qty` 在运行前已定值，不能满足本段合同。不得以先前 DataTester run、
@@ -113,11 +120,11 @@ Nautilus instrument 的 quantity 构造/校验路径生成。缺少 constraint�
 | `ST4-REQ-002` | 唯一环境是 Binance USD-M Futures Demo，endpoint 不可覆盖，凭据只来自两个 Demo 专用变量。 |
 | `ST4-REQ-003` | 唯一 instrument、单 account、one-way、isolated、1x、最多一个活动/未决订单是不可配置边界；缺少 §1.2 的公开自动确认能力时 order-enabled 路径不可用。 |
 | `ST4-REQ-004` | order-enabled 入口执行 §1.2 的一次性 operator gate 和自动 admission；固定 rc4 必须以 `account_mode_capability_unavailable` 在首单前 `HALTED`，不能把 config、连接成功或日志当确认。 |
-| `ST4-REQ-005` | order quantity 严格按 §1.3 从本 attempt 的 instrument 与提交所用 quote snapshot 计算为一个最小有效量；固定 quantity 的 rc4 ExecTester 必须按 §4.2 fail closed。 |
+| `ST4-REQ-005` | order quantity 严格按 §1.3 从本 attempt 的 instrument 与 order-type-specific `notional_price` 计算为一个最小有效量；limit 使用精确提交价格，market 使用合格 mark price；rc4 ExecTester 必须按 §4.2 fail closed。 |
 | `ST4-REQ-006` | 所有网络和订单阶段使用 §3 的唯一 deadline；v1.0 不提供 timeout override。 |
 | `ST4-REQ-007` | 核对只读取 §8 的 entry-specific rc4 公开观察面：ExecTester 使用 `LiveNode.cache` 可检索 object graph，Strategy 使用 callbacks/cache/account snapshots；不得要求取得 rc4 公共 Python API 不返回的 tester 或 report objects。TraceQuant 不拥有第二套 adapter、order、position、ledger、accounting 或 reconciler。 |
 | `ST4-REQ-008` | DataTester 只执行 §4.1 的数据场景，不创建 execution client。 |
-| `ST4-REQ-009` | ExecTester 只执行 §4.2 的两个互斥 attempt；当前 rc4 缺少 deferred quantity capability 时不得联网下单，特殊 risk bypass 不得进入普通 Strategy。 |
+| `ST4-REQ-009` | ExecTester 只执行 §4.2 的两个互斥 attempt；当前 rc4 缺少 order-type-specific deferred quantity 与 staged terminal-reconciliation cleanup capability 时不得联网下单，特殊 risk bypass 不得进入普通 Strategy。 |
 | `ST4-REQ-010` | Demo Strategy 只执行 §4.3 的固定顺序，不读取阶段 3 模型、不产生 alpha、不做 portfolio sizing。 |
 | `ST4-REQ-011` | Strategy 只使用 §5 的固定前进状态；终态只有 `COMPLETE` 或 `HALTED`，不得抽象为可配置工作流引擎。 |
 | `ST4-REQ-012` | 最终验收按 §4.4 从全新外部分区依次消费 DataTester、ExecTester、Strategy 证据，并在同一 identity 下聚合。 |
@@ -134,7 +141,7 @@ Nautilus instrument 的 quantity 构造/校验路径生成。缺少 constraint�
 | network connect | 30 秒 | 所需 data client（以及 order-enabled 场景的 execution client）均连接 |
 | ready | 60 秒 | instrument 已加载、订阅活动，且 order-enabled 场景完成账户准入并取得 §3.1 合格 quote |
 | DataTester observation | 60 秒 | 同时取得有效 quote、trade、instrument identity/constraints 和时间戳样本 |
-| order price readiness | 10 秒 | 取得 §3.1 合格 quote，并以同一 snapshot 完成 quantity/passive price 计算和提交前复核 |
+| order price readiness | 10 秒 | 取得 §3.1 对该订单类型要求的合格 quote/mark-price 输入，以精确 limit 提交价格或 market mark price 完成 quantity 计算和提交前复核 |
 | order acceptance | 10 秒 | 唯一订单收到确定 `OrderAccepted` 或确定 reject |
 | market / reduce-only fill | 30 秒 | 订单完整成交；partial fill 不延长 deadline |
 | cancellation | 10 秒 | cancel 被确定确认，或 race 经后续 §8 entry observation profile 确定为 fill |
@@ -154,17 +161,24 @@ ExecTester（仅在 §4.2 capability gate 解除后）、Strategy 以及 reduce-
 已经接受的最后一个非重复 timestamp。年龄比较使用检查瞬间的 wall clock；10 秒等待 deadline
 使用 monotonic clock，两者不能互相替代。
 
-order-enabled ready 必须先取得一份合格 quote。此后每一次正常场景订单或 reduce-only cleanup
-提交前都重新启动一次 10 秒 order price readiness deadline；在 deadline 内取得的新合格 quote
-同时用于：buy 的 `min_notional` ask、sell 的 `min_notional` bid、§4.2/§4.3 passive buy 的 best bid，
-以及 quantity/price 构造后的立即提交前复核。复核时 snapshot 年龄仍须不超过 5 秒且期间未观察到
-更新但倒退的 timestamp；不满足就丢弃该 snapshot 并在原 10 秒 deadline 内等待下一条，不能重新
-启动 deadline。
+market order 还必须通过正常 Nautilus 公共 data/cache surface 取得同一 instrument 的正数
+mark-price sample。它采用与 quote 相同的 identity、future 1 秒、age 5 秒和本 run 内 timestamp
+单调规则，但维护独立的 mark-price stream last-seen timestamp；禁止 raw Binance client、日志或
+private object。固定 runtime 若不公开该输入，market 与 reduce-only market order 必须 fail closed。
 
-deadline 到期、future/stale/out-of-order、缺少所需 bid/ask 或 instrument identity 不匹配时，本次
-运行进入 `HALTED`。对正常场景禁止提交；对 cleanup 也不得凭旧价格猜测提交，必须保留已证明的
+order-enabled ready 必须先取得一份合格 quote。此后每一次正常场景订单或 reduce-only cleanup
+提交前都重新启动一次 10 秒 order price readiness deadline。limit order 在 deadline 内取得新合格
+quote，先推导并校验精确提交价格，再用该价格计算 quantity；market order 在 deadline 内取得新合格
+mark-price sample，并用它计算 quantity。passive price 显示仍来自同一合格 quote 的 best bid。
+提交前复核时，所绑定 sample 年龄仍须不超过 5 秒，identity/price constraints 仍匹配且期间未观察到
+对应 stream 更新但倒退的 timestamp；不满足就丢弃该输入并在原 10 秒 deadline 内等待下一份，不能
+重新启动 deadline。
+
+deadline 到期、future/stale/out-of-order、缺少订单类型所需 quote/mark price 或 instrument identity
+不匹配时，本次运行进入 `HALTED`。对正常场景禁止提交；对 cleanup 也不得凭旧价格猜测提交，必须保留已证明的
 exposure 和 `cleanup_incomplete` 诊断交给操作者。不得用最近一次 DataTester run、ready 时缓存但在
-提交时已过期的 quote、trade price、mark price 或 wall-clock sleep 代替本规则。
+提交时已过期的 quote/mark price、trade price 或 wall-clock sleep 代替本规则，也不得以 bid/ask
+代替 market order 的 mark price。
 
 ## 4. 有限场景矩阵
 
@@ -192,30 +206,42 @@ operator token。TraceQuant 薄封装只负责冻结配置、启动/停止两个
 
 固定 rc4 在构造 `ExecTesterConfig` 时就固定 `order_qty` 和 `open_position_on_start_qty`；收到首个
 quote 时只提交该预存 quantity，`instrument.make_qty` 仅量化它，不会按 `min_qty`、step、
-`min_notional` 和当前 quote 求最小值。启用 limit leg 时，同一 `on_quote` 还会进入 order
-maintenance。该行为不能满足 §1.3，也不能安全实现原先单实例的 market → close → passive 顺序。
-因此固定 rc4 的 ExecTester order-enabled attempt 必须在 client/order 创建前以稳定 failure code
-`exec_tester_deferred_quantity_unavailable` 进入 `HALTED`；不得把 DataTester 或另一 node 的快照、
-运行前 quantity、日志/private hook、自定义 order owner 或 tester 旁路下单当作替代。
+`min_notional` 和 §1.3 的 order-type-specific price 求最小值。启用 limit leg 时，同一 `on_quote`
+还会进入 order maintenance。其 `on_stop` 还会同步发出 cancel-active-orders 和 close-positions，
+不会在二者之间等待原订单终态与零 active/inflight proof。该行为既不能满足 §1.3，也不能满足
+§5 的 cleanup 顺序。因此固定 rc4 的 ExecTester order-enabled attempt 必须在 client/order 创建前
+以稳定 failure code `exec_tester_order_safety_capability_unavailable` 进入 `HALTED`；不得把 DataTester
+或另一 node 的快照、运行前 quantity、日志/private hook、自定义 order owner 或 tester 旁路下单
+当作替代。
 
-解除该 gate 必须与 §1.2 一样先批准并锁定新的官方 runtime。它必须在官方 ExecTester 内提供一个
-typed、不可注入 callback 的 `MIN_VALID_FROM_FIRST_QUOTE` quantity mode：tester 自身在首个合格
-quote handler 中读取已加载 instrument，以同一 quote 按 §1.3 得到 quantity，并紧接着构造和提交
-订单；计算/校验失败必须在任何订单创建前 fatal。该能力不得允许任意 sizing function、plugin/hook
-或第二个 order owner。
+解除该 gate 必须与 §1.2 一样先批准并锁定新的官方 runtime。它必须在官方 ExecTester 内同时提供：
+
+1. typed、不可注入 callback 的 `MIN_VALID_FROM_ORDER_PRICE_INPUT` quantity mode：tester 自身读取
+   已加载 instrument；limit 先冻结精确提交价格，market 读取公开 mark-price input，再按 §1.3 得到
+   quantity 并紧接着构造和提交；计算/校验失败必须在任何订单创建前 fatal；
+2. typed `STAGED_TERMINAL_RECONCILE_THEN_CLEANUP` stop/failure mode：先请求 cancel/query，再等待
+   原订单进入 terminal，证明 active/inflight count 为零，重新读取确定的实际 position，最后仅在
+   position 非零时提交恰好一笔 reduce-only cleanup。任何 proof 超过 §3 deadline 都必须保持
+   `HALTED` 且不提交 cleanup。
+
+这些能力不得允许任意 sizing function、plugin/hook 或第二个 order owner。只增加 deferred quantity
+而没有官方 staged-cleanup capability 不足以解除 gate。
 
 能力到位后的唯一计划由两个新的、互斥的 order-enabled attempt 组成；每个 attempt 使用独立
 LiveNode、ExecTester、repo 外 evidence partition 和唯一 strategy/order tag，开始前都证明账户 flat、
 无活动/未决订单，并各自重新执行 §1.2 admission：
 
 1. **market-close attempt**：关闭全部 limit/stop legs，使用
-   `open_position_on_first_quote=true` 与 `MIN_VALID_FROM_FIRST_QUOTE` 提交唯一 market buy；完整
-   fill 后立即停止 tester，由 `close_positions_on_stop=true` 和 `reduce_only_on_stop=true` 对 cache
-   中实际 long quantity 提交唯一 reduce-only market sell，等待完整成交并证明 flat；
+   `open_position_on_first_price_input=true` 与 `MIN_VALID_FROM_ORDER_PRICE_INPUT` 提交唯一 market buy；
+   完整 fill 且该订单 terminal 后停止 tester，由 `STAGED_TERMINAL_RECONCILE_THEN_CLEANUP` 先证明
+   active/inflight count 为零，再按最新确定 long position 和合格 mark price 提交唯一 reduce-only
+   market sell，等待完整成交并证明 flat；
 2. **passive-cancel attempt**：不启用 open-position/stop/sell legs，只启用一个 post-only limit buy；
-   tester 以首个合格 quote 同时计算最小 quantity 和 `best bid - 1 price increment`，提交后不得追价、
-   modify 或补单；确定 accepted 后立即停止 tester，由 `cancel_orders_on_stop=true` 撤单并证明
-   canceled、未成交和 flat。
+   tester 先从首个合格 quote 得到并校验 `best bid - 1 price increment`，再以该精确提交价格计算最小
+   quantity；提交后不得追价、modify 或补单。确定 accepted 后停止 tester，由 staged mode 请求
+   cancel 并等待该订单 terminal、active/inflight count 为零；随后重新读取 position，若 flat 则不
+   提交 cleanup，若 cancel/fill race 形成确定非零 position 则该场景失败并只提交一笔 reduce-only
+   cleanup，无法在 deadline 内完成任何 proof 时不提交 cleanup。
 
 两个 attempt 的证据共同构成一个 `exec_tester` required scenario；任一个失败都会使该 scenario
 `FAIL/HALTED`，后一个不得用来弥补前一个。两者绝不同时运行，所以 active/pending order cap 仍为
@@ -228,7 +254,8 @@ accepted 后 canceled 且没有 `OrderFilled` 的 post-only order。多余/无�
 
 只有该独立入口可以使用官方 tester 所需的最小 risk bypass；能力必须在入口内封闭且不能由普通
 Strategy import、配置或调用。post-only order 若 reject、partial fill 或在 cancel 前/期间成交，
-场景立即判失败；若形成 position，只能按实际可证明 quantity 做 reduce-only cleanup。不得为了
+场景立即判失败；只有在原 order terminal、零 active/inflight 且 position 重算为确定非零后，才能按
+该 position 做唯一一笔 reduce-only cleanup。不得为了
 让场景通过而改成 aggressive limit、重发、在 tester 外提交订单或扩大 tester 功能。
 
 ### 4.3 TraceQuant 最小 Demo Strategy
@@ -250,7 +277,7 @@ ready
 
 passive price 与 §4.2 相同：提交时 best bid 低一个 price increment。任一步出现 reject、
 partial/late fill、ambiguous ACK、duplicate/out-of-order event、状态冲突或 timeout，成功路径
-立即停止并进入 `HALTED` 安全清场。Strategy 不读取阶段 3 artifact，不接受 signal、target
+立即停止并进入 `HALTED`，且只能按 §5 的严格顺序安全清场。Strategy 不读取阶段 3 artifact，不接受 signal、target
 position 或 sizing 参数。
 
 ### 4.4 最终证据聚合与发布
@@ -280,10 +307,18 @@ any non-terminal state -> HALTED
 ```
 
 只有收到与当前唯一 order identity、expected side、quantity 和 state 都一致的事件才能前进。
-`HALTED` 是不可逆 latch：禁止任何新开仓；只允许对已知 order 发出一次可证明安全的 cancel、
-发出一次公开 `query_order`/`query_account` 刷新命令并等待正常 callback/cache 更新，或按已证明的
-非零 position 发出一次 reduce-only cleanup。
-这些动作不能把本次结果改回 `COMPLETE`。
+`HALTED` 是不可逆 latch：禁止任何新开仓；所有 failure matrix 分支只能按以下顺序前进，不能把各步
+当作并列动作：
+
+1. 对可识别的原 order 至多请求一次 cancel，并通过公开 `query_order`/`query_account` 与正常
+   callback/cache 更新执行 reconciliation；
+2. 等待并证明原 order 已进入 terminal；
+3. 证明 active/inflight order count 为零；
+4. 从同一 entry observation profile 重新计算 position；
+5. 只有 position 为确定非零时，才按 §1.3/§3.1 提交恰好一笔 reduce-only cleanup。
+
+任一 proof 在对应 deadline 内缺失、冲突或 unknown 时保持 `HALTED`，停止自动动作且不得提交
+cleanup。cleanup 本身完成后仍保持 `HALTED`，不能把本次结果改回 `COMPLETE`。
 
 ## 6. 失败关闭矩阵
 
@@ -292,13 +327,13 @@ any non-terminal state -> HALTED
 | connect / subscription timeout | 尚未 ready | 停止 client，写 timeout | 创建 execution client（DataTester）或提交订单 | `HALTED` | deadline、已连接组件、缺失 subscription |
 | 空数据 | DataTester observation 到期 | 停止并保留订阅统计 | 把连接成功当行情成功 | `HALTED` | quote/trade counts 均或任一为零 |
 | stale / out-of-order timestamp | 正在观察对应 stream | 停止场景；无订单时直接结束 | 忽略、重排后伪装成功 | `HALTED` | stream、前后 timestamp、age |
-| order reject | 等待 acceptance | 记录确定 reject；若已有 exposure 则安全清场 | 修改参数并重发 | `HALTED` | client order reference、reason、cache status |
-| ambiguous acknowledgement | 等待 acceptance 超时或 transport unknown | Strategy 最多发出一次公开 `query_order` 并等待其 profile 更新；ExecTester 不代替官方 tester 发 command，只在 reconciliation deadline 内等待 cache graph 收敛；确定已知 order 后可 cancel | 把 query 的 `None` 返回值当 report、当作 reject、用新 ID 重发、继续开仓 | `HALTED` | command/entry identity、timeout/transport fact、后续 entry-profile result |
+| order reject | 等待 acceptance | 记录确定 reject；若已有 exposure 则严格按 §5 terminal → zero-active → position → cleanup 顺序清场 | 修改参数并重发、未证明零 active/inflight 就 cleanup | `HALTED` | client order reference、reason、cache status |
+| ambiguous acknowledgement | 等待 acceptance 超时或 transport unknown | Strategy 最多发出一次公开 `query_order` 并等待其 profile 更新；ExecTester 不代替官方 tester 发 command，只由官方 staged mode 按 §5 等待 cache graph 收敛 | 把 query 的 `None` 返回值当 report、当作 reject、用新 ID 重发、继续开仓、原 order 未 terminal 或 active/inflight 非零时 cleanup | `HALTED` | command/entry identity、timeout/transport fact、terminal/active proof、后续 entry-profile result |
 | duplicate / out-of-order event | 任一 order state | 忽略重复的状态推进并 reconcile；记录冲突 | 二次推进、二次提交 | `HALTED` | event identity、expected/observed state |
-| cancel/fill race | 等待 cancel | reconcile；若 fill 已发生则按实际 position reduce-only cleanup | 同时假定 canceled 和 filled、重发 cancel/order | `HALTED` | §8 entry profile 的 cancel/fill facts、最终 position |
-| late fill | 已收到 cancel 或已开始 reconcile | 更新 Nautilus-owned事实并按实际 exposure 清场 | 保持原 flat 假设、发布成功 | `HALTED` | late fill identity、先前状态、cleanup result |
-| unexpected partial fill | 等待任一完整 fill | 停止成功路径；按 §8 entry profile 已证明的 cumulative quantity 有限清场 | 等待/补单凑满、实现通用 partial-fill workflow | `HALTED` | ordered/cumulative/leaves quantity、entry-profile observations |
-| handler exception | 任一实际使用的 Strategy handler | 顶层保护记录 fatal diagnostic、锁住提交、进入安全清场 | 吞掉异常、继续状态推进 | `HALTED` | handler、异常类型/脱敏信息、state、submission count |
+| cancel/fill race | 等待 cancel | reconcile；严格按 §5 证明原 order terminal 与零 active/inflight 后重算 position，必要时唯一 cleanup | 同时假定 canceled 和 filled、重发 cancel/order、用当前 cumulative fill 提前 cleanup | `HALTED` | §8 entry profile 的 cancel/fill facts、terminal/active proof、最终 position |
+| late fill | 已收到 cancel 或已开始 reconcile | 更新 Nautilus-owned 事实；重新完成 §5 terminal/zero-active proof 后按实际 exposure 清场 | 保持原 flat 假设、在原 order 仍可 late fill 时 cleanup、发布成功 | `HALTED` | late fill identity、先前状态、terminal/active proof、cleanup result |
+| unexpected partial fill | 等待任一完整 fill | 停止成功路径；先等原 order terminal 与零 active/inflight，再按重算的确定 position 有限清场 | 按当前 cumulative quantity 提前 cleanup、等待/补单凑满、实现通用 partial-fill workflow | `HALTED` | ordered/cumulative/leaves quantity、terminal/active proof、entry-profile observations |
+| handler exception | 任一实际使用的 Strategy handler | 顶层保护记录 fatal diagnostic、锁住提交、按 §5 顺序进入安全清场 | 吞掉异常、继续状态推进 | `HALTED` | handler、异常类型/脱敏信息、state、submission count |
 | observation conflict | reconciliation / cleanup | 保留 §8 entry profile 的 Nautilus facts 和 `conflicting` 分类 | 选择有利事实、用 raw REST 裁决 | `HALTED` | observation digests、冲突字段 |
 | cleanup timeout | `CLEANING` 或 `HALTED` cleanup | 停止自动动作，保留外部诊断 | 标记 flat、发布成功、无限重试 | `HALTED` | active orders、position、unknown、deadline |
 
@@ -326,9 +361,9 @@ handler 前必须同步完成三件事：写入脱敏 fatal diagnostic、设置�
 | `ST4-SAFE-002` | `missing`、`conflicting`、`unknown` 或 `cleanup_incomplete` 都是失败，不得降级为 warning 或成功。 |
 | `ST4-SAFE-003` | DataTester 对空数据、错误 identity、stale/future/out-of-order timestamp 失败关闭。 |
 | `ST4-SAFE-004` | ExecTester bypass 仅限独立入口；普通 Strategy 不能 import 或配置该能力。 |
-| `ST4-SAFE-005` | ExecTester 的 reject、ambiguous ACK、unexpected/partial fill 和 cancel/fill race 禁止盲目重发，并执行有界安全清场。 |
+| `ST4-SAFE-005` | ExecTester 的 reject、ambiguous ACK、unexpected/partial fill 和 cancel/fill race 禁止盲目重发；只有官方 staged mode 按 §5 证明原订单 terminal、零 active/inflight 并重算确定 position 后才可执行唯一 cleanup。 |
 | `ST4-SAFE-006` | Strategy 对 ambiguous、duplicate、out-of-order、timeout 和 conflict 设置不可逆 `HALTED` latch，禁止新开仓。 |
-| `ST4-SAFE-007` | partial fill、late fill 或 passive limit 成交必定使验收失败；只按 Nautilus 已证明 exposure 有限清场。 |
+| `ST4-SAFE-007` | partial fill、late fill 或 passive limit 成交必定使验收失败；不得按中间 cumulative fill 提前清场，只能在原订单 terminal、零 active/inflight 后按 Nautilus 重算的确定 exposure 有限清场。 |
 | `ST4-SAFE-008` | 所有实际 handler 具有 §6.1 顶层保护；冻结清单中的每个 handler 都有独立 fault-injection case，并以 completeness assertion 防止新增 handler 漏测。 |
 | `ST4-SAFE-009` | 只有 §8 对当前入口冻结的 observation profile 证明无活动/未决订单、无持仓、无 unknown 才可 `COMPLETE`；否则保持 `HALTED`。 |
 
@@ -562,8 +597,9 @@ LIVE_NOT_APPROVED
 - [TraceQuant 分阶段推进计划](<../research/foundation-selection/TraceQuant 分阶段推进计划.md>)，阶段 4/5；
 - [ADR-0001：NautilusTrader primary runtime](../architecture/adr-0001-nautilustrader-primary-runtime.md)；
 - [NautilusTrader rc4 Binance integration](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/docs/integrations/binance.md)；
-- [rc4 Binance Futures config application](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L1200-L1247)；
-- [rc4 Binance Futures hedge-mode initialization](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L1719-L1733)；
+- [rc4 Binance Futures config application](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L1114-L1162)；
+- [rc4 Binance Futures hedge-mode initialization](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L1596-L1609)；
+- [Binance USD-M order filters](https://developers.binance.com/en/docs/derivatives/usds-margined-futures/common-definition#filters)；
 - [rc4 ExecTester fixed quantity config](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/testkit/src/testers/exec/config.rs#L47-L98)；
 - [rc4 ExecTester quote/order behavior](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/testkit/src/testers/exec/strategy.rs#L264-L278)；
 - [nautilus_trader #5039](https://github.com/nautechsystems/nautilus_trader/issues/5039)。
