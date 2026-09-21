@@ -2,18 +2,17 @@
 
 | 字段 | 值 |
 | --- | --- |
-| 文档状态 | 已批准数据/离线实施基线；order-enabled capability blocked（见 §1.2、§4.2） |
+| 文档状态 | v1.0 实施候选；固定 rc4 supported path（见 §1.2、§4.2） |
 | 文档版本 | `v1.0` |
-| 日期 | `2026-09-21` |
+| 日期 | `2026-09-22` |
 | Feature | [#384](https://github.com/PhoenixSss/tracequant/issues/384) |
 | 固定运行时 | NautilusTrader `2.0.0rc4` / `a0400251110653b6d8ae6a9b5b89c4543fa85a2d` |
 | 唯一环境 | Binance USD-M Futures Demo |
 | 产品状态 | `DEMO_ONLY`、`LIVE_NOT_APPROVED` |
 
-本文档是 Feature #384 的唯一阶段 4 实施与验收基线。当前固定 rc4 对 order-enabled
-验收存在 §1.2 与 §4.2 明确列出的公共能力缺口；缺口关闭并由 maintainer 批准新的精确
-runtime identity 之前，只允许完成不依赖这些能力的数据、schema 和离线 failure-path 工作，
-不得运行或发布 order-enabled 成功证据。#386–#391 只能实现
+本文档是 Feature #384 的唯一阶段 4 实施与验收基线。阶段 4 只组合固定 rc4 已有的公开
+config、DataTester、ExecTester、Strategy、cache 和 account observations；不要求 rc4 暴露其
+内部 hedge-mode/leverage response，也不引入 raw Binance client。#386–#391 只能实现
 §10 将其标记为 primary 或 applicable 的编号要求；primary 表示该编号唯一的实现所有者，
 applicable 表示该叶项必须服从但不得复制所有权。它们可以消费前置叶项的产物，但不得重新解释、
 复制所有权或增加交付义务。任何新增场景、环境、instrument、账户模式、基础设施、持续运行能力或
@@ -34,12 +33,12 @@ TraceQuant 最小 Demo Strategy，以及最终证据聚合和发布。成功不�
 
 | 项目 | 唯一选择 | 明确拒绝 |
 | --- | --- | --- |
-| Runtime | NautilusTrader `2.0.0rc4`，commit `a0400251110653b6d8ae6a9b5b89c4543fa85a2d`；order-enabled capability 仍为 blocked | rc5、未锁定版本、运行时身份漂移、仓库内 patched/forked `nautilus_trader` |
+| Runtime | NautilusTrader `2.0.0rc4`，commit `a0400251110653b6d8ae6a9b5b89c4543fa85a2d` | rc5、未锁定版本、运行时身份漂移、仓库内 patched/forked `nautilus_trader` |
 | Execution target | CPython 3.13、`linux-x86_64`、官方 `cp313-cp313-manylinux_2_34_x86_64` wheel | 其他 Python/platform tag、sdist/source build、非官方或重打包 wheel |
 | Venue / product | `BINANCE` / `BinanceProductType.USD_M` | Spot、COIN-M、Margin、其他交易所 |
 | Environment | `BinanceEnvironment.DEMO` | 默认 Live、`LIVE`、legacy `TESTNET`、自定义 endpoint |
 | Instrument | `BTCUSDT-PERP.BINANCE`；provider 使用 `load_all=False` 和唯一 `load_ids` | 第二个 instrument、全量加载、动态 allowlist |
-| Account | 一次运行只使用一个 Demo account；跨运行比较只接受由交易所认证身份导出的不可逆 account reference digest | 第二个 account、调用方配置的 `AccountId` 别名、完整 account ID、Live account |
+| Account | 一个 acceptance batch 由同一 runner 向三个 order-enabled 子进程注入同一份 Demo credential snapshot | 每 entry 覆盖 credential、第二个 account、完整 account ID、Live account |
 | Position mode | one-way；Nautilus 使用 `OmsType.NETTING` | hedge / dual-side |
 | Margin / leverage | `BTCUSDT` 为 `BinanceMarginType.ISOLATED`、`1x` | cross、动态 leverage、其他 symbol 设置 |
 | Active order cap | 全局最多 `1` 个活动或 acknowledgement 未决订单 | batch、并行订单、unknown 时新订单 |
@@ -51,7 +50,7 @@ TraceQuant 最小 Demo Strategy，以及最终证据聚合和发布。成功不�
 client；需要认证的入口只允许 adapter 从上述两个 Demo 专用环境变量取得凭据，TraceQuant
 配置对象、日志和 evidence 不得复制其值。
 
-### 1.2 账户模式与认证账户身份的设置和确认
+### 1.2 账户模式设置、准入与 rc4 行为确认
 
 rc4 的公开 execution config 必须同时设置：
 
@@ -59,68 +58,75 @@ rc4 的公开 execution config 必须同时设置：
 oms_type = OmsType.NETTING
 futures_margin_types = {"BTCUSDT": BinanceMarginType.ISOLATED}
 futures_leverages = {"BTCUSDT": 1}
+use_position_ids = true
 ```
 
-上述三个字段在 rc4 中不具有相同语义：`oms_type=NETTING` 只声明 Nautilus OMS 预期，
-不会把 venue 从 hedge mode 切换为 one-way；`futures_margin_types` 的非“已经是目标模式”错误会
-使 execution client 连接失败；`futures_leverages` 则是 best-effort，venue rejection 只产生
-warning 并继续连接。execution config、`LiveNode.cache`、公开 account/position objects 和公开
-report/callback 均不返回可供薄封装判定的 one-way/1x admission result。成功连接因此只能证明
-isolated 配置没有以 fatal error 失败，不能证明 one-way 或 1x。
+这些字段的语义不同：`oms_type=NETTING` 声明 Nautilus OMS 预期，但不切换 Binance position
+mode；`futures_margin_types` 的非“已经是目标模式”错误会使连接失败；`futures_leverages` 是
+best-effort，venue 业务拒绝只产生 warning。rc4 连接时会查询实际 hedge mode 并据此生成订单参数，
+但该结果和 leverage response 没有暴露到公开 Python admission surface。因此 Stage 4 不把“连接
+成功”单独解释为 one-way/1x 已确认。
 
-rc4 的 `BinanceExecutionClientConfig.account_id` 是调用方配置的 Nautilus 别名；官方 Demo 示例可将
-它任意设为 `BINANCE-001`。adapter 随后把 `self.core.account_id` 原样写入 `AccountState`，所以公开
-`Account.id` 不是 Binance 认证返回的账户身份。不同 Demo credential 可以配置相同别名，同一 credential
-也可以配置不同别名；因此 `str(account.id)` 及其 digest 都不得用于证明跨进程使用同一 Demo account。
+每个 order-enabled attempt 在创建 network client 前必须同时满足：
 
-唯一 pre-run operator gate 仍是：操作者在 Binance Demo UI 中确认三项后，为**本次**
-order-enabled attempt 显式提供固定令牌 `ONE_WAY_ISOLATED_1X_CONFIRMED`。令牌不是持久授权，
-不得默认、缓存或跨 attempt 复用；缺少或不精确匹配时必须在创建 network client 前失败。
-它只允许进入连接/自动确认阶段，不是 venue 事实、不能使订单路径 ready、不能单独支持
-`COMPLETE` 或成功 evidence。
+1. 操作者刚刚在 Binance Demo UI 中确认账户为 one-way、`BTCUSDT` isolated、1x、无活动订单且
+   flat，并为**本 attempt**显式提供固定令牌 `ONE_WAY_ISOLATED_1X_FLAT_CONFIRMED`；令牌不得默认、
+   缓存或跨 attempt 复用；
+2. exact execution config 包含上述四个固定字段，endpoint 无 override；
+3. attempt 由 §9.3 的同一 batch runner 启动，禁止 entry-level credential override；三个
+   order-enabled 子进程使用 runner 在 batch 开始时取得的同一份环境 snapshot；
+4. client 连接成功，从而证明 isolated 设置成功或 venue 已处于 isolated。连接失败即在首单前
+   `HALTED`。
 
-当前冻结 rc4 同时缺少订单前自动确认 one-way/1x 和公开交易所认证账户身份的能力。因此所有
-order-enabled attempt 必须在首笔订单前以稳定顶层 failure code
-`order_admission_capability_unavailable` 进入 `HALTED`；脱敏诊断必须按固定顺序列出
-`account_mode_capability_unavailable` 与 `venue_account_identity_capability_unavailable` 两项
-capability failure，不能只记录其中一项。
-不得用 warning/日志解析、private/Rust execution client、raw Binance REST/WebSocket、测试订单
-或连接成功替代确认。#386 只能实现该 fail-closed gate 和离线证据，不能声称修复上游能力。
+operator gate 是允许最小 Demo canary order 的风险准入，不是最终验收事实。每个包含 market fill 的
+order-enabled run 必须在第一笔最小数量开仓完整成交后、任何后续开仓前，通过 rc4 公开观察完成：
 
-解除该 gate 必须先通过独立范围变更获得 maintainer 批准、修订本文档版本并锁定新的官方
-Nautilus runtime identity。新 runtime 的公共 execution-client connect contract 必须同时保证：
+- **one-way**：本 run 的 cache order/position events 不得出现 Binance hedge leg
+  （`...-LONG`/`...-SHORT`）position identity；必须得到单一净 position，且相反方向 reduce-only
+  close 后该 position 归零。缺失/null identity 本身不能证明 one-way；出现 hedge-leg identity、多于
+  一个 open position、事件序列不完整或 identity unknown 都使本 run 不可逆地 `HALTED`；
+- **1x**：确认开仓 order terminal、无其他活动/未决订单且账户没有其他 position 后，触发一次公开
+  `query_account`，从随后到达的 `AccountState.info["total_initial_margin"]` 取得
+  `observed_initial_margin`。将 request 至 snapshot 之间、最长 5 秒窗口内同 instrument 的合格 mark
+  prices 取最小/最大值；窗口相对价差必须不超过 `0.5%`。令中点 mark 计算
+  `expected_initial_margin = abs(position_quantity) * mark_price_midpoint`，允许误差为
+  `abs(position_quantity) * (mark_price_max - mark_price_min + price_increment) + one_currency_quantum`。
+  observed 与 expected 的绝对差不得超过该值。缺少 snapshot、存在其他 margin owner、窗口过宽、
+  结果超差或无法唯一归因都使本 run `HALTED`；
+- **isolated**：连接阶段的目标设置结果与上述单 position/无其他 margin owner 前提共同记录为
+  `isolated_behavior_confirmed=true`；不得从 instrument 的默认 margin 值推导。
 
-1. venue hedge mode 与 `OmsType.NETTING` 不符时，在 `connected`/order-ready 前返回 fatal error；
-2. `BTCUSDT` leverage 设置被拒绝，或成功响应不是精确 `1x` 时，在 `connected`/order-ready 前返回
-   fatal error；
-3. exact frozen config 加上公开的 connected/ready outcome 足以形成 typed、可测试的
-   `account_mode_admitted=true`，不读取日志或私有对象。
-4. 认证连接后，公共 Nautilus surface 提供一个由 Binance 返回、独立于配置 `AccountId` 的稳定账户
-   identity：同一 Demo account 的 fresh process 结果相同，不同 Demo account 结果不同；入口只能在
-   内存中把该原始值用于 §9.3 HMAC，不能记录它。缺少、空值、多值、来源不可证明或运行间不一致都
-   必须在提交首单前失败关闭。
+行为确认失败后禁止新的正常场景订单；只有在原订单 terminal、零 active/inflight 且净 position
+确定时，才按 §5 提交唯一 reduce-only cleanup。清场成功仍保持 `HALTED`。三个确认都通过后才可
+记录 `account_mode_behavior=consistent` 并继续。passive-only ExecTester attempt 必须绑定同一 batch
+中先完成且通过上述确认的 market-close attempt，并仍重新执行 operator gate；它不能独立建立模式
+证据。
 
-仓库不得 vendor、monkeypatch 或复制 `nautilus_trader` 来满足该能力，也不得为读取或设置这些值
-创建第二个 Binance client。新的官方 runtime 未被锁定前，#389、#390 的 credentialed
-order-enabled 场景与 #391 成功发布保持 blocked。
+rc4 的 `BinanceExecutionClientConfig.account_id` 是调用方别名，不是交易所身份。Stage 4 不要求
+Binance derivatives API 未公开的稳定 account ID，也不记录或散列该别名；单 account 边界由一个
+batch runner 的不可覆盖 credential snapshot 和 attempt-local operator gate 保证。不得读取 warning、
+private/Rust client 或 raw Binance REST/WebSocket 来替代以上公开行为证据。
 
 ### 1.3 最小有效数量
 
-每个 order-enabled 场景都必须从本次 attempt 加载的 Nautilus instrument 得到数量，不接受配置
-中的静态 quantity。开仓/passive order 先按订单类型选择适用的 size increment、minimum quantity、
-precision 和 minimum notional constraints，再冻结本次提交的 `notional_price`：limit order 必须先从
-§3.1 合格 quote 推导并通过 tick/price constraints 校验**精确提交价格**（passive buy 即校验后的
-`best bid - 1 price increment`），并以该提交价格计算 minimum notional；market order 没有提交价格，
-必须使用 §3.1 中同 instrument 的合格 mark-price sample。reduce-only close 不计算最小量或最小名义，
-使用下文冻结的精确持仓原值算法。不得用 buy ask、sell bid 或预期成交价替代开仓订单的
-order-type-specific 输入。
+每个 order-enabled 场景都必须从本次 attempt 加载的 rc4 公开 Nautilus instrument 得到数量，
+不接受源码或用户配置中的静态 quantity。Stage 4 的“instrument constraints”明确指 rc4
+`Instrument` 规范化并公开的 `size_increment`、`minimum_quantity`、`maximum_quantity`（若有）和
+`minimum_notional`（若有）；不得要求或伪造 rc4 未保留的 raw `MARKET_LOT_SIZE` 字段。venue 对
+成功订单的 accepted/filled 事实是未公开 venue rule 的最终确认；确定 reject 是安全的 `HALTED`，
+不得修改 quantity 重发。
 
-对于开仓与 passive order，最终 quantity 是满足全部适用 constraints 的最小 step 倍数，并由
-Nautilus instrument 的 quantity 构造/校验路径生成。缺少 order-type-specific constraint、limit
-提交价格、公开 mark-price 输入或无法得到唯一最小值时停止；不得猜测、保守放大或扩大为
-portfolio sizing。quantity 计算、订单构造与紧接其后的提交前复核必须绑定同一份已识别的价格输入；
-limit order 绑定同一 quote snapshot 和由它推导的提交价格，market order 绑定同一 mark-price
-sample。
+开仓/passive order 先冻结 `notional_price`：limit 使用 §3.1 合格 quote 推导并校验精确提交价格
+（passive buy 为 `best bid - 1 price increment`）；market 使用同 instrument 的合格 mark price。
+quantity 是满足上述公开 minimum quantity、size precision/increment、maximum quantity 和 minimum
+notional 的最小 step 倍数。reduce-only close 不计算 minimum notional，使用下文精确持仓原值。
+缺少公开 constraint、价格输入或唯一最小值时停止；不得猜测、保守放大或扩大为 portfolio sizing。
+
+Strategy 的 quantity 计算、构造和提交前复核绑定同一价格输入。rc4 ExecTester quantity 在 config
+构造时固定，因此 §4.2 允许其薄入口先用同一 command 内的 rc4 data-only planning phase 取得
+instrument 与价格，计算 quantity 后立即构造 tester；从 planning sample 到 tester 首次 submit 的
+总时限为 10 秒。提交后必须用 cache 中实际 order price 或最近 pre-submit mark price 重新运行同一
+最小量公式；不相等即使 venue 接受也为 `HALTED`，但不得取消已发生的安全清场义务。
 
 任何正常或失败路径的 reduce-only market close 使用独立的精确清平算法，不能复用上述最小开仓量：
 
@@ -130,22 +136,19 @@ sample。
 2. close side 必须与该 position 相反，订单必须是 market + `reduce_only=true`，提交 quantity 必须与
    `close_quantity` 数值完全相等；禁止按 step/minimum/notional 向上放大、向下截断或提交 dust
    follow-up；
-3. 精确 `close_quantity` 必须可由 Nautilus `Quantity` 无损表示，并通过 reduce-only market order
-   的**全部且仅有**以下适用数量约束：instrument size precision，以及 `MARKET_LOT_SIZE` 的
-   `minQty`/`maxQty`/`stepSize`。Binance USD-M 的 `-4164 MIN_NOTIONAL` 合同明确豁免
-   reduce-only order；cleanup 不得应用 `MIN_NOTIONAL`、不得为名义校验取得 mark price，也不得改用
-   普通开仓公式、`LOT_SIZE` 或静态值；
-4. 固定 runtime 的公共 instrument surface 若不能分别、完整地提供上述适用数量 filters，或精确
-   `close_quantity` 违反任一 filter，则不得创建/提交 cleanup order；运行保持 `HALTED`，记录
-   `cleanup_incomplete` 及失败的 filter，但不得记录 secret、完整账户标识或 raw venue payload；
+3. 精确 `close_quantity` 必须可由 Nautilus `Quantity` 无损表示，并通过 rc4 公开 Instrument 的
+   size precision/increment 以及 minimum/maximum quantity（若公开）。Binance USD-M 的 `-4164`
+   合同豁免 reduce-only order 的 `MIN_NOTIONAL`；cleanup 不得应用 minimum notional、取得 mark
+   price 或放大 exposure。venue 若因公开 surface 未表达的 filter 拒绝 close，必须记录确定 reject、
+   保持 `HALTED/cleanup_incomplete`，不得修改 quantity 重发；
+4. 精确 `close_quantity` 违反任一公开 constraint 时不得创建订单；不得复制 raw exchange filters
+   或把开仓 quantity 代替真实 exposure；
 5. 构造前再次读取 position；若它与冻结值不完全相同，原 quantity 作废，必须重新完成
    terminal → zero-active → position proof。只有同一次冻结值完成构造、提交并最终证明 position 为零，
    才能记录 `cleanup_complete`；任何 partial/late fill 或 cancel/fill race 都遵循同一规则。
 
-该合同也适用于官方 ExecTester；固定 rc4 的 `ExecTesterConfig.order_qty` 和
-`open_position_on_start_qty` 在运行前已定值，不能满足本段合同。不得以先前 DataTester run、
-另一个 process/node 的 quote、保守放大 quantity 或静态配置规避。§4.2 冻结相应 capability gate
-和能力到位后的唯一双 attempt 计划。
+该合同也适用于官方 ExecTester。其固定 `order_qty`/`open_position_on_start_qty` 只能来自 §4.2
+同一 command 的短时 planning phase；先前验收 run、硬编码、保守放大或跨 batch 快照均不允许。
 
 ### 1.4 可执行身份准入
 
@@ -200,13 +203,13 @@ network client 创建前完成；任一步不可证明或不相等都以 `identi
 | --- | --- |
 | `ST4-REQ-001` | 每个入口在 import/config validation 阶段执行 §1.4：验证 clean source tree、实际 lock bytes、批准 wheel→commit 映射、安装后 distribution bytes 和 runtime digest；身份不能由期望常量自证，任一不符时不得创建客户端。 |
 | `ST4-REQ-002` | 唯一环境是 Binance USD-M Futures Demo，endpoint 不可覆盖，凭据只来自两个 Demo 专用变量。 |
-| `ST4-REQ-003` | 唯一 instrument、单 account、one-way、isolated、1x、最多一个活动/未决订单是不可配置边界；缺少 §1.2 的账户模式自动确认或交易所认证账户身份公共能力时 order-enabled 路径不可用。 |
-| `ST4-REQ-004` | order-enabled 入口执行 §1.2 的一次性 operator gate 和自动 admission；固定 rc4 必须以 `order_admission_capability_unavailable` 在首单前 `HALTED` 并列出两个具体 capability failure，不能把 config、`Account.id`、连接成功或日志当确认。 |
-| `ST4-REQ-005` | 开仓/passive quantity 按 §1.3 从本 attempt 的 instrument 与 order-type-specific `notional_price` 计算为最小有效量；任何 reduce-only close 则精确等于最新已确认 `abs(position)`，不得取整或放大，只应用冻结的 reduce-only 数量 filters，明确不应用 `MIN_NOTIONAL`，否则不提交并保持 `cleanup_incomplete`；rc4 ExecTester 必须按 §4.2 fail closed。 |
+| `ST4-REQ-003` | 唯一 instrument、同一 batch credential、one-way、isolated、1x、最多一个活动/未决订单是不可配置边界；模式按 §1.2 由 attempt-local operator gate 与 rc4 公开行为证据共同确认。 |
+| `ST4-REQ-004` | order-enabled 入口执行 §1.2 的一次性 operator gate、固定 rc4 config 和首个最小 canary fill 后的自动行为确认；gate 或 config 不能单独支持成功，确认失败时只允许有限清场并保持 `HALTED`。 |
+| `ST4-REQ-005` | 开仓/passive quantity 按 §1.3 从 rc4 公开 Instrument 与 order-type-specific `notional_price` 计算为最小有效量；ExecTester 使用同一 command 的短时 planning phase 并事后复核；reduce-only close 精确等于最新已确认 `abs(position)`，不得取整或放大，不应用 `MIN_NOTIONAL`。 |
 | `ST4-REQ-006` | 所有网络和订单阶段使用 §3 的唯一 deadline；v1.0 不提供 timeout override。 |
 | `ST4-REQ-007` | 核对只读取 §8 的 entry-specific rc4 公开观察面：ExecTester 使用 `LiveNode.cache` 可检索 object graph，Strategy 使用 callbacks/cache/account snapshots；不得要求取得 rc4 公共 Python API 不返回的 tester 或 report objects。TraceQuant 不拥有第二套 adapter、order、position、ledger、accounting 或 reconciler。 |
 | `ST4-REQ-008` | DataTester 只执行 §4.1 的数据场景，不创建 execution client。 |
-| `ST4-REQ-009` | ExecTester 只执行 §4.2 的两个互斥 attempt；当前 rc4 缺少 order-type-specific deferred quantity 与 staged terminal-reconciliation cleanup capability 时不得联网下单，特殊 risk bypass 不得进入普通 Strategy。 |
+| `ST4-REQ-009` | ExecTester 只执行 §4.2 的两个互斥主 attempt 及仅在确定非零残余仓位时启动的 cleanup-only attempt；所有订单由官方 ExecTester 提交，planning/reconciliation 薄封装只读，特殊 risk bypass 不得进入普通 Strategy。 |
 | `ST4-REQ-010` | Demo Strategy 只执行 §4.3 的固定顺序，不读取阶段 3 模型、不产生 alpha、不做 portfolio sizing。 |
 | `ST4-REQ-011` | Strategy 只使用 §5 的固定前进状态；终态只有 `COMPLETE` 或 `HALTED`，不得抽象为可配置工作流引擎。 |
 | `ST4-REQ-012` | 最终验收按 §4.4 从四个全新外部分区依次消费 DataTester、两个独立 ExecTester attempt、Strategy 证据，并在同一 batch/identity 下聚合。 |
@@ -236,7 +239,7 @@ network client 创建前完成；任一步不可证明或不相等都以 `identi
 
 ### 3.1 Order-enabled price freshness
 
-ExecTester（仅在 §4.2 capability gate 解除后）和 Strategy 的开仓 market/limit order 使用本节规则。
+ExecTester 和 Strategy 的开仓 market/limit order 使用本节规则。
 合格 quote 必须属于
 `BTCUSDT-PERP.BINANCE`，具有非空 bid/ask，`ts_event` 不得比本地 UTC wall clock 快超过 1 秒，
 检查时的 `now - ts_event` 不得超过 5 秒，并且 `ts_event` 不得早于本次 run 对该 quote stream
@@ -284,55 +287,49 @@ out-of-order timestamp 均为 `HALTED`。此入口没有 execution config、orde
 ### 4.2 官方 ExecTester 安全子集
 
 入口必须使用官方 `ExecTesterConfig`，并要求显式 `--order-enabled` 意图以及 §1.2 的精确
-operator token。TraceQuant 薄封装只负责冻结配置、启动/停止两个 attempt、读取 §8.1 cache graph
-和输出证据；所有订单动作必须由官方 ExecTester 执行。
+operator token。TraceQuant 薄封装只负责短时 data-only quantity planning、冻结两个主 attempt 的
+config、启动/停止 tester、运行无 strategy 的只读 reconciliation node、读取 §8.1 cache graph 和输出
+证据；所有开仓、limit、cancel 和 cleanup order 都必须由官方 ExecTester 提交。
 
-固定 rc4 在构造 `ExecTesterConfig` 时就固定 `order_qty` 和 `open_position_on_start_qty`；收到首个
-quote 时只提交该预存 quantity，`instrument.make_qty` 仅量化它，不会按 `min_qty`、step、
-`min_notional` 和 §1.3 的 order-type-specific price 求最小值。启用 limit leg 时，同一 `on_quote`
-还会进入 order maintenance。其 `on_stop` 还会同步发出 cancel-active-orders 和 close-positions，
-不会在二者之间等待原订单终态与零 active/inflight proof。该行为既不能满足 §1.3，也不能满足
-§5 的 cleanup 顺序。因此固定 rc4 的 ExecTester order-enabled attempt 必须在 client/order 创建前
-以稳定 failure code `exec_tester_order_safety_capability_unavailable` 进入 `HALTED`；不得把 DataTester
-或另一 node 的快照、运行前 quantity、日志/private hook、自定义 order owner 或 tester 旁路下单
-当作替代。
+rc4 的 fixed quantity 和同步 `on_stop` 行为通过分离职责与严格调用时机使用：
 
-解除该 gate 必须与 §1.2 一样先批准并锁定新的官方 runtime。它必须在官方 ExecTester 内同时提供：
+1. 每个主 attempt 先在同一 command 和 partition 内启动 rc4 data-only planning phase，仅加载目标
+   instrument 并取得 §3.1 合格 quote/mark price；按 §1.3 计算 quantity，立即停止 data client，并在
+   10 秒总时限内构造 `ExecTesterConfig`。planning 不创建 execution client、不提交订单；
+2. tester 运行期间薄封装只读 cache，不调用 tester 私有方法、不在 tester 外下单；实际 order 的
+   price/最近 pre-submit mark price 必须证明 planning quantity 仍是 §1.3 的最小值，否则场景失败；
+3. `cancel_orders_on_stop` 与 `close_positions_on_stop` 在任何一个 tester instance 中不得同时为 true。
+   market instance 只有在 opening order 已 terminal 且 active/inflight 为零后才允许 stop-and-close；
+   passive instance 只 cancel、不 close；
+4. passive stop 后以新的无 strategy LiveNode 通过正常 Nautilus reconciliation/cache 路径等待原 order
+   terminal 并证明零 active/inflight。若确定 flat，结束；若确定非零 position，场景已失败，并且只在
+   该 proof 完成后启动一个 cleanup-only 官方 ExecTester instance；若状态 unknown 则不得 cleanup；
+5. cleanup-only instance 禁用 open/limit/stop legs 和 cancel-on-stop，启用
+   `close_positions_on_stop=true`、`close_positions_qty_precision=None`、
+   `reduce_only_on_stop=true`，并复用原 passive instance 的 trader/strategy/account/instrument identity，
+   使 reconciliation 后的 position 仍由该 strategy 唯一拥有。它只在 §5 proof 已完成时 stop 一次，
+   使官方 tester 从 cache 的精确 position quantity 提交唯一 reduce-only market close。venue reject、
+   残余仓位或 deadline 都保持 `HALTED/cleanup_incomplete`，不得改量重发。
 
-1. typed、不可注入 callback 的 `MIN_VALID_FROM_ORDER_PRICE_INPUT` quantity mode：tester 自身读取
-   已加载 instrument；limit 先冻结精确提交价格，market 读取公开 mark-price input，再按 §1.3 得到
-   quantity 并紧接着构造和提交；计算/校验失败必须在任何订单创建前 fatal；
-2. typed `STAGED_TERMINAL_RECONCILE_THEN_CLEANUP` stop/failure mode：先请求 cancel/query，再等待
-   原订单进入 terminal，证明 active/inflight count 为零，重新读取确定的实际 position，最后仅在
-   position 非零时严格按 §1.3 以 `abs(position)` 原值提交恰好一笔 reduce-only cleanup；tester 的
-   public instrument surface 必须提供该段冻结的 `MARKET_LOT_SIZE` 输入，且 staged mode 必须明确
-   不对 reduce-only cleanup 应用 `MIN_NOTIONAL`。不能提供适用数量 filter、精确 exposure 不可无损
-   构造或不通过 filter 时保持 `HALTED`/`cleanup_incomplete` 且不提交。
-   任何 proof 超过 §3 deadline 都必须保持 `HALTED` 且不提交 cleanup。
+唯一计划由两个互斥主 attempt 组成；各自使用独立 LiveNode、repo 外 partition 和唯一
+strategy/order tag，开始前均证明 flat、零 active/inflight，并重新执行 §1.2 admission：
 
-这些能力不得允许任意 sizing function、plugin/hook 或第二个 order owner。只增加 deferred quantity
-而没有官方 staged-cleanup capability 不足以解除 gate。
-
-能力到位后的唯一计划由两个新的、互斥的 order-enabled attempt 组成；每个 attempt 使用独立
-LiveNode、ExecTester、repo 外 evidence partition 和唯一 strategy/order tag，开始前都证明账户 flat、
-无活动/未决订单，并各自重新执行 §1.2 admission：
-
-1. **market-close attempt**：关闭全部 limit/stop legs，使用
-   `open_position_on_first_price_input=true` 与 `MIN_VALID_FROM_ORDER_PRICE_INPUT` 提交唯一 market buy；
-   完整 fill 且该订单 terminal 后停止 tester，由 `STAGED_TERMINAL_RECONCILE_THEN_CLEANUP` 先证明
-   active/inflight count 为零，再按最新确定 long position 原值提交唯一 reduce-only
-   market sell，等待完整成交并证明 flat；
-2. **passive-cancel attempt**：不启用 open-position/stop/sell legs，只启用一个 post-only limit buy；
-   tester 先从首个合格 quote 得到并校验 `best bid - 1 price increment`，再以该精确提交价格计算最小
-   quantity；提交后不得追价、modify 或补单。确定 accepted 后停止 tester，由 staged mode 请求
-   cancel 并等待该订单 terminal、active/inflight count 为零；随后重新读取 position，若 flat 则不
-   提交 cleanup，若 cancel/fill race 形成确定非零 position 则该场景失败并只提交一笔 reduce-only
-   cleanup，无法在 deadline 内完成任何 proof 时不提交 cleanup。
+1. **market-close attempt**：planning phase 计算 market buy quantity；tester 关闭全部 limit/stop
+   legs，设置该值为 `open_position_on_start_qty` 且 `open_position_on_first_quote=true`，只提交唯一
+   market buy。完整 fill、terminal 和零 active/inflight 后先完成 §1.2 自动行为确认，再以
+   `cancel_orders_on_stop=false`、`close_positions_on_stop=true`、exact/no-truncation、reduce-only
+   配置停止 tester，等待唯一 market sell 完整成交并证明 flat；
+2. **passive-cancel attempt**：planning phase 按 `best bid - 1 price increment` 计算 limit quantity；
+   tester 禁用 open-position/stop/sell，只启用一次性 post-only limit buy，设置
+   `tob_offset_ticks=1`，禁止 modify、追价和补单。accepted 后以
+   `cancel_orders_on_stop=true`、`close_positions_on_stop=false` 停止；随后按第 4、5 项完成只读
+   reconciliation，以及仅在确定非零 position 时的官方 cleanup-only failure path。
 
 两个 attempt 的证据共同构成一个 `exec_tester` required scenario；任一个失败都会使该 scenario
 `FAIL/HALTED`，后一个不得用来弥补前一个。两者绝不同时运行，所以 active/pending order cap 仍为
-1。每个 attempt 都是独立运行，并分别生成一份 §9.1 canonical evidence record；不得把两次运行
-包进一个无 child identity/digest 的 ExecTester envelope。rc4 的
+1。每个主 attempt 分别生成一份 §9.1 canonical evidence record；failure path 中的 reconciliation
+与 cleanup-only component 使用同一 scenario/partition，并把 component config、开始结束时间和
+cache fact digest 纳入该失败 record，不能隐藏子运行。rc4 的
 `LiveNode.add_builtin_strategy("ExecTester", config)` 返回 `None`，也没有公开 strategy
 getter；薄封装不得声称持有 tester 或读取其 callback 参数。场景边界只能由薄封装按 §8.1 只读
 轮询 `LiveNode.cache` 识别：market leg 是唯一新增且完整 filled 的 market order；close leg 是唯一
@@ -340,12 +337,12 @@ getter；薄封装不得声称持有 tester 或读取其 callback 参数。场�
 accepted 后 canceled 且没有 `OrderFilled` 的 post-only order。多余/无法归属的 order、deadline、
 缺失 history 或不相容 terminal fact 均进入非 `consistent` 分类。
 
-只有该独立入口可以使用官方 tester 所需的最小 risk bypass；能力必须在入口内封闭且不能由普通
+只有该独立入口可以使用官方 tester 所需的最小 risk bypass；它必须在入口内封闭且不能由普通
 Strategy import、配置或调用。post-only order 若 reject、partial fill 或在 cancel 前/期间成交，
 场景立即判失败；只有在原 order terminal、零 active/inflight 且 position 重算为确定非零后，才能按
-§1.3 以 `abs(position)` 原值做唯一一笔 reduce-only cleanup；原值不通过适用数量 filters 时不得提交。
-不得为了
-让场景通过而改成 aggressive limit、重发、在 tester 外提交订单或扩大 tester 功能。
+§1.3 由 cleanup-only tester 以 `abs(position)` 原值做唯一一笔 reduce-only cleanup；原值不通过公开
+constraints 时不得提交。不得为了让场景通过而改成 aggressive limit、重发、在 tester 外提交订单
+或扩大 tester 功能。
 
 ### 4.3 TraceQuant 最小 Demo Strategy
 
@@ -371,8 +368,8 @@ position 或 sizing 参数。
 
 ### 4.4 最终证据聚合与发布
 
-在同一 source commit/source-tree digest、dependency lock、已通过 §1.2/§4.2 gates 的精确 runtime
-和 frozen config identity 上，使用四个
+在同一 source commit/source-tree digest、dependency lock、已通过 §1.2 admission/behavior confirmation
+的精确 rc4 runtime 和 frozen config identity 上，使用四个
 全新且初始为空的 repo 外分区依次运行 DataTester、ExecTester market-close attempt、ExecTester
 passive-cancel attempt 和 Strategy。四个分区的逻辑 ID 必须分别为 `data_tester`、
 `exec_tester_market_close`、`exec_tester_passive_cancel`、`demo_strategy`，每个分区恰好产生一份
@@ -380,8 +377,7 @@ passive-cancel attempt 和 Strategy。四个分区的逻辑 ID 必须分别为 `
 证据，不创建客户端或订单。所有 required scenario 为 `PASS`、所有 identity/digest 一致且最终
 order/position/unknown 清场后，才可原子发布
 `docs/product/stage4-binance-demo-acceptance.json`。任何失败不得创建新成功文件，也不得覆盖
-既有成功文件。固定 rc4 capability gates 未解除时，本节没有成功发布路径；聚合器必须保留
-`HALTED` 诊断，不能用 DataTester 或离线测试通过替代缺失的 order-enabled evidence。
+既有成功文件。operator gate、config 或离线测试不能替代缺失的 order-enabled 行为证据。
 
 ## 5. Strategy 固定状态
 
@@ -408,7 +404,7 @@ any non-terminal state -> HALTED
 3. 证明 active/inflight order count 为零；
 4. 从同一 entry observation profile 重新计算 position；
 5. 只有 position 为确定非零时，才按 §1.3 冻结 `close_quantity = abs(position)`；仅当它可无损
-   构造并原值通过 reduce-only 适用数量 filters 时提交恰好一笔 cleanup，否则不提交并记录
+   构造并原值通过 reduce-only 适用的 rc4 公开数量 constraints 时提交恰好一笔 cleanup，否则不提交并记录
    `cleanup_incomplete`。
 
 任一 proof 在对应 deadline 内缺失、冲突或 unknown 时保持 `HALTED`，停止自动动作且不得提交
@@ -423,9 +419,9 @@ cleanup。cleanup 本身完成后仍保持 `HALTED`，不能把本次结果改�
 | 空数据 | DataTester observation 到期 | 停止并保留订阅统计 | 把连接成功当行情成功 | `HALTED` | quote/trade counts 均或任一为零 |
 | stale / out-of-order timestamp | 正在观察对应 stream | 停止场景；无订单时直接结束 | 忽略、重排后伪装成功 | `HALTED` | stream、前后 timestamp、age |
 | order reject | 等待 acceptance | 记录确定 reject；若已有 exposure 则严格按 §5 terminal → zero-active → position → cleanup 顺序清场 | 修改参数并重发、未证明零 active/inflight 就 cleanup | `HALTED` | client order reference、reason、cache status |
-| ambiguous acknowledgement | 等待 acceptance 超时或 transport unknown | Strategy 最多发出一次公开 `query_order` 并等待其 profile 更新；ExecTester 不代替官方 tester 发 command，只由官方 staged mode 按 §5 等待 cache graph 收敛 | 把 query 的 `None` 返回值当 report、当作 reject、用新 ID 重发、继续开仓、原 order 未 terminal 或 active/inflight 非零时 cleanup | `HALTED` | command/entry identity、timeout/transport fact、terminal/active proof、后续 entry-profile result |
+| ambiguous acknowledgement | 等待 acceptance 超时或 transport unknown | Strategy 最多发出一次公开 `query_order` 并等待其 profile 更新；ExecTester 停止正常场景后只启动 §4.2 无 strategy reconciliation node，等待 cache graph 收敛 | 把 query 的 `None` 返回值当 report、当作 reject、用新 ID 重发、继续开仓、原 order 未 terminal 或 active/inflight 非零时 cleanup | `HALTED` | command/entry identity、timeout/transport fact、terminal/active proof、后续 entry-profile result |
 | duplicate / out-of-order event | 任一 order state | 忽略重复的状态推进并 reconcile；记录冲突 | 二次推进、二次提交 | `HALTED` | event identity、expected/observed state |
-| cancel/fill race | 等待 cancel | reconcile；严格按 §5 证明原 order terminal 与零 active/inflight 后重算 position；仅当 `abs(position)` 原值通过 §1.3 适用数量 filters 时提交唯一 cleanup | 同时假定 canceled 和 filled、重发 cancel/order、用当前 cumulative fill 提前 cleanup、调整 exposure 以通过 filter | `HALTED` | §8 entry profile 的 cancel/fill facts、terminal/active proof、冻结 position/filter 结果、最终 position |
+| cancel/fill race | 等待 cancel | reconcile；严格按 §5 证明原 order terminal 与零 active/inflight 后重算 position；仅当 `abs(position)` 原值通过 §1.3 rc4 公开 constraints 时提交唯一 cleanup | 同时假定 canceled 和 filled、重发 cancel/order、用当前 cumulative fill 提前 cleanup、调整 exposure 以通过 constraint | `HALTED` | §8 entry profile 的 cancel/fill facts、terminal/active proof、冻结 position/constraint 结果、最终 position |
 | late fill | 已收到 cancel 或已开始 reconcile | 更新 Nautilus-owned 事实；重新完成 §5 terminal/zero-active proof 后仅按最新 `abs(position)` 原值清场 | 保持原 flat 假设、在原 order 仍可 late fill 时 cleanup、取整/放大 exposure、发布成功 | `HALTED` | late fill identity、先前状态、terminal/active proof、冻结 position/filter 结果、cleanup result |
 | unexpected partial fill | 等待任一完整 fill | 停止成功路径；先等原 order terminal 与零 active/inflight，再仅按重算的 `abs(position)` 原值有限清场；原值不合法则不提交 | 按当前 cumulative quantity 提前 cleanup、取整/放大、等待/补单凑满、实现通用 partial-fill workflow | `HALTED` | ordered/cumulative/leaves quantity、terminal/active proof、entry-profile position/filter observations |
 | handler exception | 任一实际使用的 Strategy handler | 顶层保护记录 fatal diagnostic、锁住提交、按 §5 顺序进入安全清场 | 吞掉异常、继续状态推进 | `HALTED` | handler、异常类型/脱敏信息、state、submission count |
@@ -456,9 +452,9 @@ handler 前必须同步完成三件事：写入脱敏 fatal diagnostic、设置�
 | `ST4-SAFE-002` | `missing`、`conflicting`、`unknown` 或 `cleanup_incomplete` 都是失败，不得降级为 warning 或成功。 |
 | `ST4-SAFE-003` | DataTester 对空数据、错误 identity、stale/future/out-of-order timestamp 失败关闭。 |
 | `ST4-SAFE-004` | ExecTester bypass 仅限独立入口；普通 Strategy 不能 import 或配置该能力。 |
-| `ST4-SAFE-005` | ExecTester 的 reject、ambiguous ACK、unexpected/partial fill 和 cancel/fill race 禁止盲目重发；只有官方 staged mode 按 §5 证明原订单 terminal、零 active/inflight 并重算确定 position，且精确 `abs(position)` 原值通过 §1.3 reduce-only 适用数量 filters 后才可执行唯一 cleanup；不得应用 `MIN_NOTIONAL`。 |
+| `ST4-SAFE-005` | ExecTester 的 reject、ambiguous ACK、unexpected/partial fill 和 cancel/fill race 禁止盲目重发；只有 §4.2 无 strategy reconciliation node 按 §5 证明原订单 terminal、零 active/inflight 并重算确定 position，且精确 `abs(position)` 原值通过 §1.3 rc4 公开 constraints 后，cleanup-only 官方 ExecTester 才可执行唯一 cleanup；不得应用 `MIN_NOTIONAL`。 |
 | `ST4-SAFE-006` | Strategy 对 ambiguous、duplicate、out-of-order、timeout 和 conflict 设置不可逆 `HALTED` latch，禁止新开仓。 |
-| `ST4-SAFE-007` | partial fill、late fill 或 passive limit 成交必定使验收失败；不得按中间 cumulative fill 提前清场，只能在原订单 terminal、零 active/inflight 后以 Nautilus 重算的精确 `abs(position)` 原值有限清场；不得为满足适用的 minimum/step 取整或放大，也不得把 reduce-only 豁免的 `MIN_NOTIONAL` 当作拒绝清场条件；原值违反适用数量 filter 时禁止提交并保持 `cleanup_incomplete`。 |
+| `ST4-SAFE-007` | partial fill、late fill 或 passive limit 成交必定使验收失败；不得按中间 cumulative fill 提前清场，只能在原订单 terminal、零 active/inflight 后以 Nautilus 重算的精确 `abs(position)` 原值有限清场；不得为满足 rc4 公开 minimum/step 取整或放大，也不得把 reduce-only 豁免的 `MIN_NOTIONAL` 当作拒绝清场条件；原值违反公开 constraint 时禁止提交并保持 `cleanup_incomplete`。 |
 | `ST4-SAFE-008` | 所有实际 handler 具有 §6.1 顶层保护；冻结清单中的每个 handler 都有独立 fault-injection case，并以 completeness assertion 防止新增 handler 漏测。 |
 | `ST4-SAFE-009` | 只有 §8 对当前入口冻结的 observation profile 证明无活动/未决订单、无持仓、无 unknown 才可 `COMPLETE`；否则保持 `HALTED`。 |
 
@@ -530,9 +526,12 @@ raw report accessor 或 ExecTester callback getter 设为成功前提，也不�
   内解释。ExecTester 的最终 snapshot 必须晚于最后一个场景 terminal event；Strategy 的最终 snapshot
   必须在有界 `query_account` 之后更新。运行跨过 funding、snapshot 未更新/缺失或出现其他无法解释
   变化时为 `conflicting`，不得增加 funding ledger；
+- **Account mode**：market-close 与 Strategy 按 §1.2 从 cache order/position identity、唯一净持仓、
+  mark price 和公开 account margin snapshot 形成行为确认；passive-cancel 只可引用同 batch 已通过的
+  market-close `run_id`。operator token、config 或连接成功不能单独形成 `consistent`；
 - **Cleanup**：cache 的 open/in-flight order counts、open positions 和当前 entry profile 的 terminal
   facts 同时为零/closed，且无 deadline 或其他 unresolved unknown。发生过非零 exposure 时还必须记录
-  §1.3 冻结的 exact position、close quantity、逐项适用数量 filter 判定、`MIN_NOTIONAL=not_applicable`
+  §1.3 冻结的 exact position、close quantity、逐项 rc4 公开 constraint 判定、`MIN_NOTIONAL=not_applicable`
   marker 和最终 flat proof；若精确
   exposure 不可合法提交，分类必须是 `cleanup_incomplete`。单独的 balance 一致不能证明清场。
 
@@ -602,10 +601,9 @@ Instrument = object{
   size_precision: uint,
   size_increment: decimal,
   minimum_quantity: decimal,
+  maximum_quantity: decimal | null,
   minimum_notional: decimal | null,
-  market_minimum_quantity: decimal,
-  market_maximum_quantity: decimal,
-  market_step_size: decimal,
+  constraint_source: "RC4_PUBLIC_INSTRUMENT",
   constraints_digest: sha256
 }
 ```
@@ -622,8 +620,10 @@ POSIX path。`RuntimeIdentity.identity_digest` 删除本对象的 `identity_dige
 
 每类最小观察使用以下封闭对象。为避免让实现叶项自行决定 digest 内容，repo 外分区中的 digest source
 也被冻结为以下封闭 fact 对象；reference 使用 digest 只为脱敏，不允许用本地路径、完整账户标识或
-venue raw payload 代替。`TimedFact` arrays 按 `ts_event`、`ts_init`、`identity_digest` 排序；其余 fact
-arrays 按 `ts_event`、再按第一个 `*_reference_digest` 排序。同值仍重复出现，不能作为 set 去重：
+venue raw payload 代替。`TimedFact` arrays 按 `ts_event`、`ts_init`、`identity_digest` 排序；
+`OrderFact[]`、`FillFact[]` 和 `PositionFact[]` 按 `ts_event`、再按第一个
+`*_reference_digest` 排序。`EventFact[]` 是唯一例外，必须保持 callback/cache event history 的
+实际发生顺序，不按 event time 重排；同值仍重复出现，不能作为 set 去重：
 
 ```text
 TimedFact = object{
@@ -739,6 +739,19 @@ BalanceObservation = object{
   explained_change: true | false | null,
   digest: sha256 | null
 }
+AccountModeObservation = object{
+  classification: "consistent" | "missing" | "conflicting" | "unknown" | "not_applicable",
+  operator_gate_confirmed: true | false | null,
+  isolated_behavior_confirmed: true | false | null,
+  one_way_netting_confirmed: true | false | null,
+  leverage_one_confirmed: true | false | null,
+  confirmation_run_id: sha256 | null,
+  observed_initial_margin: decimal | null,
+  expected_initial_margin: decimal | null,
+  absolute_error: decimal | null,
+  allowed_error: decimal | null,
+  digest: sha256 | null
+}
 Cleanup = object{
   classification: "consistent" | "missing" | "conflicting" | "unknown" |
                   "cleanup_incomplete" | "not_applicable",
@@ -751,7 +764,7 @@ Cleanup = object{
 }
 Failure = object{
   code: stable_code,
-  phase: "identity" | "connect" | "ready" | "data" | "order_price" |
+  phase: "identity" | "connect" | "ready" | "data" | "account_mode" | "order_price" |
          "order_acceptance" | "fill" | "cancellation" | "reconciliation" |
          "cleanup" | "handler" | "aggregation",
   diagnostic_codes: [stable_code],
@@ -777,15 +790,20 @@ canonical SHA-256。account snapshot digest 是单个 `AccountSnapshot`
 `PositionFact[]` 的 canonical SHA-256，相应总 count 必须等于 array 长度；其余分类 count 是该 array
 按明示状态机械归约的结果。`BalanceObservation.digest` 是单个 `BalanceFact` 的 canonical SHA-256，
 `snapshot_count` 成功时恰为 `2` 且 `explained_change` 必须等于 `BalanceFact.explained_change`。
+`AccountModeObservation.digest` 删除该对象的 `digest` 后计算；market-close 与 Strategy 的成功记录
+必须直接包含 §1.2 的三个确认及 margin 数值，`confirmation_run_id` 为 `null`；passive-cancel
+成功记录的确认来自同 batch 已通过的 market-close record，三个 bool 和四个 margin decimal 必须逐
+byte 复制，`confirmation_run_id` 指向该 run。
 `Cleanup.digest` 是以下精确对象的 canonical SHA-256：
 `object{active_order_count:uint,pending_order_count:uint,open_position_count:uint,
 unresolved_unknown_count:uint,final_net_quantity:decimal|null}`。这些 category digest 均无删除投影；
 顶层 EvidenceV1 的 `evidence_digest` 又覆盖 classification、counts 和 category digest。
 
-`not_applicable` 对象的所有 count 必须为 `0`，所有 decimal/bool 必须为 `null`，`digest` 必须为
-`null`；其他 classification 的 `digest` 必须是 `sha256`。DataTester 的 order/fill/position/balance
+`not_applicable` 对象的所有 count 必须为 `0`，所有 decimal/bool 以及
+`AccountModeObservation.confirmation_run_id` 必须为 `null`，`digest` 必须为 `null`；其他
+classification 的 `digest` 必须是 `sha256`。DataTester 的 order/fill/position/balance/account-mode
 和 cleanup 恰为 `not_applicable`。其 market-data 必须有 `quote_count >= 1`、`trade_count >= 1`、
-`mark_price_count = 0`。三个 order-enabled scenario 的 order/fill/position/balance 和 cleanup 均不得
+`mark_price_count = 0`。三个 order-enabled scenario 的 order/fill/position/balance/account-mode 和 cleanup 均不得
 为 `not_applicable`；market-close 的成功计数恰为 2 submitted/accepted/terminal、2 fills，
 passive-cancel 恰为 1 submitted/accepted/terminal、0 fills，Strategy 恰为
 5 submitted/accepted/terminal、4 fills。成功记录还要求相应分类全部为 `consistent`，所有
@@ -805,7 +823,6 @@ EvidenceV1 = object{
   environment: "BINANCE_DEMO_USD_M",
   config_digest: sha256,
   acceptance_batch_id: sha256,
-  account_reference_digest: sha256 | null,
   instrument: Instrument,
   scenario: "data_tester" | "exec_tester_market_close" |
             "exec_tester_passive_cancel" | "demo_strategy",
@@ -818,7 +835,8 @@ EvidenceV1 = object{
     order: OrderObservation,
     fill: FillObservation,
     position: PositionObservation,
-    balance: BalanceObservation
+    balance: BalanceObservation,
+    account_mode: AccountModeObservation
   },
   cleanup: Cleanup,
   failure: Failure | null,
@@ -827,18 +845,16 @@ EvidenceV1 = object{
 ```
 
 `ended_at` 不得早于 `started_at`。`PASS` 与 `COMPLETE` 必须成对且 `failure = null`；`FAIL` 与
-`HALTED` 必须成对且 `failure` 非 null。DataTester 的 `account_reference_digest` 必须为 null；其他
-三个 scenario 必须为 sha256。`run_id`、`evidence_digest` 的删除投影严格保持本节开头定义。
+`HALTED` 必须成对且 `failure` 非 null。`run_id`、`evidence_digest` 的删除投影严格保持本节开头定义。
 
 #387 必须提交至少一个包含非 ASCII/NFC、nullable、decimal string 和 nested key ordering 的 evidence
 golden vector，固定 canonical UTF-8 bytes、`run_id` 与 `evidence_digest`；#391 必须提交 acceptance
 golden vector，证明 `generated_at` 改变不改变 `acceptance_digest`，任一其他输入改变会改变 digest。
 `run_id` 和 `evidence_digest` 严格按上述两个投影依序导出，避免循环身份。
-DataTester 的 order/fill/position/balance observations 必须明确为 `not_applicable`；这是合同明确
+DataTester 的 order/fill/position/balance/account-mode observations 必须明确为 `not_applicable`；这是合同明确
 排除该事实的 marker，不是 §8 reconciliation 分类，也不能伪造空成功。两个 ExecTester attempt
-和 Strategy 必须包含全部四类观察及 cleanup。三个 order-enabled record 的
-`account_reference_digest` 必须逐 byte 相同，DataTester 必须为 `null`；最终 tracked record 不保存
-该 digest 或任何 account identity。
+和 Strategy 必须包含全部五类观察及 cleanup。任何 evidence 或最终 tracked record 都不得保存
+credential、credential 派生值或 account identity。
 
 ### 9.2 `tracequant-stage4-demo-acceptance-v1`
 
@@ -876,7 +892,8 @@ AcceptanceV1 = object{
     order: "consistent",
     fill: "consistent",
     position: "consistent",
-    balance: "consistent"
+    balance: "consistent",
+    account_mode: "consistent"
   },
   cleanup: object{
     active_order_count: 0,
@@ -892,44 +909,32 @@ AcceptanceV1 = object{
 ```
 
 四个 `evidence_digests` 必须两两不同，并分别等于对应 EvidenceV1 的 `evidence_digest`；四份 source
-record 的 shared identity 字段必须逐 byte 相同且三个 order-enabled account digest 必须通过 §9.3
-constant-time equality。tracked record 不得嵌入原始事件、日志、batch key、account reference 或其
-digest。`acceptance_digest` 只删除顶层 `generated_at` 与 `acceptance_digest` 后计算，不删除或
+record 的 shared identity 字段必须逐 byte 相同。tracked record 不得嵌入原始事件、日志、batch
+nonce、credential、credential 派生值或 account identity。`acceptance_digest` 只删除顶层
+`generated_at` 与 `acceptance_digest` 后计算，不删除或
 替换任何嵌套成员；相同输入必须得到相同 digest。
 
-### 9.3 分区、batch account reference、脱敏和发布
+### 9.3 分区、batch、credential 边界、脱敏和发布
 
-- batch initializer 在任何联网运行前创建一个全新、初始为空、repo 外且仅当前用户可访问的 batch
-  root；在其中以 OS CSPRNG 生成恰好 32 bytes 的 `batch_key`，并用 exclusive create 写入权限为
-  `0600` 的 `account-reference.key`，文件内容只含这 32 个原始 bytes。已存在、长度/权限不符或无法
-  独占创建的文件必须使 batch 在创建任何 client 前失败；key 不得来自 CLI、credential、account ID、
-  source/config digest 或可预测 PRNG。
-- `acceptance_batch_id = SHA256(UTF8("tracequant-stage4-acceptance-batch-v1") || 0x00 || batch_key)`，输出
-  64 位小写 hex。initializer 通过 `TRACEQUANT_STAGE4_BATCH_ID` 向四个顺序运行的进程传递该值；只向
-  三个 order-enabled 进程另传 `TRACEQUANT_STAGE4_ACCOUNT_REFERENCE_KEY_FILE`，其值是上述 repo 外
-  key file 的路径。batch ID 只写入 schema 指定的 `acceptance_batch_id` 字段；key bytes、key-file
-  path 和两个环境变量名不得写入 frozen config、evidence、日志或 tracked record。order-enabled
-  进程必须读取恰好 32 bytes，并复算 batch ID，一旦缺失或不相等就在创建 order 前 `HALTED`。
-- 每个 order-enabled 进程只能从 §1.2 所批准的 public Nautilus surface 取得由 Binance 认证响应提供、
-  且独立于调用方配置 `AccountId` 的唯一 `venue_account_reference`。固定 rc4 的 `Account.id` 是配置
-  别名，明确禁止用作该值；固定 rc4 因而必须在首单前以
-  `venue_account_identity_capability_unavailable` 失败关闭。能力到位后，空值、多值、来源不可证明、
-  不同 observation surface 的 identity 或不可编码值同样为 `HALTED`，且不得生成可参与聚合的 digest。
-  入口只在进程内计算
-  `account_reference = NFC(venue_account_reference).encode("utf-8")`；该明文禁止写入磁盘、evidence 或日志：
-  `account_reference_digest = HMAC-SHA256(batch_key, UTF8("tracequant-stage4-account-reference-v1") || 0x00 || UTF8("BINANCE_DEMO_USD_M") || 0x00 || account_reference)`，结果编码为 64 位小写 hex。
-- 聚合器要求四份 record 的 `acceptance_batch_id` 相同、DataTester 的
-  `account_reference_digest` 为 `null`，并以 constant-time equality 比较三个 order-enabled digest；
-  任一缺失或不相等都拒绝发布。聚合完成、拒绝或正常 failure 后，batch owner 必须在 `finally`
-  路径关闭 handle、清除持有的 byte buffer 并 unlink key file；进程崩溃留下的 key/root 使该 batch
-  永久失效，只能由操作者删除，任何新 batch 都不得读取或复用。batch key 只用于本批 HMAC，不是
-  venue credential，生命周期不得跨 batch。
+- batch runner 在任何联网运行前创建一个全新、初始为空、repo 外且仅当前用户可访问的 batch root；
+  以 OS CSPRNG 在内存中生成恰好 32 bytes 的 nonce，并计算
+  `acceptance_batch_id = SHA256(UTF8("tracequant-stage4-acceptance-batch-v1") || 0x00 || nonce)`。
+  nonce 随即清零且不得写盘；只有 64 位小写 hex batch ID 可传给四个顺序子进程并写入 evidence；
+- runner 在启动任何 client 前一次性读取两个 Demo credential 环境变量，拒绝缺失或空值。DataTester
+  子进程的环境显式删除这两个变量；三个 order-enabled 子进程都从同一个不可变内存 snapshot 注入
+  完全相同的两个值。子命令、entry config 和环境 override 均不得提供第二个 credential 来源；
+- credential snapshot 只用于构造子进程环境，由 rc4 adapter 正常读取。runner、entry 和 aggregator
+  不计算 credential hash/HMAC、不打印值、不把值或任何派生 identity 放入 config/evidence。任一
+  order-enabled 子进程异常退出即使整个 batch 失败，不能用另一个环境重启或拼接成功证据；
+- 聚合器要求四份 record 的 `acceptance_batch_id` 相同；任一缺失或不相等都拒绝发布。batch 结束、
+  拒绝或失败后，runner 在 `finally` 中清除内存 snapshot。进程崩溃后的分区永久失效，只能创建新
+  batch，不能复用其 record 补跑；
 - 每次联网运行使用新的、显式命名且初始为空的 repo 外 evidence partition；四个逻辑 partition ID
   固定为 `data_tester`、`exec_tester_market_close`、`exec_tester_passive_cancel`、`demo_strategy`，
   并与 record 的 `scenario` 一致。运行只记录逻辑 partition ID，任何 tracked record 不得出现绝对
   本机路径；
 - frozen config digest 的 payload 只允许使用下述 §9.3.1 封闭对象；只记录 credential **变量名**，
-  不含值；batch ID、key、key-file path 和 account reference 都不属于 config payload；
+  不含值；batch ID、nonce、credential 和 account identity 都不属于 config payload；
 - secret、完整账户标识、签名请求、认证 header/cookie、可重放认证材料和未脱敏 raw payload
   不得进入配置文件、Issue、日志或 tracked record；
 - 原始成功和失败证据都留在外部分区；仓库只发布通过 §9.2 的脱敏 acceptance record；
@@ -938,7 +943,7 @@ digest。`acceptance_digest` 只删除顶层 `generated_at` 与 `acceptance_dige
 
 #### 9.3.1 Frozen config payload
 
-四个进程使用完全相同的下列对象；入口/scenario、partition、batch、account reference 和任何动态
+四个进程使用完全相同的下列对象；入口/scenario、partition、batch、credential 和任何动态
 observation 都不得加入。array 的顺序也是合同的一部分。`config_digest` 是该完整对象按 §9.1
 canonical bytes 计算的 SHA-256，不存在自引用字段或其他删除投影：
 
@@ -971,7 +976,7 @@ FrozenConfigV1 = object{
     position_mode: "ONE_WAY",
     margin_type: "ISOLATED",
     leverage: 1,
-    operator_gate_token_name: "ONE_WAY_ISOLATED_1X_CONFIRMED",
+    operator_gate_token_name: "ONE_WAY_ISOLATED_1X_FLAT_CONFIRMED",
     credential_variable_names: ["BINANCE_DEMO_API_KEY",
                                 "BINANCE_DEMO_API_SECRET"]
   },
@@ -1006,13 +1011,13 @@ FrozenConfigV1 = object{
 | --- | --- |
 | `ST4-EVID-001` | 准入成功输出不含 secret 的 frozen config payload 和 digest，失败不输出可冒充成功的 digest。 |
 | `ST4-EVID-002` | 所有 run evidence 使用 `tracequant-stage4-demo-evidence-v1`，并绑定 §1.4/§9.1 对实际 source、lock、wheel 和 installed distribution bytes 验证得到的完整 identity；预期常量不能自证。 |
-| `ST4-EVID-003` | order/fill/position/balance 只用 §8 为当前入口冻结的 rc4 public observation profile 分类；ExecTester 使用可检索 cache object graph，Strategy 使用 callback/cache/account；非 `consistent` 必定阻止成功。 |
-| `ST4-EVID-004` | 原始证据只写四个全新 repo 外分区；batch key 按 §9.3 生成、传递、使用和销毁，tracked 内容必须脱敏、只含逻辑引用和 digest。 |
+| `ST4-EVID-003` | order/fill/position/balance/account-mode 只用 §8 为当前入口冻结的 rc4 public observation profile 分类；ExecTester 使用可检索 cache object graph，Strategy 使用 callback/cache/account；非 `consistent` 必定阻止成功。 |
+| `ST4-EVID-004` | 原始证据只写四个全新 repo 外分区；batch nonce 与 credential snapshot 按 §9.3 仅在 runner 内存中生成/取得并清除，tracked 内容必须脱敏、只含逻辑引用和 digest。 |
 | `ST4-EVID-005` | 跨运行 identity、config 或 digest 不一致时禁止拼接证据，失败证据必须保留在外部分区。 |
 | `ST4-EVID-006` | DataTester 证据包含 quote/trade counts、instrument constraints 和 timestamp 检查结果，不含执行事实。 |
-| `ST4-EVID-007` | capability gate 解除后，两个 ExecTester attempt 各自产生独立 record/partition/digest，用 §8.1 的可检索 cache object graph 分别绑定 market fill/reduce-only flat 与 passive accepted/canceled，并共同证明最终清场；gate 未解除时只允许 `FAIL/HALTED` capability diagnostic。 |
+| `ST4-EVID-007` | 两个 ExecTester 主 attempt 各自产生独立 record/partition/digest，用 §8.1 的可检索 cache object graph 分别绑定 market fill/reduce-only flat 与 passive accepted/canceled；failure cleanup-only component 也必须进入所属失败 record，不能隐藏子运行。 |
 | `ST4-EVID-008` | Strategy 证据绑定固定状态序列、每个 order/fill、fault protection 和最终 reconciliation/cleanup。 |
-| `ST4-EVID-009` | 最终 record 使用 `tracequant-stage4-demo-acceptance-v1`，完整聚合四个新分区/四个 source digest，验证同一 `acceptance_batch_id` 与三个由交易所认证身份导出的 order-enabled account digest 相等，并声明 `LIVE_NOT_APPROVED`；配置 `AccountId` 的 digest 不可接受。 |
+| `ST4-EVID-009` | 最终 record 使用 `tracequant-stage4-demo-acceptance-v1`，完整聚合四个新分区/四个 source digest，验证同一 `acceptance_batch_id`，并声明 `LIVE_NOT_APPROVED`；tracked record 不保存 credential、派生 identity 或配置 `AccountId`。 |
 | `ST4-EVID-010` | acceptance digest 对同一输入稳定；任何失败、漂移或未清场不得创建或覆盖成功记录。 |
 
 ## 10. #386–#391 primary / applicable 映射
@@ -1060,11 +1065,11 @@ FrozenConfigV1 = object{
 
 | 叶子 Issue | 有界交付物 |
 | --- | --- |
-| [#386](https://github.com/PhoenixSss/tracequant/issues/386) | typed config、凭据/账户准入、constraints/quantity/deadline 合同、frozen config digest；在固定 rc4 上实现 §1.2 capability fail-closed，不修改上游包 |
+| [#386](https://github.com/PhoenixSss/tracequant/issues/386) | typed config、凭据/账户准入、constraints/quantity/deadline 合同、frozen config digest；实现 §1.2 operator/config gate 和行为确认计划，不修改上游包 |
 | [#387](https://github.com/PhoenixSss/tracequant/issues/387) | evidence schema、Nautilus-owned 状态分类、外部分区与脱敏/digest 行为 |
 | [#388](https://github.com/PhoenixSss/tracequant/issues/388) | 官方 DataTester 的固定 plan、薄入口和 data evidence |
-| [#389](https://github.com/PhoenixSss/tracequant/issues/389) | 固定 rc4 上只交付 §4.2 capability diagnostic/离线 plan；新官方 runtime 经修订批准后才交付双 attempt ExecTester evidence |
-| [#390](https://github.com/PhoenixSss/tracequant/issues/390) | 固定 Demo Strategy、完整 handler 清单与逐 handler fault protection、reconciliation/cleanup evidence；credentialed run 受 §1.2 gate 阻止 |
+| [#389](https://github.com/PhoenixSss/tracequant/issues/389) | 固定 rc4 的短时 planning、两个官方 ExecTester 主 attempt、只读 reconciliation、必要时 cleanup-only tester，以及完整 execution evidence |
+| [#390](https://github.com/PhoenixSss/tracequant/issues/390) | 固定 Demo Strategy、§1.2 行为确认、完整 handler 清单与逐 handler fault protection、reconciliation/cleanup evidence |
 | [#391](https://github.com/PhoenixSss/tracequant/issues/391) | fresh evidence matrix、最终聚合器和 tracked acceptance record |
 
 前置关系只传递已验证产物：#386 → #387 → #388 → #389 → #390 → #391。任何叶项在自己的
@@ -1088,7 +1093,7 @@ FrozenConfigV1 = object{
 - 禁止 raw Binance REST/WebSocket client、第二套 ledger/accounting/reconciler 和 shadow order
   state；不能用它们裁决 Nautilus unknown/conflict；
 - 禁止在仓库中 vendor、fork、monkeypatch 或复制官方 `nautilus_trader` namespace，也禁止通过
-  解析 warning/log、私有 Rust/Python 对象或 tester 外下单绕过 §1.2/§4.2 capability gates；
+  解析 warning/log、私有 Rust/Python 对象或 tester 外下单绕过 §1.2/§4.2 admission 与行为证据；
 - 禁止后台进程、持久化运行状态、自动重试系统和无限重试；一次验收必须在本进程和本次
   deadlines 内结束；
 - 阶段专用常量、typed config、有限函数和小 data structure 优于假设未来复用的抽象；新抽象
@@ -1105,10 +1110,9 @@ partial-fill 支持、funding settlement、stop orders、长时间 soak、监控
 Live admission、多 symbol/account/exchange、hedge/cross mode。它们不得因阶段 4 的失败场景或
 清场需要而提前实现。
 
-阶段 4 只有在 §1.2/§4.2 所需能力已进入 maintainer 批准并精确锁定的新官方 runtime、本文档
-完成版本修订、#386–#391 各自通过、#391 发布有效 acceptance record 且 Feature completion audit
-通过后才完成。当前固定 rc4 下 order-enabled capability blocked，因此不能达到 Feature completion，
-也不得把 capability diagnostic 或离线 plan 解释为下列接受状态。最终成功状态仍是：
+阶段 4 只有在本文档完成版本修订、#386–#391 各自通过、#391 在固定 rc4 上发布有效 acceptance
+record 且 Feature completion audit 通过后才完成。operator declaration、配置或离线 plan 不能替代
+order-enabled 行为证据。最终成功状态仍是：
 
 ```text
 NAUTILUS_PRIMARY
@@ -1123,10 +1127,14 @@ LIVE_NOT_APPROVED
 - [NautilusTrader rc4 Binance integration](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/docs/integrations/binance.md)；
 - [rc4 Binance Futures leverage/margin config application（`apply_futures_config`，L1200–L1246）](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L1200-L1246)；
 - [rc4 Binance Futures hedge-mode query and OMS comparison during connect（L1720–L1733）](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L1720-L1733)；
-- [Binance USD-M order filters](https://developers.binance.com/en/docs/derivatives/usds-margined-futures/common-definition#filters)；
+- [Binance USD-M current position mode](https://developers.binance.com/docs/derivatives/usds-margined-futures/account/rest-api/Get-Current-Position-Mode)；
+- [Binance USD-M change initial leverage](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Change-Initial-Leverage)；
+- [Binance USD-M position information V3](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Position-Information-V3)；
+- [Binance USD-M exchange information / order filters](https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Exchange-Information)；
 - [Binance `-4164 MIN_NOTIONAL`：reduce-only 豁免](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/error-code#-4164-min_notional)；
 - [rc4 Demo config 示例中的调用方 `AccountId`（L1307–L1313）](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/docs/integrations/binance.md#L1307-L1313)；
-- [rc4 AccountState 使用 `self.core.account_id`（L324–L410）](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L324-L410)；
+- [rc4 AccountState 使用配置 account ID 并公开 total margin info（L340–L437）](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L340-L437)；
 - [rc4 ExecTester fixed quantity config](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/testkit/src/testers/exec/config.rs#L47-L98)；
 - [rc4 ExecTester quote/order behavior](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/testkit/src/testers/exec/strategy.rs#L264-L278)；
+- [rc4 ExecTester exact close-on-stop path](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/testkit/src/testers/exec/strategy.rs#L1830-L1902)；
 - [nautilus_trader #5039](https://github.com/nautechsystems/nautilus_trader/issues/5039)。
