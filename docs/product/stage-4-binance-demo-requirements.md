@@ -176,7 +176,13 @@ network client 创建前完成；任一步不可证明或不相等都以 `identi
 4. **安装与实际 distribution bytes**：运行环境必须由 clean、disposable environment 的
    `uv sync --locked --dev --no-build-package nautilus-trader --no-cache` 产生，并带有 repo 外、脱敏的
    provisioning attestation，记录实际下载 wheel 的 filename/SHA-256、index identity、WHEEL tag 和
-   上述映射。运行时在 import 前使用 distribution metadata 重算：名称/版本必须精确匹配，
+   上述映射。provisioning 后不得运行会 import `nautilus_trader` 的命令；四个入口必须在同一已证明的
+   environment 中依次以 `PYTHONDONTWRITEBYTECODE=1 python -B <entrypoint>` 启动，且每个入口在 import
+   `nautilus_trader` 前同时断言环境变量值精确为 `"1"`、`sys.dont_write_bytecode is True`。任一条件不满足
+   即以 `bytecode_write_not_disabled` 在创建 client 前 `HALTED`；入口及其 child process 不得清除或覆盖
+   该环境变量。这样前序进程不会产生未列入 wheel `RECORD` 的 `__pycache__/*.pyc`，后序进程仍检查同一
+   installed tree；不得通过运行间删除 cache、忽略 `.pyc` 或为每个入口换一份未证明的新环境规避身份
+   连续性。运行时在 import 前使用 distribution metadata 重算：名称/版本必须精确匹配，
    `direct_url.json` 必须不存在，module origin 必须位于该 distribution root；逐项验证 `RECORD` 中
    每个文件的 size/hash，拒绝缺失、hash mismatch，以及 `nautilus_trader` package roots 或对应
    `.dist-info` 中未列入 `RECORD` 的 `.py`/`.pyi`/`.pyc`/native executable。`installed_tree_digest` 是按 path 排序的
@@ -184,7 +190,8 @@ network client 创建前完成；任一步不可证明或不相等都以 `identi
    SHA-256，并且必须等于 provisioning attestation 的值。
 5. **Runtime digest 投影**：`runtime.identity_digest` 只对以下完整对象按 §9.1 canonical-byte 规则
    求 SHA-256：`distribution`、`version`、`upstream_commit`、`wheel_filename`、`wheel_sha256`、
-   `wheel_tag`、`installed_tree_digest`；计算时只排除 `identity_digest` 本身。字段缺失、expected/actual
+   `wheel_tag`、`installed_tree_digest`、`bytecode_write_disabled=true`；计算时只排除
+   `identity_digest` 本身。字段缺失、expected/actual
    不一致、attestation 缺失或 digest 不一致都失败，不能用文档常量补值。
 
 ## 2. 稳定行为要求
@@ -556,32 +563,276 @@ raw report accessor 或 ExecTester callback getter 设为成功前提，也不�
    `null` 占位，也不得删除任何其他字段。frozen config digest 直接 hash 不含自引用 digest 字段的
    完整 frozen config payload，不做其他投影。
 
+以下类型和对象定义是 v1 schema 的规范形式，而非示例。`object{...}` 表示成员集合封闭、每个列出
+成员恰好出现一次且拒绝额外成员；`[T; N]` 表示长度恰为 `N` 的 array，`[T]` 表示保持事件发生顺序的
+array；`A | B` 表示联合类型。`uint` 是 `0..9007199254740991` 的 JSON integer。`sha256` 是
+`^[0-9a-f]{64}$`，`git_oid` 是 `^[0-9a-f]{40}$`，`stable_code` 是
+`^[a-z][a-z0-9_]{0,63}$`，`timestamp` 与 `decimal` 分别服从本节前述时间和十进制字符串规则。
+除显式写出的 `null` 外没有 nullable 字段。
+
+公用封闭对象如下；它们在 evidence、acceptance 和 frozen config 中复用时必须保持完全相同的成员名
+和类型：
+
+```text
+SourceTree = object{
+  git_tree_oid: git_oid,
+  source_tree_digest: sha256,
+  staged_change_count: 0,
+  unstaged_change_count: 0,
+  untracked_ignored_executable_count: 0,
+  import_origin_digest: sha256
+}
+
+RuntimeIdentity = object{
+  distribution: "nautilus-trader",
+  version: "2.0.0rc4",
+  upstream_commit: "a0400251110653b6d8ae6a9b5b89c4543fa85a2d",
+  wheel_filename: "nautilus_trader-2.0.0rc4-cp313-cp313-manylinux_2_34_x86_64.whl",
+  wheel_sha256: "0c97c4385d55833fc3cce4934ca48a2a5fa0ea1d69d0a775b88c2bbf6fb79005",
+  wheel_tag: "cp313-cp313-manylinux_2_34_x86_64",
+  installed_tree_digest: sha256,
+  bytecode_write_disabled: true,
+  identity_digest: sha256
+}
+
+Instrument = object{
+  instrument_id: "BTCUSDT-PERP.BINANCE",
+  price_precision: uint,
+  price_increment: decimal,
+  size_precision: uint,
+  size_increment: decimal,
+  minimum_quantity: decimal,
+  minimum_notional: decimal | null,
+  market_minimum_quantity: decimal,
+  market_maximum_quantity: decimal,
+  market_step_size: decimal,
+  constraints_digest: sha256
+}
+```
+
+`source_tree_digest` 的输入是 §1.4 已定义的、按 path 排序的
+`[{"path":string,"mode":"100644"|"100755"|"120000"|"160000","blob_oid":git_oid}]`；
+path 必须是 NFC、非空、无 `.`/`..` segment 的 repository-relative POSIX path。`installed_tree_digest`
+输入中的 path 使用同一规则、`size` 是 `uint`。`import_origin_digest` 的输入是按
+`module`、再按 `relative_path` 排序的
+`[{"module":string,"relative_path":string,"sha256":sha256}]`，其中 path 必须是 repository-relative
+POSIX path。`RuntimeIdentity.identity_digest` 删除本对象的 `identity_digest` 后计算；
+`installed_tree_digest` 仍使用 §1.4 的精确投影。`Instrument.constraints_digest` 删除本对象的
+`constraints_digest` 后计算。以上全部使用 §9.1 canonical bytes。
+
+每类最小观察使用以下封闭对象。为避免让实现叶项自行决定 digest 内容，repo 外分区中的 digest source
+也被冻结为以下封闭 fact 对象；reference 使用 digest 只为脱敏，不允许用本地路径、完整账户标识或
+venue raw payload 代替。`TimedFact` arrays 按 `ts_event`、`ts_init`、`identity_digest` 排序；其余 fact
+arrays 按 `ts_event`、再按第一个 `*_reference_digest` 排序。同值仍重复出现，不能作为 set 去重：
+
+```text
+TimedFact = object{
+  identity_digest: sha256,
+  ts_event: timestamp,
+  ts_init: timestamp
+}
+EventFact = object{
+  event_type: stable_code,
+  event_reference_digest: sha256,
+  ts_event: timestamp,
+  ts_init: timestamp
+}
+AccountSnapshot = object{
+  currency: string,
+  total: decimal,
+  free: decimal,
+  locked: decimal,
+  ts_event: timestamp
+}
+MarketDataFacts = object{
+  quotes: [TimedFact],
+  trades: [TimedFact],
+  mark_prices: [TimedFact]
+}
+OrderFact = object{
+  client_order_reference_digest: sha256,
+  venue_order_reference_digest: sha256 | null,
+  side: "BUY" | "SELL",
+  order_type: "MARKET" | "LIMIT",
+  quantity: decimal,
+  reduce_only: true | false,
+  post_only: true | false,
+  cumulative_quantity: decimal,
+  leaves_quantity: decimal,
+  terminal_status: "FILLED" | "CANCELED" | "REJECTED" | "EXPIRED" | "UNKNOWN",
+  ts_event: timestamp,
+  event_sequence_digest: sha256
+}
+FillFact = object{
+  trade_reference_digest: sha256,
+  order_reference_digest: sha256,
+  side: "BUY" | "SELL",
+  last_quantity: decimal,
+  price: decimal,
+  commission_amount: decimal,
+  commission_currency: string,
+  liquidity_side: "MAKER" | "TAKER",
+  cumulative_quantity: decimal,
+  average_price: decimal,
+  position_change: decimal,
+  position_reference_digest: sha256,
+  before_account_snapshot_digest: sha256,
+  after_account_snapshot_digest: sha256,
+  ts_event: timestamp
+}
+PositionFact = object{
+  position_reference_digest: sha256,
+  side: "LONG" | "SHORT" | "FLAT",
+  quantity: decimal,
+  realized_pnl: decimal,
+  ts_event: timestamp,
+  event_sequence_digest: sha256
+}
+BalanceFact = object{
+  before: AccountSnapshot,
+  after: AccountSnapshot,
+  commission_total: decimal,
+  realized_pnl_total: decimal,
+  observed_change: decimal,
+  explained_change: true | false,
+  before_ts_event: timestamp,
+  after_ts_event: timestamp
+}
+
+MarketDataObservation = object{
+  classification: "consistent" | "missing" | "conflicting" | "unknown",
+  quote_count: uint,
+  trade_count: uint,
+  mark_price_count: uint,
+  digest: sha256
+}
+OrderObservation = object{
+  classification: "consistent" | "missing" | "conflicting" | "unknown" | "not_applicable",
+  submitted_count: uint,
+  accepted_count: uint,
+  terminal_count: uint,
+  active_count: uint,
+  inflight_count: uint,
+  rejected_count: uint,
+  digest: sha256 | null
+}
+FillObservation = object{
+  classification: "consistent" | "missing" | "conflicting" | "unknown" | "not_applicable",
+  fill_count: uint,
+  completely_filled_order_count: uint,
+  partial_fill_order_count: uint,
+  late_fill_count: uint,
+  digest: sha256 | null
+}
+PositionObservation = object{
+  classification: "consistent" | "missing" | "conflicting" | "unknown" | "not_applicable",
+  observed_position_count: uint,
+  open_position_count: uint,
+  closed_position_count: uint,
+  final_net_quantity: decimal | null,
+  realized_pnl: decimal | null,
+  digest: sha256 | null
+}
+BalanceObservation = object{
+  classification: "consistent" | "missing" | "conflicting" | "unknown" | "not_applicable",
+  snapshot_count: uint,
+  explained_change: true | false | null,
+  digest: sha256 | null
+}
+Cleanup = object{
+  classification: "consistent" | "missing" | "conflicting" | "unknown" |
+                  "cleanup_incomplete" | "not_applicable",
+  active_order_count: uint,
+  pending_order_count: uint,
+  open_position_count: uint,
+  unresolved_unknown_count: uint,
+  final_net_quantity: decimal | null,
+  digest: sha256 | null
+}
+Failure = object{
+  code: stable_code,
+  phase: "identity" | "connect" | "ready" | "data" | "order_price" |
+         "order_acceptance" | "fill" | "cancellation" | "reconciliation" |
+         "cleanup" | "handler" | "aggregation",
+  diagnostic_codes: [stable_code],
+  diagnostic_digest: sha256
+}
+```
+
+所有 `client_order`、`venue_order`、`trade`、`position` reference digest 使用同一精确投影：
+`SHA256(UTF8("tracequant-stage4-reference-v1") || 0x00 || UTF8(<kind>) || 0x00 ||
+UTF8(NFC(<public-reference>)))`，其中 `<kind>` 必须恰为上述四个 literal，public reference 非空。
+`TimedFact.identity_digest` 使用
+`SHA256(UTF8("tracequant-stage4-market-fact-v1") || 0x00 || UTF8(<containing-array-key>) || 0x00 ||
+UTF8("BTCUSDT-PERP.BINANCE") || 0x00 || UTF8(ts_event) || 0x00 || UTF8(ts_init))`，array key 恰为
+`quotes`、`trades` 或 `mark_prices`。`EventFact.event_reference_digest` 使用同一公式和 domain，
+但 array key 替换为 `event_type`。`event_sequence_digest` 是按事件发生顺序保存的 `EventFact[]` 的
+canonical SHA-256。account snapshot digest 是单个 `AccountSnapshot`
+的 canonical SHA-256；FillFact 的 before/after digest 必须指向同一 run 的对应 snapshot。
+`diagnostic_codes` 长度为 `1..16`，按 code point 升序且不得重复；`diagnostic_digest` 删除
+`Failure.diagnostic_digest` 后对完整 Failure 对象计算，因此 code、phase 和全部 detail code 都被绑定。
+
+`MarketDataObservation.digest = SHA256(canonical(MarketDataFacts))`，三个 count 必须分别等于三个 array
+长度。Order/Fill/Position observation 的 `digest` 分别是 `OrderFact[]`、`FillFact[]`、
+`PositionFact[]` 的 canonical SHA-256，相应总 count 必须等于 array 长度；其余分类 count 是该 array
+按明示状态机械归约的结果。`BalanceObservation.digest` 是单个 `BalanceFact` 的 canonical SHA-256，
+`snapshot_count` 成功时恰为 `2` 且 `explained_change` 必须等于 `BalanceFact.explained_change`。
+`Cleanup.digest` 是以下精确对象的 canonical SHA-256：
+`object{active_order_count:uint,pending_order_count:uint,open_position_count:uint,
+unresolved_unknown_count:uint,final_net_quantity:decimal|null}`。这些 category digest 均无删除投影；
+顶层 EvidenceV1 的 `evidence_digest` 又覆盖 classification、counts 和 category digest。
+
+`not_applicable` 对象的所有 count 必须为 `0`，所有 decimal/bool 必须为 `null`，`digest` 必须为
+`null`；其他 classification 的 `digest` 必须是 `sha256`。DataTester 的 order/fill/position/balance
+和 cleanup 恰为 `not_applicable`。其 market-data 必须有 `quote_count >= 1`、`trade_count >= 1`、
+`mark_price_count = 0`。三个 order-enabled scenario 的 order/fill/position/balance 和 cleanup 均不得
+为 `not_applicable`；market-close 的成功计数恰为 2 submitted/accepted/terminal、2 fills，
+passive-cancel 恰为 1 submitted/accepted/terminal、0 fills，Strategy 恰为
+5 submitted/accepted/terminal、4 fills。成功记录还要求相应分类全部为 `consistent`，所有
+active/inflight/open/pending/partial/late/unresolved count 为 `0`、cleanup
+`final_net_quantity = "0"`；失败记录允许计数反映提前终止，但不得伪造成功基数。
+
+完整 run record 只有以下形状：
+
+```text
+EvidenceV1 = object{
+  schema: "tracequant-stage4-demo-evidence-v1",
+  run_id: sha256,
+  source_commit: git_oid,
+  source_tree: SourceTree,
+  dependency_lock_digest: sha256,
+  runtime: RuntimeIdentity,
+  environment: "BINANCE_DEMO_USD_M",
+  config_digest: sha256,
+  acceptance_batch_id: sha256,
+  account_reference_digest: sha256 | null,
+  instrument: Instrument,
+  scenario: "data_tester" | "exec_tester_market_close" |
+            "exec_tester_passive_cancel" | "demo_strategy",
+  started_at: timestamp,
+  ended_at: timestamp,
+  result: "PASS" | "FAIL",
+  terminal_state: "COMPLETE" | "HALTED",
+  observations: object{
+    market_data: MarketDataObservation,
+    order: OrderObservation,
+    fill: FillObservation,
+    position: PositionObservation,
+    balance: BalanceObservation
+  },
+  cleanup: Cleanup,
+  failure: Failure | null,
+  evidence_digest: sha256
+}
+```
+
+`ended_at` 不得早于 `started_at`。`PASS` 与 `COMPLETE` 必须成对且 `failure = null`；`FAIL` 与
+`HALTED` 必须成对且 `failure` 非 null。DataTester 的 `account_reference_digest` 必须为 null；其他
+三个 scenario 必须为 sha256。`run_id`、`evidence_digest` 的删除投影严格保持本节开头定义。
+
 #387 必须提交至少一个包含非 ASCII/NFC、nullable、decimal string 和 nested key ordering 的 evidence
 golden vector，固定 canonical UTF-8 bytes、`run_id` 与 `evidence_digest`；#391 必须提交 acceptance
 golden vector，证明 `generated_at` 改变不改变 `acceptance_digest`，任一其他输入改变会改变 digest。
-schema 只允许以下顶层事实：
-
-| 字段 | 内容 |
-| --- | --- |
-| `schema` | 固定 `tracequant-stage4-demo-evidence-v1` |
-| `run_id` | 由本记录稳定 payload 导出的不可逆 ID |
-| `source_commit` | 运行源码 commit |
-| `source_tree` | §1.4 的 Git tree object ID、`source_tree_digest`、零 dirty/untracked-executable counts 与 import-origin digest；不含绝对路径 |
-| `dependency_lock_digest` | `uv.lock` digest |
-| `runtime` | §1.4 的 distribution/version、upstream commit、实际 wheel filename/hash/tag、installed-tree digest 和按冻结投影得到的 identity digest |
-| `environment` | 固定 `BINANCE_DEMO_USD_M` |
-| `config_digest` | §9.3 脱敏冻结配置 digest |
-| `acceptance_batch_id` | §9.3 batch key 按冻结投影导出的 64 位小写 SHA-256；四份 run record 必须完全相同 |
-| `account_reference_digest` | DataTester 为 `null`；三个 order-enabled 运行严格按 §9.3 从 approved public Nautilus surface 暴露的交易所认证账户身份和同一 batch key 导出；不得保存原始或完整 account ID |
-| `instrument` | 固定 `BTCUSDT-PERP.BINANCE` 及本次 constraints digest |
-| `scenario` | 恰为 `data_tester`、`exec_tester_market_close`、`exec_tester_passive_cancel` 或 `demo_strategy`，并与分区逻辑 ID 相同 |
-| `started_at` / `ended_at` | 运行边界 |
-| `result` / `terminal_state` | `PASS`/`FAIL` 与 `COMPLETE`/`HALTED` |
-| `observations` | §8 最小 order/fill/position/balance 分类和 scenario-specific counts/digests |
-| `cleanup` | active、pending、position、unknown counts 与分类 |
-| `failure` | 成功时 `null`；失败时稳定 code、阶段和脱敏 diagnostic digest |
-| `evidence_digest` | canonical payload（排除本字段）的 digest |
-
 `run_id` 和 `evidence_digest` 严格按上述两个投影依序导出，避免循环身份。
 DataTester 的 order/fill/position/balance observations 必须明确为 `not_applicable`；这是合同明确
 排除该事实的 marker，不是 §8 reconciliation 分类，也不能伪造空成功。两个 ExecTester attempt
@@ -591,15 +842,60 @@ DataTester 的 order/fill/position/balance observations 必须明确为 `not_app
 
 ### 9.2 `tracequant-stage4-demo-acceptance-v1`
 
-最终 tracked record 只包含：schema、`acceptance_batch_id`、source commit/source-tree digest、
-dependency lock digest、runtime identity、environment、config/instrument constraints digest、按
-`data_tester`、`exec_tester_market_close`、`exec_tester_passive_cancel`、`demo_strategy` 固定 key
-保存的四个 source evidence digest、同样四项的 required run matrix（其中两个 ExecTester 项再共同
-归约为 `exec_tester` required scenario）、最终 order/fill/position/balance 分类、cleanup counts、
-`LIVE_NOT_APPROVED`、生成时间和 acceptance digest。两个 ExecTester run 必须各自存在且为 `PASS`；
-不得用一个 digest 填两个 key，也不得用 envelope 或 scenario-level digest 替代任一 run digest。
-它不得嵌入原始事件、日志、batch key 或 account reference。相同输入按 §9.1 的
-acceptance 投影必须得到相同 acceptance digest。
+最终 tracked record 只有以下封闭形状；所有 `required_runs` 值在可发布 record 中都是 literal
+`"PASS"`，两个 ExecTester 项另外共同归约为同一个 `exec_tester: "PASS"`：
+
+```text
+AcceptanceV1 = object{
+  schema: "tracequant-stage4-demo-acceptance-v1",
+  acceptance_batch_id: sha256,
+  source_commit: git_oid,
+  source_tree_digest: sha256,
+  dependency_lock_digest: sha256,
+  runtime_identity_digest: sha256,
+  environment: "BINANCE_DEMO_USD_M",
+  config_digest: sha256,
+  instrument: object{
+    instrument_id: "BTCUSDT-PERP.BINANCE",
+    constraints_digest: sha256
+  },
+  evidence_digests: object{
+    data_tester: sha256,
+    exec_tester_market_close: sha256,
+    exec_tester_passive_cancel: sha256,
+    demo_strategy: sha256
+  },
+  required_runs: object{
+    data_tester: "PASS",
+    exec_tester_market_close: "PASS",
+    exec_tester_passive_cancel: "PASS",
+    demo_strategy: "PASS",
+    exec_tester: "PASS"
+  },
+  reconciliation: object{
+    order: "consistent",
+    fill: "consistent",
+    position: "consistent",
+    balance: "consistent"
+  },
+  cleanup: object{
+    active_order_count: 0,
+    pending_order_count: 0,
+    open_position_count: 0,
+    unresolved_unknown_count: 0,
+    final_net_quantity: "0"
+  },
+  product_status: "LIVE_NOT_APPROVED",
+  generated_at: timestamp,
+  acceptance_digest: sha256
+}
+```
+
+四个 `evidence_digests` 必须两两不同，并分别等于对应 EvidenceV1 的 `evidence_digest`；四份 source
+record 的 shared identity 字段必须逐 byte 相同且三个 order-enabled account digest 必须通过 §9.3
+constant-time equality。tracked record 不得嵌入原始事件、日志、batch key、account reference 或其
+digest。`acceptance_digest` 只删除顶层 `generated_at` 与 `acceptance_digest` 后计算，不删除或
+替换任何嵌套成员；相同输入必须得到相同 digest。
 
 ### 9.3 分区、batch account reference、脱敏和发布
 
@@ -632,14 +928,77 @@ acceptance 投影必须得到相同 acceptance digest。
   固定为 `data_tester`、`exec_tester_market_close`、`exec_tester_passive_cancel`、`demo_strategy`，
   并与 record 的 `scenario` 一致。运行只记录逻辑 partition ID，任何 tracked record 不得出现绝对
   本机路径；
-- frozen config digest 的 payload 包含 runtime、environment、product、instrument、account-mode
-  declaration、limits 和 deadlines；只记录 credential **变量名**，不含值；batch ID、key、key-file
-  path 和 account reference 都不属于 config payload；
+- frozen config digest 的 payload 只允许使用下述 §9.3.1 封闭对象；只记录 credential **变量名**，
+  不含值；batch ID、key、key-file path 和 account reference 都不属于 config payload；
 - secret、完整账户标识、签名请求、认证 header/cookie、可重放认证材料和未脱敏 raw payload
   不得进入配置文件、Issue、日志或 tracked record；
 - 原始成功和失败证据都留在外部分区；仓库只发布通过 §9.2 的脱敏 acceptance record；
 - required evidence 缺失、identity/config drift、digest 不匹配、非 `consistent` 分类或清场不完整
   时，不得创建或覆盖成功记录。写入必须先完整验证临时 payload，再做单文件原子替换。
+
+#### 9.3.1 Frozen config payload
+
+四个进程使用完全相同的下列对象；入口/scenario、partition、batch、account reference 和任何动态
+observation 都不得加入。array 的顺序也是合同的一部分。`config_digest` 是该完整对象按 §9.1
+canonical bytes 计算的 SHA-256，不存在自引用字段或其他删除投影：
+
+```text
+FrozenConfigV1 = object{
+  schema: "tracequant-stage4-demo-config-v1",
+  runtime: object{
+    identity_digest: sha256,
+    python: "3.13",
+    platform: "linux-x86_64",
+    wheel_tag: "cp313-cp313-manylinux_2_34_x86_64",
+    bytecode_write_disabled: true
+  },
+  environment: "BINANCE_DEMO_USD_M",
+  product: object{
+    venue: "BINANCE",
+    product_type: "USD_M",
+    endpoint_policy: "DEMO_DEFAULTS_ONLY",
+    base_url_http: null,
+    base_url_ws: null,
+    base_url_ws_trading: null
+  },
+  instrument: object{
+    load_all: false,
+    load_ids: ["BTCUSDT-PERP.BINANCE"; 1],
+    constraints_digest: sha256
+  },
+  account_mode: object{
+    oms_type: "NETTING",
+    position_mode: "ONE_WAY",
+    margin_type: "ISOLATED",
+    leverage: 1,
+    operator_gate_token_name: "ONE_WAY_ISOLATED_1X_CONFIRMED",
+    credential_variable_names: ["BINANCE_DEMO_API_KEY",
+                                "BINANCE_DEMO_API_SECRET"]
+  },
+  limits: object{
+    active_or_pending_order_cap: 1,
+    opening_quantity_policy: "MIN_VALID_FROM_ORDER_PRICE_INPUT",
+    cleanup_quantity_policy: "EXACT_CONFIRMED_ABS_NET_POSITION",
+    cleanup_order_type: "MARKET_REDUCE_ONLY",
+    min_notional_for_cleanup: "NOT_APPLICABLE"
+  },
+  deadlines_seconds: object{
+    network_connect: 30,
+    ready: 60,
+    data_tester_observation: 60,
+    order_price_readiness: 10,
+    order_acceptance: 10,
+    market_or_reduce_only_fill: 30,
+    cancellation: 10,
+    reconciliation: 30,
+    cleanup: 60
+  }
+}
+```
+
+`runtime.identity_digest` 必须等于本 run `RuntimeIdentity.identity_digest`，
+`instrument.constraints_digest` 必须等于本 run `Instrument.constraints_digest`。四份 EvidenceV1 的
+`config_digest` 必须逐 byte 相同；任何 member、literal、array 顺序或 digest 不同都属于 config drift。
 
 ### 9.4 证据要求编号
 
@@ -762,11 +1121,11 @@ LIVE_NOT_APPROVED
 - [TraceQuant 分阶段推进计划](<../research/foundation-selection/TraceQuant 分阶段推进计划.md>)，阶段 4/5；
 - [ADR-0001：NautilusTrader primary runtime](../architecture/adr-0001-nautilustrader-primary-runtime.md)；
 - [NautilusTrader rc4 Binance integration](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/docs/integrations/binance.md)；
-- [rc4 Binance Futures leverage/margin config application（`apply_futures_config`，L1114–L1162）](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L1114-L1162)；
-- [rc4 Binance Futures hedge-mode query and OMS comparison during connect（L1596–L1609）](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L1596-L1609)；
+- [rc4 Binance Futures leverage/margin config application（`apply_futures_config`，L1200–L1246）](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L1200-L1246)；
+- [rc4 Binance Futures hedge-mode query and OMS comparison during connect（L1720–L1733）](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L1720-L1733)；
 - [Binance USD-M order filters](https://developers.binance.com/en/docs/derivatives/usds-margined-futures/common-definition#filters)；
 - [Binance `-4164 MIN_NOTIONAL`：reduce-only 豁免](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/error-code#-4164-min_notional)；
-- [rc4 Demo config 示例中的调用方 `AccountId`](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/docs/integrations/binance.md#L1130-L1137)；
+- [rc4 Demo config 示例中的调用方 `AccountId`（L1307–L1313）](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/docs/integrations/binance.md#L1307-L1313)；
 - [rc4 AccountState 使用 `self.core.account_id`（L324–L410）](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L324-L410)；
 - [rc4 ExecTester fixed quantity config](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/testkit/src/testers/exec/config.rs#L47-L98)；
 - [rc4 ExecTester quote/order behavior](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/testkit/src/testers/exec/strategy.rs#L264-L278)；
