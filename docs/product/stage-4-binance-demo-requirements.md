@@ -34,6 +34,7 @@ TraceQuant 最小 Demo Strategy，以及最终证据聚合和发布。成功不�
 | 项目 | 唯一选择 | 明确拒绝 |
 | --- | --- | --- |
 | Runtime | NautilusTrader `2.0.0rc4`，commit `a0400251110653b6d8ae6a9b5b89c4543fa85a2d`；order-enabled capability 仍为 blocked | rc5、未锁定版本、运行时身份漂移、仓库内 patched/forked `nautilus_trader` |
+| Execution target | CPython 3.13、`linux-x86_64`、官方 `cp313-cp313-manylinux_2_34_x86_64` wheel | 其他 Python/platform tag、sdist/source build、非官方或重打包 wheel |
 | Venue / product | `BINANCE` / `BinanceProductType.USD_M` | Spot、COIN-M、Margin、其他交易所 |
 | Environment | `BinanceEnvironment.DEMO` | 默认 Live、`LIVE`、legacy `TESTNET`、自定义 endpoint |
 | Instrument | `BTCUSDT-PERP.BINANCE`；provider 使用 `load_all=False` 和唯一 `load_ids` | 第二个 instrument、全量加载、动态 allowlist |
@@ -41,7 +42,7 @@ TraceQuant 最小 Demo Strategy，以及最终证据聚合和发布。成功不�
 | Position mode | one-way；Nautilus 使用 `OmsType.NETTING` | hedge / dual-side |
 | Margin / leverage | `BTCUSDT` 为 `BinanceMarginType.ISOLATED`、`1x` | cross、动态 leverage、其他 symbol 设置 |
 | Active order cap | 全局最多 `1` 个活动或 acknowledgement 未决订单 | batch、并行订单、unknown 时新订单 |
-| Quantity | 运行时 instrument constraints 允许的一个最小有效订单量 | 硬编码数量、放大 sizing、绕过 minimum/precision/notional |
+| Quantity | 开仓与 passive order 使用运行时 constraints 算出的最小有效量；任何 reduce-only close 精确等于最新已确认的 `abs(net position)` | 硬编码数量、portfolio sizing、对 close quantity 向上/向下取整、绕过适用 filter |
 | Credentials | `BINANCE_DEMO_API_KEY`、`BINANCE_DEMO_API_SECRET` | 通用 Live/Testnet 变量、文件内 secret、命令行 secret |
 
 `base_url_http`、`base_url_ws` 和 `base_url_ws_trading` 必须为 `None`；由 rc4 adapter 根据
@@ -92,35 +93,94 @@ order-enabled 场景与 #391 成功发布保持 blocked。
 
 ### 1.3 最小有效数量
 
-每个 order-enabled 场景都必须从本次 attempt 加载的 Nautilus instrument 计算数量，不接受配置
-中的静态 quantity。先按订单类型选择适用的 size increment、minimum quantity、precision 和
-minimum notional constraints，再冻结本次提交的 `notional_price`：limit order 必须先从 §3.1
-合格 quote 推导并通过 tick/price constraints 校验**精确提交价格**（passive buy 即校验后的
-`best bid - 1 price increment`），并以该提交价格计算 minimum notional；market order 没有提交
-价格，必须使用 §3.1 中同 instrument 的合格 mark-price sample。不得用 buy ask、sell bid 或预期
-成交价替代这两个 order-type-specific 输入。
+每个 order-enabled 场景都必须从本次 attempt 加载的 Nautilus instrument 得到数量，不接受配置
+中的静态 quantity。开仓/passive order 先按订单类型选择适用的 size increment、minimum quantity、
+precision 和 minimum notional constraints，再冻结本次提交的 `notional_price`：limit order 必须先从
+§3.1 合格 quote 推导并通过 tick/price constraints 校验**精确提交价格**（passive buy 即校验后的
+`best bid - 1 price increment`），并以该提交价格计算 minimum notional；market order 没有提交价格，
+必须使用 §3.1 中同 instrument 的合格 mark-price sample。reduce-only close 不计算最小量，使用下文
+冻结的精确持仓原值算法。不得用 buy ask、sell bid 或预期成交价替代 order-type-specific 输入。
 
-最终 quantity 是满足全部适用 constraints 的最小 step 倍数，并由 Nautilus instrument 的 quantity
-构造/校验路径生成。缺少 order-type-specific constraint、limit 提交价格、公开 mark-price 输入或
-无法得到唯一最小值时停止；不得猜测、保守放大或扩大为 portfolio sizing。quantity 计算、订单构造
-与紧接其后的提交前复核必须绑定同一份已识别的价格输入；limit order 绑定同一 quote snapshot 和
-由它推导的提交价格，market order 绑定同一 mark-price sample。该规则同样适用于 reduce-only
-cleanup。
+对于开仓与 passive order，最终 quantity 是满足全部适用 constraints 的最小 step 倍数，并由
+Nautilus instrument 的 quantity 构造/校验路径生成。缺少 order-type-specific constraint、limit
+提交价格、公开 mark-price 输入或无法得到唯一最小值时停止；不得猜测、保守放大或扩大为
+portfolio sizing。quantity 计算、订单构造与紧接其后的提交前复核必须绑定同一份已识别的价格输入；
+limit order 绑定同一 quote snapshot 和由它推导的提交价格，market order 绑定同一 mark-price
+sample。
+
+任何正常或失败路径的 reduce-only market close 使用独立的精确清平算法，不能复用上述最小开仓量：
+
+1. 只有证明前一订单 terminal、active/inflight count 为零，并由当前入口的 §8 observation profile
+   得到唯一、非零的 one-way net position 后，才冻结一次 `close_quantity = abs(position)`；失败路径
+   必须逐项执行 §5 的同一 proof 顺序；
+2. close side 必须与该 position 相反，订单必须是 market + `reduce_only=true`，提交 quantity 必须与
+   `close_quantity` 数值完全相等；禁止按 step/minimum/notional 向上放大、向下截断或提交 dust
+   follow-up；
+3. 精确 `close_quantity` 必须可由 Nautilus `Quantity` 无损表示，并通过 reduce-only market order
+   的**全部且仅有**以下数量/名义约束：instrument size precision、`MARKET_LOT_SIZE` 的
+   `minQty`/`maxQty`/`stepSize`，以及用同一份 §3.1 合格 mark-price sample 计算的 `MIN_NOTIONAL`；
+   不得改用普通开仓公式、`LOT_SIZE`、静态值或假定 reduce-only exemption；
+4. 固定 runtime 的公共 instrument surface 若不能分别、完整地提供上述 market filters，或精确
+   `close_quantity` 违反任一 filter，则不得创建/提交 cleanup order；运行保持 `HALTED`，记录
+   `cleanup_incomplete` 及失败的 filter，但不得记录 secret、完整账户标识或 raw venue payload；
+5. 构造前再次读取 position；若它与冻结值不完全相同，原 quantity 作废，必须重新完成
+   terminal → zero-active → position proof。只有同一次冻结值完成构造、提交并最终证明 position 为零，
+   才能记录 `cleanup_complete`；任何 partial/late fill 或 cancel/fill race 都遵循同一规则。
 
 该合同也适用于官方 ExecTester；固定 rc4 的 `ExecTesterConfig.order_qty` 和
 `open_position_on_start_qty` 在运行前已定值，不能满足本段合同。不得以先前 DataTester run、
 另一个 process/node 的 quote、保守放大 quantity 或静态配置规避。§4.2 冻结相应 capability gate
 和能力到位后的唯一双 attempt 计划。
 
+### 1.4 可执行身份准入
+
+`source_commit`、dependency lock 和 runtime identity 必须描述本次进程实际执行的 bytes，而不是把
+预期常量写入 evidence。每个入口必须在 import/config validation 阶段执行以下唯一准入，并在任何
+network client 创建前完成；任一步不可证明或不相等都以 `identity_unverified` 或更具体的稳定 code
+进入 `HALTED`：
+
+1. **TraceQuant source**：`source_commit` 是当前 repository `HEAD` 的完整 commit SHA。所有 tracked
+   文件的 index 与 working-tree bytes/mode 必须和该 commit 的 blob 完全相同，任何 staged、unstaged
+   或 deleted tracked path 都失败。`src/tracequant/**` 下不得存在 Git 未跟踪或 ignored 的可导入/
+   可执行文件或 symlink（包括 `.py`、`.pyi`、`.pyc`、native extension）；已经载入的每个
+   `tracequant.*` module realpath 必须位于该 commit 的 `src/tracequant`，是 tracked regular file，且
+   bytes 与对应 blob 相同。`PYTHONPATH`、cwd 或其他 import root 产生第二个 namespace/source 时失败。
+   evidence 记录 commit、Git tree object ID，以及按 §9.1 规则对按 path 排序的
+   `{path, mode, blob_oid}` tracked manifest 求得的 `source_tree_digest`；只记录“staged/unstaged
+   change count = 0、untracked/ignored executable count = 0”和 import-origin digest，不记录本机绝对路径。
+2. **Dependency lock**：运行时 `uv.lock` 必须是上述 commit 的 tracked blob 且 bytes 完全相等；
+   `dependency_lock_digest` 是这些实际 bytes 的 SHA-256。`pyproject.toml` 与 `uv.toml` 同样必须来自
+   该 clean commit；lock 中必须仍是 PyPI registry 的精确 `nautilus-trader==2.0.0rc4`，且
+   `uv.toml` 仍禁止该包 source build。
+3. **批准的 wheel → commit 映射**：唯一映射是
+   `nautilus_trader-2.0.0rc4-cp313-cp313-manylinux_2_34_x86_64.whl` / SHA-256
+   `0c97c4385d55833fc3cce4934ca48a2a5fa0ea1d69d0a775b88c2bbf6fb79005` → upstream commit
+   `a0400251110653b6d8ae6a9b5b89c4543fa85a2d`，其批准记录是
+   `docs/releases/tracequant-v2-bootstrap-2026-09-13.md`。version 字符串本身不能建立该映射；
+   其他 lock 中的 platform wheel 或 sdist hash 不属于本 Demo target。
+4. **安装与实际 distribution bytes**：运行环境必须由 clean、disposable environment 的
+   `uv sync --locked --dev --no-build-package nautilus-trader --no-cache` 产生，并带有 repo 外、脱敏的
+   provisioning attestation，记录实际下载 wheel 的 filename/SHA-256、index identity、WHEEL tag 和
+   上述映射。运行时在 import 前使用 distribution metadata 重算：名称/版本必须精确匹配，
+   `direct_url.json` 必须不存在，module origin 必须位于该 distribution root；逐项验证 `RECORD` 中
+   每个文件的 size/hash，拒绝缺失、hash mismatch，以及 `nautilus_trader` package roots 或对应
+   `.dist-info` 中未列入 `RECORD` 的 `.py`/`.pyi`/`.pyc`/native executable。`installed_tree_digest` 是按 path 排序的
+   `{path, size, sha256}`（包括对 `RECORD` 本身现场求得的值）数组按 §9.1 canonical bytes 计算的
+   SHA-256，并且必须等于 provisioning attestation 的值。
+5. **Runtime digest 投影**：`runtime.identity_digest` 只对以下完整对象按 §9.1 canonical-byte 规则
+   求 SHA-256：`distribution`、`version`、`upstream_commit`、`wheel_filename`、`wheel_sha256`、
+   `wheel_tag`、`installed_tree_digest`；计算时只排除 `identity_digest` 本身。字段缺失、expected/actual
+   不一致、attestation 缺失或 digest 不一致都失败，不能用文档常量补值。
+
 ## 2. 稳定行为要求
 
 | ID | 冻结要求 |
 | --- | --- |
-| `ST4-REQ-001` | 每个入口在 import/config validation 阶段验证精确 rc4 version、commit identity 和 dependency lock digest；身份不符时不得创建客户端。 |
+| `ST4-REQ-001` | 每个入口在 import/config validation 阶段执行 §1.4：验证 clean source tree、实际 lock bytes、批准 wheel→commit 映射、安装后 distribution bytes 和 runtime digest；身份不能由期望常量自证，任一不符时不得创建客户端。 |
 | `ST4-REQ-002` | 唯一环境是 Binance USD-M Futures Demo，endpoint 不可覆盖，凭据只来自两个 Demo 专用变量。 |
 | `ST4-REQ-003` | 唯一 instrument、单 account、one-way、isolated、1x、最多一个活动/未决订单是不可配置边界；缺少 §1.2 的公开自动确认能力时 order-enabled 路径不可用。 |
 | `ST4-REQ-004` | order-enabled 入口执行 §1.2 的一次性 operator gate 和自动 admission；固定 rc4 必须以 `account_mode_capability_unavailable` 在首单前 `HALTED`，不能把 config、连接成功或日志当确认。 |
-| `ST4-REQ-005` | order quantity 严格按 §1.3 从本 attempt 的 instrument 与 order-type-specific `notional_price` 计算为一个最小有效量；limit 使用精确提交价格，market 使用合格 mark price；rc4 ExecTester 必须按 §4.2 fail closed。 |
+| `ST4-REQ-005` | 开仓/passive quantity 按 §1.3 从本 attempt 的 instrument 与 order-type-specific `notional_price` 计算为最小有效量；任何 reduce-only close 则精确等于最新已确认 `abs(position)`，不得取整或放大，且必须通过冻结的 market filters，否则不提交并保持 `cleanup_incomplete`；rc4 ExecTester 必须按 §4.2 fail closed。 |
 | `ST4-REQ-006` | 所有网络和订单阶段使用 §3 的唯一 deadline；v1.0 不提供 timeout override。 |
 | `ST4-REQ-007` | 核对只读取 §8 的 entry-specific rc4 公开观察面：ExecTester 使用 `LiveNode.cache` 可检索 object graph，Strategy 使用 callbacks/cache/account snapshots；不得要求取得 rc4 公共 Python API 不返回的 tester 或 report objects。TraceQuant 不拥有第二套 adapter、order、position、ledger、accounting 或 reconciler。 |
 | `ST4-REQ-008` | DataTester 只执行 §4.1 的数据场景，不创建 execution client。 |
@@ -221,8 +281,10 @@ quote 时只提交该预存 quantity，`instrument.make_qty` 仅量化它，不�
    quantity 并紧接着构造和提交；计算/校验失败必须在任何订单创建前 fatal；
 2. typed `STAGED_TERMINAL_RECONCILE_THEN_CLEANUP` stop/failure mode：先请求 cancel/query，再等待
    原订单进入 terminal，证明 active/inflight count 为零，重新读取确定的实际 position，最后仅在
-   position 非零时提交恰好一笔 reduce-only cleanup。任何 proof 超过 §3 deadline 都必须保持
-   `HALTED` 且不提交 cleanup。
+   position 非零时严格按 §1.3 以 `abs(position)` 原值提交恰好一笔 reduce-only cleanup；tester 的
+   public instrument surface 必须提供该段冻结的 `MARKET_LOT_SIZE` 与 `MIN_NOTIONAL` 输入，不能提供、
+   精确 exposure 不可无损构造或不通过 filter 时保持 `HALTED`/`cleanup_incomplete` 且不提交。
+   任何 proof 超过 §3 deadline 都必须保持 `HALTED` 且不提交 cleanup。
 
 这些能力不得允许任意 sizing function、plugin/hook 或第二个 order owner。只增加 deferred quantity
 而没有官方 staged-cleanup capability 不足以解除 gate。
@@ -255,7 +317,8 @@ accepted 后 canceled 且没有 `OrderFilled` 的 post-only order。多余/无�
 只有该独立入口可以使用官方 tester 所需的最小 risk bypass；能力必须在入口内封闭且不能由普通
 Strategy import、配置或调用。post-only order 若 reject、partial fill 或在 cancel 前/期间成交，
 场景立即判失败；只有在原 order terminal、零 active/inflight 且 position 重算为确定非零后，才能按
-该 position 做唯一一笔 reduce-only cleanup。不得为了
+§1.3 以 `abs(position)` 原值做唯一一笔 reduce-only cleanup；原值不通过 market filters 时不得提交。
+不得为了
 让场景通过而改成 aggressive limit、重发、在 tester 外提交订单或扩大 tester 功能。
 
 ### 4.3 TraceQuant 最小 Demo Strategy
@@ -282,8 +345,8 @@ position 或 sizing 参数。
 
 ### 4.4 最终证据聚合与发布
 
-在同一 source commit、dependency lock、已通过 §1.2/§4.2 gates 的精确 runtime 和 frozen config
-identity 上，使用三个
+在同一 source commit/source-tree digest、dependency lock、已通过 §1.2/§4.2 gates 的精确 runtime
+和 frozen config identity 上，使用三个
 全新且初始为空的 repo 外分区依次运行 DataTester、ExecTester 和 Strategy。聚合器只验证既有
 证据，不创建客户端或订单。所有 required scenario 为 `PASS`、所有 identity/digest 一致且最终
 order/position/unknown 清场后，才可原子发布
@@ -315,7 +378,9 @@ any non-terminal state -> HALTED
 2. 等待并证明原 order 已进入 terminal；
 3. 证明 active/inflight order count 为零；
 4. 从同一 entry observation profile 重新计算 position；
-5. 只有 position 为确定非零时，才按 §1.3/§3.1 提交恰好一笔 reduce-only cleanup。
+5. 只有 position 为确定非零时，才按 §1.3/§3.1 冻结 `close_quantity = abs(position)`；仅当它可无损
+   构造并原值通过 reduce-only market filters 时提交恰好一笔 cleanup，否则不提交并记录
+   `cleanup_incomplete`。
 
 任一 proof 在对应 deadline 内缺失、冲突或 unknown 时保持 `HALTED`，停止自动动作且不得提交
 cleanup。cleanup 本身完成后仍保持 `HALTED`，不能把本次结果改回 `COMPLETE`。
@@ -324,15 +389,16 @@ cleanup。cleanup 本身完成后仍保持 `HALTED`，不能把本次结果改�
 
 | 情况 | 事件前置状态 | 允许动作 | 禁止动作 | 终态 | 最小证据 |
 | --- | --- | --- | --- | --- | --- |
+| source / lock / runtime identity 无法验证或漂移 | import/config validation | 按 §1.4 记录稳定 failure code 和已完成的脱敏 actual/expected digests | 用 expected 常量补值、创建 network client、继续场景或发布成功 | `HALTED` | source-tree/lock/runtime verification result；不得含绝对路径 |
 | connect / subscription timeout | 尚未 ready | 停止 client，写 timeout | 创建 execution client（DataTester）或提交订单 | `HALTED` | deadline、已连接组件、缺失 subscription |
 | 空数据 | DataTester observation 到期 | 停止并保留订阅统计 | 把连接成功当行情成功 | `HALTED` | quote/trade counts 均或任一为零 |
 | stale / out-of-order timestamp | 正在观察对应 stream | 停止场景；无订单时直接结束 | 忽略、重排后伪装成功 | `HALTED` | stream、前后 timestamp、age |
 | order reject | 等待 acceptance | 记录确定 reject；若已有 exposure 则严格按 §5 terminal → zero-active → position → cleanup 顺序清场 | 修改参数并重发、未证明零 active/inflight 就 cleanup | `HALTED` | client order reference、reason、cache status |
 | ambiguous acknowledgement | 等待 acceptance 超时或 transport unknown | Strategy 最多发出一次公开 `query_order` 并等待其 profile 更新；ExecTester 不代替官方 tester 发 command，只由官方 staged mode 按 §5 等待 cache graph 收敛 | 把 query 的 `None` 返回值当 report、当作 reject、用新 ID 重发、继续开仓、原 order 未 terminal 或 active/inflight 非零时 cleanup | `HALTED` | command/entry identity、timeout/transport fact、terminal/active proof、后续 entry-profile result |
 | duplicate / out-of-order event | 任一 order state | 忽略重复的状态推进并 reconcile；记录冲突 | 二次推进、二次提交 | `HALTED` | event identity、expected/observed state |
-| cancel/fill race | 等待 cancel | reconcile；严格按 §5 证明原 order terminal 与零 active/inflight 后重算 position，必要时唯一 cleanup | 同时假定 canceled 和 filled、重发 cancel/order、用当前 cumulative fill 提前 cleanup | `HALTED` | §8 entry profile 的 cancel/fill facts、terminal/active proof、最终 position |
-| late fill | 已收到 cancel 或已开始 reconcile | 更新 Nautilus-owned 事实；重新完成 §5 terminal/zero-active proof 后按实际 exposure 清场 | 保持原 flat 假设、在原 order 仍可 late fill 时 cleanup、发布成功 | `HALTED` | late fill identity、先前状态、terminal/active proof、cleanup result |
-| unexpected partial fill | 等待任一完整 fill | 停止成功路径；先等原 order terminal 与零 active/inflight，再按重算的确定 position 有限清场 | 按当前 cumulative quantity 提前 cleanup、等待/补单凑满、实现通用 partial-fill workflow | `HALTED` | ordered/cumulative/leaves quantity、terminal/active proof、entry-profile observations |
+| cancel/fill race | 等待 cancel | reconcile；严格按 §5 证明原 order terminal 与零 active/inflight 后重算 position；仅当 `abs(position)` 原值通过 §1.3 market filters 时提交唯一 cleanup | 同时假定 canceled 和 filled、重发 cancel/order、用当前 cumulative fill 提前 cleanup、调整 exposure 以通过 filter | `HALTED` | §8 entry profile 的 cancel/fill facts、terminal/active proof、冻结 position/filter 结果、最终 position |
+| late fill | 已收到 cancel 或已开始 reconcile | 更新 Nautilus-owned 事实；重新完成 §5 terminal/zero-active proof 后仅按最新 `abs(position)` 原值清场 | 保持原 flat 假设、在原 order 仍可 late fill 时 cleanup、取整/放大 exposure、发布成功 | `HALTED` | late fill identity、先前状态、terminal/active proof、冻结 position/filter 结果、cleanup result |
+| unexpected partial fill | 等待任一完整 fill | 停止成功路径；先等原 order terminal 与零 active/inflight，再仅按重算的 `abs(position)` 原值有限清场；原值不合法则不提交 | 按当前 cumulative quantity 提前 cleanup、取整/放大、等待/补单凑满、实现通用 partial-fill workflow | `HALTED` | ordered/cumulative/leaves quantity、terminal/active proof、entry-profile position/filter observations |
 | handler exception | 任一实际使用的 Strategy handler | 顶层保护记录 fatal diagnostic、锁住提交、按 §5 顺序进入安全清场 | 吞掉异常、继续状态推进 | `HALTED` | handler、异常类型/脱敏信息、state、submission count |
 | observation conflict | reconciliation / cleanup | 保留 §8 entry profile 的 Nautilus facts 和 `conflicting` 分类 | 选择有利事实、用 raw REST 裁决 | `HALTED` | observation digests、冲突字段 |
 | cleanup timeout | `CLEANING` 或 `HALTED` cleanup | 停止自动动作，保留外部诊断 | 标记 flat、发布成功、无限重试 | `HALTED` | active orders、position、unknown、deadline |
@@ -361,9 +427,9 @@ handler 前必须同步完成三件事：写入脱敏 fatal diagnostic、设置�
 | `ST4-SAFE-002` | `missing`、`conflicting`、`unknown` 或 `cleanup_incomplete` 都是失败，不得降级为 warning 或成功。 |
 | `ST4-SAFE-003` | DataTester 对空数据、错误 identity、stale/future/out-of-order timestamp 失败关闭。 |
 | `ST4-SAFE-004` | ExecTester bypass 仅限独立入口；普通 Strategy 不能 import 或配置该能力。 |
-| `ST4-SAFE-005` | ExecTester 的 reject、ambiguous ACK、unexpected/partial fill 和 cancel/fill race 禁止盲目重发；只有官方 staged mode 按 §5 证明原订单 terminal、零 active/inflight 并重算确定 position 后才可执行唯一 cleanup。 |
+| `ST4-SAFE-005` | ExecTester 的 reject、ambiguous ACK、unexpected/partial fill 和 cancel/fill race 禁止盲目重发；只有官方 staged mode 按 §5 证明原订单 terminal、零 active/inflight 并重算确定 position，且精确 `abs(position)` 原值通过 §1.3 market filters 后才可执行唯一 cleanup。 |
 | `ST4-SAFE-006` | Strategy 对 ambiguous、duplicate、out-of-order、timeout 和 conflict 设置不可逆 `HALTED` latch，禁止新开仓。 |
-| `ST4-SAFE-007` | partial fill、late fill 或 passive limit 成交必定使验收失败；不得按中间 cumulative fill 提前清场，只能在原订单 terminal、零 active/inflight 后按 Nautilus 重算的确定 exposure 有限清场。 |
+| `ST4-SAFE-007` | partial fill、late fill 或 passive limit 成交必定使验收失败；不得按中间 cumulative fill 提前清场，只能在原订单 terminal、零 active/inflight 后以 Nautilus 重算的精确 `abs(position)` 原值有限清场；不得为满足 minimum/step/notional 取整或放大，原值不合法时禁止提交并保持 `cleanup_incomplete`。 |
 | `ST4-SAFE-008` | 所有实际 handler 具有 §6.1 顶层保护；冻结清单中的每个 handler 都有独立 fault-injection case，并以 completeness assertion 防止新增 handler 漏测。 |
 | `ST4-SAFE-009` | 只有 §8 对当前入口冻结的 observation profile 证明无活动/未决订单、无持仓、无 unknown 才可 `COMPLETE`；否则保持 `HALTED`。 |
 
@@ -436,7 +502,9 @@ raw report accessor 或 ExecTester callback getter 设为成功前提，也不�
   必须在有界 `query_account` 之后更新。运行跨过 funding、snapshot 未更新/缺失或出现其他无法解释
   变化时为 `conflicting`，不得增加 funding ledger；
 - **Cleanup**：cache 的 open/in-flight order counts、open positions 和当前 entry profile 的 terminal
-  facts 同时为零/closed，且无 deadline 或其他 unresolved unknown。单独的 balance 一致不能证明清场。
+  facts 同时为零/closed，且无 deadline 或其他 unresolved unknown。发生过非零 exposure 时还必须记录
+  §1.3 冻结的 exact position、close quantity、逐项 market-filter 判定和最终 flat proof；若精确
+  exposure 不可合法提交，分类必须是 `cleanup_incomplete`。单独的 balance 一致不能证明清场。
 
 ## 9. 证据合同
 
@@ -475,8 +543,9 @@ schema 只允许以下顶层事实：
 | `schema` | 固定 `tracequant-stage4-demo-evidence-v1` |
 | `run_id` | 由本记录稳定 payload 导出的不可逆 ID |
 | `source_commit` | 运行源码 commit |
+| `source_tree` | §1.4 的 Git tree object ID、`source_tree_digest`、零 dirty/untracked-executable counts 与 import-origin digest；不含绝对路径 |
 | `dependency_lock_digest` | `uv.lock` digest |
-| `runtime` | 固定 version、commit 和可验证 runtime identity digest |
+| `runtime` | §1.4 的 distribution/version、upstream commit、实际 wheel filename/hash/tag、installed-tree digest 和按冻结投影得到的 identity digest |
 | `environment` | 固定 `BINANCE_DEMO_USD_M` |
 | `config_digest` | §9.3 脱敏冻结配置 digest |
 | `account_reference_digest` | DataTester 为 `null`；order-enabled 运行使用同一 acceptance batch 内稳定、跨 batch 不可关联的加盐 digest；不得保存 account ID |
@@ -497,7 +566,7 @@ DataTester 的 order/fill/position/balance observations 必须明确为 `not_app
 
 ### 9.2 `tracequant-stage4-demo-acceptance-v1`
 
-最终 tracked record 只包含：schema、source commit、dependency lock digest、runtime identity、
+最终 tracked record 只包含：schema、source commit/source-tree digest、dependency lock digest、runtime identity、
 environment、config/instrument constraints digest、三个 source evidence digest、required scenario
 矩阵结果、最终 order/fill/position/balance 分类、cleanup counts、`LIVE_NOT_APPROVED`、生成时间和
 acceptance digest。它不得嵌入原始事件、日志或 account reference。相同输入按 §9.1 的
@@ -520,7 +589,7 @@ acceptance 投影必须得到相同 acceptance digest。
 | ID | 冻结要求 |
 | --- | --- |
 | `ST4-EVID-001` | 准入成功输出不含 secret 的 frozen config payload 和 digest，失败不输出可冒充成功的 digest。 |
-| `ST4-EVID-002` | 所有 run evidence 使用 `tracequant-stage4-demo-evidence-v1` 并绑定 §9.1 的完整 identity。 |
+| `ST4-EVID-002` | 所有 run evidence 使用 `tracequant-stage4-demo-evidence-v1`，并绑定 §1.4/§9.1 对实际 source、lock、wheel 和 installed distribution bytes 验证得到的完整 identity；预期常量不能自证。 |
 | `ST4-EVID-003` | order/fill/position/balance 只用 §8 为当前入口冻结的 rc4 public observation profile 分类；ExecTester 使用可检索 cache object graph，Strategy 使用 callback/cache/account；非 `consistent` 必定阻止成功。 |
 | `ST4-EVID-004` | 原始证据只写全新 repo 外分区；tracked 内容必须脱敏、只含逻辑引用和 digest。 |
 | `ST4-EVID-005` | 跨运行 identity、config 或 digest 不一致时禁止拼接证据，失败证据必须保留在外部分区。 |
