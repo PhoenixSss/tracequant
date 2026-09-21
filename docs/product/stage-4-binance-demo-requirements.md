@@ -14,8 +14,9 @@
 验收存在 §1.2 与 §4.2 明确列出的公共能力缺口；缺口关闭并由 maintainer 批准新的精确
 runtime identity 之前，只允许完成不依赖这些能力的数据、schema 和离线 failure-path 工作，
 不得运行或发布 order-enabled 成功证据。#386–#391 只能实现
-§10 分配给自己的编号要求；它们可以消费前置叶项的产物，但不得重新解释、复制所有权或
-增加交付义务。任何新增场景、环境、instrument、账户模式、基础设施、持续运行能力或
+§10 将其标记为 primary 或 applicable 的编号要求；primary 表示该编号唯一的实现所有者，
+applicable 表示该叶项必须服从但不得复制所有权。它们可以消费前置叶项的产物，但不得重新解释、
+复制所有权或增加交付义务。任何新增场景、环境、instrument、账户模式、基础设施、持续运行能力或
 第三方依赖都是独立范围变更，必须先获得 maintainer 明确批准并修订本文档版本。
 
 本基线细化
@@ -189,7 +190,7 @@ network client 创建前完成；任一步不可证明或不相等都以 `identi
 | `ST4-REQ-011` | Strategy 只使用 §5 的固定前进状态；终态只有 `COMPLETE` 或 `HALTED`，不得抽象为可配置工作流引擎。 |
 | `ST4-REQ-012` | 最终验收按 §4.4 从四个全新外部分区依次消费 DataTester、两个独立 ExecTester attempt、Strategy 证据，并在同一 batch/identity 下聚合。 |
 | `ST4-REQ-013` | 成功矩阵只包括 data、market complete fill、passive limit accepted/canceled、long/short、reduce-only close 和最终清场。 |
-| `ST4-REQ-014` | 阶段 4 完成后停止扩展并保持 `LIVE_NOT_APPROVED`；§11 的能力只能由阶段 5 或以后承接。 |
+| `ST4-REQ-014` | 阶段 4 完成后停止扩展并保持 `LIVE_NOT_APPROVED`；§12 的能力只能由阶段 5 或以后承接。 |
 
 ## 3. 唯一 deadline
 
@@ -635,18 +636,57 @@ acceptance 投影必须得到相同 acceptance digest。
 | `ST4-EVID-009` | 最终 record 使用 `tracequant-stage4-demo-acceptance-v1`，完整聚合四个新分区/四个 source digest，验证同一 `acceptance_batch_id` 与三个 order-enabled account digest 相等，并声明 `LIVE_NOT_APPROVED`。 |
 | `ST4-EVID-010` | acceptance digest 对同一输入稳定；任何失败、漂移或未清场不得创建或覆盖成功记录。 |
 
-## 10. #386–#391 唯一映射
+## 10. #386–#391 primary / applicable 映射
 
-每个编号只由一项叶子 Issue 实现。依赖方可以读取其输出，但不能复制编号所有权。
+下表逐一列出每个稳定编号的唯一 primary owner 和全部额外 applicable 叶项。primary 负责实现并
+验证该编号；applicable 叶项必须在自己的有界交付物中服从该编号，但不得复制实现所有权。
+`—` 表示除 primary 外没有额外 applicable 叶项。叶项只能承接表中将其列为 primary 或 applicable
+的编号；依赖方可以读取前置产物，但不能据此增加未映射的交付义务。
 
-| 叶子 Issue | 唯一承接编号 | 有界交付物 |
+| 稳定编号 | 唯一 primary owner | 额外 applicable 叶项 |
 | --- | --- | --- |
-| [#386](https://github.com/PhoenixSss/tracequant/issues/386) | `ST4-REQ-001`–`006`；`ST4-SAFE-001`；`ST4-EVID-001` | typed config、凭据/账户准入、constraints/quantity/deadline 合同、frozen config digest；在固定 rc4 上实现 §1.2 capability fail-closed，不修改上游包 |
-| [#387](https://github.com/PhoenixSss/tracequant/issues/387) | `ST4-REQ-007`；`ST4-SAFE-002`；`ST4-EVID-002`–`005` | evidence schema、Nautilus-owned 状态分类、外部分区与脱敏/digest 行为 |
-| [#388](https://github.com/PhoenixSss/tracequant/issues/388) | `ST4-REQ-008`；`ST4-SAFE-003`；`ST4-EVID-006` | 官方 DataTester 的固定 plan、薄入口和 data evidence |
-| [#389](https://github.com/PhoenixSss/tracequant/issues/389) | `ST4-REQ-009`；`ST4-SAFE-004`–`005`；`ST4-EVID-007` | 固定 rc4 上只交付 §4.2 capability diagnostic/离线 plan；新官方 runtime 经修订批准后才交付双 attempt ExecTester evidence |
-| [#390](https://github.com/PhoenixSss/tracequant/issues/390) | `ST4-REQ-010`–`011`；`ST4-SAFE-006`–`009`；`ST4-EVID-008` | 固定 Demo Strategy、完整 handler 清单与逐 handler fault protection、reconciliation/cleanup evidence；credentialed run 受 §1.2 gate 阻止 |
-| [#391](https://github.com/PhoenixSss/tracequant/issues/391) | `ST4-REQ-012`–`014`；`ST4-EVID-009`–`010` | fresh evidence matrix、最终聚合器和 tracked acceptance record |
+| `ST4-REQ-001` | [#386](https://github.com/PhoenixSss/tracequant/issues/386) | #387、#388、#389、#390、#391 |
+| `ST4-REQ-002` | [#386](https://github.com/PhoenixSss/tracequant/issues/386) | #387、#388、#389、#390、#391 |
+| `ST4-REQ-003` | [#386](https://github.com/PhoenixSss/tracequant/issues/386) | #387、#388、#389、#390、#391 |
+| `ST4-REQ-004` | [#386](https://github.com/PhoenixSss/tracequant/issues/386) | #389、#390、#391 |
+| `ST4-REQ-005` | [#386](https://github.com/PhoenixSss/tracequant/issues/386) | #389、#390、#391 |
+| `ST4-REQ-006` | [#386](https://github.com/PhoenixSss/tracequant/issues/386) | #388、#389、#390、#391 |
+| `ST4-REQ-007` | [#387](https://github.com/PhoenixSss/tracequant/issues/387) | #388、#389、#390、#391 |
+| `ST4-REQ-008` | [#388](https://github.com/PhoenixSss/tracequant/issues/388) | #391 |
+| `ST4-REQ-009` | [#389](https://github.com/PhoenixSss/tracequant/issues/389) | #391 |
+| `ST4-REQ-010` | [#390](https://github.com/PhoenixSss/tracequant/issues/390) | #391 |
+| `ST4-REQ-011` | [#390](https://github.com/PhoenixSss/tracequant/issues/390) | #391 |
+| `ST4-REQ-012` | [#391](https://github.com/PhoenixSss/tracequant/issues/391) | — |
+| `ST4-REQ-013` | [#391](https://github.com/PhoenixSss/tracequant/issues/391) | #388、#389、#390 |
+| `ST4-REQ-014` | [#391](https://github.com/PhoenixSss/tracequant/issues/391) | #386、#387、#388、#389、#390 |
+| `ST4-SAFE-001` | [#386](https://github.com/PhoenixSss/tracequant/issues/386) | #388、#389、#390、#391 |
+| `ST4-SAFE-002` | [#387](https://github.com/PhoenixSss/tracequant/issues/387) | #388、#389、#390、#391 |
+| `ST4-SAFE-003` | [#388](https://github.com/PhoenixSss/tracequant/issues/388) | #391 |
+| `ST4-SAFE-004` | [#389](https://github.com/PhoenixSss/tracequant/issues/389) | #390、#391 |
+| `ST4-SAFE-005` | [#389](https://github.com/PhoenixSss/tracequant/issues/389) | #391 |
+| `ST4-SAFE-006` | [#390](https://github.com/PhoenixSss/tracequant/issues/390) | #391 |
+| `ST4-SAFE-007` | [#390](https://github.com/PhoenixSss/tracequant/issues/390) | #389、#391 |
+| `ST4-SAFE-008` | [#390](https://github.com/PhoenixSss/tracequant/issues/390) | #391 |
+| `ST4-SAFE-009` | [#390](https://github.com/PhoenixSss/tracequant/issues/390) | #388、#389、#391 |
+| `ST4-EVID-001` | [#386](https://github.com/PhoenixSss/tracequant/issues/386) | #387、#388、#389、#390、#391 |
+| `ST4-EVID-002` | [#387](https://github.com/PhoenixSss/tracequant/issues/387) | #388、#389、#390、#391 |
+| `ST4-EVID-003` | [#387](https://github.com/PhoenixSss/tracequant/issues/387) | #388、#389、#390、#391 |
+| `ST4-EVID-004` | [#387](https://github.com/PhoenixSss/tracequant/issues/387) | #388、#389、#390、#391 |
+| `ST4-EVID-005` | [#387](https://github.com/PhoenixSss/tracequant/issues/387) | #388、#389、#390、#391 |
+| `ST4-EVID-006` | [#388](https://github.com/PhoenixSss/tracequant/issues/388) | #391 |
+| `ST4-EVID-007` | [#389](https://github.com/PhoenixSss/tracequant/issues/389) | #391 |
+| `ST4-EVID-008` | [#390](https://github.com/PhoenixSss/tracequant/issues/390) | #391 |
+| `ST4-EVID-009` | [#391](https://github.com/PhoenixSss/tracequant/issues/391) | — |
+| `ST4-EVID-010` | [#391](https://github.com/PhoenixSss/tracequant/issues/391) | — |
+
+| 叶子 Issue | 有界交付物 |
+| --- | --- |
+| [#386](https://github.com/PhoenixSss/tracequant/issues/386) | typed config、凭据/账户准入、constraints/quantity/deadline 合同、frozen config digest；在固定 rc4 上实现 §1.2 capability fail-closed，不修改上游包 |
+| [#387](https://github.com/PhoenixSss/tracequant/issues/387) | evidence schema、Nautilus-owned 状态分类、外部分区与脱敏/digest 行为 |
+| [#388](https://github.com/PhoenixSss/tracequant/issues/388) | 官方 DataTester 的固定 plan、薄入口和 data evidence |
+| [#389](https://github.com/PhoenixSss/tracequant/issues/389) | 固定 rc4 上只交付 §4.2 capability diagnostic/离线 plan；新官方 runtime 经修订批准后才交付双 attempt ExecTester evidence |
+| [#390](https://github.com/PhoenixSss/tracequant/issues/390) | 固定 Demo Strategy、完整 handler 清单与逐 handler fault protection、reconciliation/cleanup evidence；credentialed run 受 §1.2 gate 阻止 |
+| [#391](https://github.com/PhoenixSss/tracequant/issues/391) | fresh evidence matrix、最终聚合器和 tracked acceptance record |
 
 前置关系只传递已验证产物：#386 → #387 → #388 → #389 → #390 → #391。任何叶项在自己的
 编号、Critical Outcome 和 Acceptance Criteria 满足后必须停止；不得以“方便后续叶项”为由
@@ -702,8 +742,8 @@ LIVE_NOT_APPROVED
 - [TraceQuant 分阶段推进计划](<../research/foundation-selection/TraceQuant 分阶段推进计划.md>)，阶段 4/5；
 - [ADR-0001：NautilusTrader primary runtime](../architecture/adr-0001-nautilustrader-primary-runtime.md)；
 - [NautilusTrader rc4 Binance integration](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/docs/integrations/binance.md)；
-- [rc4 Binance Futures config application](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L1114-L1162)；
-- [rc4 Binance Futures hedge-mode initialization](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L1596-L1609)；
+- [rc4 Binance Futures leverage/margin config application（`apply_futures_config`，L1114–L1162）](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L1114-L1162)；
+- [rc4 Binance Futures hedge-mode query and OMS comparison during connect（L1596–L1609）](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/adapters/binance/src/futures/execution.rs#L1596-L1609)；
 - [Binance USD-M order filters](https://developers.binance.com/en/docs/derivatives/usds-margined-futures/common-definition#filters)；
 - [rc4 ExecTester fixed quantity config](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/testkit/src/testers/exec/config.rs#L47-L98)；
 - [rc4 ExecTester quote/order behavior](https://github.com/nautechsystems/nautilus_trader/blob/a0400251110653b6d8ae6a9b5b89c4543fa85a2d/crates/testkit/src/testers/exec/strategy.rs#L264-L278)；
