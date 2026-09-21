@@ -83,7 +83,7 @@ Nautilus instrument 的 quantity 构造/校验路径生成。缺少 constraint�
 | `ST4-REQ-004` | order-enabled 入口执行 §1.2 的一次性 operator gate，并通过 rc4 config 主动设置 account mode；设置或确认失败即关闭。 |
 | `ST4-REQ-005` | order quantity 严格按 §1.3 计算为一个最小有效量；所有 order-enabled 入口共用同一校验合同。 |
 | `ST4-REQ-006` | 所有网络和订单阶段使用 §3 的唯一 deadline；v1.0 不提供 timeout override。 |
-| `ST4-REQ-007` | 核对只读取 Nautilus cache 和公开 execution/account reports；TraceQuant 不拥有第二套 adapter、order、position、ledger、accounting 或 reconciler。 |
+| `ST4-REQ-007` | 核对只读取 §8 冻结的 rc4 公开观察面：Strategy order/fill/position callbacks、Nautilus cache 和 account snapshots；不得要求调用方取得 rc4 公共 Python API 不返回的 report objects。TraceQuant 不拥有第二套 adapter、order、position、ledger、accounting 或 reconciler。 |
 | `ST4-REQ-008` | DataTester 只执行 §4.1 的数据场景，不创建 execution client。 |
 | `ST4-REQ-009` | ExecTester 只执行 §4.2 的独立安全子集，特殊 risk bypass 不得进入普通 Strategy。 |
 | `ST4-REQ-010` | Demo Strategy 只执行 §4.3 的固定顺序，不读取阶段 3 模型、不产生 alpha、不做 portfolio sizing。 |
@@ -104,8 +104,8 @@ Nautilus instrument 的 quantity 构造/校验路径生成。缺少 constraint�
 | DataTester observation | 60 秒 | 同时取得有效 quote、trade、instrument identity/constraints 和时间戳样本 |
 | order acceptance | 10 秒 | 唯一订单收到确定 `OrderAccepted` 或确定 reject |
 | market / reduce-only fill | 30 秒 | 订单完整成交；partial fill 不延长 deadline |
-| cancellation | 10 秒 | cancel 被确定确认，或 race 经报告确定为 fill |
-| reconciliation | 30 秒 | cache 与所需公开 reports 完成一致性分类 |
+| cancellation | 10 秒 | cancel 被确定确认，或 race 经后续 callback/cache observation 确定为 fill |
+| reconciliation | 30 秒 | 所需 callback observations 与 cache/account snapshots 完成一致性分类 |
 | cleanup | 60 秒 | 无活动/未决订单、无持仓、无 unresolved unknown |
 
 连接或 ready 超时不允许提交订单。order acceptance 超时是 ambiguous acknowledgement，不能
@@ -135,7 +135,7 @@ out-of-order timestamp 均为 `HALTED`。此入口没有 execution config、orde
 使用 rc4 官方 `ExecTesterConfig`，或只负责冻结配置、逐项选择场景和输出证据的薄封装。
 入口必须要求显式 `--order-enabled` 意图以及 §1.2 的精确 operator token。唯一顺序是：
 
-1. 账户、instrument 和 constraints ready，且 Nautilus cache/reports 证明无活动订单、无持仓；
+1. 账户、instrument 和 constraints ready，且 §8 的公开 cache/account snapshots 证明无活动订单、无持仓；
 2. 以一个最小有效量提交 market buy，等待完整成交；
 3. 对实际 long quantity 提交 reduce-only market sell，等待完整成交并证明 flat；
 4. 以一个最小有效量在当前 best bid 低一个 price increment 处提交 post-only limit buy；
@@ -195,7 +195,8 @@ any non-terminal state -> HALTED
 
 只有收到与当前唯一 order identity、expected side、quantity 和 state 都一致的事件才能前进。
 `HALTED` 是不可逆 latch：禁止任何新开仓；只允许对已知 order 发出一次可证明安全的 cancel、
-查询公开 reports/reconcile，或按已证明的非零 position 发出一次 reduce-only cleanup。
+发出一次公开 `query_order`/`query_account` 刷新命令并等待正常 callback/cache 更新，或按已证明的
+非零 position 发出一次 reduce-only cleanup。
 这些动作不能把本次结果改回 `COMPLETE`。
 
 ## 6. 失败关闭矩阵
@@ -206,13 +207,13 @@ any non-terminal state -> HALTED
 | 空数据 | DataTester observation 到期 | 停止并保留订阅统计 | 把连接成功当行情成功 | `HALTED` | quote/trade counts 均或任一为零 |
 | stale / out-of-order timestamp | 正在观察对应 stream | 停止场景；无订单时直接结束 | 忽略、重排后伪装成功 | `HALTED` | stream、前后 timestamp、age |
 | order reject | 等待 acceptance | 记录确定 reject；若已有 exposure 则安全清场 | 修改参数并重发 | `HALTED` | client order reference、reason、cache status |
-| ambiguous acknowledgement | 等待 acceptance 超时或 transport unknown | 查询正常 Nautilus report/reconcile；确定已知 order 后可 cancel | 当作 reject、用新 ID 重发、继续开仓 | `HALTED` | command identity、timeout/transport fact、report result |
+| ambiguous acknowledgement | 等待 acceptance 超时或 transport unknown | 最多发出一次公开 `query_order` 并在 reconciliation deadline 内等待 callback/cache 更新；确定已知 order 后可 cancel | 把 query 的 `None` 返回值当 report、当作 reject、用新 ID 重发、继续开仓 | `HALTED` | command identity、timeout/transport fact、后续 callback/cache result |
 | duplicate / out-of-order event | 任一 order state | 忽略重复的状态推进并 reconcile；记录冲突 | 二次推进、二次提交 | `HALTED` | event identity、expected/observed state |
-| cancel/fill race | 等待 cancel | reconcile；若 fill 已发生则按实际 position reduce-only cleanup | 同时假定 canceled 和 filled、重发 cancel/order | `HALTED` | cancel event、fill/report、最终 position |
+| cancel/fill race | 等待 cancel | reconcile；若 fill 已发生则按实际 position reduce-only cleanup | 同时假定 canceled 和 filled、重发 cancel/order | `HALTED` | cancel/fill callbacks、cache order、最终 position |
 | late fill | 已收到 cancel 或已开始 reconcile | 更新 Nautilus-owned事实并按实际 exposure 清场 | 保持原 flat 假设、发布成功 | `HALTED` | late fill identity、先前状态、cleanup result |
-| unexpected partial fill | 等待任一完整 fill | 停止成功路径；按已报告 cumulative quantity 有限清场 | 等待/补单凑满、实现通用 partial-fill workflow | `HALTED` | ordered/cumulative/leaves quantity、reports |
+| unexpected partial fill | 等待任一完整 fill | 停止成功路径；按 `OrderFilled` callbacks 与 cache 已证明的 cumulative quantity 有限清场 | 等待/补单凑满、实现通用 partial-fill workflow | `HALTED` | ordered/cumulative/leaves quantity、callback/cache observations |
 | handler exception | 任一实际使用的 Strategy handler | 顶层保护记录 fatal diagnostic、锁住提交、进入安全清场 | 吞掉异常、继续状态推进 | `HALTED` | handler、异常类型/脱敏信息、state、submission count |
-| cache/report conflict | reconciliation / cleanup | 保留两侧 Nautilus facts 和 `conflicting` 分类 | 选择有利一侧、用 raw REST 裁决 | `HALTED` | cache/report digests、冲突字段 |
+| callback/cache conflict | reconciliation / cleanup | 保留两侧 Nautilus facts 和 `conflicting` 分类 | 选择有利一侧、用 raw REST 裁决 | `HALTED` | callback/cache digests、冲突字段 |
 | cleanup timeout | `CLEANING` 或 `HALTED` cleanup | 停止自动动作，保留外部诊断 | 标记 flat、发布成功、无限重试 | `HALTED` | active orders、position、unknown、deadline |
 
 ### 6.1 rc4 handler exception 防护
@@ -238,33 +239,55 @@ inhibit latch、转入 `HALTED`。不得依赖 runtime 自动打印或停止 nod
 | `ST4-SAFE-006` | Strategy 对 ambiguous、duplicate、out-of-order、timeout 和 conflict 设置不可逆 `HALTED` latch，禁止新开仓。 |
 | `ST4-SAFE-007` | partial fill、late fill 或 passive limit 成交必定使验收失败；只按 Nautilus 已证明 exposure 有限清场。 |
 | `ST4-SAFE-008` | 所有实际 handler 具有 §6.1 顶层保护，并以确定性 fault injection 证明异常可观察且停止后续提交。 |
-| `ST4-SAFE-009` | 只有 cache/reports 证明无活动/未决订单、无持仓、无 unknown 才可 `COMPLETE`；否则保持 `HALTED`。 |
+| `ST4-SAFE-009` | 只有 §8 的 callback observations 与 cache/account snapshots 证明无活动/未决订单、无持仓、无 unknown 才可 `COMPLETE`；否则保持 `HALTED`。 |
 
 ## 8. 状态核对合同
 
-每类事实按以下互斥结果分类。分类输入只能是同一 run identity 下的 Nautilus cache 和公开
-execution/account reports。
+每类事实按以下互斥结果分类。分类输入只能来自同一 run identity 下、rc4 公共 Python API
+直接暴露的两类 Nautilus-owned observations：
+
+- Strategy 的 `on_order_*`、`on_order_filled` 和 `on_position_*` callbacks 收到的不可变事件；
+- `Strategy.cache`（或 `LiveNode.cache`）中的 order/position/account 对象与公开查询结果，其中
+  account 的运行前后状态来自公开 `Account.events()` / `Account.last_event()`。
+
+rc4 的 `Strategy.query_order` 和 `Strategy.query_account` 是返回 `None` 的 command 方法；它们只可在
+ambiguous/cleanup 路径各触发一次有界刷新，证据仍必须来自随后到达的 callback 事件或 cache/account
+状态。rc4 虽公开 `OrderStatusReport`、`FillReport`、`PositionStatusReport` 类型，但 Strategy、
+LiveNode 和 Cache 没有返回这些 raw report objects 的公共 accessor/callback。因此阶段计划中的
+“cache/report”在本锁定版本内不得被解释为必须取得这些对象，也不得使用 Rust execution-client
+内部、private message bus 或 raw Binance REST 补足它们。
+
+任一上述 callback、cache query 或运行前后 `AccountState` 在 deadline 内不可获得时，按 `missing`
+或 `unknown` 失败关闭；不能把 command 调用成功、同一 cache 对象的两次读取或本地反向合成对象当作
+第二项 observation。这个规则既不把 rc4 缺少的 raw report accessor 设为成功前提，也不降低 required
+observation 缺失时的失败语义。
 
 | 分类 | 定义 |
 | --- | --- |
-| `consistent` | 所有 required cache/report observations 存在，identity、状态和数值在 Nautilus 原生 precision 内一致。 |
-| `missing` | 当前场景要求的任一 cache 或 report observation 不存在。 |
+| `consistent` | 当前场景要求的 callback 与 cache/account observations 均存在，identity、状态和数值在 Nautilus 原生 precision 内一致。 |
+| `missing` | 当前场景要求的任一 callback 或 cache/account observation 不存在。 |
 | `conflicting` | 两个 Nautilus-owned observation 对同一事实给出不相容 identity、状态或数值。 |
-| `unknown` | acknowledgement 未决、report 不完整、无法解析，或事实不能从公开 surface 确定。 |
+| `unknown` | acknowledgement 未决、观察不完整、无法解析，或事实不能从上述公开 surface 确定。 |
 | `cleanup_incomplete` | 任一活动/未决订单、非零 position 或 unresolved unknown 仍存在。 |
 
 具体核对最小集合：
 
-- **Order**：client order reference、instrument、side、type、quantity、reduce-only/post-only、
-  accepted/canceled/filled status 在 cache 与 `OrderStatusReport` 一致；
-- **Fill**：trade reference 唯一，order reference、side、last/cumulative quantity、price、fee 和
-  liquidity side 与 cache/event/`FillReport` 一致；
-- **Position**：instrument、side 和 quantity 在 cache 与 `PositionStatusReport` 一致；成功清场
-  必须两侧均为 flat/absent-active-position；
-- **Balance**：只比较运行前后公开 account/balance snapshots，并验证其变化能由公开 reports
-  中的 fills、fees 和 realized PnL 在 native currency precision 内解释。运行跨过 funding 或出现
-  其他无法解释变化时为 `conflicting`，不得增加 funding ledger；
-- **Cleanup**：上述 order/position 以及所有 unknown 同时清零。单独的 balance 一致不能证明清场。
+- **Order**：`OrderAccepted`/`OrderCanceled`/`OrderFilled` callback sequence 的 client/venue order
+  reference、instrument、状态和时间，与 cache order 的 side、type、quantity、reduce-only/post-only、
+  cumulative/leaves quantity 和最终状态一致；
+- **Fill**：每个 `OrderFilled` callback 的 trade reference 唯一，order reference、side、last quantity、
+  price、commission 和 liquidity side 与对应 cache order 的 cumulative quantity/average price 及
+  position/account 变化一致；不得从 cache order 反向合成一份“独立 fill report”；
+- **Position**：以本次固定场景捕获的 `OrderFilled` callbacks 按 side/last quantity 做有界净额计算，
+  其 instrument、side、quantity 必须与 `PositionOpened`/`PositionChanged`/`PositionClosed` callbacks
+  及 cache position/`positions_open` 一致；该运行内算术不是持久 ledger。成功清场必须净额为零、
+  position callback 已 closed 且 cache 无 open position；
+- **Balance**：比较同一公开 Account 对象中运行前后的 `AccountState` snapshots，并验证变化能由
+  `OrderFilled.commission` 与 `PositionChanged`/`PositionClosed.realized_pnl` 在 native currency
+  precision 内解释。最终 snapshot 必须在有界 `query_account` 之后更新；运行跨过 funding、snapshot
+  未更新/缺失或出现其他无法解释变化时为 `conflicting`，不得增加 funding ledger；
+- **Cleanup**：cache 的 open/in-flight order counts、open positions 和上述 callback terminal facts
+  同时为零/closed，且无 query deadline 或其他 unresolved unknown。单独的 balance 一致不能证明清场。
 
 ## 9. 证据合同
 
@@ -324,7 +347,7 @@ acceptance digest。它不得嵌入原始事件、日志或 account reference。
 | --- | --- |
 | `ST4-EVID-001` | 准入成功输出不含 secret 的 frozen config payload 和 digest，失败不输出可冒充成功的 digest。 |
 | `ST4-EVID-002` | 所有 run evidence 使用 `tracequant-stage4-demo-evidence-v1` 并绑定 §9.1 的完整 identity。 |
-| `ST4-EVID-003` | order/fill/position/balance 只按 §8 分类；非 `consistent` 必定阻止成功。 |
+| `ST4-EVID-003` | order/fill/position/balance 只用 §8 冻结的 rc4 callback/cache/account observations 分类；非 `consistent` 必定阻止成功。 |
 | `ST4-EVID-004` | 原始证据只写全新 repo 外分区；tracked 内容必须脱敏、只含逻辑引用和 digest。 |
 | `ST4-EVID-005` | 跨运行 identity、config 或 digest 不一致时禁止拼接证据，失败证据必须保留在外部分区。 |
 | `ST4-EVID-006` | DataTester 证据包含 quote/trade counts、instrument constraints 和 timestamp 检查结果，不含执行事实。 |
@@ -355,7 +378,8 @@ acceptance digest。它不得嵌入原始事件、日志或 account reference。
 > **这些约束可审计且适用于 #386–#391。违反任一项即不符合阶段 4，即使 happy path 能运行。**
 
 - 优先直接组合 rc4 的 public config、factory、`DataTesterConfig`、`ExecTesterConfig`、
-  Strategy/order API、cache 和 reports；不得复制 Nautilus data/execution/order/position/account/
+  Strategy/order API、callbacks、cache 和 account snapshots；不得依赖不可获取的 report objects，
+  不得复制 Nautilus data/execution/order/position/account/
   reconciliation 语义；
 - 禁止新增通用 exchange/provider abstraction、adapter facade、plugin/hook registry、依赖注入
   容器、workflow/orchestration engine、scheduler/daemon、通用状态机/CLI/schema registry、event
