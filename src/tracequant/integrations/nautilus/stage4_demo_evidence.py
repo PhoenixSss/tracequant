@@ -349,14 +349,17 @@ def validate_stage4_demo_evidence(record: Mapping[str, object]) -> None:
     _require_literal(record["environment"], DEMO_ENVIRONMENT, "environment")
     _require_sha256(record["config_digest"], "config_digest")
     _validate_batch_id(record["batch_id"])
-    _validate_instrument(_require_mapping(record["instrument"], "instrument"))
+    result = _require_one_of(record["result"], frozenset({"PASS", "FAIL"}), "result")
+    instrument_complete = _validate_instrument(
+        _require_mapping(record["instrument"], "instrument"),
+        allow_missing=result == "FAIL",
+    )
     scenario = _require_one_of(record["scenario"], frozenset(SCENARIOS), "scenario")
     started_at = _require_timestamp(record["started_at"], "started_at")
     ended_at = _require_timestamp(record["ended_at"], "ended_at")
     if ended_at < started_at:
         raise Stage4DemoEvidenceError("ended_at precedes started_at")
 
-    result = _require_one_of(record["result"], frozenset({"PASS", "FAIL"}), "result")
     terminal = _require_one_of(
         record["terminal_state"], frozenset({"COMPLETE", "HALTED"}), "terminal_state"
     )
@@ -372,6 +375,7 @@ def validate_stage4_demo_evidence(record: Mapping[str, object]) -> None:
         observations=observations,
         cleanup=cleanup,
         failure=record["failure"],
+        instrument_complete=instrument_complete,
     )
     _require_sha256(record["evidence_digest"], "evidence_digest")
     if record["evidence_digest"] != stage4_demo_evidence_digest(record):
@@ -493,9 +497,29 @@ def _validate_runtime(runtime: Mapping[str, object]) -> None:
         _require_literal(runtime[key], value, f"runtime.{key}")
 
 
-def _validate_instrument(instrument: Mapping[str, object]) -> None:
+def _validate_instrument(
+    instrument: Mapping[str, object],
+    *,
+    allow_missing: bool,
+) -> bool:
     _require_keys(instrument, _INSTRUMENT_KEYS, "instrument")
     _require_literal(instrument["id"], DEMO_INSTRUMENT_ID, "instrument.id")
+    constraint_keys = _keys_except(_INSTRUMENT_KEYS, "id")
+    required_constraint_keys = (
+        "price_precision",
+        "price_increment",
+        "size_precision",
+        "size_increment",
+        "minimum_quantity",
+    )
+    if any(instrument[key] is None for key in required_constraint_keys):
+        if not allow_missing or any(
+            instrument[key] is not None for key in constraint_keys
+        ):
+            raise Stage4DemoEvidenceError(
+                "instrument constraints must be complete, or all null for failed evidence"
+            )
+        return False
     _require_nonnegative_int(
         instrument["price_precision"], "instrument.price_precision"
     )
@@ -523,6 +547,7 @@ def _validate_instrument(instrument: Mapping[str, object]) -> None:
         raise Stage4DemoEvidenceError(
             "instrument.maximum_quantity is below instrument.minimum_quantity"
         )
+    return True
 
 
 def _validate_observations(observations: Mapping[str, object]) -> None:
@@ -633,6 +658,7 @@ def _validate_terminal_contract(
     observations: Mapping[str, object],
     cleanup: Mapping[str, object],
     failure: object,
+    instrument_complete: bool,
 ) -> None:
     if (result, terminal) not in {("PASS", "COMPLETE"), ("FAIL", "HALTED")}:
         raise Stage4DemoEvidenceError("result and terminal_state are inconsistent")
@@ -671,6 +697,14 @@ def _validate_terminal_contract(
     if result == "FAIL":
         if failure is None:
             raise Stage4DemoEvidenceError("failed evidence requires a bounded failure")
+        market_data = cast(Mapping[str, object], observations["market_data"])
+        if (
+            not instrument_complete
+            and market_data["classification"] != EvidenceClassification.MISSING.value
+        ):
+            raise Stage4DemoEvidenceError(
+                "failed evidence without instrument constraints requires missing market data"
+            )
         return
     if failure is not None:
         raise Stage4DemoEvidenceError("passing evidence cannot contain a failure")

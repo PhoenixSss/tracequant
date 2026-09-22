@@ -17,8 +17,8 @@ from nautilus_trader.adapters.binance import (
     BinanceInstrumentProviderConfig,
     BinanceProductType,
 )
-from nautilus_trader.common import Environment
-from nautilus_trader.live import LiveNode
+from nautilus_trader.common import Cache, Environment
+from nautilus_trader.live import LiveNode, LiveNodeHandle
 from nautilus_trader.model import (
     ClientId,
     CryptoPerpetual,
@@ -95,7 +95,7 @@ class Stage4DemoDataPlan:
 class Stage4DemoDataObservation:
     """Nautilus-owned facts collected from one fresh DataTester node."""
 
-    instrument: CryptoPerpetual
+    instrument: CryptoPerpetual | None
     quotes: tuple[QuoteTick, ...]
     trades: tuple[TradeTick, ...]
     quote_count: int
@@ -121,6 +121,18 @@ class Stage4DemoDataOutcome:
     evidence_partition: Path
     evidence_path: Path
     evidence: dict[str, object]
+
+
+@dataclass(frozen=True)
+class _Stage4DemoDataRunResult:
+    observation: Stage4DemoDataObservation
+    failure: Stage4DemoDataFailure | None
+
+
+class _Stage4DemoDataRuntimeFailure(Stage4DemoDataError):
+    def __init__(self, message: str, failure: Stage4DemoDataFailure) -> None:
+        super().__init__(message)
+        self.failure = failure
 
 
 def build_stage4_demo_data_plan(
@@ -192,13 +204,16 @@ def build_stage4_demo_data_evidence(
 ) -> dict[str, object]:
     """Adapt public DataTester observations into the frozen EvidenceV1 schema."""
     instrument = _instrument_payload(observation.instrument)
+    instrument_valid = observation.instrument is not None
     timestamp_valid = _timestamps_are_valid(observation)
     counts_valid = (
         observation.quote_count >= len(observation.quotes) > 0
         and observation.trade_count >= len(observation.trades) > 0
     )
     identities_valid = _stream_identities_are_valid(observation)
-    observations_valid = timestamp_valid and counts_valid and identities_valid
+    observations_valid = (
+        instrument_valid and timestamp_valid and counts_valid and identities_valid
+    )
 
     resolved_failure = failure
     if resolved_failure is None and not observations_valid:
@@ -222,8 +237,8 @@ def build_stage4_demo_data_evidence(
 
     classification = classify_stage4_observation(
         applicable=True,
-        observed=counts_valid,
-        conflicting=counts_valid and not observations_valid,
+        observed=instrument_valid and counts_valid,
+        conflicting=instrument_valid and counts_valid and not observations_valid,
     ).value
     result = "PASS" if resolved_failure is None else "FAIL"
     terminal_state = "COMPLETE" if resolved_failure is None else "HALTED"
@@ -323,80 +338,91 @@ def run_stage4_demo_data(
     )
     if plan.evidence_partition.exists():
         raise Stage4DemoDataError("DataTester evidence partition already exists")
-    observation = asyncio.run(_observe_stage4_demo_data(plan))
-    evidence = build_stage4_demo_data_evidence(plan, observation)
+    run_result = asyncio.run(_observe_stage4_demo_data(plan))
+    evidence = build_stage4_demo_data_evidence(
+        plan,
+        run_result.observation,
+        failure=run_result.failure,
+    )
     return write_stage4_demo_data_evidence(plan, evidence)
 
 
 async def _observe_stage4_demo_data(
     plan: Stage4DemoDataPlan,
-) -> Stage4DemoDataObservation:
+) -> _Stage4DemoDataRunResult:
     node = _build_data_tester_node(plan)
+    cache = node.cache
+    handle = node.handle()
     started_at_ns = time.time_ns()
     run_task: asyncio.Task[None] | None = None
+    failure: Stage4DemoDataFailure | None = None
     try:
         connect_deadline = start_queue_deadline(DeadlinePhase.CONNECT)
         run_task = asyncio.create_task(node.run_async())
         await _wait_until(
-            lambda: node.is_running,
+            lambda: handle.is_running,
             deadline=connect_deadline,
             run_task=run_task,
-            failure="DataTester did not connect before the fixed deadline",
+            failure_message="DataTester did not connect before the fixed deadline",
+            timeout_failure=_connect_subscription_failure(),
+            runtime_failure=_connect_subscription_failure(),
         )
 
         ready_deadline = start_queue_deadline(DeadlinePhase.READY)
         await _wait_until(
-            lambda: node.cache.instrument(plan.instrument_id) is not None,
+            lambda: cache.instrument(plan.instrument_id) is not None,
             deadline=ready_deadline,
             run_task=run_task,
-            failure="DataTester instrument was not ready before the fixed deadline",
+            failure_message=(
+                "DataTester instrument was not ready before the fixed deadline"
+            ),
+            timeout_failure=_connect_subscription_failure(),
+            runtime_failure=_connect_subscription_failure(),
         )
 
         data_deadline = start_queue_deadline(DeadlinePhase.DATA_OBSERVATION)
         await _wait_until(
             lambda: (
-                node.cache.quote_count(plan.instrument_id) > 0
-                and node.cache.trade_count(plan.instrument_id) > 0
+                cache.quote_count(plan.instrument_id) > 0
+                and cache.trade_count(plan.instrument_id) > 0
             ),
             deadline=data_deadline,
             run_task=run_task,
-            failure="DataTester did not observe quote and trade before the fixed deadline",
+            failure_message=(
+                "DataTester did not observe quote and trade before the fixed deadline"
+            ),
+            timeout_failure=Stage4DemoDataFailure(
+                code="DATA_TIMEOUT",
+                phase="data",
+                diagnostic_codes=("FAILED",),
+            ),
+            runtime_failure=_connect_subscription_failure(),
         )
-        instrument = node.cache.instrument(plan.instrument_id)
-        quote = node.cache.quote(plan.instrument_id)
-        trade = node.cache.trade(plan.instrument_id)
-        if (
-            not isinstance(instrument, CryptoPerpetual)
-            or not isinstance(quote, QuoteTick)
-            or not isinstance(trade, TradeTick)
-        ):
-            raise Stage4DemoDataError("DataTester public cache facts are incomplete")
-        return Stage4DemoDataObservation(
-            instrument=instrument,
-            quotes=(quote,),
-            trades=(trade,),
-            quote_count=node.cache.quote_count(plan.instrument_id),
-            trade_count=node.cache.trade_count(plan.instrument_id),
-            started_at_ns=started_at_ns,
-            ended_at_ns=time.time_ns(),
-            observed_at_ns=time.time_ns(),
+    except _Stage4DemoDataRuntimeFailure as exc:
+        failure = exc.failure
+    except Exception:
+        failure = Stage4DemoDataFailure(
+            code="HANDLER_EXCEPTION",
+            phase="data",
+            diagnostic_codes=("HANDLER_EXCEPTION",),
         )
     finally:
+        cleanup_failure = await _stop_data_tester(handle, run_task)
+        if cleanup_failure is not None:
+            failure = cleanup_failure
         try:
-            node.stop()
-            if run_task is not None:
-                cleanup_seconds = _deadline_seconds(DeadlinePhase.CLEANUP)
-                await asyncio.wait_for(run_task, timeout=cleanup_seconds)
-        except TimeoutError as exc:
-            raise Stage4DemoDataError(
-                "DataTester did not stop before the fixed cleanup deadline"
-            ) from exc
-        except Stage4DemoDataError:
-            raise
-        except Exception as exc:
-            raise Stage4DemoDataError("DataTester stopped with an error") from exc
+            observation = _capture_data_tester_observation(
+                cache,
+                plan,
+                started_at_ns=started_at_ns,
+            )
         finally:
-            node.dispose()
+            if run_task is None or run_task.done():
+                node.dispose()
+    return _Stage4DemoDataRunResult(
+        observation=observation,
+        failure=_complete_failure_diagnostics(failure, observation),
+    )
 
 
 def _build_data_tester_node(plan: Stage4DemoDataPlan) -> LiveNode:
@@ -426,21 +452,135 @@ async def _wait_until(
     *,
     deadline: stage4_demo.DemoDeadline,
     run_task: asyncio.Task[None],
-    failure: str,
+    failure_message: str,
+    timeout_failure: Stage4DemoDataFailure,
+    runtime_failure: Stage4DemoDataFailure,
 ) -> None:
-    while not predicate():
+    while True:
+        try:
+            if predicate():
+                return
+        except Exception as exc:
+            raise _Stage4DemoDataRuntimeFailure(
+                failure_message,
+                runtime_failure,
+            ) from exc
         if run_task.done():
             try:
                 run_task.result()
             except Exception as exc:
-                raise Stage4DemoDataError(failure) from exc
-            raise Stage4DemoDataError(failure)
+                raise _Stage4DemoDataRuntimeFailure(
+                    failure_message,
+                    runtime_failure,
+                ) from exc
+            raise _Stage4DemoDataRuntimeFailure(
+                failure_message,
+                runtime_failure,
+            )
         if deadline.expired():
-            raise Stage4DemoDataError(failure)
+            raise _Stage4DemoDataRuntimeFailure(
+                failure_message,
+                timeout_failure,
+            )
         await asyncio.sleep(min(_POLL_INTERVAL_SECONDS, deadline.remaining_seconds()))
 
 
-def _instrument_payload(instrument: CryptoPerpetual) -> dict[str, object]:
+async def _stop_data_tester(
+    handle: LiveNodeHandle,
+    run_task: asyncio.Task[None] | None,
+) -> Stage4DemoDataFailure | None:
+    if run_task is None:
+        return None
+    completed_before_stop = run_task.done()
+    handle.stop()
+    try:
+        cleanup_seconds = _deadline_seconds(DeadlinePhase.CLEANUP)
+        await asyncio.wait_for(run_task, timeout=cleanup_seconds)
+    except TimeoutError:
+        return Stage4DemoDataFailure(
+            code="CLEANUP_FAILED",
+            phase="cleanup",
+            diagnostic_codes=("FAILED",),
+        )
+    except Exception:
+        if completed_before_stop:
+            return None
+        return Stage4DemoDataFailure(
+            code="CLEANUP_FAILED",
+            phase="cleanup",
+            diagnostic_codes=("FAILED",),
+        )
+    return None
+
+
+def _capture_data_tester_observation(
+    cache: Cache,
+    plan: Stage4DemoDataPlan,
+    *,
+    started_at_ns: int,
+) -> Stage4DemoDataObservation:
+    cached_instrument = cache.instrument(plan.instrument_id)
+    instrument = (
+        cached_instrument if isinstance(cached_instrument, CryptoPerpetual) else None
+    )
+    quotes = cache.quotes(plan.instrument_id) or []
+    trades = cache.trades(plan.instrument_id) or []
+    if not all(isinstance(item, QuoteTick) for item in quotes) or not all(
+        isinstance(item, TradeTick) for item in trades
+    ):
+        raise Stage4DemoDataError("DataTester public cache streams are incomplete")
+    observed_at_ns = time.time_ns()
+    return Stage4DemoDataObservation(
+        instrument=instrument,
+        # Nautilus cache histories are newest-first; evidence validates arrival order.
+        quotes=tuple(reversed(quotes)),
+        trades=tuple(reversed(trades)),
+        quote_count=cache.quote_count(plan.instrument_id),
+        trade_count=cache.trade_count(plan.instrument_id),
+        started_at_ns=started_at_ns,
+        ended_at_ns=observed_at_ns,
+        observed_at_ns=observed_at_ns,
+    )
+
+
+def _connect_subscription_failure() -> Stage4DemoDataFailure:
+    return Stage4DemoDataFailure(
+        code="CONNECT_SUBSCRIPTION_FAILED",
+        phase="data",
+        diagnostic_codes=("FAILED",),
+    )
+
+
+def _complete_failure_diagnostics(
+    failure: Stage4DemoDataFailure | None,
+    observation: Stage4DemoDataObservation,
+) -> Stage4DemoDataFailure | None:
+    if failure is None or failure.code != "DATA_TIMEOUT":
+        return failure
+    diagnostics: list[str] = []
+    if not observation.quotes:
+        diagnostics.append("NO_QUOTES")
+    if not observation.trades:
+        diagnostics.append("NO_TRADES")
+    return Stage4DemoDataFailure(
+        code=failure.code,
+        phase=failure.phase,
+        diagnostic_codes=tuple(diagnostics or failure.diagnostic_codes),
+    )
+
+
+def _instrument_payload(instrument: CryptoPerpetual | None) -> dict[str, object]:
+    if instrument is None:
+        return {
+            "id": DEMO_INSTRUMENT_ID,
+            "price_precision": None,
+            "price_increment": None,
+            "size_precision": None,
+            "size_increment": None,
+            "minimum_quantity": None,
+            "maximum_quantity": None,
+            "minimum_notional": None,
+        }
     if str(instrument.id) != DEMO_INSTRUMENT_ID:
         raise Stage4DemoDataError(
             "DataTester returned an instrument outside the allowlist"
