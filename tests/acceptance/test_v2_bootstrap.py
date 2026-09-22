@@ -81,6 +81,34 @@ def _candidate_paths() -> set[Path]:
     return {Path(entry.decode()) for entry in completed.stdout.split(b"\0") if entry}
 
 
+def _documented_production_python() -> set[Path]:
+    document = (
+        REPOSITORY_ROOT / "docs/architecture/repository-structure.md"
+    ).read_text(encoding="utf-8")
+    marker = "The complete production package is:\n\n```text\n"
+    _, found, remainder = document.partition(marker)
+    assert found
+    tree, found, _ = remainder.partition("\n```")
+    assert found
+
+    directories: list[tuple[int, Path]] = []
+    python_paths: set[Path] = set()
+    for line in tree.splitlines():
+        name = line.strip()
+        if not name:
+            continue
+        indentation = len(line) - len(line.lstrip())
+        while directories and directories[-1][0] >= indentation:
+            directories.pop()
+        parent = directories[-1][1] if directories else Path()
+        path = parent / name.removesuffix("/")
+        if name.endswith("/"):
+            directories.append((indentation, path))
+        elif path.suffix == ".py":
+            python_paths.add(path)
+    return python_paths
+
+
 def _guide_paths_outside_approved_lck_layout(paths: set[Path]) -> set[Path]:
     return {
         path
@@ -207,6 +235,7 @@ def test_candidate_tree_matches_the_approved_product_and_lck_layout() -> None:
         for path in paths
         if path.suffix == ".py" and path.is_relative_to(Path("src"))
     }
+    assert _documented_production_python() == production_python
     assert production_python == {
         Path("src/tracequant/__init__.py"),
         Path("src/tracequant/integrations/__init__.py"),
@@ -220,6 +249,7 @@ def test_candidate_tree_matches_the_approved_product_and_lck_layout() -> None:
         Path("src/tracequant/integrations/nautilus/stage3_model.py"),
         Path("src/tracequant/integrations/nautilus/stage3_momentum.py"),
         Path("src/tracequant/integrations/nautilus/stage3_oos.py"),
+        Path("src/tracequant/integrations/nautilus/stage4_demo.py"),
         Path("src/tracequant/integrations/nautilus/strategies/__init__.py"),
         Path("src/tracequant/integrations/nautilus/strategies/stage1_ma_cross.py"),
         Path("src/tracequant/integrations/nautilus/strategies/stage3_model.py"),
