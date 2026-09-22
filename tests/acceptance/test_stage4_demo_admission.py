@@ -42,6 +42,7 @@ from tracequant.integrations.nautilus.stage4_demo import (
     exact_reduce_only_quantity,
     freeze_demo_config,
     minimum_order_quantity,
+    prepare_demo_admission_batch,
     start_queue_deadline,
 )
 
@@ -116,11 +117,14 @@ def _admit(
     operator_token: str = OPERATOR_CONFIRMATION_TOKEN,
 ) -> None:
     repository_root, runtime = runtime_checkout
-    admit_current_demo_attempt(
+    batch = prepare_demo_admission_batch(
         repository_root=repository_root,
         config=config,
         expected_runtime=expected_runtime or runtime,
         environ=VALID_ENVIRONMENT if environ is None else environ,
+    )
+    admit_current_demo_attempt(
+        batch=batch,
         operator_token=operator_token,
     )
 
@@ -197,7 +201,7 @@ def test_valid_admission_is_offline_stable_and_secret_free(
     runtime_checkout: tuple[Path, RuntimeIdentity],
 ) -> None:
     repository_root, runtime = runtime_checkout
-    admission = admit_current_demo_attempt(
+    batch = prepare_demo_admission_batch(
         repository_root=repository_root,
         config=DemoConfig(),
         expected_runtime=runtime,
@@ -206,6 +210,9 @@ def test_valid_admission_is_offline_stable_and_secret_free(
             "BINANCE_API_KEY": "ignored-live-key",
             "BINANCE_API_SECRET": "ignored-live-secret",
         },
+    )
+    admission = admit_current_demo_attempt(
+        batch=batch,
         operator_token=OPERATOR_CONFIRMATION_TOKEN,
     )
     frozen = admission.frozen_config
@@ -252,6 +259,8 @@ def test_valid_admission_is_offline_stable_and_secret_free(
     assert client_config.base_url_http is None
     assert client_config.base_url_ws is None
     assert client_config.base_url_ws_trading is None
+    assert client_config.instrument_provider.load_all is False
+    assert client_config.instrument_provider.load_ids == [DEMO_INSTRUMENT_ID]
     assert client_config.futures_leverages == {"BTCUSDT": 1}
     assert client_config.futures_margin_types == {"BTCUSDT": BinanceMarginType.ISOLATED}
 
@@ -261,6 +270,68 @@ def test_valid_admission_is_offline_stable_and_secret_free(
         )
         == stage4_demo.NAUTILUS_CP313_LINUX_X86_64_WHEEL_SHA256
     )
+
+
+def test_batch_snapshot_prevents_cross_attempt_credential_drift(
+    runtime_checkout: tuple[Path, RuntimeIdentity],
+) -> None:
+    repository_root, runtime = runtime_checkout
+    environ = dict(VALID_ENVIRONMENT)
+    batch = prepare_demo_admission_batch(
+        repository_root=repository_root,
+        config=DemoConfig(),
+        expected_runtime=runtime,
+        environ=environ,
+    )
+    first = admit_current_demo_attempt(
+        batch=batch,
+        operator_token=OPERATOR_CONFIRMATION_TOKEN,
+    )
+
+    environ[DEMO_API_KEY_ENV] = "drifted-key"
+    environ[DEMO_API_SECRET_ENV] = "drifted-secret"
+    second = admit_current_demo_attempt(
+        batch=batch,
+        operator_token=OPERATOR_CONFIRMATION_TOKEN,
+    )
+
+    assert first._credentials is second._credentials
+    assert first._credentials.api_key == VALID_ENVIRONMENT[DEMO_API_KEY_ENV]
+    assert first._credentials.api_secret == VALID_ENVIRONMENT[DEMO_API_SECRET_ENV]
+
+
+def test_secret_bearing_objects_have_no_credential_derived_hash(
+    runtime_checkout: tuple[Path, RuntimeIdentity],
+) -> None:
+    repository_root, runtime = runtime_checkout
+    first_batch = prepare_demo_admission_batch(
+        repository_root=repository_root,
+        config=DemoConfig(),
+        expected_runtime=runtime,
+        environ=VALID_ENVIRONMENT,
+    )
+    second_batch = prepare_demo_admission_batch(
+        repository_root=repository_root,
+        config=DemoConfig(),
+        expected_runtime=runtime,
+        environ={
+            DEMO_API_KEY_ENV: "other-key",
+            DEMO_API_SECRET_ENV: "other-secret",
+        },
+    )
+    first = admit_current_demo_attempt(
+        batch=first_batch,
+        operator_token=OPERATOR_CONFIRMATION_TOKEN,
+    )
+    second = admit_current_demo_attempt(
+        batch=second_batch,
+        operator_token=OPERATOR_CONFIRMATION_TOKEN,
+    )
+
+    assert first._credentials is not second._credentials
+    assert type(first._credentials).__hash__ is object.__hash__
+    assert first_batch == second_batch
+    assert first == second
 
 
 def test_runtime_capture_rejects_tracked_source_changes(

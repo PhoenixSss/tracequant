@@ -21,6 +21,7 @@ from typing import Final, cast
 from nautilus_trader.adapters.binance import (
     BinanceEnvironment,
     BinanceExecutionClientConfig,
+    BinanceInstrumentProviderConfig,
     BinanceMarginType,
     BinanceProductType,
 )
@@ -151,7 +152,7 @@ class DemoConfig:
     allow_entry_credential_override: bool = False
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class DemoCredentialSnapshot:
     """A batch-owned secret snapshot which is never serialized by this module."""
 
@@ -174,13 +175,32 @@ class FrozenDemoConfig:
 
 
 @dataclass(frozen=True)
+class DemoAdmissionBatch:
+    """One runtime/config/credential snapshot shared by every batch attempt."""
+
+    repository_root: Path = field(repr=False)
+    runtime: RuntimeIdentity
+    config: DemoConfig
+    frozen_config: FrozenDemoConfig
+    _credentials: DemoCredentialSnapshot = field(
+        repr=False,
+        compare=False,
+        hash=False,
+    )
+
+
+@dataclass(frozen=True)
 class AdmittedDemoAttempt:
-    """Proof that an order-enabled attempt passed every offline gate."""
+    """Proof that one order-enabled attempt passed every offline gate."""
 
     runtime: RuntimeIdentity
     config: DemoConfig
     frozen_config: FrozenDemoConfig
-    _credentials: DemoCredentialSnapshot = field(repr=False)
+    _credentials: DemoCredentialSnapshot = field(
+        repr=False,
+        compare=False,
+        hash=False,
+    )
 
 
 def capture_runtime_identity(repository_root: Path) -> RuntimeIdentity:
@@ -223,47 +243,69 @@ def capture_runtime_identity(repository_root: Path) -> RuntimeIdentity:
     return identity
 
 
-def admit_current_demo_attempt(
+def prepare_demo_admission_batch(
     *,
     repository_root: Path,
     expected_runtime: RuntimeIdentity,
     config: DemoConfig,
     environ: Mapping[str, str],
-    operator_token: str,
-) -> AdmittedDemoAttempt:
-    """Validate current facts before any caller is permitted to create a client."""
-    observed_runtime = capture_runtime_identity(repository_root)
-    return _admit_captured_demo_attempt(
+) -> DemoAdmissionBatch:
+    """Capture the one credential snapshot owned by a Stage 4 Demo batch."""
+    root = Path(repository_root).resolve()
+    observed_runtime = capture_runtime_identity(root)
+    return _prepare_captured_demo_admission_batch(
+        repository_root=root,
         expected_runtime=expected_runtime,
         observed_runtime=observed_runtime,
         config=config,
         environ=environ,
-        operator_token=operator_token,
     )
 
 
-def _admit_captured_demo_attempt(
+def _prepare_captured_demo_admission_batch(
     *,
+    repository_root: Path,
     expected_runtime: RuntimeIdentity,
     observed_runtime: RuntimeIdentity,
     config: DemoConfig,
     environ: Mapping[str, str],
-    operator_token: str,
-) -> AdmittedDemoAttempt:
-    """Pure admission seam used after current facts have been captured."""
+) -> DemoAdmissionBatch:
+    """Pure batch preparation seam used after current facts have been captured."""
     _validate_runtime_constants(observed_runtime)
     if observed_runtime != expected_runtime:
         raise Stage4DemoAdmissionError("runtime identity drifted")
     _validate_demo_config(config)
-    if operator_token != OPERATOR_CONFIRMATION_TOKEN:
-        raise Stage4DemoAdmissionError("operator confirmation gate is invalid")
     credentials = _load_demo_credentials(environ)
     frozen_config = freeze_demo_config(config)
-    return AdmittedDemoAttempt(
+    return DemoAdmissionBatch(
+        repository_root=repository_root,
         runtime=observed_runtime,
         config=config,
         frozen_config=frozen_config,
         _credentials=credentials,
+    )
+
+
+def admit_current_demo_attempt(
+    *,
+    batch: DemoAdmissionBatch,
+    operator_token: str,
+) -> AdmittedDemoAttempt:
+    """Admit one attempt against the batch-owned credential/config snapshot."""
+    observed_runtime = capture_runtime_identity(batch.repository_root)
+    _validate_runtime_constants(observed_runtime)
+    if observed_runtime != batch.runtime:
+        raise Stage4DemoAdmissionError("runtime identity drifted")
+    _validate_demo_config(batch.config)
+    if freeze_demo_config(batch.config) != batch.frozen_config:
+        raise Stage4DemoAdmissionError("frozen Demo configuration drifted")
+    if operator_token != OPERATOR_CONFIRMATION_TOKEN:
+        raise Stage4DemoAdmissionError("operator confirmation gate is invalid")
+    return AdmittedDemoAttempt(
+        runtime=observed_runtime,
+        config=batch.config,
+        frozen_config=batch.frozen_config,
+        _credentials=batch._credentials,
     )
 
 
@@ -281,6 +323,10 @@ def build_execution_client_config(
         base_url_http=None,
         base_url_ws=None,
         base_url_ws_trading=None,
+        instrument_provider=BinanceInstrumentProviderConfig(
+            load_all=False,
+            load_ids=[DEMO_INSTRUMENT_ID],
+        ),
         use_position_ids=True,
         oms_type=OmsType.NETTING,
         api_key=admission._credentials.api_key,
