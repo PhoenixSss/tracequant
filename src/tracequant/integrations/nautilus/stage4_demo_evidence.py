@@ -34,7 +34,35 @@ _TIMESTAMP_PATTERN: Final = (
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
     r"(?:\.[0-9]{1,6})?Z"
 )
-_DIAGNOSTIC_CODE_PATTERN: Final = r"[A-Za-z][A-Za-z0-9_.:-]{0,127}"
+_FAILURE_CODES: Final = (
+    "CLEANUP_INCOMPLETE",
+    "DATA_TIMEOUT",
+    "ORDER_TIMEOUT",
+    "TERMINAL_FACT_CONFLICTING",
+    "TERMINAL_FACT_MISSING",
+    "TERMINAL_FACT_UNKNOWN",
+)
+_FAILURE_PHASES: Final = (
+    "account_mode",
+    "cleanup",
+    "data",
+    "execution",
+    "reconciliation",
+)
+_DIAGNOSTIC_CODES: Final = (
+    "ACCOUNT_MODE_UNKNOWN",
+    "ACTIVE_ORDERS_REMAIN",
+    "BALANCE_UNKNOWN",
+    "FAILED",
+    "NO_QUOTES",
+    "NO_TRADES",
+    "NONZERO_NET_QUANTITY",
+    "OPEN_POSITION_REMAINS",
+    "ORDER_UNKNOWN",
+    "PENDING_ORDERS_REMAIN",
+    "POSITION_UNKNOWN",
+    "UNRESOLVED_UNKNOWN",
+)
 
 
 class Stage4DemoEvidenceError(ValueError):
@@ -556,8 +584,8 @@ def _validate_failure(failure: object) -> None:
         return
     value = _require_mapping(failure, "failure")
     _require_keys(value, _FAILURE_KEYS, "failure")
-    _require_pattern(value["code"], _DIAGNOSTIC_CODE_PATTERN, "failure.code")
-    _require_pattern(value["phase"], _DIAGNOSTIC_CODE_PATTERN, "failure.phase")
+    _require_one_of(value["code"], _FAILURE_CODES, "failure.code")
+    _require_one_of(value["phase"], _FAILURE_PHASES, "failure.phase")
     codes = value["diagnostic_codes"]
     if not isinstance(codes, list) or not codes:
         raise Stage4DemoEvidenceError(
@@ -565,8 +593,8 @@ def _validate_failure(failure: object) -> None:
         )
     seen: set[str] = set()
     for index, code in enumerate(codes):
-        validated = _require_pattern(
-            code, _DIAGNOSTIC_CODE_PATTERN, f"failure.diagnostic_codes[{index}]"
+        validated = _require_one_of(
+            code, _DIAGNOSTIC_CODES, f"failure.diagnostic_codes[{index}]"
         )
         if validated in seen:
             raise Stage4DemoEvidenceError("failure diagnostic codes must be unique")

@@ -459,6 +459,36 @@ def test_evidence_schema_digest_json_and_redaction_are_exact_and_deterministic()
         finalize_stage4_demo_evidence(bad_diagnostic)
 
 
+@pytest.mark.parametrize(
+    ("field", "credential_or_account_identity"),
+    [
+        ("code", "DemoApiSecretABC123"),
+        ("phase", "BinanceAccount987654321"),
+        ("diagnostic_codes", "CredentialDerivedUser42"),
+    ],
+)
+def test_failure_diagnostics_reject_credential_and_account_shaped_values(
+    field: str,
+    credential_or_account_identity: str,
+) -> None:
+    payload = _evidence_payload(DemoEvidenceScenario.DEMO_STRATEGY.value)
+    payload["result"] = "FAIL"
+    payload["terminal_state"] = "HALTED"
+    failure: dict[str, object] = {
+        "code": "TERMINAL_FACT_MISSING",
+        "phase": "reconciliation",
+        "diagnostic_codes": ["POSITION_UNKNOWN"],
+    }
+    if field == "diagnostic_codes":
+        failure[field] = [credential_or_account_identity]
+    else:
+        failure[field] = credential_or_account_identity
+    payload["failure"] = failure
+
+    with pytest.raises(Stage4DemoEvidenceError, match=f"failure\\.{field}"):
+        finalize_stage4_demo_evidence(payload)
+
+
 def test_evidence_batch_rejects_identity_drift_and_bad_record_digest() -> None:
     records = [_evidence(scenario) for scenario in SCENARIOS]
     digests = validate_stage4_demo_evidence_batch(records)
