@@ -110,6 +110,14 @@ class Stage4DemoExecMarketInput:
 
 
 @dataclass(frozen=True)
+class Stage4DemoExecAttemptInput:
+    """Attempt-local values acquired only when that attempt is ready to start."""
+
+    market: Stage4DemoExecMarketInput
+    operator_token: str = field(repr=False)
+
+
+@dataclass(frozen=True)
 class Stage4DemoExecPhasePlan:
     """One sequential official-tester phase; phases never overlap."""
 
@@ -141,14 +149,19 @@ class Stage4DemoExecAttemptPlan:
 
 @dataclass(frozen=True)
 class Stage4DemoExecPlan:
-    """The two mandatory, independent Stage 4 ExecTester attempts."""
+    """Deferred two-attempt plan; no operator token or admission is cached."""
 
-    market_close: Stage4DemoExecAttemptPlan
-    passive_cancel: Stage4DemoExecAttemptPlan
-
-    @property
-    def attempts(self) -> tuple[Stage4DemoExecAttemptPlan, ...]:
-        return (self.market_close, self.passive_cancel)
+    evidence_root: Path
+    batch_id: str
+    acquire_market_close: Callable[[], Stage4DemoExecAttemptInput] = field(
+        repr=False,
+        compare=False,
+    )
+    acquire_passive_cancel: Callable[[], Stage4DemoExecAttemptInput] = field(
+        repr=False,
+        compare=False,
+    )
+    _batch: DemoAdmissionBatch = field(repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -221,6 +234,14 @@ class Stage4DemoExecBatchOutcome:
 
 
 @dataclass(frozen=True)
+class Stage4DemoCleanupAuthorization:
+    """Exact signed position and reduce-only close quantity proven for cleanup."""
+
+    signed_position: Decimal
+    quantity: Quantity
+
+
+@dataclass(frozen=True)
 class _ExecPhaseSnapshot:
     started_at_ns: int
     ended_at_ns: int
@@ -245,6 +266,12 @@ class _ExecPhaseSnapshot:
     account_mode: Stage4DemoAccountModeObservation | None
     unresolved_unknown_count: int
     failure: Stage4DemoExecFailure | None
+
+
+@dataclass
+class _MarketTimestampSequence:
+    quote_ns: int
+    mark_ns: int
 
 
 class _AccountQueryProbe(Strategy):
@@ -281,52 +308,16 @@ def build_stage4_demo_exec_plan(
     batch: DemoAdmissionBatch,
     evidence_root: Path,
     batch_id: str,
-    market_close_input: Stage4DemoExecMarketInput,
-    passive_cancel_input: Stage4DemoExecMarketInput,
-    market_operator_token: str,
-    passive_operator_token: str,
+    acquire_market_close: Callable[[], Stage4DemoExecAttemptInput],
+    acquire_passive_cancel: Callable[[], Stage4DemoExecAttemptInput],
 ) -> Stage4DemoExecPlan:
-    """Build the only order-enabled plan: two separately gated attempts."""
-    if market_close_input is passive_cancel_input:
-        raise Stage4DemoExecutionError("ExecTester attempts cannot reuse price input")
-    _validate_market_input(market_close_input)
-    _validate_market_input(passive_cancel_input)
-    market_admission = admit_current_demo_attempt(
-        batch=batch,
-        operator_token=market_operator_token,
-    )
-    passive_admission = admit_current_demo_attempt(
-        batch=batch,
-        operator_token=passive_operator_token,
-    )
-    if market_admission is passive_admission:
-        raise Stage4DemoExecutionError(
-            "ExecTester attempts require independent admission proofs"
-        )
-
-    market_plan = _build_attempt_plan(
-        scenario=DemoEvidenceScenario.EXEC_TESTER_MARKET_CLOSE,
-        admission=market_admission,
-        repository_root=batch.repository_root,
-        evidence_root=evidence_root,
-        batch_id=batch_id,
-        market_input=market_close_input,
-    )
-    passive_plan = _build_attempt_plan(
-        scenario=DemoEvidenceScenario.EXEC_TESTER_PASSIVE_CANCEL,
-        admission=passive_admission,
-        repository_root=batch.repository_root,
-        evidence_root=evidence_root,
-        batch_id=batch_id,
-        market_input=passive_cancel_input,
-    )
-    if market_plan.evidence_partition == passive_plan.evidence_partition:
-        raise Stage4DemoExecutionError(
-            "ExecTester attempts require separate partitions"
-        )
+    """Build a deferred plan without acquiring or caching attempt-local gates."""
     return Stage4DemoExecPlan(
-        market_close=market_plan,
-        passive_cancel=passive_plan,
+        evidence_root=evidence_root,
+        batch_id=batch_id,
+        acquire_market_close=acquire_market_close,
+        acquire_passive_cancel=acquire_passive_cancel,
+        _batch=batch,
     )
 
 
@@ -335,44 +326,85 @@ def run_stage4_demo_exec(
     batch: DemoAdmissionBatch,
     evidence_root: Path,
     batch_id: str,
-    market_close_input: Stage4DemoExecMarketInput,
-    passive_cancel_input: Stage4DemoExecMarketInput,
-    market_operator_token: str,
-    passive_operator_token: str,
+    acquire_market_close: Callable[[], Stage4DemoExecAttemptInput],
+    acquire_passive_cancel: Callable[[], Stage4DemoExecAttemptInput],
 ) -> Stage4DemoExecBatchOutcome:
-    """Run both fixed logical attempts and persist their separate records."""
+    """Acquire, run, and persist each attempt sequentially and fail closed."""
     plan = build_stage4_demo_exec_plan(
         batch=batch,
         evidence_root=evidence_root,
         batch_id=batch_id,
-        market_close_input=market_close_input,
-        passive_cancel_input=passive_cancel_input,
-        market_operator_token=market_operator_token,
-        passive_operator_token=passive_operator_token,
+        acquire_market_close=acquire_market_close,
+        acquire_passive_cancel=acquire_passive_cancel,
     )
-    if any(attempt.evidence_partition.exists() for attempt in plan.attempts):
-        raise Stage4DemoExecutionError("ExecTester evidence partition already exists")
-    market_observation, passive_observation = asyncio.run(
-        _observe_stage4_demo_exec(plan)
+    market_plan = _admit_deferred_attempt(
+        plan,
+        scenario=DemoEvidenceScenario.EXEC_TESTER_MARKET_CLOSE,
+        acquire=plan.acquire_market_close,
     )
-    market_evidence = build_stage4_demo_exec_evidence(
-        plan.market_close,
-        market_observation,
+    market_outcome = _run_and_persist_attempt(market_plan)
+    if market_outcome.evidence.get("result") != "PASS":
+        raise Stage4DemoExecutionError(
+            "market attempt halted; passive attempt was not admitted; "
+            f"record={market_outcome.evidence_path}"
+        )
+
+    passive_plan = _admit_deferred_attempt(
+        plan,
+        scenario=DemoEvidenceScenario.EXEC_TESTER_PASSIVE_CANCEL,
+        acquire=plan.acquire_passive_cancel,
+        previous_market_input=market_plan.market_input,
     )
-    passive_evidence = build_stage4_demo_exec_evidence(
-        plan.passive_cancel,
-        passive_observation,
-    )
+    if passive_plan.evidence_partition == market_plan.evidence_partition:
+        raise Stage4DemoExecutionError(
+            "ExecTester attempts require separate partitions"
+        )
+    passive_outcome = _run_and_persist_attempt(passive_plan)
     return Stage4DemoExecBatchOutcome(
-        market_close=write_stage4_demo_exec_evidence(
-            plan.market_close,
-            market_evidence,
-        ),
-        passive_cancel=write_stage4_demo_exec_evidence(
-            plan.passive_cancel,
-            passive_evidence,
-        ),
+        market_close=market_outcome,
+        passive_cancel=passive_outcome,
     )
+
+
+def _admit_deferred_attempt(
+    plan: Stage4DemoExecPlan,
+    *,
+    scenario: DemoEvidenceScenario,
+    acquire: Callable[[], Stage4DemoExecAttemptInput],
+    previous_market_input: Stage4DemoExecMarketInput | None = None,
+) -> Stage4DemoExecAttemptPlan:
+    price_deadline = stage4_demo.start_queue_deadline(DeadlinePhase.PRICE_READINESS)
+    attempt_input = acquire()
+    now_ns = time.time_ns()
+    if price_deadline.expired():
+        raise Stage4DemoExecutionError("attempt price readiness deadline expired")
+    _validate_market_input(
+        attempt_input.market,
+        checked_at_ns=now_ns,
+        previous=previous_market_input,
+    )
+    admission = admit_current_demo_attempt(
+        batch=plan._batch,
+        operator_token=attempt_input.operator_token,
+    )
+    return _build_attempt_plan(
+        scenario=scenario,
+        admission=admission,
+        repository_root=plan._batch.repository_root,
+        evidence_root=plan.evidence_root,
+        batch_id=plan.batch_id,
+        market_input=attempt_input.market,
+    )
+
+
+def _run_and_persist_attempt(
+    plan: Stage4DemoExecAttemptPlan,
+) -> Stage4DemoExecOutcome:
+    if plan.evidence_partition.exists():
+        raise Stage4DemoExecutionError("ExecTester evidence partition already exists")
+    observation = asyncio.run(_observe_stage4_demo_attempt(plan))
+    evidence = build_stage4_demo_exec_evidence(plan, observation)
+    return write_stage4_demo_exec_evidence(plan, evidence)
 
 
 def build_stage4_demo_exec_evidence(
@@ -598,7 +630,7 @@ def prove_exact_cleanup_quantity(
     inflight_order_count: int,
     open_position_count: int,
     net_position: Decimal | None,
-) -> Quantity | None:
+) -> Stage4DemoCleanupAuthorization | None:
     """Authorize at most one cleanup quantity only after the frozen safety proof."""
     if (
         not original_order_terminal
@@ -611,64 +643,54 @@ def prove_exact_cleanup_quantity(
         return None
     if net_position == 0:
         return None
-    return exact_reduce_only_quantity(plan.instrument, net_position)
+    return Stage4DemoCleanupAuthorization(
+        signed_position=net_position,
+        quantity=exact_reduce_only_quantity(plan.instrument, net_position),
+    )
 
 
-async def _observe_stage4_demo_exec(
-    plan: Stage4DemoExecPlan,
-) -> tuple[Stage4DemoExecObservation, Stage4DemoExecObservation]:
-    market_phase = await _run_exec_phase(
-        plan.market_close,
-        plan.market_close.phases[0],
+async def _observe_stage4_demo_attempt(
+    plan: Stage4DemoExecAttemptPlan,
+) -> Stage4DemoExecObservation:
+    canary = await _run_exec_phase(
+        plan,
+        plan.phases[0],
         phase_kind="canary",
     )
-    passive_canary = await _run_exec_phase(
-        plan.passive_cancel,
-        plan.passive_cancel.phases[0],
-        phase_kind="canary",
-    )
-    if passive_canary.failure is None:
-        passive_phase = await _run_exec_phase(
-            plan.passive_cancel,
-            plan.passive_cancel.phases[1],
+    if plan.scenario is DemoEvidenceScenario.EXEC_TESTER_MARKET_CLOSE:
+        return _logical_observation(plan, canary=canary, execution=canary)
+
+    if canary.failure is None:
+        execution = await _run_exec_phase(
+            plan,
+            plan.phases[1],
             phase_kind="passive",
         )
     else:
-        passive_phase = _skipped_phase_snapshot(passive_canary)
+        execution = _skipped_phase_snapshot(canary)
 
-    cleanup_quantity = prove_exact_cleanup_quantity(
-        plan.passive_cancel,
-        original_order_terminal=passive_phase.order_terminal,
-        active_order_count=passive_phase.active_order_count,
-        inflight_order_count=passive_phase.inflight_order_count,
-        open_position_count=passive_phase.open_position_count,
-        net_position=passive_phase.final_net_quantity,
+    cleanup_authorization = prove_exact_cleanup_quantity(
+        plan,
+        original_order_terminal=execution.order_terminal,
+        active_order_count=execution.active_order_count,
+        inflight_order_count=execution.inflight_order_count,
+        open_position_count=execution.open_position_count,
+        net_position=execution.final_net_quantity,
     )
     if (
-        passive_phase.failure is not None
-        and passive_phase.unresolved_unknown_count == 0
-        and cleanup_quantity is not None
+        execution.failure is not None
+        and execution.unresolved_unknown_count == 0
+        and cleanup_authorization is not None
     ):
         cleanup_phase = await _run_exec_phase(
-            plan.passive_cancel,
-            plan.passive_cancel.phases[2],
+            plan,
+            plan.phases[2],
             phase_kind="cleanup",
-            cleanup_quantity=cleanup_quantity,
+            cleanup_authorization=cleanup_authorization,
         )
-        passive_phase = _merge_cleanup_snapshot(passive_phase, cleanup_phase)
+        execution = _merge_cleanup_snapshot(execution, cleanup_phase)
 
-    return (
-        _logical_observation(
-            plan.market_close,
-            canary=market_phase,
-            execution=market_phase,
-        ),
-        _logical_observation(
-            plan.passive_cancel,
-            canary=passive_canary,
-            execution=passive_phase,
-        ),
-    )
+    return _logical_observation(plan, canary=canary, execution=execution)
 
 
 async def _run_exec_phase(
@@ -676,31 +698,45 @@ async def _run_exec_phase(
     phase: Stage4DemoExecPhasePlan,
     *,
     phase_kind: Literal["canary", "passive", "cleanup"],
-    cleanup_quantity: Quantity | None = None,
+    cleanup_authorization: Stage4DemoCleanupAuthorization | None = None,
 ) -> _ExecPhaseSnapshot:
-    if phase_kind == "cleanup":
-        if cleanup_quantity is None:
-            raise Stage4DemoExecutionError("cleanup phase is missing authorization")
-        runtime = _build_authorized_cleanup_runtime(
-            plan,
-            phase,
-            cleanup_quantity=cleanup_quantity,
+    started_at_ns = time.time_ns()
+    try:
+        if phase_kind == "cleanup":
+            if cleanup_authorization is None:
+                raise Stage4DemoExecutionError("cleanup phase is missing authorization")
+            runtime = _build_authorized_cleanup_runtime(
+                plan,
+                phase,
+                cleanup_authorization=cleanup_authorization,
+            )
+        else:
+            if phase.run_condition != "always":
+                raise Stage4DemoExecutionError("conditional phase used without proof")
+            runtime = _build_exec_tester_runtime_unchecked(plan, phase)
+    except Exception:
+        return _failed_phase_snapshot(
+            started_at_ns=started_at_ns,
+            failure=Stage4DemoExecFailure(
+                "CONNECT_SUBSCRIPTION_FAILED",
+                "construction",
+                ("FAILED",),
+            ),
         )
-    else:
-        if phase.run_condition != "always":
-            raise Stage4DemoExecutionError("conditional phase used without proof")
-        runtime = _build_exec_tester_runtime_unchecked(plan, phase)
 
     node = runtime.node
     cache = node.cache
     handle = node.handle()
-    started_at_ns = time.time_ns()
     account_before_count = _account_event_count(cache)
     strategy_id = _require_phase_strategy_id(phase)
     run_task: asyncio.Task[None] = asyncio.create_task(node.run_async())
     failure: Stage4DemoExecFailure | None = None
     account_mode: Stage4DemoAccountModeObservation | None = None
     stop_requested = False
+    market_sequence = _MarketTimestampSequence(
+        quote_ns=plan.market_input.quote_ts_event_ns,
+        mark_ns=plan.market_input.mark_ts_event_ns,
+    )
     try:
         await _wait_until(
             lambda: handle.is_running,
@@ -711,8 +747,8 @@ async def _run_exec_phase(
             ),
         )
         await _wait_until(
-            lambda: _market_ready(cache, plan),
-            deadline=stage4_demo.start_queue_deadline(DeadlinePhase.READY),
+            lambda: _market_ready(cache, plan, market_sequence),
+            deadline=stage4_demo.start_queue_deadline(DeadlinePhase.PRICE_READINESS),
             run_task=run_task,
             failure=Stage4DemoExecFailure(
                 "CONNECT_SUBSCRIPTION_FAILED", "data", ("FAILED",)
@@ -730,6 +766,21 @@ async def _run_exec_phase(
                     ("POSITION_UNKNOWN",),
                 ),
             )
+            if (
+                cleanup_authorization is None
+                or not _cleanup_cache_matches_authorization(
+                    cache,
+                    plan,
+                    cleanup_authorization,
+                )
+            ):
+                raise _Stage4DemoExecutionRuntimeError(
+                    Stage4DemoExecFailure(
+                        "TERMINAL_FACT_UNKNOWN",
+                        "reconciliation",
+                        ("POSITION_UNKNOWN",),
+                    )
+                )
         else:
             acceptance_deadline = stage4_demo.start_queue_deadline(
                 DeadlinePhase.ORDER_ACCEPTANCE
@@ -830,6 +881,17 @@ async def _run_exec_phase(
                     ("OPEN_POSITION_REMAINS",),
                 ),
             )
+            if cleanup_authorization is None or not _cleanup_action_matches(
+                cache,
+                plan,
+                strategy_id,
+                cleanup_authorization,
+            ):
+                failure = Stage4DemoExecFailure(
+                    "CLEANUP_FAILED",
+                    "cleanup",
+                    ("FAILED",),
+                )
     except _Stage4DemoExecutionRuntimeError as exc:
         failure = failure or exc.failure
     except Exception:
@@ -934,7 +996,11 @@ async def _stop_exec_tester(
     return None
 
 
-def _market_ready(cache: Cache, plan: Stage4DemoExecAttemptPlan) -> bool:
+def _market_ready(
+    cache: Cache,
+    plan: Stage4DemoExecAttemptPlan,
+    sequence: _MarketTimestampSequence,
+) -> bool:
     observed_instrument = cache.instrument(plan.instrument.id)
     if not isinstance(observed_instrument, CryptoPerpetual) or not _instrument_matches(
         observed_instrument,
@@ -951,6 +1017,10 @@ def _market_ready(cache: Cache, plan: Stage4DemoExecAttemptPlan) -> bool:
         or mark.value.as_decimal() <= 0
     ):
         return False
+    if quote.ts_event < sequence.quote_ns or mark.ts_event < sequence.mark_ns:
+        raise Stage4DemoExecutionError("market timestamp moved backward")
+    sequence.quote_ns = quote.ts_event
+    sequence.mark_ns = mark.ts_event
     observed_at_ns = time.time_ns()
     return _timestamp_is_fresh(quote.ts_event, observed_at_ns) and _timestamp_is_fresh(
         mark.ts_event, observed_at_ns
@@ -1058,6 +1128,51 @@ def _cleanup_complete(
         and cache.orders_open_count(instrument_id=plan.instrument.id) == 0
         and cache.orders_inflight_count(instrument_id=plan.instrument.id) == 0
         and not cache.positions_open(instrument_id=plan.instrument.id)
+    )
+
+
+def _cleanup_cache_matches_authorization(
+    cache: Cache,
+    plan: Stage4DemoExecAttemptPlan,
+    authorization: Stage4DemoCleanupAuthorization,
+) -> bool:
+    positions = cache.positions_open(instrument_id=plan.instrument.id)
+    if (
+        cache.orders_open_count(instrument_id=plan.instrument.id) != 0
+        or cache.orders_inflight_count(instrument_id=plan.instrument.id) != 0
+        or len(positions) != 1
+    ):
+        return False
+    current = _signed_position_quantity(positions[0])
+    return (
+        current == authorization.signed_position
+        and current is not None
+        and exact_reduce_only_quantity(plan.instrument, current)
+        == authorization.quantity
+    )
+
+
+def _cleanup_action_matches(
+    cache: Cache,
+    plan: Stage4DemoExecAttemptPlan,
+    strategy_id: StrategyId,
+    authorization: Stage4DemoCleanupAuthorization,
+) -> bool:
+    orders = cache.orders(
+        instrument_id=plan.instrument.id,
+        strategy_id=strategy_id,
+    )
+    if len(orders) != 1:
+        return False
+    order = orders[0]
+    expected_side = "SELL" if authorization.signed_position > 0 else "BUY"
+    side = str(getattr(order, "side", "")).upper().rsplit(".", maxsplit=1)[-1]
+    reduce_only = getattr(order, "is_reduce_only", False)
+    reduce_only = reduce_only() if callable(reduce_only) else reduce_only
+    return (
+        _order_quantity(order) == authorization.quantity.as_decimal()
+        and side == expected_side
+        and reduce_only is True
     )
 
 
@@ -1335,6 +1450,38 @@ def _skipped_phase_snapshot(canary: _ExecPhaseSnapshot) -> _ExecPhaseSnapshot:
         account_mode=None,
         unresolved_unknown_count=canary.unresolved_unknown_count,
         failure=canary.failure,
+    )
+
+
+def _failed_phase_snapshot(
+    *,
+    started_at_ns: int,
+    failure: Stage4DemoExecFailure,
+) -> _ExecPhaseSnapshot:
+    return _ExecPhaseSnapshot(
+        started_at_ns=started_at_ns,
+        ended_at_ns=time.time_ns(),
+        quote_count=0,
+        trade_count=0,
+        market_timestamps_valid=False,
+        order_submitted=False,
+        order_accepted=False,
+        order_terminal=False,
+        active_order_count=0,
+        inflight_order_count=0,
+        pending_order_count=0,
+        order_ambiguous=False,
+        fill_complete=False,
+        fill_partial=False,
+        fill_late=False,
+        open_position_count=0,
+        final_net_quantity=Decimal(0),
+        balance_before_observed=False,
+        balance_after_observed=False,
+        balance_change_explained=False,
+        account_mode=None,
+        unresolved_unknown_count=1,
+        failure=failure,
     )
 
 
@@ -1617,13 +1764,13 @@ def _build_authorized_cleanup_node(
     plan: Stage4DemoExecAttemptPlan,
     phase: Stage4DemoExecPhasePlan,
     *,
-    cleanup_quantity: Quantity,
+    cleanup_authorization: Stage4DemoCleanupAuthorization,
 ) -> LiveNode:
     """Build the sole cleanup phase after its exact quantity was authorized."""
     return _build_authorized_cleanup_runtime(
         plan,
         phase,
-        cleanup_quantity=cleanup_quantity,
+        cleanup_authorization=cleanup_authorization,
     ).node
 
 
@@ -1631,7 +1778,7 @@ def _build_authorized_cleanup_runtime(
     plan: Stage4DemoExecAttemptPlan,
     phase: Stage4DemoExecPhasePlan,
     *,
-    cleanup_quantity: Quantity,
+    cleanup_authorization: Stage4DemoCleanupAuthorization,
 ) -> _ExecTesterRuntime:
     """Build the cleanup runtime only from an exact authorized quantity."""
     if not any(candidate is phase for candidate in plan.phases):
@@ -1641,8 +1788,11 @@ def _build_authorized_cleanup_runtime(
     if phase.run_condition != "failure_with_cleanup_proof":
         raise Stage4DemoExecutionError("phase is not the failure-only cleanup phase")
     if (
-        exact_reduce_only_quantity(plan.instrument, cleanup_quantity.as_decimal())
-        != cleanup_quantity
+        exact_reduce_only_quantity(
+            plan.instrument,
+            cleanup_authorization.signed_position,
+        )
+        != cleanup_authorization.quantity
     ):
         raise Stage4DemoExecutionError("cleanup quantity is not exact")
     return _build_exec_tester_runtime_unchecked(plan, phase)
@@ -1784,7 +1934,13 @@ def _cleanup_tester_config(
     )
 
 
-def _validate_market_input(value: Stage4DemoExecMarketInput) -> None:
+def _validate_market_input(
+    value: Stage4DemoExecMarketInput,
+    *,
+    checked_at_ns: int | None = None,
+    previous: Stage4DemoExecMarketInput | None = None,
+) -> None:
+    checked_at_ns = time.time_ns() if checked_at_ns is None else checked_at_ns
     if str(value.instrument.id) != DEMO_INSTRUMENT_ID:
         raise Stage4DemoExecutionError(
             "market input instrument is outside the allowlist"
@@ -1795,6 +1951,16 @@ def _validate_market_input(value: Stage4DemoExecMarketInput) -> None:
         raise Stage4DemoExecutionError("market input quote is crossed or locked")
     if value.mark_price.as_decimal() <= 0:
         raise Stage4DemoExecutionError("market input mark price is not positive")
+    if value.observed_at_ns > checked_at_ns + _FUTURE_TOLERANCE_NS:
+        raise Stage4DemoExecutionError("market observation time is in the future")
+    if checked_at_ns - value.observed_at_ns > _MAX_PRICE_AGE_NS:
+        raise Stage4DemoExecutionError("market observation is stale at check time")
+    if previous is not None and (
+        value.observed_at_ns <= previous.observed_at_ns
+        or value.quote_ts_event_ns < previous.quote_ts_event_ns
+        or value.mark_ts_event_ns < previous.mark_ts_event_ns
+    ):
+        raise Stage4DemoExecutionError("market input was reused or moved backward")
     for name, timestamp in (
         ("quote", value.quote_ts_event_ns),
         ("mark", value.mark_ts_event_ns),
@@ -1934,6 +2100,8 @@ __all__ = [
     "EXEC_TESTER_BUILTIN",
     "PASSIVE_OFFSET_TICKS",
     "Stage4DemoAccountModeObservation",
+    "Stage4DemoCleanupAuthorization",
+    "Stage4DemoExecAttemptInput",
     "Stage4DemoExecBatchOutcome",
     "Stage4DemoExecFailure",
     "Stage4DemoExecMarketInput",
