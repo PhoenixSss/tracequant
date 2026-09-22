@@ -337,6 +337,80 @@ def test_data_tester_not_applicable_is_valid_but_order_scenarios_require_facts()
         finalize_stage4_demo_evidence(empty_data)
 
 
+def test_order_scenarios_require_their_frozen_fill_outcomes() -> None:
+    passive = _evidence_payload(DemoEvidenceScenario.EXEC_TESTER_PASSIVE_CANCEL.value)
+    _nested(passive, "observations", "fill")["complete"] = True
+    with pytest.raises(Stage4DemoEvidenceError, match="zero fill"):
+        finalize_stage4_demo_evidence(passive)
+
+    for scenario in (
+        DemoEvidenceScenario.EXEC_TESTER_MARKET_CLOSE.value,
+        DemoEvidenceScenario.DEMO_STRATEGY.value,
+    ):
+        required_fill = _evidence_payload(scenario)
+        _nested(required_fill, "observations", "fill")["complete"] = False
+        with pytest.raises(Stage4DemoEvidenceError, match="must be complete"):
+            finalize_stage4_demo_evidence(required_fill)
+
+
+@pytest.mark.parametrize(
+    "classification_path",
+    [
+        ("observations", "order", "classification"),
+        ("observations", "fill", "classification"),
+        ("observations", "position", "classification"),
+        ("observations", "balance", "classification"),
+        ("observations", "account_mode", "classification"),
+        ("cleanup", "classification"),
+    ],
+)
+def test_failed_data_tester_requires_not_applicable_scenario_facts(
+    classification_path: tuple[str, ...],
+) -> None:
+    data_failure = _evidence_payload(DemoEvidenceScenario.DATA_TESTER.value)
+    data_failure["result"] = "FAIL"
+    data_failure["terminal_state"] = "HALTED"
+    data_failure["failure"] = {
+        "code": "DATA_TIMEOUT",
+        "phase": "data",
+        "diagnostic_codes": ["NO_QUOTES"],
+    }
+    target = _nested(data_failure, *classification_path[:-1])
+    target[classification_path[-1]] = "consistent"
+    with pytest.raises(Stage4DemoEvidenceError, match="must be not_applicable"):
+        finalize_stage4_demo_evidence(data_failure)
+
+
+@pytest.mark.parametrize(
+    "classification_path",
+    [
+        ("observations", "order", "classification"),
+        ("observations", "fill", "classification"),
+        ("observations", "position", "classification"),
+        ("observations", "balance", "classification"),
+        ("observations", "account_mode", "classification"),
+        ("cleanup", "classification"),
+    ],
+)
+def test_failed_order_scenario_rejects_not_applicable_facts(
+    classification_path: tuple[str, ...],
+) -> None:
+    order_failure = _evidence_payload(
+        DemoEvidenceScenario.EXEC_TESTER_MARKET_CLOSE.value
+    )
+    order_failure["result"] = "FAIL"
+    order_failure["terminal_state"] = "HALTED"
+    order_failure["failure"] = {
+        "code": "ORDER_TIMEOUT",
+        "phase": "execution",
+        "diagnostic_codes": ["ORDER_UNKNOWN"],
+    }
+    target = _nested(order_failure, *classification_path[:-1])
+    target[classification_path[-1]] = "not_applicable"
+    with pytest.raises(Stage4DemoEvidenceError, match="cannot mark"):
+        finalize_stage4_demo_evidence(order_failure)
+
+
 def test_evidence_schema_digest_json_and_redaction_are_exact_and_deterministic() -> (
     None
 ):

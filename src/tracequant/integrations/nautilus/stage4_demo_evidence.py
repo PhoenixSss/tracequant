@@ -584,6 +584,38 @@ def _validate_terminal_contract(
 ) -> None:
     if (result, terminal) not in {("PASS", "COMPLETE"), ("FAIL", "HALTED")}:
         raise Stage4DemoEvidenceError("result and terminal_state are inconsistent")
+
+    execution_names = ("order", "fill", "position", "balance", "account_mode")
+    if scenario == DemoEvidenceScenario.DATA_TESTER.value:
+        for name in execution_names:
+            observation = cast(Mapping[str, object], observations[name])
+            if (
+                observation["classification"]
+                != EvidenceClassification.NOT_APPLICABLE.value
+            ):
+                raise Stage4DemoEvidenceError(
+                    "DataTester execution and account facts must be not_applicable"
+                )
+        if cleanup["classification"] != EvidenceClassification.NOT_APPLICABLE.value:
+            raise Stage4DemoEvidenceError("DataTester cleanup must be not_applicable")
+        _require_neutral_data_tester_state(observations, cleanup)
+    else:
+        if scenario not in _ORDER_ENABLED_SCENARIOS:
+            raise Stage4DemoEvidenceError("scenario is outside the Stage 4 contract")
+        for name in execution_names:
+            observation = cast(Mapping[str, object], observations[name])
+            if (
+                observation["classification"]
+                == EvidenceClassification.NOT_APPLICABLE.value
+            ):
+                raise Stage4DemoEvidenceError(
+                    "order-enabled evidence cannot mark terminal facts not_applicable"
+                )
+        if cleanup["classification"] == EvidenceClassification.NOT_APPLICABLE.value:
+            raise Stage4DemoEvidenceError(
+                "order-enabled evidence cannot mark cleanup not_applicable"
+            )
+
     if result == "FAIL":
         if failure is None:
             raise Stage4DemoEvidenceError("failed evidence requires a bounded failure")
@@ -601,28 +633,13 @@ def _validate_terminal_contract(
             "passing evidence requires valid market timestamps"
         )
 
-    execution_names = ("order", "fill", "position", "balance", "account_mode")
     if scenario == DemoEvidenceScenario.DATA_TESTER.value:
         if market_data["quote_count"] == 0 or market_data["trade_count"] == 0:
             raise Stage4DemoEvidenceError(
                 "DataTester requires at least one quote and one trade"
             )
-        for name in execution_names:
-            observation = cast(Mapping[str, object], observations[name])
-            if (
-                observation["classification"]
-                != EvidenceClassification.NOT_APPLICABLE.value
-            ):
-                raise Stage4DemoEvidenceError(
-                    "DataTester execution and account facts must be not_applicable"
-                )
-        if cleanup["classification"] != EvidenceClassification.NOT_APPLICABLE.value:
-            raise Stage4DemoEvidenceError("DataTester cleanup must be not_applicable")
-        _require_neutral_data_tester_state(observations, cleanup)
         return
 
-    if scenario not in _ORDER_ENABLED_SCENARIOS:
-        raise Stage4DemoEvidenceError("scenario is outside the Stage 4 contract")
     for name in execution_names:
         observation = cast(Mapping[str, object], observations[name])
         if observation["classification"] != EvidenceClassification.CONSISTENT.value:
@@ -631,7 +648,7 @@ def _validate_terminal_contract(
             )
     if cleanup["classification"] != EvidenceClassification.CONSISTENT.value:
         raise Stage4DemoEvidenceError("passing order-enabled evidence requires cleanup")
-    _require_cleared_order_state(observations, cleanup)
+    _require_cleared_order_state(scenario, observations, cleanup)
 
 
 def _require_neutral_data_tester_state(
@@ -684,7 +701,9 @@ def _require_neutral_data_tester_state(
 
 
 def _require_cleared_order_state(
-    observations: Mapping[str, object], cleanup: Mapping[str, object]
+    scenario: str,
+    observations: Mapping[str, object],
+    cleanup: Mapping[str, object],
 ) -> None:
     order = cast(Mapping[str, object], observations["order"])
     fill = cast(Mapping[str, object], observations["fill"])
@@ -699,6 +718,11 @@ def _require_cleared_order_state(
         )
     if fill["partial"] is True or fill["late"] is True:
         raise Stage4DemoEvidenceError("partial or late fills cannot pass")
+    if scenario == DemoEvidenceScenario.EXEC_TESTER_PASSIVE_CANCEL.value:
+        if fill["complete"] is True:
+            raise Stage4DemoEvidenceError("passive-cancel evidence requires zero fill")
+    elif fill["complete"] is not True:
+        raise Stage4DemoEvidenceError("required market fills must be complete")
     if position["open_count"] != 0 or position["final_net_quantity"] != "0":
         raise Stage4DemoEvidenceError("position is not flat")
     if not all(
