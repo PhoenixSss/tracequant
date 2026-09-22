@@ -189,9 +189,19 @@ class DemoAdmissionBatch:
     )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
+class _AdmittedDemoAttemptSeal:
+    """Module-owned binding for every value used by an admitted attempt."""
+
+    runtime: RuntimeIdentity
+    config: DemoConfig
+    frozen_config: FrozenDemoConfig
+    credentials: DemoCredentialSnapshot = field(repr=False)
+
+
+@dataclass(frozen=True, init=False)
 class AdmittedDemoAttempt:
-    """Proof that one order-enabled attempt passed every offline gate."""
+    """Opaque proof that one order-enabled attempt passed every offline gate."""
 
     runtime: RuntimeIdentity
     config: DemoConfig
@@ -201,6 +211,16 @@ class AdmittedDemoAttempt:
         compare=False,
         hash=False,
     )
+    _seal: _AdmittedDemoAttemptSeal = field(
+        repr=False,
+        compare=False,
+        hash=False,
+    )
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        raise Stage4DemoAdmissionError(
+            "admitted attempts can only be created by the Demo admission gate"
+        )
 
 
 def capture_runtime_identity(repository_root: Path) -> RuntimeIdentity:
@@ -301,11 +321,11 @@ def admit_current_demo_attempt(
         raise Stage4DemoAdmissionError("frozen Demo configuration drifted")
     if operator_token != OPERATOR_CONFIRMATION_TOKEN:
         raise Stage4DemoAdmissionError("operator confirmation gate is invalid")
-    return AdmittedDemoAttempt(
+    return _create_admitted_demo_attempt(
         runtime=observed_runtime,
         config=batch.config,
         frozen_config=batch.frozen_config,
-        _credentials=batch._credentials,
+        credentials=batch._credentials,
     )
 
 
@@ -315,6 +335,7 @@ def build_execution_client_config(
     account_id: AccountId,
 ) -> BinanceExecutionClientConfig:
     """Build the fixed rc4 config from the admitted batch credential snapshot."""
+    _validate_admitted_demo_attempt(admission)
     config = admission.config
     return BinanceExecutionClientConfig(
         account_id=account_id,
@@ -334,6 +355,51 @@ def build_execution_client_config(
         futures_leverages={DEMO_SYMBOL: 1},
         futures_margin_types={DEMO_SYMBOL: BinanceMarginType.ISOLATED},
     )
+
+
+def _create_admitted_demo_attempt(
+    *,
+    runtime: RuntimeIdentity,
+    config: DemoConfig,
+    frozen_config: FrozenDemoConfig,
+    credentials: DemoCredentialSnapshot,
+) -> AdmittedDemoAttempt:
+    """Create an opaque attempt after the caller has completed every gate."""
+    seal = _AdmittedDemoAttemptSeal(
+        runtime=runtime,
+        config=config,
+        frozen_config=frozen_config,
+        credentials=credentials,
+    )
+    admission = object.__new__(AdmittedDemoAttempt)
+    object.__setattr__(admission, "runtime", runtime)
+    object.__setattr__(admission, "config", config)
+    object.__setattr__(admission, "frozen_config", frozen_config)
+    object.__setattr__(admission, "_credentials", credentials)
+    object.__setattr__(admission, "_seal", seal)
+    return admission
+
+
+def _validate_admitted_demo_attempt(admission: AdmittedDemoAttempt) -> None:
+    """Reject values not bound by the current module-owned admission path."""
+    if type(admission) is not AdmittedDemoAttempt:
+        raise Stage4DemoAdmissionError("Demo admission proof is invalid")
+    try:
+        seal = admission._seal
+    except AttributeError as error:
+        raise Stage4DemoAdmissionError("Demo admission proof is invalid") from error
+    if (
+        not isinstance(seal, _AdmittedDemoAttemptSeal)
+        or admission.runtime is not seal.runtime
+        or admission.config is not seal.config
+        or admission.frozen_config is not seal.frozen_config
+        or admission._credentials is not seal.credentials
+    ):
+        raise Stage4DemoAdmissionError("Demo admission proof is invalid")
+    _validate_runtime_constants(admission.runtime)
+    _validate_demo_config(admission.config)
+    if freeze_demo_config(admission.config) != admission.frozen_config:
+        raise Stage4DemoAdmissionError("frozen Demo configuration drifted")
 
 
 def minimum_order_quantity(

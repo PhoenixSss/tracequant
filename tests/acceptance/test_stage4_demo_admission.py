@@ -32,6 +32,7 @@ from tracequant.integrations.nautilus.stage4_demo import (
     DEMO_API_SECRET_ENV,
     DEMO_INSTRUMENT_ID,
     OPERATOR_CONFIRMATION_TOKEN,
+    AdmittedDemoAttempt,
     DeadlinePhase,
     DemoConfig,
     RuntimeIdentity,
@@ -270,6 +271,52 @@ def test_valid_admission_is_offline_stable_and_secret_free(
         )
         == stage4_demo.NAUTILUS_CP313_LINUX_X86_64_WHEEL_SHA256
     )
+
+
+def test_execution_config_rejects_forged_or_replaced_admission(
+    runtime_checkout: tuple[Path, RuntimeIdentity],
+) -> None:
+    repository_root, runtime = runtime_checkout
+    batch = prepare_demo_admission_batch(
+        repository_root=repository_root,
+        config=DemoConfig(),
+        expected_runtime=runtime,
+        environ=VALID_ENVIRONMENT,
+    )
+    admission = admit_current_demo_attempt(
+        batch=batch,
+        operator_token=OPERATOR_CONFIRMATION_TOKEN,
+    )
+    alternate_credentials = stage4_demo.DemoCredentialSnapshot(
+        api_key="live-key",
+        api_secret="live-secret",
+    )
+
+    with pytest.raises(Stage4DemoAdmissionError, match="only be created"):
+        AdmittedDemoAttempt(
+            runtime=runtime,
+            config=replace(DemoConfig(), environment=BinanceEnvironment.LIVE),
+            frozen_config=admission.frozen_config,
+            _credentials=alternate_credentials,
+        )
+    with pytest.raises(Stage4DemoAdmissionError, match="only be created"):
+        replace(
+            admission,
+            config=replace(DemoConfig(), environment=BinanceEnvironment.LIVE),
+        )
+    with pytest.raises(Stage4DemoAdmissionError, match="only be created"):
+        replace(admission, _credentials=alternate_credentials)
+
+    missing_seal = object.__new__(AdmittedDemoAttempt)
+    object.__setattr__(missing_seal, "runtime", runtime)
+    object.__setattr__(missing_seal, "config", DemoConfig())
+    object.__setattr__(missing_seal, "frozen_config", admission.frozen_config)
+    object.__setattr__(missing_seal, "_credentials", alternate_credentials)
+    with pytest.raises(Stage4DemoAdmissionError, match="proof is invalid"):
+        build_execution_client_config(
+            missing_seal,
+            account_id=AccountId.from_str("BINANCE-001"),
+        )
 
 
 def test_batch_snapshot_prevents_cross_attempt_credential_drift(
