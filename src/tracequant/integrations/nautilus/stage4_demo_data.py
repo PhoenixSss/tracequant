@@ -457,14 +457,6 @@ async def _wait_until(
     runtime_failure: Stage4DemoDataFailure,
 ) -> None:
     while True:
-        try:
-            if predicate():
-                return
-        except Exception as exc:
-            raise _Stage4DemoDataRuntimeFailure(
-                failure_message,
-                runtime_failure,
-            ) from exc
         if run_task.done():
             try:
                 run_task.result()
@@ -477,6 +469,14 @@ async def _wait_until(
                 failure_message,
                 runtime_failure,
             )
+        try:
+            if predicate():
+                return
+        except Exception as exc:
+            raise _Stage4DemoDataRuntimeFailure(
+                failure_message,
+                runtime_failure,
+            ) from exc
         if deadline.expired():
             raise _Stage4DemoDataRuntimeFailure(
                 failure_message,

@@ -142,13 +142,18 @@ class _CacheDouble:
         quotes: tuple[QuoteTick, ...],
         trades: tuple[TradeTick, ...],
         instrument_available: bool = True,
+        instrument_unavailable_checks: int = 0,
     ) -> None:
         self._instrument = _instrument() if instrument_available else None
+        self._instrument_unavailable_checks = instrument_unavailable_checks
         self._quotes = list(quotes)
         self._trades = list(trades)
 
     def instrument(self, instrument_id: InstrumentId) -> CryptoPerpetual | None:
         assert str(instrument_id) == DEMO_INSTRUMENT_ID
+        if self._instrument_unavailable_checks > 0:
+            self._instrument_unavailable_checks -= 1
+            return None
         return self._instrument
 
     def quotes(self, instrument_id: InstrumentId) -> list[QuoteTick]:
@@ -457,6 +462,29 @@ def test_stage4_demo_data_runtime_failure_writes_subscription_failure_evidence(
 ) -> None:
     cache = _CacheDouble(quotes=(), trades=())
     node = _LiveNodeDouble(cache, run_error=RuntimeError("subscription failed"))
+
+    outcome = _run_with_node_double(monkeypatch, tmp_path, node)
+
+    assert outcome.evidence["result"] == "FAIL"
+    assert outcome.evidence["failure"] == {
+        "code": "CONNECT_SUBSCRIPTION_FAILED",
+        "phase": "data",
+        "diagnostic_codes": ["FAILED"],
+    }
+    assert node.disposed is True
+
+
+def test_stage4_demo_data_runtime_failure_overrides_cached_success_data(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    observed_at = time.time_ns()
+    cache = _CacheDouble(
+        quotes=(_quote(observed_at),),
+        trades=(_trade(observed_at),),
+        instrument_unavailable_checks=1,
+    )
+    node = _LiveNodeDouble(cache, run_error=RuntimeError("connection lost"))
 
     outcome = _run_with_node_double(monkeypatch, tmp_path, node)
 
