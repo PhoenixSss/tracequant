@@ -201,6 +201,7 @@ def _observation(
         balance_before_observed=True,
         balance_after_observed=True,
         balance_change_explained=True,
+        order_action_consistent=True,
         account_mode=Stage4DemoAccountModeObservation(
             operator_gate_confirmed=True,
             canary_complete=True,
@@ -212,6 +213,34 @@ def _observation(
         ),
         unresolved_unknown_count=1 if ambiguous else 0,
     )
+
+
+def _cached_order(
+    *,
+    side: str,
+    order_type: str,
+    quantity: str,
+    filled: str,
+    reduce_only: bool,
+    status: str,
+    price: str | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        side=side,
+        order_type=order_type,
+        quantity=Quantity.from_str(quantity),
+        filled_qty=Quantity.from_str(filled),
+        is_reduce_only=reduce_only,
+        status=status,
+        price=Price.from_str(price) if price is not None else None,
+        ts_submitted=1,
+        ts_accepted=1,
+        is_closed=status in {"FILLED", "CANCELED", "EXPIRED"},
+    )
+
+
+def _changed_namespace(value: SimpleNamespace, **changes: object) -> SimpleNamespace:
+    return SimpleNamespace(**{**vars(value), **changes})
 
 
 def test_stage4_demo_exec_plan_is_bounded_and_cannot_target_live(
@@ -527,6 +556,199 @@ def test_stage4_demo_exec_cleanup_binds_current_position_and_actual_close_order(
     )
 
 
+def test_stage4_demo_exec_canary_requires_exact_market_buy_and_reduce_only_sell(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    quantity = plan.market_close.canary_quantity
+    opening = _cached_order(
+        side="BUY",
+        order_type="MARKET",
+        quantity="0.001",
+        filled="0.001",
+        reduce_only=False,
+        status="FILLED",
+    )
+    closing = _cached_order(
+        side="SELL",
+        order_type="MARKET",
+        quantity="0.001",
+        filled="0.001",
+        reduce_only=True,
+        status="FILLED",
+    )
+
+    assert stage4_demo_execution._canary_action_matches([opening, closing], quantity)
+    assert not stage4_demo_execution._canary_action_matches(
+        [opening, _changed_namespace(closing, side="BUY")], quantity
+    )
+    assert not stage4_demo_execution._canary_action_matches(
+        [opening, _changed_namespace(closing, is_reduce_only=False)], quantity
+    )
+    assert not stage4_demo_execution._canary_action_matches(
+        [
+            opening,
+            _changed_namespace(closing, quantity=Quantity.from_str("0.002")),
+        ],
+        quantity,
+    )
+
+
+def test_stage4_demo_exec_passive_terminal_must_be_canceled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.passive_cancel
+    canceled = _cached_order(
+        side="BUY",
+        order_type="LIMIT",
+        quantity="0.001",
+        filled="0.000",
+        reduce_only=False,
+        status="CANCELED",
+        price="49999.99",
+    )
+
+    def cache_with(order: object) -> Cache:
+        return cast(
+            Cache,
+            SimpleNamespace(
+                orders=lambda **kwargs: [order],
+                orders_open_count=lambda **kwargs: 0,
+                orders_inflight_count=lambda **kwargs: 0,
+            ),
+        )
+
+    strategy_id = stage4_demo_execution._require_phase_strategy_id(attempt.phases[1])
+    assert stage4_demo_execution._passive_cancel_complete(
+        cache_with(canceled), attempt, strategy_id
+    )
+    assert not stage4_demo_execution._passive_cancel_complete(
+        cache_with(_changed_namespace(canceled, status="EXPIRED")),
+        attempt,
+        strategy_id,
+    )
+    assert not stage4_demo_execution._passive_cancel_complete(
+        cache_with(_changed_namespace(canceled, price=Price.from_str("50000.00"))),
+        attempt,
+        strategy_id,
+    )
+
+
+def test_stage4_demo_exec_market_record_does_not_double_phase_counts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    account_mode = Stage4DemoAccountModeObservation(
+        operator_gate_confirmed=True,
+        canary_complete=True,
+        one_way_confirmed=True,
+        isolated_confirmed=True,
+        observed_initial_margin=Decimal("50.00"),
+        mark_price_min=Decimal("49999.00"),
+        mark_price_max=Decimal("50001.00"),
+    )
+    snapshot = replace(
+        stage4_demo_execution._failed_phase_snapshot(
+            started_at_ns=1,
+            failure=stage4_demo_execution.Stage4DemoExecFailure(
+                "TERMINAL_FACT_UNKNOWN",
+                "reconciliation",
+                ("FAILED",),
+            ),
+        ),
+        quote_count=3,
+        trade_count=2,
+        market_timestamps_valid=True,
+        order_submitted=True,
+        order_accepted=True,
+        order_terminal=True,
+        fill_complete=True,
+        balance_before_observed=True,
+        balance_after_observed=True,
+        balance_change_explained=True,
+        order_action_consistent=True,
+        account_mode=account_mode,
+        unresolved_unknown_count=0,
+        failure=None,
+    )
+
+    observation = stage4_demo_execution._logical_observation(
+        plan.market_close,
+        canary=snapshot,
+        execution=snapshot,
+    )
+
+    assert observation.quote_count == 3
+    assert observation.trade_count == 2
+
+
+def test_stage4_demo_exec_runtime_price_must_match_admitted_passive_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.passive_cancel
+    now_ns = time.time_ns()
+
+    def cache_with_bid(bid: str) -> Cache:
+        return cast(
+            Cache,
+            SimpleNamespace(
+                instrument=lambda instrument_id: attempt.instrument,
+                quote=lambda instrument_id: SimpleNamespace(
+                    instrument_id=attempt.instrument.id,
+                    bid_price=Price.from_str(bid),
+                    ask_price=Price.from_str("50000.02"),
+                    ts_event=now_ns,
+                ),
+                mark_price=lambda instrument_id: SimpleNamespace(
+                    instrument_id=attempt.instrument.id,
+                    value=Price.from_str("50000.00"),
+                    ts_event=now_ns,
+                ),
+            ),
+        )
+
+    sequence = stage4_demo_execution._MarketTimestampSequence(quote_ns=0, mark_ns=0)
+    assert stage4_demo_execution._market_ready(
+        cache_with_bid("50000.00"),
+        attempt,
+        sequence,
+        phase_kind="passive",
+    )
+    with pytest.raises(Stage4DemoExecutionError, match="drifted"):
+        stage4_demo_execution._market_ready(
+            cache_with_bid("50000.01"),
+            attempt,
+            sequence,
+            phase_kind="passive",
+        )
+
+
+def test_stage4_demo_exec_action_conflict_cannot_produce_pass_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    observation = replace(
+        _observation(DemoEvidenceScenario.EXEC_TESTER_MARKET_CLOSE),
+        order_action_consistent=False,
+    )
+
+    evidence = build_stage4_demo_exec_evidence(plan.market_close, observation)
+
+    assert evidence["result"] == "FAIL"
+    assert evidence["failure"] == {
+        "code": "TERMINAL_FACT_CONFLICTING",
+        "phase": "reconciliation",
+        "diagnostic_codes": ["FAILED"],
+    }
+
+
 def test_stage4_demo_exec_construction_failure_becomes_terminal_observation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -613,11 +835,13 @@ def test_stage4_demo_exec_rejects_runtime_market_timestamp_rollback(
         SimpleNamespace(
             instrument=lambda instrument_id: attempt.instrument,
             quote=lambda instrument_id: SimpleNamespace(
+                instrument_id=attempt.instrument.id,
                 bid_price=Price.from_str("50000.00"),
                 ask_price=Price.from_str("50000.01"),
                 ts_event=attempt.market_input.quote_ts_event_ns - 1,
             ),
             mark_price=lambda instrument_id: SimpleNamespace(
+                instrument_id=attempt.instrument.id,
                 value=Price.from_str("50000.00"),
                 ts_event=attempt.market_input.mark_ts_event_ns,
             ),

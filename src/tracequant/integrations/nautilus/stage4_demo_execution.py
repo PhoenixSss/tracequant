@@ -211,6 +211,7 @@ class Stage4DemoExecObservation:
     balance_before_observed: bool
     balance_after_observed: bool
     balance_change_explained: bool
+    order_action_consistent: bool
     account_mode: Stage4DemoAccountModeObservation
     unresolved_unknown_count: int
     failure: Stage4DemoExecFailure | None = None
@@ -263,6 +264,7 @@ class _ExecPhaseSnapshot:
     balance_before_observed: bool
     balance_after_observed: bool
     balance_change_explained: bool
+    order_action_consistent: bool
     account_mode: Stage4DemoAccountModeObservation | None
     unresolved_unknown_count: int
     failure: Stage4DemoExecFailure | None
@@ -436,6 +438,7 @@ def build_stage4_demo_exec_evidence(
         observation.order_submitted
         and observation.order_accepted
         and observation.order_terminal
+        and observation.order_action_consistent
         and observation.active_order_count == 0
         and observation.pending_order_count == 0
         and not observation.order_ambiguous
@@ -747,7 +750,12 @@ async def _run_exec_phase(
             ),
         )
         await _wait_until(
-            lambda: _market_ready(cache, plan, market_sequence),
+            lambda: _market_ready(
+                cache,
+                plan,
+                market_sequence,
+                phase_kind=phase_kind,
+            ),
             deadline=stage4_demo.start_queue_deadline(DeadlinePhase.PRICE_READINESS),
             run_task=run_task,
             failure=Stage4DemoExecFailure(
@@ -1000,6 +1008,8 @@ def _market_ready(
     cache: Cache,
     plan: Stage4DemoExecAttemptPlan,
     sequence: _MarketTimestampSequence,
+    *,
+    phase_kind: Literal["canary", "passive", "cleanup"] = "canary",
 ) -> bool:
     observed_instrument = cache.instrument(plan.instrument.id)
     if not isinstance(observed_instrument, CryptoPerpetual) or not _instrument_matches(
@@ -1012,6 +1022,11 @@ def _market_ready(
     if quote is None or mark is None:
         return False
     if (
+        quote.instrument_id != plan.instrument.id
+        or mark.instrument_id != plan.instrument.id
+    ):
+        return False
+    if (
         quote.bid_price.as_decimal() <= 0
         or quote.ask_price.as_decimal() <= quote.bid_price.as_decimal()
         or mark.value.as_decimal() <= 0
@@ -1022,9 +1037,29 @@ def _market_ready(
     sequence.quote_ns = quote.ts_event
     sequence.mark_ns = mark.ts_event
     observed_at_ns = time.time_ns()
-    return _timestamp_is_fresh(quote.ts_event, observed_at_ns) and _timestamp_is_fresh(
-        mark.ts_event, observed_at_ns
-    )
+    timestamps_ready = _timestamp_is_fresh(
+        quote.ts_event, observed_at_ns
+    ) and _timestamp_is_fresh(mark.ts_event, observed_at_ns)
+    if not timestamps_ready:
+        return False
+
+    if phase_kind == "canary":
+        runtime_quantity = minimum_order_quantity(observed_instrument, mark.value)
+        if runtime_quantity != plan.canary_quantity:
+            raise Stage4DemoExecutionError(
+                "runtime canary quantity drifted from admitted price input"
+            )
+    elif phase_kind == "passive":
+        runtime_price = quote.bid_price - observed_instrument.price_increment
+        runtime_quantity = minimum_order_quantity(observed_instrument, runtime_price)
+        if (
+            runtime_price != plan.passive_price
+            or runtime_quantity != plan.passive_quantity
+        ):
+            raise Stage4DemoExecutionError(
+                "runtime passive price or quantity drifted from admitted input"
+            )
+    return True
 
 
 def _order_ack_resolved(
@@ -1055,9 +1090,9 @@ def _canary_filled(
     positions = cache.positions_open(instrument_id=plan.instrument.id)
     return (
         len(orders) == 1
-        and _order_bool(orders[0], "is_closed")
-        and _filled_quantity(orders[0]) == _order_quantity(orders[0])
+        and _canary_open_order_matches(orders[0], plan.canary_quantity)
         and len(positions) == 1
+        and _signed_position_quantity(positions[0]) == plan.canary_quantity.as_decimal()
     )
 
 
@@ -1086,10 +1121,7 @@ def _canary_cleanup_complete(
     )
     return (
         len(orders) == 2
-        and all(_order_bool(order, "is_closed") for order in orders)
-        and all(
-            _filled_quantity(order) == _order_quantity(order) > 0 for order in orders
-        )
+        and _canary_action_matches(orders, plan.canary_quantity)
         and cache.orders_open_count(instrument_id=plan.instrument.id) == 0
         and cache.orders_inflight_count(instrument_id=plan.instrument.id) == 0
         and not cache.positions_open(instrument_id=plan.instrument.id)
@@ -1107,7 +1139,7 @@ def _passive_cancel_complete(
     )
     return (
         len(orders) == 1
-        and _order_bool(orders[0], "is_closed")
+        and _passive_order_matches(plan, orders[0])
         and cache.orders_open_count(instrument_id=plan.instrument.id) == 0
         and cache.orders_inflight_count(instrument_id=plan.instrument.id) == 0
     )
@@ -1304,6 +1336,26 @@ def _capture_phase_snapshot(
     account_after_count = _account_event_count(cache)
     unresolved = int(ambiguous) + int(bool(inflight_orders)) + int(position_unknown)
     resolved_failure = failure
+    action_consistent = _phase_order_action_consistent(plan, phase_kind, orders)
+    if (
+        phase_kind != "cleanup"
+        and terminal
+        and not action_consistent
+        and (
+            resolved_failure is None
+            or resolved_failure.code
+            in {
+                "CONNECT_SUBSCRIPTION_FAILED",
+                "ORDER_TIMEOUT",
+                "CLEANUP_INCOMPLETE",
+            }
+        )
+    ):
+        resolved_failure = Stage4DemoExecFailure(
+            "TERMINAL_FACT_CONFLICTING",
+            "reconciliation",
+            ("FAILED",),
+        )
     if resolved_failure is None and rejected:
         resolved_failure = Stage4DemoExecFailure(
             "ORDER_REJECTED", "execution", ("ORDER_REJECTED",)
@@ -1372,6 +1424,7 @@ def _capture_phase_snapshot(
             and unresolved == 0
             and (no_fill_accounting or filled_accounting)
         ),
+        order_action_consistent=action_consistent,
         account_mode=account_mode,
         unresolved_unknown_count=unresolved,
         failure=resolved_failure,
@@ -1393,13 +1446,22 @@ def _logical_observation(
         mark_price_min=None,
         mark_price_max=None,
     )
+    same_phase = canary is execution
     return Stage4DemoExecObservation(
         scenario=plan.scenario,
         instrument=plan.instrument,
         started_at_ns=canary.started_at_ns,
         ended_at_ns=execution.ended_at_ns,
-        quote_count=canary.quote_count + execution.quote_count,
-        trade_count=canary.trade_count + execution.trade_count,
+        quote_count=(
+            canary.quote_count
+            if same_phase
+            else canary.quote_count + execution.quote_count
+        ),
+        trade_count=(
+            canary.trade_count
+            if same_phase
+            else canary.trade_count + execution.trade_count
+        ),
         market_timestamps_valid=(
             canary.market_timestamps_valid and execution.market_timestamps_valid
         ),
@@ -1417,8 +1479,11 @@ def _logical_observation(
         balance_before_observed=canary.balance_before_observed,
         balance_after_observed=execution.balance_after_observed,
         balance_change_explained=(
-            canary.balance_change_explained and execution.balance_change_explained
+            canary.balance_change_explained
+            if same_phase
+            else canary.balance_change_explained and execution.balance_change_explained
         ),
+        order_action_consistent=execution.order_action_consistent,
         account_mode=account_mode,
         unresolved_unknown_count=execution.unresolved_unknown_count,
         failure=canary.failure or execution.failure,
@@ -1447,6 +1512,7 @@ def _skipped_phase_snapshot(canary: _ExecPhaseSnapshot) -> _ExecPhaseSnapshot:
         balance_before_observed=canary.balance_after_observed,
         balance_after_observed=canary.balance_after_observed,
         balance_change_explained=False,
+        order_action_consistent=False,
         account_mode=None,
         unresolved_unknown_count=canary.unresolved_unknown_count,
         failure=canary.failure,
@@ -1479,6 +1545,7 @@ def _failed_phase_snapshot(
         balance_before_observed=False,
         balance_after_observed=False,
         balance_change_explained=False,
+        order_action_consistent=False,
         account_mode=None,
         unresolved_unknown_count=1,
         failure=failure,
@@ -1514,6 +1581,7 @@ def _merge_cleanup_snapshot(
         balance_change_explained=(
             execution.balance_change_explained and cleanup.balance_change_explained
         ),
+        order_action_consistent=execution.order_action_consistent,
         account_mode=None,
         unresolved_unknown_count=cleanup.unresolved_unknown_count,
         failure=cleanup.failure or execution.failure,
@@ -1628,12 +1696,105 @@ def _position_commissions(position: object) -> list[object]:
 
 
 def _order_rejected(order: object) -> bool:
-    status = getattr(order, "status", None)
-    status = status() if callable(status) else status
-    return str(status).upper().rsplit(".", maxsplit=1)[-1] in {
-        "DENIED",
-        "REJECTED",
-    }
+    return _order_enum_name(order, "status") in {"DENIED", "REJECTED"}
+
+
+def _order_enum_name(order: object, name: str) -> str:
+    value = getattr(order, name, None)
+    value = value() if callable(value) else value
+    return str(value).upper().rsplit(".", maxsplit=1)[-1]
+
+
+def _order_price(order: object) -> Decimal | None:
+    value = getattr(order, "price", None)
+    value = value() if callable(value) else value
+    decimal_value = getattr(value, "as_decimal", None)
+    if not callable(decimal_value):
+        return None
+    result = decimal_value()
+    return result if isinstance(result, Decimal) else None
+
+
+def _order_reduce_only(order: object) -> bool:
+    return _order_bool(order, "is_reduce_only")
+
+
+def _filled_market_order_matches(
+    order: object,
+    *,
+    side: str,
+    quantity: Quantity,
+    reduce_only: bool,
+) -> bool:
+    expected_quantity = quantity.as_decimal()
+    return (
+        _order_enum_name(order, "order_type") == "MARKET"
+        and _order_enum_name(order, "side") == side
+        and _order_reduce_only(order) is reduce_only
+        and _order_quantity(order) == expected_quantity
+        and _filled_quantity(order) == expected_quantity
+        and _order_bool(order, "is_closed")
+    )
+
+
+def _canary_open_order_matches(order: object, quantity: Quantity) -> bool:
+    return _filled_market_order_matches(
+        order,
+        side="BUY",
+        quantity=quantity,
+        reduce_only=False,
+    )
+
+
+def _canary_action_matches(
+    orders: list[object],
+    quantity: Quantity,
+) -> bool:
+    if len(orders) != 2:
+        return False
+    opening = [order for order in orders if _canary_open_order_matches(order, quantity)]
+    closing = [
+        order
+        for order in orders
+        if _filled_market_order_matches(
+            order,
+            side="SELL",
+            quantity=quantity,
+            reduce_only=True,
+        )
+    ]
+    return len(opening) == len(closing) == 1 and opening[0] is not closing[0]
+
+
+def _passive_order_matches(
+    plan: Stage4DemoExecAttemptPlan,
+    order: object,
+) -> bool:
+    if plan.passive_price is None or plan.passive_quantity is None:
+        return False
+    return (
+        _order_enum_name(order, "order_type") == "LIMIT"
+        and _order_enum_name(order, "side") == "BUY"
+        and not _order_reduce_only(order)
+        and _order_quantity(order) == plan.passive_quantity.as_decimal()
+        and _filled_quantity(order) == 0
+        and _order_price(order) == plan.passive_price.as_decimal()
+        and getattr(order, "ts_accepted", None) is not None
+        and _order_enum_name(order, "status") == "CANCELED"
+        and _order_bool(order, "is_closed")
+    )
+
+
+def _phase_order_action_consistent(
+    plan: Stage4DemoExecAttemptPlan,
+    phase_kind: Literal["canary", "passive", "cleanup"],
+    orders: list[object],
+) -> bool:
+    if phase_kind == "canary":
+        return _canary_action_matches(orders, plan.canary_quantity)
+    if phase_kind == "passive":
+        return len(orders) == 1 and _passive_order_matches(plan, orders[0])
+    return True
 
 
 def _build_attempt_plan(

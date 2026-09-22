@@ -101,6 +101,17 @@ quote/mark 必须属于目标 instrument、价格为正，`ts_event` 不得比�
 年龄不超过 5 秒，且本 stream 内 timestamp 不倒退。提交前的 price-readiness deadline 为 10 秒；
 过期输入必须在原 deadline 内替换，不能重启 deadline。
 
+锁定的 rc4 `ExecTester` 是本边界的特例：其 built-in strategy 只能在 `LiveNode` 启动前注册，
+并会从首个 quote callback 直接提交 pending market open 或维护 limit order；rc4 没有允许薄入口
+在同一 callback 前插入 policy gate 的 public hook。因而 ExecTester 的“提交前 price readiness”
+特指：创建 order-enabled node 前，入口必须在上述 10 秒 deadline 内取得并验证本 attempt 的
+public instrument/quote/mark input，并只从该 input 冻结 tester quantity 与预期 passive price。
+node 启动后的 cache observation 不是第二个放行 gate，而是强制一致性证明：runtime instrument
+constraints 必须相同，quote/mark 必须仍合格，按 runtime price 重新计算的最小 quantity 必须等于
+冻结 quantity，且缓存中的实际 order 必须逐项匹配预期 side、type、quantity、price、
+`reduce_only` 与 terminal status。任一漂移均为 `conflicting/HALTED`，禁止重发，只可按 §5 清场。
+该特例不适用于 §4.3 Strategy；Strategy 仍须在自己的 handler 内先通过 readiness gate 再提交。
+
 reduce-only cleanup 不复用开仓最小量公式。它只在原订单 terminal、零 active/inflight 且净持仓
 确定后冻结 `close_quantity=abs(position)`，side 与持仓相反，使用 market +
 `reduce_only=true`。quantity 必须可由 Nautilus 无损表示并满足 rc4 public size/min/max

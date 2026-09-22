@@ -159,6 +159,12 @@ builds two independently admitted logical attempts from the official rc4
 canary followed by a single passive post-only accept/cancel attempt. Its plan is
 Demo-only, sequential, capped at one active or inflight order, and permits a
 failure-only exact cleanup phase only after terminal-order and zero-order proof.
+Because rc4 registers the built-in tester before `LiveNode` starts, the entry
+freezes quantity and expected passive price from a qualified attempt-local public
+input before constructing the order-enabled node, then requires the runtime cache
+to prove the same constraints and exact submitted action identity. Runtime price
+drift, a non-reduce-only or inexact close, and any passive terminal status other
+than `CANCELED` are conflicting observations and cannot produce PASS.
 It adapts only Nautilus-owned public cache/account facts into one fresh external
 EvidenceV1 partition per attempt; it does not expose tester-only execution
 privilege to ordinary Strategy code or introduce a reusable orchestrator.
