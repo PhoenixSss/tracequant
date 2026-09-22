@@ -316,11 +316,11 @@ EvidenceV1 = {
   batch_id: opaque_id,
   instrument: {
     id: "BTCUSDT-PERP.BINANCE",
-    price_precision: uint,
-    price_increment: decimal,
-    size_precision: uint,
-    size_increment: decimal,
-    minimum_quantity: decimal,
+    price_precision: uint | null,
+    price_increment: decimal | null,
+    size_precision: uint | null,
+    size_increment: decimal | null,
+    minimum_quantity: decimal | null,
     maximum_quantity: decimal | null,
     minimum_notional: decimal | null
   },
@@ -366,6 +366,11 @@ EvidenceV1 = {
 `PASS/COMPLETE`、failure 为 null、required classifications 为 `consistent`、零
 active/pending/open/unknown 且 final net quantity 为 `"0"`。失败必须
 `FAIL/HALTED` 且包含 failure；实际 count 不得伪造成成功。
+
+只有 `FAIL/HALTED` 可在 instrument-ready 前的当前 attempt 失败时保留锁定的 instrument
+`id`，并将其余全部 instrument constraint 字段同时设为 `null`；部分缺失非法，且对应
+market-data classification 必须为 `missing`。`PASS/COMPLETE` 仍要求完整 instrument
+constraints。此表示不进入只接受四份 PASS record 的 AcceptanceV1 聚合。
 
 原始 events、account snapshots 和 diagnostics 留在对应 repo 外 partition；tracked record 不包含
 原始 payload、绝对路径、credential/account identity。四个 scenario record 的

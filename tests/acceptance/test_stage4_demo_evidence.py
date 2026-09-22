@@ -426,6 +426,45 @@ def test_failed_data_tester_requires_not_applicable_scenario_facts(
         finalize_stage4_demo_evidence(data_failure)
 
 
+def test_failed_evidence_allows_only_wholly_missing_instrument_constraints() -> None:
+    data_failure = _evidence_payload(DemoEvidenceScenario.DATA_TESTER.value)
+    data_failure["result"] = "FAIL"
+    data_failure["terminal_state"] = "HALTED"
+    instrument = _nested(data_failure, "instrument")
+    for key in instrument:
+        if key != "id":
+            instrument[key] = None
+    market_data = _nested(data_failure, "observations", "market_data")
+    market_data.update(
+        {
+            "classification": "missing",
+            "quote_count": 0,
+            "trade_count": 0,
+            "timestamp_valid": False,
+        }
+    )
+    data_failure["failure"] = {
+        "code": "CONNECT_SUBSCRIPTION_FAILED",
+        "phase": "data",
+        "diagnostic_codes": ["FAILED"],
+    }
+
+    validate_stage4_demo_evidence(finalize_stage4_demo_evidence(data_failure))
+
+    incomplete = copy.deepcopy(data_failure)
+    _nested(incomplete, "instrument")["price_precision"] = 2
+    with pytest.raises(Stage4DemoEvidenceError, match="all null"):
+        finalize_stage4_demo_evidence(incomplete)
+
+    passing = _evidence_payload(DemoEvidenceScenario.DATA_TESTER.value)
+    passing_instrument = _nested(passing, "instrument")
+    for key in passing_instrument:
+        if key != "id":
+            passing_instrument[key] = None
+    with pytest.raises(Stage4DemoEvidenceError, match="all null"):
+        finalize_stage4_demo_evidence(passing)
+
+
 @pytest.mark.parametrize(
     "classification_path",
     [
