@@ -102,6 +102,7 @@ src/tracequant/
       stage3_momentum.py
       stage3_oos.py
       stage4_demo.py
+      stage4_demo_evidence.py
       strategies/
         __init__.py
         stage1_ma_cross.py
@@ -136,13 +137,16 @@ sequentially invokes those existing Stage 3 capabilities. It accepts only
 explicit locked identity and absolute external roots, creates no scheduler or
 resume layer, and writes only the compact tracked acceptance projection in the
 checkout; models and full run evidence remain external.
-`integrations/nautilus/stage4_demo.py` owns the bounded offline Binance USD-M
+`integrations/nautilus/stage4_demo.py` and its finite
+`stage4_demo_evidence.py` companion own the bounded offline Binance USD-M
 Futures Demo boundary: fixed runtime/configuration and credential admission,
 pure normal-order and exact reduce-only quantity contracts, fixed monotonic
-deadlines, and the secret-free frozen configuration digest. It may construct
+deadlines, the secret-free frozen configuration digest, and the two frozen
+Stage 4 evidence schemas with fail-closed pure validation. They may construct
 the approved Nautilus execution-client configuration only from an admitted
-attempt, but it does not create a network client, connect to Demo or Live,
-submit orders, fetch market or account state, or orchestrate execution.
+attempt, but do not create a network client, connect to Demo or Live, submit
+orders, fetch market or account state, aggregate or publish acceptance, or
+orchestrate execution.
 `tracequant.research` owns
 read-only Polars views, time splits, the finite Stage 3 causal feature/label
 contract, and the LightGBM training/artifact/loading boundary over the stage 2
