@@ -102,6 +102,7 @@ src/tracequant/
       stage3_momentum.py
       stage3_oos.py
       stage4_demo.py
+      stage4_demo_data.py
       stage4_demo_evidence.py
       strategies/
         __init__.py
@@ -146,7 +147,11 @@ Stage 4 evidence schemas with fail-closed pure validation. They may construct
 the approved Nautilus execution-client configuration only from an admitted
 attempt, but do not create a network client, connect to Demo or Live, submit
 orders, fetch market or account state, aggregate or publish acceptance, or
-orchestrate execution.
+orchestrate execution. `stage4_demo_data.py` is the one bounded exception for
+public Demo market data: it composes the official rc4 `DataTester` with one
+Binance USD-M Demo data client, observes only the locked instrument through the
+public cache, and writes one EvidenceV1 record to a fresh external partition.
+It creates no execution client and does not read credentials.
 `tracequant.research` owns
 read-only Polars views, time splits, the finite Stage 3 causal feature/label
 contract, and the LightGBM training/artifact/loading boundary over the stage 2
