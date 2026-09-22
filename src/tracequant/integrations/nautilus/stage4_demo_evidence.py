@@ -35,9 +35,19 @@ _TIMESTAMP_PATTERN: Final = (
     r"(?:\.[0-9]{1,6})?Z"
 )
 _FAILURE_CODES: Final = (
+    "CANCEL_FILL_RACE",
+    "CONNECT_SUBSCRIPTION_FAILED",
     "CLEANUP_INCOMPLETE",
+    "CLEANUP_FAILED",
     "DATA_TIMEOUT",
+    "DATA_INVALID",
+    "EVENT_SEQUENCE_INVALID",
+    "HANDLER_EXCEPTION",
+    "IDENTITY_CONFIG_GATE_FAILED",
+    "ORDER_AMBIGUOUS",
+    "ORDER_REJECTED",
     "ORDER_TIMEOUT",
+    "OBSERVATION_CONFLICT",
     "TERMINAL_FACT_CONFLICTING",
     "TERMINAL_FACT_MISSING",
     "TERMINAL_FACT_UNKNOWN",
@@ -54,10 +64,12 @@ _DIAGNOSTIC_CODES: Final = (
     "ACTIVE_ORDERS_REMAIN",
     "BALANCE_UNKNOWN",
     "FAILED",
+    "HANDLER_EXCEPTION",
     "NO_QUOTES",
     "NO_TRADES",
     "NONZERO_NET_QUANTITY",
     "OPEN_POSITION_REMAINS",
+    "ORDER_REJECTED",
     "ORDER_UNKNOWN",
     "PENDING_ORDERS_REMAIN",
     "POSITION_UNKNOWN",
@@ -494,15 +506,23 @@ def _validate_instrument(instrument: Mapping[str, object]) -> None:
     _require_decimal(
         instrument["size_increment"], "instrument.size_increment", positive=True
     )
-    _require_decimal(
+    minimum_quantity = _require_decimal(
         instrument["minimum_quantity"], "instrument.minimum_quantity", positive=True
     )
-    _require_optional_decimal(
-        instrument["maximum_quantity"], "instrument.maximum_quantity"
+    maximum_quantity = _require_optional_decimal(
+        instrument["maximum_quantity"],
+        "instrument.maximum_quantity",
+        positive=True,
     )
     _require_optional_decimal(
-        instrument["minimum_notional"], "instrument.minimum_notional"
+        instrument["minimum_notional"],
+        "instrument.minimum_notional",
+        positive=True,
     )
+    if maximum_quantity is not None and maximum_quantity < minimum_quantity:
+        raise Stage4DemoEvidenceError(
+            "instrument.maximum_quantity is below instrument.minimum_quantity"
+        )
 
 
 def _validate_observations(observations: Mapping[str, object]) -> None:
@@ -883,10 +903,12 @@ def _require_decimal(value: object, context: str, *, positive: bool = False) -> 
     return parsed
 
 
-def _require_optional_decimal(value: object, context: str) -> Decimal | None:
+def _require_optional_decimal(
+    value: object, context: str, *, positive: bool = False
+) -> Decimal | None:
     if value is None:
         return None
-    return _require_decimal(value, context)
+    return _require_decimal(value, context, positive=positive)
 
 
 def _optional_decimal_value(value: object) -> Decimal | None:

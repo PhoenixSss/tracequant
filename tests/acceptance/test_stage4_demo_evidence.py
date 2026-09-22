@@ -31,6 +31,7 @@ from tracequant.integrations.nautilus.stage4_demo_evidence import (
     finalize_stage4_demo_acceptance,
     finalize_stage4_demo_evidence,
     new_stage4_demo_batch_id,
+    stage4_demo_evidence_digest,
     stage4_demo_partition_path,
     validate_stage4_demo_acceptance,
     validate_stage4_demo_evidence,
@@ -453,6 +454,81 @@ def test_failed_order_scenario_rejects_not_applicable_facts(
     target[classification_path[-1]] = "not_applicable"
     with pytest.raises(Stage4DemoEvidenceError, match="cannot mark"):
         finalize_stage4_demo_evidence(order_failure)
+
+
+@pytest.mark.parametrize(
+    ("scenario", "failure_code", "diagnostic_code", "order_changes"),
+    [
+        (
+            DemoEvidenceScenario.DEMO_STRATEGY.value,
+            "HANDLER_EXCEPTION",
+            "HANDLER_EXCEPTION",
+            {},
+        ),
+        (
+            DemoEvidenceScenario.EXEC_TESTER_MARKET_CLOSE.value,
+            "ORDER_REJECTED",
+            "ORDER_REJECTED",
+            {"accepted": False, "complete": False},
+        ),
+    ],
+)
+def test_required_failures_remain_truthful_after_successful_cleanup(
+    scenario: str,
+    failure_code: str,
+    diagnostic_code: str,
+    order_changes: dict[str, bool],
+) -> None:
+    payload = _evidence_payload(scenario)
+    payload["result"] = "FAIL"
+    payload["terminal_state"] = "HALTED"
+    payload["failure"] = {
+        "code": failure_code,
+        "phase": "execution",
+        "diagnostic_codes": [diagnostic_code],
+    }
+    if "accepted" in order_changes:
+        _nested(payload, "observations", "order")["accepted"] = order_changes[
+            "accepted"
+        ]
+    if "complete" in order_changes:
+        _nested(payload, "observations", "fill")["complete"] = order_changes["complete"]
+
+    evidence = finalize_stage4_demo_evidence(payload)
+
+    assert evidence["result"] == "FAIL"
+    assert evidence["terminal_state"] == "HALTED"
+    assert _nested(evidence, "cleanup")["classification"] == "consistent"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("maximum_quantity", "0"),
+        ("maximum_quantity", "-1"),
+        ("minimum_notional", "0"),
+        ("minimum_notional", "-1"),
+        ("maximum_quantity", "0.0001"),
+    ],
+)
+def test_pass_record_rejects_invalid_optional_instrument_constraints(
+    field: str, value: str
+) -> None:
+    payload = _evidence_payload(DemoEvidenceScenario.DATA_TESTER.value)
+    _nested(payload, "instrument")[field] = value
+
+    with pytest.raises(Stage4DemoEvidenceError, match=f"instrument\\.{field}"):
+        finalize_stage4_demo_evidence(payload)
+
+
+def test_batch_rejects_shared_impossible_instrument_constraints() -> None:
+    records = [_evidence(scenario) for scenario in SCENARIOS]
+    for record in records:
+        _nested(record, "instrument")["maximum_quantity"] = "0.0001"
+        record["evidence_digest"] = stage4_demo_evidence_digest(record)
+
+    with pytest.raises(Stage4DemoEvidenceError, match="maximum_quantity"):
+        validate_stage4_demo_evidence_batch(records)
 
 
 def test_evidence_schema_digest_json_and_redaction_are_exact_and_deterministic() -> (
