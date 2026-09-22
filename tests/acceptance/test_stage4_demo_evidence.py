@@ -354,6 +354,50 @@ def test_order_scenarios_require_their_frozen_fill_outcomes() -> None:
 
 
 @pytest.mark.parametrize(
+    ("observed", "allowed_min", "allowed_max"),
+    [
+        ("0", "0", "0"),
+        ("-0.01", "-0.02", "0"),
+    ],
+)
+def test_order_scenarios_require_positive_observed_initial_margin(
+    observed: str, allowed_min: str, allowed_max: str
+) -> None:
+    payload = _evidence_payload(DemoEvidenceScenario.DEMO_STRATEGY.value)
+    account_mode = _nested(payload, "observations", "account_mode")
+    account_mode["observed_initial_margin"] = observed
+    account_mode["allowed_initial_margin_min"] = allowed_min
+    account_mode["allowed_initial_margin_max"] = allowed_max
+
+    with pytest.raises(Stage4DemoEvidenceError, match="must be positive"):
+        finalize_stage4_demo_evidence(payload)
+
+    zero_lower_bound = _evidence_payload(DemoEvidenceScenario.DEMO_STRATEGY.value)
+    validate_stage4_demo_evidence(finalize_stage4_demo_evidence(zero_lower_bound))
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        DemoEvidenceScenario.EXEC_TESTER_PASSIVE_CANCEL.value,
+        DemoEvidenceScenario.DEMO_STRATEGY.value,
+    ],
+)
+def test_passive_order_scenarios_require_a_qualified_quote(scenario: str) -> None:
+    payload = _evidence_payload(scenario)
+    _nested(payload, "observations", "market_data")["quote_count"] = 0
+
+    with pytest.raises(Stage4DemoEvidenceError, match="at least one quote"):
+        finalize_stage4_demo_evidence(payload)
+
+    market_close = _evidence_payload(
+        DemoEvidenceScenario.EXEC_TESTER_MARKET_CLOSE.value
+    )
+    _nested(market_close, "observations", "market_data")["quote_count"] = 0
+    validate_stage4_demo_evidence(finalize_stage4_demo_evidence(market_close))
+
+
+@pytest.mark.parametrize(
     "classification_path",
     [
         ("observations", "order", "classification"),

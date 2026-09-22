@@ -92,6 +92,10 @@ SCENARIOS: Final = (
     "demo_strategy",
 )
 _ORDER_ENABLED_SCENARIOS: Final = SCENARIOS[1:]
+_PASSIVE_ORDER_SCENARIOS: Final = (
+    DemoEvidenceScenario.EXEC_TESTER_PASSIVE_CANCEL.value,
+    DemoEvidenceScenario.DEMO_STRATEGY.value,
+)
 _CLASSIFICATIONS: Final = (
     "consistent",
     "missing",
@@ -667,6 +671,10 @@ def _validate_terminal_contract(
                 "DataTester requires at least one quote and one trade"
             )
         return
+    if scenario in _PASSIVE_ORDER_SCENARIOS and market_data["quote_count"] == 0:
+        raise Stage4DemoEvidenceError(
+            "passive-order evidence requires at least one quote"
+        )
 
     for name in execution_names:
         observation = cast(Mapping[str, object], observations[name])
@@ -784,6 +792,8 @@ def _require_cleared_order_state(
     allowed_max = _optional_decimal_value(account["allowed_initial_margin_max"])
     if observed is None or allowed_min is None or allowed_max is None:
         raise Stage4DemoEvidenceError("initial-margin proof is incomplete")
+    if observed <= 0:
+        raise Stage4DemoEvidenceError("observed initial margin must be positive")
     if allowed_min > allowed_max or not allowed_min <= observed <= allowed_max:
         raise Stage4DemoEvidenceError(
             "observed initial margin is outside its allowed range"
