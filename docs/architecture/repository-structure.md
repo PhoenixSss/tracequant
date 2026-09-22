@@ -104,6 +104,7 @@ src/tracequant/
       stage4_demo.py
       stage4_demo_data.py
       stage4_demo_evidence.py
+      stage4_demo_execution.py
       strategies/
         __init__.py
         stage1_ma_cross.py
@@ -152,6 +153,15 @@ public Demo market data: it composes the official rc4 `DataTester` with one
 Binance USD-M Demo data client, observes only the locked instrument through the
 public cache, and writes one EvidenceV1 record to a fresh external partition.
 It creates no execution client and does not read credentials.
+`stage4_demo_execution.py` is the matching bounded order-enabled exception. It
+builds two independently admitted logical attempts from the official rc4
+`ExecTester`: one market-canary/exact-reduce-only-close attempt and one fresh
+canary followed by a single passive post-only accept/cancel attempt. Its plan is
+Demo-only, sequential, capped at one active or inflight order, and permits a
+failure-only exact cleanup phase only after terminal-order and zero-order proof.
+It adapts only Nautilus-owned public cache/account facts into one fresh external
+EvidenceV1 partition per attempt; it does not expose tester-only execution
+privilege to ordinary Strategy code or introduce a reusable orchestrator.
 `tracequant.research` owns
 read-only Polars views, time splits, the finite Stage 3 causal feature/label
 contract, and the LightGBM training/artifact/loading boundary over the stage 2
