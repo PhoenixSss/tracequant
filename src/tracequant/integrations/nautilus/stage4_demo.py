@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import re
 import subprocess
@@ -174,7 +175,18 @@ class FrozenDemoConfig:
         return self._payload_json
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
+class _DemoAdmissionBatchSeal:
+    """Module-owned binding for one prepared batch and its credentials."""
+
+    repository_root: Path = field(repr=False)
+    runtime: RuntimeIdentity
+    config: DemoConfig
+    frozen_config: FrozenDemoConfig
+    credentials: DemoCredentialSnapshot = field(repr=False)
+
+
+@dataclass(frozen=True, init=False)
 class DemoAdmissionBatch:
     """One runtime/config/credential snapshot shared by every batch attempt."""
 
@@ -187,6 +199,16 @@ class DemoAdmissionBatch:
         compare=False,
         hash=False,
     )
+    _seal: _DemoAdmissionBatchSeal = field(
+        repr=False,
+        compare=False,
+        hash=False,
+    )
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        raise Stage4DemoAdmissionError(
+            "Demo admission batches can only be created by the preparation gate"
+        )
 
 
 @dataclass(frozen=True, eq=False)
@@ -268,9 +290,8 @@ def prepare_demo_admission_batch(
     repository_root: Path,
     expected_runtime: RuntimeIdentity,
     config: DemoConfig,
-    environ: Mapping[str, str],
 ) -> DemoAdmissionBatch:
-    """Capture the one credential snapshot owned by a Stage 4 Demo batch."""
+    """Capture process-environment credentials for one Stage 4 Demo batch."""
     root = Path(repository_root).resolve()
     observed_runtime = capture_runtime_identity(root)
     return _prepare_captured_demo_admission_batch(
@@ -278,7 +299,7 @@ def prepare_demo_admission_batch(
         expected_runtime=expected_runtime,
         observed_runtime=observed_runtime,
         config=config,
-        environ=environ,
+        environ=os.environ,
     )
 
 
@@ -297,12 +318,12 @@ def _prepare_captured_demo_admission_batch(
     _validate_demo_config(config)
     credentials = _load_demo_credentials(environ)
     frozen_config = freeze_demo_config(config)
-    return DemoAdmissionBatch(
+    return _create_demo_admission_batch(
         repository_root=repository_root,
         runtime=observed_runtime,
         config=config,
         frozen_config=frozen_config,
-        _credentials=credentials,
+        credentials=credentials,
     )
 
 
@@ -312,20 +333,21 @@ def admit_current_demo_attempt(
     operator_token: str,
 ) -> AdmittedDemoAttempt:
     """Admit one attempt against the batch-owned credential/config snapshot."""
-    observed_runtime = capture_runtime_identity(batch.repository_root)
+    batch_seal = _validate_demo_admission_batch(batch)
+    observed_runtime = capture_runtime_identity(batch_seal.repository_root)
     _validate_runtime_constants(observed_runtime)
-    if observed_runtime != batch.runtime:
+    if observed_runtime != batch_seal.runtime:
         raise Stage4DemoAdmissionError("runtime identity drifted")
-    _validate_demo_config(batch.config)
-    if freeze_demo_config(batch.config) != batch.frozen_config:
+    _validate_demo_config(batch_seal.config)
+    if freeze_demo_config(batch_seal.config) != batch_seal.frozen_config:
         raise Stage4DemoAdmissionError("frozen Demo configuration drifted")
     if operator_token != OPERATOR_CONFIRMATION_TOKEN:
         raise Stage4DemoAdmissionError("operator confirmation gate is invalid")
     return _create_admitted_demo_attempt(
         runtime=observed_runtime,
-        config=batch.config,
-        frozen_config=batch.frozen_config,
-        credentials=batch._credentials,
+        config=batch_seal.config,
+        frozen_config=batch_seal.frozen_config,
+        credentials=batch_seal.credentials,
     )
 
 
@@ -378,6 +400,54 @@ def _create_admitted_demo_attempt(
     object.__setattr__(admission, "_credentials", credentials)
     object.__setattr__(admission, "_seal", seal)
     return admission
+
+
+def _create_demo_admission_batch(
+    *,
+    repository_root: Path,
+    runtime: RuntimeIdentity,
+    config: DemoConfig,
+    frozen_config: FrozenDemoConfig,
+    credentials: DemoCredentialSnapshot,
+) -> DemoAdmissionBatch:
+    """Create a sealed batch after the preparation gate has passed."""
+    seal = _DemoAdmissionBatchSeal(
+        repository_root=repository_root,
+        runtime=runtime,
+        config=config,
+        frozen_config=frozen_config,
+        credentials=credentials,
+    )
+    batch = object.__new__(DemoAdmissionBatch)
+    object.__setattr__(batch, "repository_root", repository_root)
+    object.__setattr__(batch, "runtime", runtime)
+    object.__setattr__(batch, "config", config)
+    object.__setattr__(batch, "frozen_config", frozen_config)
+    object.__setattr__(batch, "_credentials", credentials)
+    object.__setattr__(batch, "_seal", seal)
+    return batch
+
+
+def _validate_demo_admission_batch(
+    batch: DemoAdmissionBatch,
+) -> _DemoAdmissionBatchSeal:
+    """Reject batches not bound by the current module-owned preparation path."""
+    if type(batch) is not DemoAdmissionBatch:
+        raise Stage4DemoAdmissionError("Demo admission batch is invalid")
+    try:
+        seal = batch._seal
+    except AttributeError as error:
+        raise Stage4DemoAdmissionError("Demo admission batch is invalid") from error
+    if (
+        not isinstance(seal, _DemoAdmissionBatchSeal)
+        or batch.repository_root is not seal.repository_root
+        or batch.runtime is not seal.runtime
+        or batch.config is not seal.config
+        or batch.frozen_config is not seal.frozen_config
+        or batch._credentials is not seal.credentials
+    ):
+        raise Stage4DemoAdmissionError("Demo admission batch is invalid")
+    return seal
 
 
 def _validate_admitted_demo_attempt(admission: AdmittedDemoAttempt) -> None:

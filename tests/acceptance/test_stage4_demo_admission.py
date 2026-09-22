@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
+from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 from nautilus_trader.adapters.binance import (
@@ -34,6 +37,7 @@ from tracequant.integrations.nautilus.stage4_demo import (
     OPERATOR_CONFIRMATION_TOKEN,
     AdmittedDemoAttempt,
     DeadlinePhase,
+    DemoAdmissionBatch,
     DemoConfig,
     RuntimeIdentity,
     Stage4DemoAdmissionError,
@@ -118,12 +122,14 @@ def _admit(
     operator_token: str = OPERATOR_CONFIRMATION_TOKEN,
 ) -> None:
     repository_root, runtime = runtime_checkout
-    batch = prepare_demo_admission_batch(
-        repository_root=repository_root,
-        config=config,
-        expected_runtime=expected_runtime or runtime,
-        environ=VALID_ENVIRONMENT if environ is None else environ,
-    )
+    with patch.dict(
+        os.environ, VALID_ENVIRONMENT if environ is None else environ, clear=True
+    ):
+        batch = prepare_demo_admission_batch(
+            repository_root=repository_root,
+            config=config,
+            expected_runtime=expected_runtime or runtime,
+        )
     admit_current_demo_attempt(
         batch=batch,
         operator_token=operator_token,
@@ -202,16 +208,20 @@ def test_valid_admission_is_offline_stable_and_secret_free(
     runtime_checkout: tuple[Path, RuntimeIdentity],
 ) -> None:
     repository_root, runtime = runtime_checkout
-    batch = prepare_demo_admission_batch(
-        repository_root=repository_root,
-        config=DemoConfig(),
-        expected_runtime=runtime,
-        environ={
+    with patch.dict(
+        os.environ,
+        {
             **VALID_ENVIRONMENT,
             "BINANCE_API_KEY": "ignored-live-key",
             "BINANCE_API_SECRET": "ignored-live-secret",
         },
-    )
+        clear=True,
+    ):
+        batch = prepare_demo_admission_batch(
+            repository_root=repository_root,
+            config=DemoConfig(),
+            expected_runtime=runtime,
+        )
     admission = admit_current_demo_attempt(
         batch=batch,
         operator_token=OPERATOR_CONFIRMATION_TOKEN,
@@ -277,12 +287,12 @@ def test_execution_config_rejects_forged_or_replaced_admission(
     runtime_checkout: tuple[Path, RuntimeIdentity],
 ) -> None:
     repository_root, runtime = runtime_checkout
-    batch = prepare_demo_admission_batch(
-        repository_root=repository_root,
-        config=DemoConfig(),
-        expected_runtime=runtime,
-        environ=VALID_ENVIRONMENT,
-    )
+    with patch.dict(os.environ, VALID_ENVIRONMENT, clear=True):
+        batch = prepare_demo_admission_batch(
+            repository_root=repository_root,
+            config=DemoConfig(),
+            expected_runtime=runtime,
+        )
     admission = admit_current_demo_attempt(
         batch=batch,
         operator_token=OPERATOR_CONFIRMATION_TOKEN,
@@ -319,28 +329,77 @@ def test_execution_config_rejects_forged_or_replaced_admission(
         )
 
 
+def test_batch_credentials_only_come_from_process_environment(
+    runtime_checkout: tuple[Path, RuntimeIdentity],
+) -> None:
+    repository_root, runtime = runtime_checkout
+    alternate_source = {
+        DEMO_API_KEY_ENV: "alternate-key",
+        DEMO_API_SECRET_ENV: "alternate-secret",
+    }
+    unsafe_prepare = cast(Any, prepare_demo_admission_batch)
+
+    with patch.dict(os.environ, VALID_ENVIRONMENT, clear=True):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'environ'"):
+            unsafe_prepare(
+                repository_root=repository_root,
+                config=DemoConfig(),
+                expected_runtime=runtime,
+                environ=alternate_source,
+            )
+
+
+def test_batch_rejects_direct_construction_and_credential_replacement(
+    runtime_checkout: tuple[Path, RuntimeIdentity],
+) -> None:
+    repository_root, runtime = runtime_checkout
+    with patch.dict(os.environ, VALID_ENVIRONMENT, clear=True):
+        batch = prepare_demo_admission_batch(
+            repository_root=repository_root,
+            config=DemoConfig(),
+            expected_runtime=runtime,
+        )
+    alternate_credentials = stage4_demo.DemoCredentialSnapshot(
+        api_key="alternate-key",
+        api_secret="alternate-secret",
+    )
+
+    with pytest.raises(Stage4DemoAdmissionError, match="only be created"):
+        DemoAdmissionBatch(
+            repository_root=repository_root,
+            runtime=runtime,
+            config=DemoConfig(),
+            frozen_config=batch.frozen_config,
+            _credentials=alternate_credentials,
+        )
+    with pytest.raises(Stage4DemoAdmissionError, match="only be created"):
+        replace(batch, _credentials=alternate_credentials)
+
+
 def test_batch_snapshot_prevents_cross_attempt_credential_drift(
     runtime_checkout: tuple[Path, RuntimeIdentity],
 ) -> None:
     repository_root, runtime = runtime_checkout
-    environ = dict(VALID_ENVIRONMENT)
-    batch = prepare_demo_admission_batch(
-        repository_root=repository_root,
-        config=DemoConfig(),
-        expected_runtime=runtime,
-        environ=environ,
-    )
+    with patch.dict(os.environ, VALID_ENVIRONMENT, clear=True):
+        batch = prepare_demo_admission_batch(
+            repository_root=repository_root,
+            config=DemoConfig(),
+            expected_runtime=runtime,
+        )
     first = admit_current_demo_attempt(
         batch=batch,
         operator_token=OPERATOR_CONFIRMATION_TOKEN,
     )
 
-    environ[DEMO_API_KEY_ENV] = "drifted-key"
-    environ[DEMO_API_SECRET_ENV] = "drifted-secret"
-    second = admit_current_demo_attempt(
-        batch=batch,
-        operator_token=OPERATOR_CONFIRMATION_TOKEN,
-    )
+    with patch.dict(
+        os.environ,
+        {DEMO_API_KEY_ENV: "drifted-key", DEMO_API_SECRET_ENV: "drifted-secret"},
+        clear=True,
+    ):
+        second = admit_current_demo_attempt(
+            batch=batch,
+            operator_token=OPERATOR_CONFIRMATION_TOKEN,
+        )
 
     assert first._credentials is second._credentials
     assert first._credentials.api_key == VALID_ENVIRONMENT[DEMO_API_KEY_ENV]
@@ -351,21 +410,25 @@ def test_secret_bearing_objects_have_no_credential_derived_hash(
     runtime_checkout: tuple[Path, RuntimeIdentity],
 ) -> None:
     repository_root, runtime = runtime_checkout
-    first_batch = prepare_demo_admission_batch(
-        repository_root=repository_root,
-        config=DemoConfig(),
-        expected_runtime=runtime,
-        environ=VALID_ENVIRONMENT,
-    )
-    second_batch = prepare_demo_admission_batch(
-        repository_root=repository_root,
-        config=DemoConfig(),
-        expected_runtime=runtime,
-        environ={
+    with patch.dict(os.environ, VALID_ENVIRONMENT, clear=True):
+        first_batch = prepare_demo_admission_batch(
+            repository_root=repository_root,
+            config=DemoConfig(),
+            expected_runtime=runtime,
+        )
+    with patch.dict(
+        os.environ,
+        {
             DEMO_API_KEY_ENV: "other-key",
             DEMO_API_SECRET_ENV: "other-secret",
         },
-    )
+        clear=True,
+    ):
+        second_batch = prepare_demo_admission_batch(
+            repository_root=repository_root,
+            config=DemoConfig(),
+            expected_runtime=runtime,
+        )
     first = admit_current_demo_attempt(
         batch=first_batch,
         operator_token=OPERATOR_CONFIRMATION_TOKEN,
