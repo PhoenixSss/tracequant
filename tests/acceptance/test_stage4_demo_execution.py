@@ -28,6 +28,7 @@ from nautilus_trader.model import (
     PositionId,
     Price,
     Quantity,
+    StrategyId,
     Symbol,
 )
 
@@ -802,6 +803,126 @@ def test_stage4_demo_exec_canary_close_receives_exact_proof(
     assert evidence["result"] == "PASS"
 
 
+@pytest.mark.parametrize("residual", ["0.0005", "0.0035", "11.000"])
+def test_stage4_demo_exec_unrepresentable_canary_residual_persists_halted_record(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    residual: str,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.market_close
+    opening = replace(
+        stage4_demo_execution._failed_phase_snapshot(
+            started_at_ns=1,
+            failure=stage4_demo_execution.Stage4DemoExecFailure(
+                "CLEANUP_INCOMPLETE", "cleanup", ("OPEN_POSITION_REMAINS",)
+            ),
+        ),
+        order_submitted=True,
+        order_accepted=True,
+        order_terminal=True,
+        fill_partial=True,
+        open_position_count=1,
+        final_net_quantity=Decimal(residual),
+        unresolved_unknown_count=0,
+    )
+    phases: list[str] = []
+
+    async def run_phase(
+        _plan: Stage4DemoExecAttemptPlan,
+        _phase: object,
+        *,
+        phase_kind: str,
+        cleanup_authorization: object = None,
+        balance_baseline: Decimal | None = None,
+    ) -> stage4_demo_execution._ExecPhaseSnapshot:
+        del cleanup_authorization, balance_baseline
+        phases.append(phase_kind)
+        return opening
+
+    monkeypatch.setattr(stage4_demo_execution, "_run_exec_phase", run_phase)
+    outcome = stage4_demo_execution._run_and_persist_attempt(attempt)
+
+    assert phases == ["canary"]
+    assert outcome.evidence["terminal_state"] == "HALTED"
+    cleanup = cast(dict[str, object], outcome.evidence["cleanup"])
+    assert cleanup["classification"] == "cleanup_incomplete"
+    assert Decimal(str(cleanup["final_net_quantity"])) == Decimal(residual)
+    assert json.loads(outcome.evidence_path.read_text()) == outcome.evidence
+
+
+def test_stage4_demo_exec_unrepresentable_passive_residual_persists_halted_record(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.passive_cancel
+    opening = replace(
+        stage4_demo_execution._failed_phase_snapshot(
+            started_at_ns=1,
+            failure=stage4_demo_execution.Stage4DemoExecFailure(
+                "CLEANUP_INCOMPLETE", "cleanup", ("FAILED",)
+            ),
+        ),
+        order_submitted=True,
+        order_accepted=True,
+        order_terminal=True,
+        fill_complete=True,
+        open_position_count=1,
+        final_net_quantity=Decimal("0.001"),
+        account_mode=_observation(attempt.scenario).account_mode,
+        unresolved_unknown_count=0,
+        failure=None,
+    )
+    closing = replace(
+        opening,
+        open_position_count=0,
+        final_net_quantity=Decimal(0),
+        account_mode=None,
+    )
+    passive = replace(
+        opening,
+        fill_complete=False,
+        fill_partial=True,
+        open_position_count=1,
+        final_net_quantity=Decimal("0.0035"),
+        account_mode=None,
+        failure=stage4_demo_execution.Stage4DemoExecFailure(
+            "CANCEL_FILL_RACE", "execution", ("FAILED",)
+        ),
+    )
+    phases: list[str] = []
+
+    async def run_phase(
+        _plan: Stage4DemoExecAttemptPlan,
+        _phase: object,
+        *,
+        phase_kind: str,
+        cleanup_authorization: Stage4DemoCleanupAuthorization | None = None,
+        balance_baseline: Decimal | None = None,
+    ) -> stage4_demo_execution._ExecPhaseSnapshot:
+        del balance_baseline
+        phases.append(phase_kind)
+        if phase_kind == "canary":
+            return opening
+        if phase_kind == "cleanup":
+            assert cleanup_authorization is not None
+            return closing
+        return passive
+
+    monkeypatch.setattr(stage4_demo_execution, "_run_exec_phase", run_phase)
+    outcome = stage4_demo_execution._run_and_persist_attempt(attempt)
+
+    assert phases == ["canary", "cleanup", "passive"]
+    assert outcome.evidence["terminal_state"] == "HALTED"
+    failure = cast(dict[str, object], outcome.evidence["failure"])
+    cleanup = cast(dict[str, object], outcome.evidence["cleanup"])
+    assert failure["code"] == "CANCEL_FILL_RACE"
+    assert cleanup["classification"] == "cleanup_incomplete"
+    assert cleanup["final_net_quantity"] == "0.0035"
+    assert json.loads(outcome.evidence_path.read_text()) == outcome.evidence
+
+
 def test_stage4_demo_exec_failed_canary_never_starts_close_without_proof(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -972,15 +1093,14 @@ def test_stage4_demo_exec_cleanup_binds_current_position_and_actual_close_order(
         authorization,
     )
     position.quantity = Quantity.from_str("0.003")
-    position.strategy_id = stage4_demo_execution._require_phase_strategy_id(
-        attempt.phases[0]
-    )
+    position.strategy_id = StrategyId.from_str("EXTERNAL")
     assert not stage4_demo_execution._cleanup_cache_matches_authorization(
         cache,
         attempt,
         strategy_id,
         authorization,
     )
+    position.strategy_id = strategy_id
 
     # Reconciliation may retain the terminal entry order under the reused ID.
     entry_order = SimpleNamespace(is_reduce_only=False, is_closed=True)
@@ -1040,6 +1160,8 @@ def test_stage4_demo_exec_cleanup_node_has_no_stop_close_tester(
     cleanup_config = runtime.cleanup_strategy.config
     assert cleanup_config is not None
     assert cleanup_config.manage_stop is False
+    assert cleanup_config.external_order_claims == [attempt.instrument.id]
+    assert attempt.phases[0].tester_config.external_order_claims is None
     assert builtins == []
 
 

@@ -160,8 +160,12 @@ canary followed by a single passive post-only accept/cancel attempt. Its plan is
 Demo-only, sequential, capped at one active or inflight order. Each canary stops
 without automatic close; a private cleanup-only Nautilus Strategy submits the
 single exact reduce-only market order through public order APIs only after
-terminal-order, zero-order, and current-position proof. Its stop path cannot
-submit an order. Passive failure cleanup uses the same proof gate.
+terminal-order, zero-order, and current-position proof. The cleanup Strategy
+claims only the admitted instrument during fresh-node reconciliation so recovered
+orders and positions retain its Strategy ID; the current-state proof still gates
+the single close. Its stop path cannot submit an order. Passive failure cleanup
+uses the same proof gate. An unrepresentable residual leaves a HALTED record with
+cleanup_incomplete and its observed net quantity.
 Because rc4 registers the built-in tester before `LiveNode` starts, the entry
 freezes quantity and expected passive price from a qualified attempt-local public
 input before constructing the order-enabled node, then requires the runtime cache

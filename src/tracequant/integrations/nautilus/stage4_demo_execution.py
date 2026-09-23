@@ -50,6 +50,7 @@ from tracequant.integrations.nautilus.stage4_demo import (
     DemoAdmissionBatch,
     FrozenDemoConfig,
     RuntimeIdentity,
+    Stage4DemoAdmissionError,
     admit_current_demo_attempt,
     build_execution_client_config,
     exact_reduce_only_quantity,
@@ -317,11 +318,12 @@ class _ExactCleanupStrategy(Strategy):
         strategy_id: StrategyId,
         authorization: Stage4DemoCleanupAuthorization,
     ) -> _ExactCleanupStrategy:
-        del plan, authorization
+        del authorization
         return super().__new__(  # type: ignore[call-arg]
             cls,
             StrategyConfig(
                 strategy_id=strategy_id,
+                external_order_claims=[plan.instrument.id],
                 manage_stop=False,
                 log_events=False,
                 log_commands=False,
@@ -991,6 +993,27 @@ def prove_exact_cleanup_quantity(
     )
 
 
+def _possible_cleanup_authorization(
+    plan: Stage4DemoExecAttemptPlan,
+    snapshot: _ExecPhaseSnapshot,
+) -> Stage4DemoCleanupAuthorization | None:
+    if snapshot.unresolved_unknown_count != 0:
+        return None
+    try:
+        return prove_exact_cleanup_quantity(
+            plan,
+            original_order_terminal=snapshot.order_terminal,
+            active_order_count=snapshot.active_order_count,
+            inflight_order_count=snapshot.inflight_order_count,
+            open_position_count=snapshot.open_position_count,
+            net_position=snapshot.final_net_quantity,
+        )
+    except Stage4DemoAdmissionError:
+        # A partial fill may leave a known residual that cannot be closed exactly.
+        # Preserve its observed quantity in a HALTED record without placing an order.
+        return None
+
+
 async def _observe_stage4_demo_attempt(
     plan: Stage4DemoExecAttemptPlan,
 ) -> Stage4DemoExecObservation:
@@ -999,16 +1022,7 @@ async def _observe_stage4_demo_attempt(
         plan.phases[0],
         phase_kind="canary",
     )
-    authorization = None
-    if opening.unresolved_unknown_count == 0:
-        authorization = prove_exact_cleanup_quantity(
-            plan,
-            original_order_terminal=opening.order_terminal,
-            active_order_count=opening.active_order_count,
-            inflight_order_count=opening.inflight_order_count,
-            open_position_count=opening.open_position_count,
-            net_position=opening.final_net_quantity,
-        )
+    authorization = _possible_cleanup_authorization(plan, opening)
     if authorization is None:
         canary = replace(
             opening,
@@ -1039,14 +1053,7 @@ async def _observe_stage4_demo_attempt(
     else:
         execution = _skipped_phase_snapshot(canary)
 
-    cleanup_authorization = prove_exact_cleanup_quantity(
-        plan,
-        original_order_terminal=execution.order_terminal,
-        active_order_count=execution.active_order_count,
-        inflight_order_count=execution.inflight_order_count,
-        open_position_count=execution.open_position_count,
-        net_position=execution.final_net_quantity,
-    )
+    cleanup_authorization = _possible_cleanup_authorization(plan, execution)
     if (
         execution.failure is not None
         and execution.unresolved_unknown_count == 0
@@ -1577,12 +1584,15 @@ def _authorized_cleanup_position(
         return None
     position = positions[0]
     current = _signed_position_quantity(position)
-    if (
-        current is None
-        or current != authorization.signed_position
-        or exact_reduce_only_quantity(plan.instrument, current)
-        != authorization.quantity
-    ):
+    if current is None or current != authorization.signed_position:
+        return None
+    try:
+        if (
+            exact_reduce_only_quantity(plan.instrument, current)
+            != authorization.quantity
+        ):
+            return None
+    except Stage4DemoAdmissionError:
         return None
     return cast(Position, position)
 
