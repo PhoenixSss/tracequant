@@ -1134,6 +1134,7 @@ async def _run_exec_phase(
     failure: Stage4DemoExecFailure | None = None
     account_mode: Stage4DemoAccountModeObservation | None = None
     stop_requested = False
+    stop_failed = False
     market_input_conflicting = False
     market_sequence = _MarketTimestampSequence(
         quote_ns=plan.market_input.quote_ts_event_ns,
@@ -1222,13 +1223,15 @@ async def _run_exec_phase(
                     "ORDER_TIMEOUT", "execution", ("POSITION_UNKNOWN",)
                 ),
             )
-            query_at_ns = time.time_ns()
             previous_account_events = _account_event_count(cache)
             if runtime.account_query is None:
                 raise Stage4DemoExecutionError("account query strategy is missing")
             runtime.account_query.query_once()
+            query_at_ns = time.time_ns()
             await _wait_until(
-                lambda: _account_event_count(cache) > previous_account_events,
+                lambda: _account_query_event_is_fresh(
+                    cache, query_at_ns, previous_account_events
+                ),
                 deadline=stage4_demo.start_queue_deadline(DeadlinePhase.RECONCILIATION),
                 run_task=run_task,
                 failure=Stage4DemoExecFailure(
@@ -1250,8 +1253,14 @@ async def _run_exec_phase(
                 "execution",
                 ("FAILED",),
             )
-        handle.stop()
         stop_requested = True
+        try:
+            handle.stop()
+        except Exception as exc:
+            stop_failed = True
+            raise _Stage4DemoExecutionRuntimeError(
+                Stage4DemoExecFailure("CLEANUP_FAILED", "cleanup", ("FAILED",))
+            ) from exc
         if phase_kind == "passive":
             await _wait_after_stop(
                 lambda: _passive_cancel_complete(cache, plan, strategy_id),
@@ -1314,10 +1323,14 @@ async def _run_exec_phase(
     order_submission_unknown = (
         failure is not None and "ORDER_UNKNOWN" in failure.diagnostic_codes
     )
-    cleanup_failure = await _stop_exec_tester(
-        handle,
-        run_task,
-        request_stop=not stop_requested,
+    cleanup_failure = (
+        Stage4DemoExecFailure("CLEANUP_FAILED", "cleanup", ("FAILED",))
+        if stop_failed
+        else await _stop_exec_tester(
+            handle,
+            run_task,
+            request_stop=not stop_requested,
+        )
     )
     if cleanup_failure is not None:
         failure = cleanup_failure
@@ -1409,7 +1422,10 @@ async def _stop_exec_tester(
 ) -> Stage4DemoExecFailure | None:
     completed_before_stop = run_task.done()
     if request_stop:
-        handle.stop()
+        try:
+            handle.stop()
+        except Exception:
+            return Stage4DemoExecFailure("CLEANUP_FAILED", "cleanup", ("FAILED",))
     try:
         await asyncio.wait_for(
             run_task,
@@ -1651,6 +1667,27 @@ def _cleanup_action_matches(
     )
 
 
+def _account_query_event_is_fresh(
+    cache: Cache,
+    query_at_ns: int,
+    previous_account_events: int,
+) -> bool:
+    if _account_event_count(cache) <= previous_account_events:
+        return False
+    account = cache.account(AccountId.from_str(EXEC_ACCOUNT_ID))
+    event = getattr(account, "last_event", None) if account is not None else None
+    if callable(event):
+        event = event()
+    event_ts = getattr(event, "ts_event", None)
+    event_init = getattr(event, "ts_init", None)
+    return (
+        isinstance(event_ts, int)
+        and query_at_ns <= event_ts <= query_at_ns + _MAX_PRICE_AGE_NS
+        and isinstance(event_init, int)
+        and event_init >= query_at_ns
+    )
+
+
 def _capture_account_mode(
     cache: Cache,
     plan: Stage4DemoExecAttemptPlan,
@@ -1669,6 +1706,7 @@ def _capture_account_mode(
     if callable(event):
         event = event()
     event_ts = getattr(event, "ts_event", None)
+    event_init = getattr(event, "ts_init", None)
     info = getattr(event, "info", None)
     margins = getattr(event, "margins", None)
     target_margin_only = (
@@ -1683,7 +1721,9 @@ def _capture_account_mode(
     observed_margin: Decimal | None = None
     if (
         isinstance(event_ts, int)
-        and abs(event_ts - query_at_ns) <= _MAX_PRICE_AGE_NS
+        and query_at_ns <= event_ts <= query_at_ns + _MAX_PRICE_AGE_NS
+        and isinstance(event_init, int)
+        and event_init >= query_at_ns
         and isinstance(info, dict)
         and "total_initial_margin" in info
     ):

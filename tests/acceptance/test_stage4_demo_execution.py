@@ -526,9 +526,11 @@ def test_stage4_demo_exec_missing_canary_order_keeps_unknown_cleanup(
     assert cleanup["unresolved_unknown_count"] == 1
 
 
+@pytest.mark.parametrize("raise_on_stop", [False, True])
 def test_stage4_demo_exec_failed_canary_stop_cannot_auto_close_outstanding_order(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    raise_on_stop: bool,
 ) -> None:
     plan, _ = _plan(monkeypatch, tmp_path)
     attempt = plan.market_close
@@ -542,6 +544,8 @@ def test_stage4_demo_exec_failed_canary_stop_cannot_auto_close_outstanding_order
     def stop() -> None:
         stopped_with_auto_close.append(phase.tester_config.close_positions_on_stop)
         stop_event.set()
+        if raise_on_stop:
+            raise RuntimeError("stop failed")
 
     node = SimpleNamespace(
         cache=SimpleNamespace(
@@ -578,25 +582,30 @@ def test_stage4_demo_exec_failed_canary_stop_cannot_auto_close_outstanding_order
         open_position_count=1,
         final_net_quantity=Decimal("0.001"),
     )
-    monkeypatch.setattr(
-        stage4_demo_execution,
-        "_capture_phase_snapshot",
-        lambda *args, **kwargs: outstanding,
-    )
+    captured_stop_state: list[bool] = []
+
+    def capture(
+        *args: object, **kwargs: object
+    ) -> stage4_demo_execution._ExecPhaseSnapshot:
+        captured_stop_state.append(bool(kwargs["stop_unconfirmed"]))
+        return outstanding
+
+    monkeypatch.setattr(stage4_demo_execution, "_capture_phase_snapshot", capture)
 
     result = asyncio.run(
         stage4_demo_execution._run_exec_phase(attempt, phase, phase_kind="canary")
     )
     assert stopped_with_auto_close == [False]
+    assert captured_stop_state == [raise_on_stop]
     assert result.active_order_count == 1
     assert result.unresolved_unknown_count == 1
 
 
-@pytest.mark.parametrize("stop_unconfirmed", [False, True])
+@pytest.mark.parametrize("stop_behavior", ["normal", "unconfirmed", "raises"])
 def test_stage4_demo_exec_filled_canary_stops_with_position_for_exact_close(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    stop_unconfirmed: bool,
+    stop_behavior: str,
 ) -> None:
     plan, _ = _plan(monkeypatch, tmp_path)
     attempt = plan.market_close
@@ -650,9 +659,18 @@ def test_stage4_demo_exec_filled_canary_stops_with_position_for_exact_close(
         nonlocal account_events
         account_events += 1
 
+    stop_calls = 0
+
+    def stop() -> None:
+        nonlocal stop_calls
+        stop_calls += 1
+        stopped.set()
+        if stop_behavior == "raises":
+            raise RuntimeError("stop failed")
+
     node = SimpleNamespace(
         cache=cache,
-        handle=lambda: SimpleNamespace(is_running=True, stop=stopped.set),
+        handle=lambda: SimpleNamespace(is_running=True, stop=stop),
         run_async=run_async,
         dispose=lambda: disposed.append(True),
     )
@@ -670,6 +688,11 @@ def test_stage4_demo_exec_filled_canary_stops_with_position_for_exact_close(
     )
     monkeypatch.setattr(
         stage4_demo_execution,
+        "_account_query_event_is_fresh",
+        lambda cache, query_at_ns, previous: account_events > previous,
+    )
+    monkeypatch.setattr(
+        stage4_demo_execution,
         "_capture_account_mode",
         lambda *args: _observation(attempt.scenario).account_mode,
     )
@@ -679,7 +702,27 @@ def test_stage4_demo_exec_filled_canary_stops_with_position_for_exact_close(
         lambda *args, **kwargs: (1, Decimal("100")),
     )
 
-    if stop_unconfirmed:
+    if stop_behavior == "raises":
+
+        def no_cleanup(*args: object, **kwargs: object) -> None:
+            pytest.fail("a new cleanup node started after stop raised")
+
+        monkeypatch.setattr(
+            stage4_demo_execution, "_build_authorized_cleanup_runtime", no_cleanup
+        )
+        outcome = stage4_demo_execution._run_and_persist_attempt(attempt)
+        assert stop_calls == 1
+        assert stopped.is_set()
+        assert not disposed
+        assert outcome.evidence["terminal_state"] == "HALTED"
+        failure = cast(dict[str, object], outcome.evidence["failure"])
+        cleanup = cast(dict[str, object], outcome.evidence["cleanup"])
+        assert failure["code"] == "CLEANUP_FAILED"
+        assert cleanup["unresolved_unknown_count"] == 1
+        assert json.loads(outcome.evidence_path.read_text()) == outcome.evidence
+        return
+
+    if stop_behavior == "unconfirmed":
 
         async def failed_stop(
             *args: object, **kwargs: object
@@ -2207,6 +2250,68 @@ def test_stage4_demo_exec_rejects_inflated_caller_constraints_before_admission(
     validate_stage4_demo_evidence(record)
     assert record["result"] == "FAIL"
     assert record["failure"]["code"] == "DATA_INVALID"
+
+
+@pytest.mark.parametrize(
+    ("event_offset_ns", "init_offset_ns", "event_count", "expected"),
+    [
+        (-1, 1, 2, False),
+        (1, -1, 2, False),
+        (1, 1, 1, False),
+        (1, 1, 2, True),
+    ],
+)
+def test_stage4_demo_exec_account_query_requires_post_query_event(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    event_offset_ns: int,
+    init_offset_ns: int,
+    event_count: int,
+    expected: bool,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.market_close
+    query_at_ns = time.time_ns()
+    event = SimpleNamespace(
+        ts_event=query_at_ns + event_offset_ns,
+        ts_init=query_at_ns + init_offset_ns,
+        info={"total_initial_margin": "50.00"},
+        margins=[SimpleNamespace(instrument_id=attempt.instrument.id)],
+    )
+    position = SimpleNamespace(id="BTCUSDT-BINANCE-001")
+    cache = cast(
+        Cache,
+        SimpleNamespace(
+            account=lambda *args: SimpleNamespace(
+                event_count=event_count, last_event=event
+            ),
+            positions_open=lambda **kwargs: [position],
+            orders_open=lambda: [],
+            orders_open_count=lambda: 0,
+            orders_inflight_count=lambda: 0,
+            orders=lambda: [],
+            mark_prices=lambda *args: [
+                SimpleNamespace(
+                    instrument_id=attempt.instrument.id,
+                    ts_event=query_at_ns,
+                    value=Price.from_str("50000.00"),
+                )
+            ],
+        ),
+    )
+    assert (
+        stage4_demo_execution._account_query_event_is_fresh(cache, query_at_ns, 1)
+        is expected
+    )
+    observed = stage4_demo_execution._capture_account_mode(cache, attempt, query_at_ns)
+    assert (observed.observed_initial_margin is not None) is (
+        event_offset_ns >= 0 and init_offset_ns >= 0
+    )
+    if not expected:
+        assert not (
+            stage4_demo_execution._account_query_event_is_fresh(cache, query_at_ns, 1)
+            and stage4_demo_execution._account_mode_complete(attempt, observed)
+        )
 
 
 def test_stage4_demo_exec_canary_rejects_numeric_two_x_before_passive(
