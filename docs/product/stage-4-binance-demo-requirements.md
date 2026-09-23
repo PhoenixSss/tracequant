@@ -29,4 +29,4 @@
 
 DataTester、ExecTester、双方向交易、post-only limit/cancel、四场景矩阵、batch 聚合、EvidenceV1/digest、全流行情证明、通用恢复、soak、阶段 3 模型与 Live 授权均不是本阶段完成条件。固定 rc4 无法给出的 typed venue 回执也不是成功条件。
 
-实施由 [#397](https://github.com/PhoenixSss/tracequant/issues/397) 撤回旧代码、[#390](https://github.com/PhoenixSss/tracequant/issues/390) 实现单 Strategy、[#391](https://github.com/PhoenixSss/tracequant/issues/391) 实际运行和记录依次完成。历史 #385–#389 不构成新的前置矩阵。
+旧代码已由 [#397](https://github.com/PhoenixSss/tracequant/issues/397) 撤回。当前交付依次为 [#399](https://github.com/PhoenixSss/tracequant/issues/399) 实现单 Strategy、[#400](https://github.com/PhoenixSss/tracequant/issues/400) 在合并后的 main 实际运行和核对。历史 #385–#391 不构成新的前置矩阵。
