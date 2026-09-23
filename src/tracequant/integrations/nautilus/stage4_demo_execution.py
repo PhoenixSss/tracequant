@@ -1158,6 +1158,19 @@ async def _run_exec_phase(
                     "ORDER_TIMEOUT", "execution", ("ORDER_UNKNOWN",)
                 ),
             )
+        elif phase_kind == "canary":
+            await _wait_after_stop(
+                lambda: _canary_stop_complete(cache, plan, strategy_id),
+                deadline=stage4_demo.start_queue_deadline(
+                    DeadlinePhase.MARKET_OR_REDUCE_ONLY_FILL
+                ),
+                run_task=run_task,
+                failure=Stage4DemoExecFailure(
+                    "CLEANUP_INCOMPLETE",
+                    "cleanup",
+                    ("UNRESOLVED_UNKNOWN",),
+                ),
+            )
         else:
             await _wait_after_stop(
                 lambda: _cleanup_complete(cache, plan, strategy_id),
@@ -1337,7 +1350,7 @@ def _market_ready(
     ):
         return False
     if quote.ts_event < sequence.quote_ns or mark.ts_event < sequence.mark_ns:
-        raise Stage4DemoExecutionError("market timestamp moved backward")
+        raise _RuntimeMarketConflict("market timestamp moved backward")
     sequence.quote_ns = quote.ts_event
     sequence.mark_ns = mark.ts_event
     observed_at_ns = time.time_ns()
@@ -1397,6 +1410,18 @@ def _canary_filled(
         and _canary_open_order_matches(orders[0], plan.canary_quantity)
         and len(positions) == 1
         and _signed_position_quantity(positions[0]) == plan.canary_quantity.as_decimal()
+    )
+
+
+def _canary_stop_complete(
+    cache: Cache,
+    plan: Stage4DemoExecAttemptPlan,
+    strategy_id: StrategyId,
+) -> bool:
+    return (
+        _canary_filled(cache, plan, strategy_id)
+        and cache.orders_open_count(instrument_id=plan.instrument.id) == 0
+        and cache.orders_inflight_count(instrument_id=plan.instrument.id) == 0
     )
 
 
