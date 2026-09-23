@@ -674,6 +674,7 @@ def _neutral_execution_observations() -> dict[str, object]:
         "account_mode": {
             "classification": not_applicable,
             "operator_gate_confirmed": False,
+            "config_requested": False,
             "canary_complete": False,
             "one_way_confirmed": False,
             "isolated_confirmed": False,

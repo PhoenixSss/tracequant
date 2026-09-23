@@ -104,6 +104,7 @@ def _observations(scenario: str) -> dict[str, object]:
             "account_mode": {
                 "classification": "not_applicable",
                 "operator_gate_confirmed": False,
+                "config_requested": False,
                 "canary_complete": False,
                 "one_way_confirmed": False,
                 "isolated_confirmed": False,
@@ -150,13 +151,14 @@ def _observations(scenario: str) -> dict[str, object]:
         "account_mode": {
             "classification": "consistent",
             "operator_gate_confirmed": True,
+            "config_requested": True,
             "canary_complete": True,
-            "one_way_confirmed": True,
-            "isolated_confirmed": True,
-            "leverage_one_confirmed": True,
-            "observed_initial_margin": "0.01",
-            "allowed_initial_margin_min": "0",
-            "allowed_initial_margin_max": "0.02",
+            "one_way_confirmed": False,
+            "isolated_confirmed": False,
+            "leverage_one_confirmed": False,
+            "observed_initial_margin": None,
+            "allowed_initial_margin_min": None,
+            "allowed_initial_margin_max": None,
         },
     }
 
@@ -354,27 +356,19 @@ def test_order_scenarios_require_their_frozen_fill_outcomes() -> None:
             finalize_stage4_demo_evidence(required_fill)
 
 
-@pytest.mark.parametrize(
-    ("observed", "allowed_min", "allowed_max"),
-    [
-        ("0", "0", "0"),
-        ("-0.01", "-0.02", "0"),
-    ],
-)
-def test_order_scenarios_require_positive_observed_initial_margin(
-    observed: str, allowed_min: str, allowed_max: str
-) -> None:
+def test_order_scenarios_keep_unproved_rc4_mode_fields_false() -> None:
     payload = _evidence_payload(DemoEvidenceScenario.DEMO_STRATEGY.value)
     account_mode = _nested(payload, "observations", "account_mode")
-    account_mode["observed_initial_margin"] = observed
-    account_mode["allowed_initial_margin_min"] = allowed_min
-    account_mode["allowed_initial_margin_max"] = allowed_max
+    validate_stage4_demo_evidence(finalize_stage4_demo_evidence(payload))
 
-    with pytest.raises(Stage4DemoEvidenceError, match="must be positive"):
-        finalize_stage4_demo_evidence(payload)
+    for key in ("one_way_confirmed", "isolated_confirmed", "leverage_one_confirmed"):
+        forged = _evidence_payload(DemoEvidenceScenario.DEMO_STRATEGY.value)
+        _nested(forged, "observations", "account_mode")[key] = True
+        with pytest.raises(Stage4DemoEvidenceError, match="unproved"):
+            finalize_stage4_demo_evidence(forged)
 
-    zero_lower_bound = _evidence_payload(DemoEvidenceScenario.DEMO_STRATEGY.value)
-    validate_stage4_demo_evidence(finalize_stage4_demo_evidence(zero_lower_bound))
+    account_mode["observed_initial_margin"] = "0.01"
+    validate_stage4_demo_evidence(finalize_stage4_demo_evidence(payload))
 
 
 @pytest.mark.parametrize(

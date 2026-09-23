@@ -2,9 +2,9 @@
 
 | 字段 | 值 |
 | --- | --- |
-| 文档状态 | v1.0 实施候选 |
-| 文档版本 | `v1.0` |
-| 日期 | `2026-09-22` |
+| 文档状态 | v1.1 rc4 能力收敛 |
+| 文档版本 | `v1.1` |
+| 日期 | `2026-09-24` |
 | Feature | [#384](https://github.com/PhoenixSss/tracequant/issues/384) |
 | 固定运行时 | NautilusTrader `2.0.0rc4` / `a0400251110653b6d8ae6a9b5b89c4543fa85a2d` |
 | 产品状态 | `DEMO_ONLY`、`LIVE_NOT_APPROVED` |
@@ -45,11 +45,10 @@ primary/applicable 要求；达到自己的 Critical Outcome 与 Acceptance Crit
 任一不符都在联网前 `HALTED`。阶段 4 不要求逐文件 source/wheel manifest、import-origin 扫描、
 pycache 禁令、wheel `RECORD` 全量复验、installed-tree digest 或 provisioning attestation。
 
-### 1.2 账户模式准入与行为确认
+### 1.2 账户模式准入与公开事实核对
 
-每个 order-enabled **attempt** 是一个逻辑场景，从 operator/config gate 开始，到该场景终态结束；
-它可以与其他 attempt 位于同一或不同 process/LiveNode，但不得继承另一个 attempt 的账户模式证据。
-创建 client 前必须：
+每个 order-enabled **attempt** 是独立逻辑场景，从 operator/config gate 到该场景终态；
+不得继承另一个 attempt 的 gate 或 account observations。创建 client 前必须：
 
 1. 操作者刚刚在 Demo UI 确认 one-way、`BTCUSDT` isolated、1x、flat、零活动订单，并为本
    attempt 提供精确 token `ONE_WAY_ISOLATED_1X_FLAT_CONFIRMED`；token 不得默认、缓存或复用；
@@ -58,29 +57,29 @@ pycache 禁令、wheel `RECORD` 全量复验、installed-tree digest 或 provisi
    `use_position_ids=true`，且 endpoint 无 override；
 3. 本 attempt 使用 batch owner 提供的 credential snapshot，entry 不得覆盖。
 
-rc4 的 margin-type 配置失败会阻止连接，但 leverage 业务拒绝只产生 warning；hedge-mode 查询也没有
-公开 typed admission result。因此 gate/config 只允许一个最小 market canary，不能支持成功。
-每个 attempt 必须以自己的 canary 完整成交，并在继续正常场景订单前用正常 Nautilus surface 确认：
+上述是操作者确认和请求配置，不是交易所模式成功回执。固定 rc4 的 margin-type 配置失败会
+阻止连接，但 leverage 业务拒绝只产生 warning，hedge-mode 查询没有公开 typed admission result；
+`query_account` 产生的异步 `AccountState` 也没有可关联到本次请求的 ID。因此不能以
+warning 缺席、一个净持仓或查询后的 margin 数值自动证明 venue one-way/isolated/1x。
 
-- **one-way**：cache order/position observations 只出现一个净 position，不出现
-  `...-LONG`/`...-SHORT` hedge leg；缺失 identity 或 observation 不完整不能算确认；
-- **isolated**：固定 margin config 成功连接，且 canary 期间只有目标 instrument 的唯一 position，
-  无其他 order/position 或 margin owner；
-- **1x**：canary terminal 且无其他 order/position 后公开 `query_account`，读取随后
-  `AccountState.info["total_initial_margin"]`。请求前后 5 秒内的合格 mark price 构成区间，
-  相对价差不超过 0.5%；observed initial margin 必须落在
-  `abs(quantity) * [mark_min, mark_max]`，允许两端各扩展
-  `abs(quantity) * price_increment + one_currency_quantum`；`one_currency_quantum` 是 rc4 public
-  USDT currency precision 的一个最小单位。
+每个 attempt 仍须用自己的最小 market canary 完整成交，并在继续场景订单前核对公开事实：
+当前 cache 中仅有目标 instrument 的一个净持仓，不出现 `...-LONG`/`...-SHORT` hedge leg；
+没有其他 active/inflight order 或已观察到的其他 margin owner。任一实际观察到的冲突、
+缺失的必要订单/持仓身份或无法确定的 exposure 均 `HALTED`，只允许 §5 有证明的清场。
+可记录 `AccountState.info["total_initial_margin"]` 与 mark price 作诊断，但其未关联的数值
+既不证明 1x，也不单独作为 PASS 前置条件。没有 margin event 本身不构成模式冲突。
+canary 清平后才继续本场景；ExecTester market、ExecTester passive、Strategy 各自独立。
 
-确认后立即以 exact reduce-only quantity 清平 canary。任一确认失败都进入不可逆 `HALTED`，只允许
-§5 安全清场。ExecTester market、ExecTester passive、Strategy 各是独立 attempt：passive attempt
-在自己的 passive order 前也必须完成自己的 canary/确认/清平，不能引用或复制 market attempt 的值。
+EvidenceV1 的 `operator_gate_confirmed`、`config_requested` 和 `canary_complete` 分别表达
+操作者确认、已请求固定配置和当次 canary 完整成交。固定 rc4 不提供 typed venue 回执，
+所以 `one_way_confirmed`、`isolated_confirmed`、`leverage_one_confirmed` 不得设为 `true`；
+这些字段保持 `false` 表示未证实，不把它们当成可忽略的实际冲突。`account_mode.classification`
+为 `consistent` 只表示上述准入与公开观察互不矛盾，不表示 venue 已确认模式。
 
-`BinanceExecutionClientConfig.account_id` 是调用方别名，不是 Binance 认证身份，不能用来证明
-account 相同。batch 内单 account 由同一 credential snapshot、禁止 entry override 和 attempt-local
-gate 保证；credential 不做 hash/HMAC，不写入证据。不得解析 warning、读取 private/Rust client 或
-创建 raw Binance REST/WebSocket client 替代上述确认。
+`BinanceExecutionClientConfig.account_id` 是调用方别名，不是 Binance 认证身份。batch 内同一
+account 由同一 credential snapshot、禁止 entry override 和 attempt-local gate 约束；credential
+不做 hash/HMAC，不写入证据。不得解析 warning、读取 private/Rust client 或创建 raw Binance
+REST/WebSocket client 来制造模式确认。
 
 ### 1.3 Quantity 与价格输入
 
@@ -98,7 +97,8 @@ gate 保证；credential 不做 hash/HMAC，不写入证据。不得解析 warni
   使 attempt `HALTED`，不得改量重发。
 
 quote/mark 必须属于目标 instrument、价格为正，`ts_event` 不得比当前 UTC 快超过 1 秒，检查时
-年龄不超过 5 秒，且本 stream 内 timestamp 不倒退。提交前的 price-readiness deadline 为 10 秒；
+年龄不超过 5 秒。入口实际消费或记录的同一 stream 样本 timestamp 不得倒退；
+这不声称覆盖未被入口观察的全量行情流。提交前的 price-readiness deadline 为 10 秒；
 过期输入必须在原 deadline 内替换，不能重启 deadline。
 
 锁定的 rc4 `ExecTester` 是本边界的特例：其 built-in strategy 只能在 `LiveNode` 启动前注册，
@@ -106,10 +106,12 @@ quote/mark 必须属于目标 instrument、价格为正，`ts_event` 不得比�
 在同一 callback 前插入 policy gate 的 public hook。因而 ExecTester 的“提交前 price readiness”
 特指：创建 order-enabled node 前，入口必须在上述 10 秒 deadline 内取得并验证本 attempt 的
 public instrument/quote/mark input，并只从该 input 冻结 tester quantity 与预期 passive price。
-node 启动后的 cache observation 不是第二个放行 gate，而是强制一致性证明：runtime instrument
-constraints 必须相同，quote/mark 必须仍合格，按 runtime price 重新计算的最小 quantity 必须等于
-冻结 quantity，且缓存中的实际 order 必须逐项匹配预期 side、type、quantity、price、
-`reduce_only` 与 terminal status。任一漂移均为 `conflicting/HALTED`，禁止重发，只可按 §5 清场。
+node 启动后的 cache observation 不是第二个放行 gate，而是强制一致性核对：runtime instrument
+constraints 必须相同，实际观察到的 quote/mark 必须仍合格且相对于已接纳样本不倒退，按 runtime
+price 重新计算的最小 quantity 必须等于冻结 quantity，缓存中的实际 order 必须逐项匹配预期
+side、type、quantity、price、`reduce_only` 与 terminal status。就绪后直至终态仍须把实际观察
+到的最终 quote/mark 与已接纳 timestamp 比较；回退、缺失或其他漂移均为 `conflicting/HALTED`，
+禁止重发，只可按 §5 清场。未观察的中间行情不作全流单调性声明。
 该特例不适用于 §4.3 Strategy；Strategy 仍须在自己的 handler 内先通过 readiness gate 再提交。
 
 reduce-only cleanup 不复用开仓最小量公式。它只在原订单 terminal、零 active/inflight 且净持仓
@@ -125,7 +127,7 @@ constraints；不得取整、放大或应用 `MIN_NOTIONAL`。构造前 position
 | `ST4-REQ-001` | 所有入口执行 §1.1 最小 runtime identity；漂移时联网前失败。 |
 | `ST4-REQ-002` | 唯一环境、endpoint 与凭据来源遵循 §1。 |
 | `ST4-REQ-003` | 单 instrument/account、one-way、isolated、1x、最多一个 active/inflight order。 |
-| `ST4-REQ-004` | 每个 order-enabled attempt 执行自己的 operator/config gate、canary 和 §1.2 行为确认。 |
+| `ST4-REQ-004` | 每个 order-enabled attempt 执行自己的 operator/config gate、canary 和 §1.2 公开事实核对；不要求 rc4 不提供的 typed venue 确认。 |
 | `ST4-REQ-005` | 正常 quantity 与 exact reduce-only cleanup 遵循 §1.3。 |
 | `ST4-REQ-006` | 全部阶段使用 §3 固定 deadline，不提供 override。 |
 | `ST4-REQ-007` | 核对只用 rc4 public cache/callback/account observations，不建立第二 owner。 |
@@ -183,9 +185,9 @@ process、LiveNode、tester-instance 或 reconciliation component 数量。
 两个逻辑 attempt：
 
 1. **`exec_tester_market_close`**：用唯一 market buy 作为本 attempt canary；完整成交后执行
-   §1.2 模式确认，再以 exact reduce-only market sell 清平。
+   §1.2 公开事实核对，再以 exact reduce-only market sell 清平。
 2. **`exec_tester_passive_cancel`**：先在本 attempt 内以官方 tester 完成自己的最小 market
-   canary、§1.2 确认和 exact reduce-only 清平；随后提交唯一 post-only limit buy，价格为
+   canary、§1.2 公开事实核对和 exact reduce-only 清平；随后提交唯一 post-only limit buy，价格为
    best bid 低一个 increment，accepted 后请求 cancel，最终证明 canceled、零 fill、零 position。
 
 两个 attempt 使用独立逻辑 partition/record，但可在同一或不同 runtime topology 顺序执行。
@@ -202,7 +204,7 @@ Strategy 只通过 Nautilus public Strategy/order API，按以下顺序前进：
 ```text
 ready
   -> market long complete fill (本 attempt canary)
-  -> account-mode confirmed
+  -> public account/position facts consistent
   -> reduce-only long close -> flat
   -> market short complete fill
   -> reduce-only short close -> flat
@@ -274,7 +276,7 @@ diagnostic、设置 submission-inhibit latch、进入 `HALTED`。一个确定性
 
 分类只允许：
 
-- `consistent`：所需事实齐全且相互一致；
+- `consistent`：rc4 可得的所需事实齐全且相互一致；账户模式不借此宣称 typed venue 回执；
 - `missing`：required fact 未出现；
 - `conflicting`：公开 facts 对同一状态不一致；
 - `unknown`：无法证明 terminal、order ownership 或 position；
@@ -355,6 +357,7 @@ EvidenceV1 = {
     account_mode: {
       classification,
       operator_gate_confirmed,
+      config_requested,
       canary_complete,
       one_way_confirmed,
       isolated_confirmed,
@@ -378,7 +381,10 @@ EvidenceV1 = {
 ```
 
 `classification` 使用 §6 枚举。DataTester 的 execution/account-mode/cleanup 分类为
-`not_applicable`；三个 order-enabled records 的这些分类不得为 `not_applicable`。成功必须
+`not_applicable` 且 account-mode 布尔字段全为 `false`；三个 order-enabled records 的这些分类
+不得为 `not_applicable`。其 PASS 只要求 `operator_gate_confirmed`、`config_requested`、
+`canary_complete` 为 `true`，三个 venue `*_confirmed` 字段必须为 `false`；initial-margin 字段
+仅为可选、未关联的诊断信息，不要求有值或落在推断区间内。成功必须
 `PASS/COMPLETE`、failure 为 null、required classifications 为 `consistent`、零
 active/pending/open/unknown 且 final net quantity 为 `"0"`。失败必须
 `FAIL/HALTED` 且包含 failure；实际 count 不得伪造成成功。
@@ -450,7 +456,7 @@ AcceptanceV1 = {
 | `ST4-EVID-004` | 原始证据写入四个新逻辑 partitions；batch ID 防止跨批拼接且不派生自 credential。 |
 | `ST4-EVID-005` | identity/config/batch drift 或 record digest 错误拒绝聚合。 |
 | `ST4-EVID-006` | DataTester record 只含 data/instrument/timestamp 结果。 |
-| `ST4-EVID-007` | 两个 ExecTester records 各含本 attempt 自有 mode canary、execution 与 cleanup 结果。 |
+| `ST4-EVID-007` | 两个 ExecTester records 各含本 attempt 自有 operator/config、mode canary、公开观察、execution 与 cleanup 结果；不伪称 venue 模式确认。 |
 | `ST4-EVID-008` | Strategy record 绑定固定状态序列、handler protection 与最终 reconciliation。 |
 | `ST4-EVID-009` | acceptance 聚合四个 record 并声明 `LIVE_NOT_APPROVED`。 |
 | `ST4-EVID-010` | 失败或未清场不创建/覆盖成功 record；同一 payload digest 稳定。 |

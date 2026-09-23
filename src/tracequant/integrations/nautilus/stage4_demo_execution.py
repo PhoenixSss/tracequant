@@ -78,7 +78,6 @@ _EXEC_NODE_NAME: Final = "TRACEQUANT-STAGE4-EXEC-TESTER"
 _EXEC_TRADER_ID: Final = "TRACEQUANT-001"
 _FUTURE_TOLERANCE_NS: Final = 1_000_000_000
 _MAX_PRICE_AGE_NS: Final = 5_000_000_000
-_MAX_MARK_SPREAD_TEXT: Final = "0.005"
 _POLL_INTERVAL_SECONDS: Final = 0.05
 _EXEC_DEADLINE_PHASES: Final = (
     DeadlinePhase.CONNECT,
@@ -180,8 +179,8 @@ class Stage4DemoAccountModeObservation:
 
     operator_gate_confirmed: bool
     canary_complete: bool
-    one_way_confirmed: bool
-    isolated_confirmed: bool
+    net_position_shape_consistent: bool
+    account_scope_consistent: bool
     observed_initial_margin: Decimal | None
     mark_price_min: Decimal | None
     mark_price_max: Decimal | None
@@ -291,29 +290,6 @@ class _MarketTimestampSequence:
     mark_ns: int
 
 
-class _AccountQueryProbe(Strategy):
-    """Private query-only Strategy; it has no order-construction path."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            StrategyConfig(
-                strategy_id=StrategyId.from_str("STAGE4-ACCOUNT-QUERY-001"),
-                log_events=False,
-                log_commands=False,
-            )
-        )
-        self._query_requested = False
-
-    def query_once(self) -> None:
-        if self._query_requested:
-            raise Stage4DemoExecutionError("account query cannot be repeated")
-        self._query_requested = True
-        self.query_account(
-            AccountId.from_str(EXEC_ACCOUNT_ID),
-            ClientId.from_str(EXEC_CLIENT_NAME),
-        )
-
-
 class _ExactCleanupStrategy(Strategy):
     """Private one-shot close for an already proven ExecTester position."""
 
@@ -389,7 +365,6 @@ class _ExactCleanupStrategy(Strategy):
 @dataclass(frozen=True)
 class _ExecTesterRuntime:
     node: LiveNode
-    account_query: _AccountQueryProbe | None = None
     cleanup_strategy: _ExactCleanupStrategy | None = None
 
 
@@ -707,6 +682,7 @@ def _persist_preparation_failure(
             "account_mode": {
                 "classification": missing,
                 "operator_gate_confirmed": True,
+                "config_requested": True,
                 "canary_complete": False,
                 "one_way_confirmed": False,
                 "isolated_confirmed": False,
@@ -756,17 +732,11 @@ def build_stage4_demo_exec_evidence(
     if observation.instrument.id != plan.instrument.id:
         raise Stage4DemoExecutionError("observation instrument does not match its plan")
 
-    allowed_margin = _allowed_initial_margin(plan, observation.account_mode)
     account_consistent = (
         observation.account_mode.operator_gate_confirmed
         and observation.account_mode.canary_complete
-        and observation.account_mode.one_way_confirmed
-        and observation.account_mode.isolated_confirmed
-        and allowed_margin is not None
-        and observation.account_mode.observed_initial_margin is not None
-        and allowed_margin[0]
-        <= observation.account_mode.observed_initial_margin
-        <= allowed_margin[1]
+        and observation.account_mode.net_position_shape_consistent
+        and observation.account_mode.account_scope_consistent
     )
     market_consistent = (
         observation.quote_count > 0
@@ -878,19 +848,16 @@ def build_stage4_demo_exec_evidence(
                 observation.account_mode.canary_complete,
             ),
             "operator_gate_confirmed": observation.account_mode.operator_gate_confirmed,
+            "config_requested": True,
             "canary_complete": observation.account_mode.canary_complete,
-            "one_way_confirmed": observation.account_mode.one_way_confirmed,
-            "isolated_confirmed": observation.account_mode.isolated_confirmed,
-            "leverage_one_confirmed": account_consistent,
+            "one_way_confirmed": False,
+            "isolated_confirmed": False,
+            "leverage_one_confirmed": False,
             "observed_initial_margin": _optional_decimal_text(
                 observation.account_mode.observed_initial_margin
             ),
-            "allowed_initial_margin_min": (
-                _decimal_text(allowed_margin[0]) if allowed_margin is not None else None
-            ),
-            "allowed_initial_margin_max": (
-                _decimal_text(allowed_margin[1]) if allowed_margin is not None else None
-            ),
+            "allowed_initial_margin_min": None,
+            "allowed_initial_margin_max": None,
         },
     }
     payload: dict[str, object] = {
@@ -1223,24 +1190,10 @@ async def _run_exec_phase(
                     "ORDER_TIMEOUT", "execution", ("POSITION_UNKNOWN",)
                 ),
             )
-            previous_account_events = _account_event_count(cache)
-            if runtime.account_query is None:
-                raise Stage4DemoExecutionError("account query strategy is missing")
-            runtime.account_query.query_once()
-            query_at_ns = time.time_ns()
-            await _wait_until(
-                lambda: _account_query_event_is_fresh(
-                    cache, query_at_ns, previous_account_events
-                ),
-                deadline=stage4_demo.start_queue_deadline(DeadlinePhase.RECONCILIATION),
-                run_task=run_task,
-                failure=Stage4DemoExecFailure(
-                    "TERMINAL_FACT_UNKNOWN",
-                    "account_mode",
-                    ("ACCOUNT_MODE_UNKNOWN",),
-                ),
-            )
-            account_mode = _capture_account_mode(cache, plan, query_at_ns)
+            # rc4 AccountState has no request correlation ID. Inspect public
+            # facts without treating an asynchronous account event as a typed
+            # venue-mode acknowledgement.
+            account_mode = _capture_account_mode(cache, plan, time.time_ns())
             if not _account_mode_complete(plan, account_mode):
                 failure = Stage4DemoExecFailure(
                     "TERMINAL_FACT_UNKNOWN",
@@ -1320,9 +1273,9 @@ async def _run_exec_phase(
             ("FAILED",),
         )
 
-    order_submission_unknown = (
-        failure is not None and "ORDER_UNKNOWN" in failure.diagnostic_codes
-    )
+    # Once an order-enabled tester node runs, an empty local cache cannot
+    # establish that its first quote callback never submitted an order.
+    order_submission_unknown = phase_kind in {"canary", "passive"}
     cleanup_failure = (
         Stage4DemoExecFailure("CLEANUP_FAILED", "cleanup", ("FAILED",))
         if stop_failed
@@ -1353,6 +1306,7 @@ async def _run_exec_phase(
             account_mode=account_mode,
             failure=failure,
             order_submission_unknown=order_submission_unknown,
+            market_sequence=market_sequence,
             cleanup_authorization=cleanup_authorization,
             market_input_conflicting=market_input_conflicting,
             stop_unconfirmed=cleanup_failure is not None,
@@ -1667,27 +1621,6 @@ def _cleanup_action_matches(
     )
 
 
-def _account_query_event_is_fresh(
-    cache: Cache,
-    query_at_ns: int,
-    previous_account_events: int,
-) -> bool:
-    if _account_event_count(cache) <= previous_account_events:
-        return False
-    account = cache.account(AccountId.from_str(EXEC_ACCOUNT_ID))
-    event = getattr(account, "last_event", None) if account is not None else None
-    if callable(event):
-        event = event()
-    event_ts = getattr(event, "ts_event", None)
-    event_init = getattr(event, "ts_init", None)
-    return (
-        isinstance(event_ts, int)
-        and query_at_ns <= event_ts <= query_at_ns + _MAX_PRICE_AGE_NS
-        and isinstance(event_init, int)
-        and event_init >= query_at_ns
-    )
-
-
 def _capture_account_mode(
     cache: Cache,
     plan: Stage4DemoExecAttemptPlan,
@@ -1705,8 +1638,6 @@ def _capture_account_mode(
     event = getattr(account, "last_event", None) if account is not None else None
     if callable(event):
         event = event()
-    event_ts = getattr(event, "ts_event", None)
-    event_init = getattr(event, "ts_init", None)
     info = getattr(event, "info", None)
     margins = getattr(event, "margins", None)
     target_margin_only = (
@@ -1717,18 +1648,19 @@ def _capture_account_mode(
             for margin in margins
         )
     )
-    isolated = isolated and target_margin_only
+    # A missing/uncorrelated margin list cannot prove ISOLATED. Only an
+    # observed conflicting margin owner is used as a failure signal.
+    isolated = isolated and (
+        not isinstance(margins, list) or not margins or target_margin_only
+    )
     observed_margin: Decimal | None = None
-    if (
-        isinstance(event_ts, int)
-        and query_at_ns <= event_ts <= query_at_ns + _MAX_PRICE_AGE_NS
-        and isinstance(event_init, int)
-        and event_init >= query_at_ns
-        and isinstance(info, dict)
-        and "total_initial_margin" in info
-    ):
+    # The latest AccountState is uncorrelated with a query in rc4. Preserve
+    # its public margin value as a diagnostic, never as 1x confirmation.
+    if isinstance(info, dict) and "total_initial_margin" in info:
         try:
             observed_margin = Decimal(str(info["total_initial_margin"]))
+            if not observed_margin.is_finite():
+                observed_margin = None
         except Exception:
             observed_margin = None
 
@@ -1743,8 +1675,8 @@ def _capture_account_mode(
     return Stage4DemoAccountModeObservation(
         operator_gate_confirmed=True,
         canary_complete=True,
-        one_way_confirmed=one_way,
-        isolated_confirmed=isolated,
+        net_position_shape_consistent=one_way,
+        account_scope_consistent=isolated,
         observed_initial_margin=observed_margin,
         mark_price_min=min(mark_values) if mark_values else None,
         mark_price_max=max(mark_values) if mark_values else None,
@@ -1755,15 +1687,11 @@ def _account_mode_complete(
     plan: Stage4DemoExecAttemptPlan,
     value: Stage4DemoAccountModeObservation,
 ) -> bool:
-    allowed = _allowed_initial_margin(plan, value)
     return (
         value.operator_gate_confirmed
         and value.canary_complete
-        and value.one_way_confirmed
-        and value.isolated_confirmed
-        and allowed is not None
-        and value.observed_initial_margin is not None
-        and allowed[0] <= value.observed_initial_margin <= allowed[1]
+        and value.net_position_shape_consistent
+        and value.account_scope_consistent
     )
 
 
@@ -1843,11 +1771,15 @@ def _bounded_phase_source_facts(
                 _account_total_balance(cache, plan)
             ),
             "initial_margin": _public_numeric_text(initial_margin),
-            "one_way_confirmed": (
-                account_mode.one_way_confirmed if account_mode is not None else None
+            "net_position_shape_consistent": (
+                account_mode.net_position_shape_consistent
+                if account_mode is not None
+                else None
             ),
-            "isolated_confirmed": (
-                account_mode.isolated_confirmed if account_mode is not None else None
+            "account_scope_consistent": (
+                account_mode.account_scope_consistent
+                if account_mode is not None
+                else None
             ),
             "mark_price_min": (
                 _optional_decimal_text(account_mode.mark_price_min)
@@ -1912,6 +1844,7 @@ def _capture_phase_snapshot(
     account_before_balance: Decimal | None,
     account_mode: Stage4DemoAccountModeObservation | None,
     failure: Stage4DemoExecFailure | None,
+    market_sequence: _MarketTimestampSequence,
     order_submission_unknown: bool = False,
     cleanup_authorization: Stage4DemoCleanupAuthorization | None = None,
     market_input_conflicting: bool = False,
@@ -2045,7 +1978,20 @@ def _capture_phase_snapshot(
         cache,
         plan,
         ended_at_ns,
+        market_sequence,
     )
+    if not timestamp_valid:
+        observed_pair = (
+            cache.quote(plan.instrument.id) is not None
+            and cache.mark_price(plan.instrument.id) is not None
+        )
+        market_input_conflicting = market_input_conflicting or observed_pair
+        if resolved_failure is None:
+            resolved_failure = Stage4DemoExecFailure(
+                "TERMINAL_FACT_CONFLICTING" if observed_pair else "DATA_INVALID",
+                "data",
+                ("FAILED",),
+            )
     snapshot = _ExecPhaseSnapshot(
         started_at_ns=started_at_ns,
         ended_at_ns=ended_at_ns,
@@ -2106,8 +2052,8 @@ def _logical_observation(
     account_mode = canary.account_mode or Stage4DemoAccountModeObservation(
         operator_gate_confirmed=True,
         canary_complete=False,
-        one_way_confirmed=False,
-        isolated_confirmed=False,
+        net_position_shape_consistent=False,
+        account_scope_consistent=False,
         observed_initial_margin=None,
         mark_price_min=None,
         mark_price_max=None,
@@ -2409,6 +2355,7 @@ def _cached_market_timestamps_valid(
     cache: Cache,
     plan: Stage4DemoExecAttemptPlan,
     observed_at_ns: int,
+    sequence: _MarketTimestampSequence,
 ) -> bool:
     quote = cache.quote(plan.instrument.id)
     mark = cache.mark_price(plan.instrument.id)
@@ -2417,6 +2364,8 @@ def _cached_market_timestamps_valid(
         and mark is not None
         and quote.instrument_id == plan.instrument.id
         and mark.instrument_id == plan.instrument.id
+        and quote.ts_event >= sequence.quote_ns
+        and mark.ts_event >= sequence.mark_ns
         and _timestamp_is_fresh(quote.ts_event, observed_at_ns)
         and _timestamp_is_fresh(mark.ts_event, observed_at_ns)
     )
@@ -2765,11 +2714,9 @@ def _build_exec_tester_runtime_unchecked(
 ) -> _ExecTesterRuntime:
     """Construct a previously authorized official-tester phase node."""
     node = _build_exec_node(plan)
-    account_query = _AccountQueryProbe()
-    node.add_strategy(account_query)
     node.add_builtin_actor(_DATA_TESTER_BUILTIN, plan.observer_config)
     node.add_builtin_strategy(plan.builtin_strategy, phase.tester_config)
-    return _ExecTesterRuntime(node=node, account_query=account_query)
+    return _ExecTesterRuntime(node=node)
 
 
 def _build_exec_node(plan: Stage4DemoExecAttemptPlan) -> LiveNode:
@@ -2951,27 +2898,6 @@ def _validate_market_input(
             raise Stage4DemoExecutionError(f"{name} timestamp is in the future")
         if value.observed_at_ns - timestamp > _MAX_PRICE_AGE_NS:
             raise Stage4DemoExecutionError(f"{name} input is stale")
-
-
-def _allowed_initial_margin(
-    plan: Stage4DemoExecAttemptPlan,
-    observation: Stage4DemoAccountModeObservation,
-) -> tuple[Decimal, Decimal] | None:
-    minimum = observation.mark_price_min
-    maximum = observation.mark_price_max
-    if minimum is None or maximum is None or minimum <= 0 or maximum < minimum:
-        return None
-    if (maximum - minimum) / minimum > Decimal(_MAX_MARK_SPREAD_TEXT):
-        return None
-    quantity = plan.canary_quantity.as_decimal()
-    currency_quantum = Decimal(1).scaleb(-plan.instrument.quote_currency.precision)
-    allowance = (
-        quantity * plan.instrument.price_increment.as_decimal() + currency_quantum
-    )
-    return (
-        max(Decimal(0), quantity * minimum - allowance),
-        quantity * maximum + allowance,
-    )
 
 
 def _derive_failure(

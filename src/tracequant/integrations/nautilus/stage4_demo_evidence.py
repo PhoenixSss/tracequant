@@ -206,6 +206,7 @@ _BALANCE_KEYS: Final = (
 _ACCOUNT_MODE_KEYS: Final = (
     "classification",
     "operator_gate_confirmed",
+    "config_requested",
     "canary_complete",
     "one_way_confirmed",
     "isolated_confirmed",
@@ -832,26 +833,15 @@ def _require_cleared_order_state(
         raise Stage4DemoEvidenceError(
             "cleanup did not prove zero orders, flat, and known"
         )
-    for key in (
-        "operator_gate_confirmed",
-        "canary_complete",
-        "one_way_confirmed",
-        "isolated_confirmed",
-        "leverage_one_confirmed",
-    ):
+    for key in ("operator_gate_confirmed", "config_requested", "canary_complete"):
         if account[key] is not True:
-            raise Stage4DemoEvidenceError("account-mode proof is incomplete")
-    observed = _optional_decimal_value(account["observed_initial_margin"])
-    allowed_min = _optional_decimal_value(account["allowed_initial_margin_min"])
-    allowed_max = _optional_decimal_value(account["allowed_initial_margin_max"])
-    if observed is None or allowed_min is None or allowed_max is None:
-        raise Stage4DemoEvidenceError("initial-margin proof is incomplete")
-    if observed <= 0:
-        raise Stage4DemoEvidenceError("observed initial margin must be positive")
-    if allowed_min > allowed_max or not allowed_min <= observed <= allowed_max:
-        raise Stage4DemoEvidenceError(
-            "observed initial margin is outside its allowed range"
-        )
+            raise Stage4DemoEvidenceError("account-mode admission facts are incomplete")
+    # The pinned rc4 adapter exposes no typed, request-correlated venue mode
+    # acknowledgement. These names remain in EvidenceV1 for compatibility, but
+    # a PASS must never claim that the venue confirmed them.
+    for key in ("one_way_confirmed", "isolated_confirmed", "leverage_one_confirmed"):
+        if account[key] is not False:
+            raise Stage4DemoEvidenceError("rc4 venue mode confirmation is unproved")
 
 
 def _scenario_value(scenario: DemoEvidenceScenario | str) -> str:

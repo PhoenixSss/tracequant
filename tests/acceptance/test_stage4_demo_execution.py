@@ -235,8 +235,8 @@ def _observation(
         account_mode=Stage4DemoAccountModeObservation(
             operator_gate_confirmed=True,
             canary_complete=True,
-            one_way_confirmed=True,
-            isolated_confirmed=True,
+            net_position_shape_consistent=True,
+            account_scope_consistent=True,
             observed_initial_margin=Decimal("50.00"),
             mark_price_min=Decimal("49999.00"),
             mark_price_max=Decimal("50001.00"),
@@ -456,10 +456,11 @@ def test_stage4_demo_exec_attempts_adapt_independent_nautilus_owned_evidence(
     observations = cast(dict[str, object], evidence["observations"])
     account_mode = cast(dict[str, object], observations["account_mode"])
     assert account_mode["operator_gate_confirmed"] is True
+    assert account_mode["config_requested"] is True
     assert account_mode["canary_complete"] is True
-    assert account_mode["one_way_confirmed"] is True
-    assert account_mode["isolated_confirmed"] is True
-    assert account_mode["leverage_one_confirmed"] is True
+    assert account_mode["one_way_confirmed"] is False
+    assert account_mode["isolated_confirmed"] is False
+    assert account_mode["leverage_one_confirmed"] is False
     fill = cast(dict[str, object], observations["fill"])
     assert fill["complete"] is (
         scenario is DemoEvidenceScenario.EXEC_TESTER_MARKET_CLOSE
@@ -508,6 +509,7 @@ def test_stage4_demo_exec_missing_canary_order_keeps_unknown_cleanup(
         account_before_count=0,
         account_before_balance=None,
         account_mode=None,
+        market_sequence=stage4_demo_execution._MarketTimestampSequence(0, 0),
         failure=failure,
         order_submission_unknown=True,
     )
@@ -559,7 +561,7 @@ def test_stage4_demo_exec_failed_canary_stop_cannot_auto_close_outstanding_order
     monkeypatch.setattr(
         stage4_demo_execution,
         "_build_exec_tester_runtime_unchecked",
-        lambda *args: SimpleNamespace(node=node, account_query=None),
+        lambda *args: SimpleNamespace(node=node),
     )
 
     async def timeout(*args: object, **kwargs: object) -> None:
@@ -655,10 +657,6 @@ def test_stage4_demo_exec_filled_canary_stops_with_position_for_exact_close(
     async def run_async() -> None:
         await stopped.wait()
 
-    def query_once() -> None:
-        nonlocal account_events
-        account_events += 1
-
     stop_calls = 0
 
     def stop() -> None:
@@ -677,19 +675,12 @@ def test_stage4_demo_exec_filled_canary_stops_with_position_for_exact_close(
     monkeypatch.setattr(
         stage4_demo_execution,
         "_build_exec_tester_runtime_unchecked",
-        lambda *args: SimpleNamespace(
-            node=node, account_query=SimpleNamespace(query_once=query_once)
-        ),
+        lambda *args: SimpleNamespace(node=node),
     )
     monkeypatch.setattr(
         stage4_demo_execution,
         "_account_event_count",
         lambda cache: account_events,
-    )
-    monkeypatch.setattr(
-        stage4_demo_execution,
-        "_account_query_event_is_fresh",
-        lambda cache, query_at_ns, previous: account_events > previous,
     )
     monkeypatch.setattr(
         stage4_demo_execution,
@@ -1536,8 +1527,8 @@ def test_stage4_demo_exec_market_record_does_not_double_phase_counts(
     account_mode = Stage4DemoAccountModeObservation(
         operator_gate_confirmed=True,
         canary_complete=True,
-        one_way_confirmed=True,
-        isolated_confirmed=True,
+        net_position_shape_consistent=True,
+        account_scope_consistent=True,
         observed_initial_margin=Decimal("50.00"),
         mark_price_min=Decimal("49999.00"),
         mark_price_max=Decimal("50001.00"),
@@ -1704,7 +1695,7 @@ def test_stage4_demo_exec_runtime_drift_is_conflicting_in_record(
     monkeypatch.setattr(
         stage4_demo_execution,
         "_build_exec_tester_runtime_unchecked",
-        lambda *args: SimpleNamespace(node=node, account_query=None),
+        lambda *args: SimpleNamespace(node=node),
     )
 
     snapshot = asyncio.run(
@@ -1713,7 +1704,7 @@ def test_stage4_demo_exec_runtime_drift_is_conflicting_in_record(
     assert snapshot.failure == stage4_demo_execution.Stage4DemoExecFailure(
         "TERMINAL_FACT_CONFLICTING", "data", ("FAILED",)
     )
-    assert snapshot.market_timestamps_valid
+    assert snapshot.market_timestamps_valid is not timestamp_rollback
     assert snapshot.market_input_conflicting
     observation = replace(
         _observation(attempt.scenario),
@@ -2252,75 +2243,54 @@ def test_stage4_demo_exec_rejects_inflated_caller_constraints_before_admission(
     assert record["failure"]["code"] == "DATA_INVALID"
 
 
-@pytest.mark.parametrize(
-    ("event_offset_ns", "init_offset_ns", "event_count", "expected"),
-    [
-        (-1, 1, 2, False),
-        (1, -1, 2, False),
-        (1, 1, 1, False),
-        (1, 1, 2, True),
-    ],
-)
-def test_stage4_demo_exec_account_query_requires_post_query_event(
+def test_stage4_demo_exec_uncorrelated_account_margin_is_diagnostic(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    event_offset_ns: int,
-    init_offset_ns: int,
-    event_count: int,
-    expected: bool,
 ) -> None:
     plan, _ = _plan(monkeypatch, tmp_path)
     attempt = plan.market_close
-    query_at_ns = time.time_ns()
+    observed_at_ns = time.time_ns()
     event = SimpleNamespace(
-        ts_event=query_at_ns + event_offset_ns,
-        ts_init=query_at_ns + init_offset_ns,
-        info={"total_initial_margin": "50.00"},
+        ts_event=observed_at_ns - 10_000_000_000,
+        ts_init=observed_at_ns - 10_000_000_000,
+        info={"total_initial_margin": "25.00"},
         margins=[SimpleNamespace(instrument_id=attempt.instrument.id)],
     )
     position = SimpleNamespace(id="BTCUSDT-BINANCE-001")
     cache = cast(
         Cache,
         SimpleNamespace(
-            account=lambda *args: SimpleNamespace(
-                event_count=event_count, last_event=event
-            ),
+            account=lambda *args: SimpleNamespace(last_event=event),
             positions_open=lambda **kwargs: [position],
             orders_open=lambda: [],
             orders_open_count=lambda: 0,
             orders_inflight_count=lambda: 0,
             orders=lambda: [],
-            mark_prices=lambda *args: [
-                SimpleNamespace(
-                    instrument_id=attempt.instrument.id,
-                    ts_event=query_at_ns,
-                    value=Price.from_str("50000.00"),
-                )
-            ],
+            mark_prices=lambda *args: [],
         ),
     )
-    assert (
-        stage4_demo_execution._account_query_event_is_fresh(cache, query_at_ns, 1)
-        is expected
+    observed = stage4_demo_execution._capture_account_mode(
+        cache, attempt, observed_at_ns
     )
-    observed = stage4_demo_execution._capture_account_mode(cache, attempt, query_at_ns)
-    assert (observed.observed_initial_margin is not None) is (
-        event_offset_ns >= 0 and init_offset_ns >= 0
+    assert observed.observed_initial_margin == Decimal("25.00")
+    assert stage4_demo_execution._account_mode_complete(attempt, observed)
+
+    event.margins = [SimpleNamespace(instrument_id="OTHER")]
+    conflicting = stage4_demo_execution._capture_account_mode(
+        cache, attempt, observed_at_ns
     )
-    if not expected:
-        assert not (
-            stage4_demo_execution._account_query_event_is_fresh(cache, query_at_ns, 1)
-            and stage4_demo_execution._account_mode_complete(attempt, observed)
-        )
+    assert not conflicting.account_scope_consistent
+    assert not stage4_demo_execution._account_mode_complete(attempt, conflicting)
 
 
-def test_stage4_demo_exec_canary_rejects_numeric_two_x_before_passive(
+def test_stage4_demo_exec_canary_rejects_observed_position_conflict_before_passive(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     plan, _ = _plan(monkeypatch, tmp_path)
     bad_mode = replace(
         _observation(DemoEvidenceScenario.EXEC_TESTER_PASSIVE_CANCEL).account_mode,
+        net_position_shape_consistent=False,
         observed_initial_margin=Decimal("25.00"),
     )
     assert not stage4_demo_execution._account_mode_complete(
@@ -2549,6 +2519,7 @@ def test_stage4_demo_exec_global_state_blocks_cleanup_and_final_pass(
         account_before_count=0,
         account_before_balance=None,
         account_mode=None,
+        market_sequence=stage4_demo_execution._MarketTimestampSequence(0, 0),
         failure=None,
     )
     assert snapshot.active_order_count == 1
@@ -2622,6 +2593,7 @@ def test_stage4_demo_exec_persists_nautilus_phase_facts_in_attempt_partition(
         account_before_balance=Decimal("100.00"),
         account_mode=_observation(attempt.scenario).account_mode,
         failure=None,
+        market_sequence=stage4_demo_execution._MarketTimestampSequence(0, 0),
     )
     facts = cast(dict[str, Any], snapshot.phase_observations[0])
     assert facts["orders"][0]["filled_quantity"] == str(quantity)
@@ -2641,3 +2613,144 @@ def test_stage4_demo_exec_persists_nautilus_phase_facts_in_attempt_partition(
     assert sidecar["evidence_sha256"] == hashlib.sha256(rendered.encode()).hexdigest()
     assert sidecar["phases"] == [facts]
     assert sidecar["source"] == "nautilus_cache"
+
+
+def test_stage4_demo_exec_observed_timestamp_rollback_after_readiness_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.passive_cancel
+    phase = attempt.phases[2]
+    now_ns = time.time_ns()
+    state = {"quote_ns": now_ns}
+    stopped = asyncio.Event()
+    canceled = _cached_order(
+        side="BUY",
+        order_type="LIMIT",
+        quantity=str(attempt.passive_quantity),
+        filled="0.000",
+        reduce_only=False,
+        status="CANCELED",
+        price=str(attempt.passive_price),
+    )
+    cache = SimpleNamespace(
+        instrument=lambda instrument_id: attempt.instrument,
+        quote=lambda instrument_id: SimpleNamespace(
+            instrument_id=attempt.instrument.id,
+            bid_price=Price.from_str("50000.00"),
+            ask_price=Price.from_str("50000.02"),
+            ts_event=state["quote_ns"],
+        ),
+        mark_price=lambda instrument_id: SimpleNamespace(
+            instrument_id=attempt.instrument.id,
+            value=Price.from_str("50000.00"),
+            ts_event=now_ns,
+        ),
+        quote_count=lambda instrument_id: 1,
+        trade_count=lambda instrument_id: 0,
+        orders=lambda **kwargs: [canceled],
+        orders_open_count=lambda **kwargs: 0,
+        orders_inflight_count=lambda **kwargs: 0,
+        positions_open=lambda **kwargs: [],
+        positions=lambda **kwargs: [],
+        account=lambda *args: None,
+    )
+
+    async def run_async() -> None:
+        await stopped.wait()
+
+    def stop() -> None:
+        state["quote_ns"] = now_ns - 1
+        stopped.set()
+
+    node = SimpleNamespace(
+        cache=cache,
+        handle=lambda: SimpleNamespace(is_running=True, stop=stop),
+        run_async=run_async,
+        dispose=lambda: None,
+    )
+    monkeypatch.setattr(
+        stage4_demo_execution,
+        "_build_exec_tester_runtime_unchecked",
+        lambda *args: SimpleNamespace(node=node),
+    )
+
+    snapshot = asyncio.run(
+        stage4_demo_execution._run_exec_phase(attempt, phase, phase_kind="passive")
+    )
+    assert not snapshot.market_timestamps_valid
+    assert snapshot.market_input_conflicting
+    assert snapshot.failure is not None
+    observation = replace(
+        _observation(attempt.scenario),
+        market_timestamps_valid=snapshot.market_timestamps_valid,
+    )
+    evidence = build_stage4_demo_exec_evidence(attempt, observation)
+    assert evidence["result"] == "FAIL"
+    assert evidence["terminal_state"] == "HALTED"
+
+
+def test_stage4_demo_exec_post_start_data_failure_missing_order_is_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.market_close
+    stopped = asyncio.Event()
+    cache = SimpleNamespace(
+        orders=lambda **kwargs: [],
+        orders_open_count=lambda **kwargs: 0,
+        orders_inflight_count=lambda **kwargs: 0,
+        positions_open=lambda **kwargs: [],
+        positions=lambda **kwargs: [],
+        account=lambda *args: None,
+        quote_count=lambda *args: 0,
+        trade_count=lambda *args: 0,
+        quote=lambda *args: None,
+        mark_price=lambda *args: None,
+    )
+
+    async def run_async() -> None:
+        await stopped.wait()
+
+    node = SimpleNamespace(
+        cache=cache,
+        handle=lambda: SimpleNamespace(is_running=True, stop=stopped.set),
+        run_async=run_async,
+        dispose=lambda: None,
+    )
+    monkeypatch.setattr(
+        stage4_demo_execution,
+        "_build_exec_tester_runtime_unchecked",
+        lambda *args: SimpleNamespace(node=node),
+    )
+    calls = 0
+
+    async def fail_readiness(*args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise stage4_demo_execution._Stage4DemoExecutionRuntimeError(
+                stage4_demo_execution.Stage4DemoExecFailure(
+                    "CONNECT_SUBSCRIPTION_FAILED", "data", ("FAILED",)
+                )
+            )
+
+    monkeypatch.setattr(stage4_demo_execution, "_wait_until", fail_readiness)
+    snapshot = asyncio.run(
+        stage4_demo_execution._run_exec_phase(
+            attempt, attempt.phases[0], phase_kind="canary"
+        )
+    )
+    assert calls == 2
+    assert snapshot.unresolved_unknown_count == 1
+    evidence = build_stage4_demo_exec_evidence(
+        attempt,
+        stage4_demo_execution._logical_observation(
+            attempt, canary=snapshot, execution=snapshot
+        ),
+    )
+    cleanup = cast(dict[str, object], evidence["cleanup"])
+    assert evidence["result"] == "FAIL"
+    assert cleanup["classification"] == "cleanup_incomplete"
