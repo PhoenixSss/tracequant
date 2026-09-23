@@ -28,7 +28,7 @@ from nautilus_trader.model import (
     Symbol,
 )
 
-from tracequant.integrations.nautilus import stage4_demo_execution
+from tracequant.integrations.nautilus import stage4_demo, stage4_demo_execution
 from tracequant.integrations.nautilus.stage4_demo import (
     DEMO_INSTRUMENT_ID,
     NAUTILUS_CP313_LINUX_X86_64_WHEEL_SHA256,
@@ -1191,6 +1191,94 @@ def test_stage4_demo_exec_construction_failure_becomes_terminal_observation(
     assert observation.unresolved_unknown_count == 1
 
 
+def test_stage4_demo_exec_public_readiness_waits_for_fresh_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.undo()
+    instrument = _instrument()
+    instrument_id = instrument.id
+    now_ns = time.time_ns()
+    reads = 0
+    stopped = False
+
+    class CacheStub:
+        def instrument(self, _instrument_id: InstrumentId) -> CryptoPerpetual:
+            return instrument
+
+        def quote(self, _instrument_id: InstrumentId) -> SimpleNamespace:
+            nonlocal reads
+            reads += 1
+            return SimpleNamespace(
+                instrument_id=instrument_id,
+                bid_price=Price.from_str("50000.00"),
+                ask_price=Price.from_str("50000.01"),
+                ts_event=now_ns - 6_000_000_000 if reads == 1 else time.time_ns(),
+            )
+
+        def mark_price(self, _instrument_id: InstrumentId) -> SimpleNamespace:
+            return SimpleNamespace(
+                instrument_id=instrument_id,
+                value=Price.from_str("50000.00"),
+                ts_event=now_ns - 6_000_000_000 if reads == 1 else time.time_ns(),
+            )
+
+    class NodeStub:
+        cache = CacheStub()
+
+        def add_builtin_actor(self, *_args: object) -> None:
+            pass
+
+        def handle(self) -> SimpleNamespace:
+            return SimpleNamespace(is_running=True)
+
+        async def run_async(self) -> None:
+            await asyncio.Event().wait()
+
+        def dispose(self) -> None:
+            pass
+
+    node = NodeStub()
+
+    class BuilderStub:
+        def __getattr__(self, _name: str) -> object:
+            return lambda *_args, **_kwargs: self
+
+        def build(self) -> NodeStub:
+            return node
+
+    async def stop(
+        _handle: object,
+        run_task: asyncio.Task[None],
+        *,
+        request_stop: bool,
+    ) -> None:
+        nonlocal stopped
+        assert request_stop
+        stopped = True
+        run_task.cancel()
+        try:
+            await run_task
+        except asyncio.CancelledError:
+            pass
+        return None
+
+    monkeypatch.setattr(
+        stage4_demo_execution,
+        "LiveNode",
+        SimpleNamespace(builder=lambda *_args: BuilderStub()),
+    )
+    monkeypatch.setattr(stage4_demo_execution, "_stop_exec_tester", stop)
+    deadline = stage4_demo.start_queue_deadline(DeadlinePhase.PRICE_READINESS)
+
+    result = asyncio.run(stage4_demo_execution._acquire_public_market_input(deadline))
+
+    assert reads >= 2
+    assert stopped
+    assert not deadline.expired()
+    assert result.quote_ts_event_ns > now_ns - 5_000_000_000
+    assert result.mark_ts_event_ns > now_ns - 5_000_000_000
+
+
 def test_stage4_demo_exec_rejects_stale_or_non_allowlisted_public_input(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1431,6 +1519,89 @@ def test_stage4_demo_exec_market_halt_is_persisted_and_blocks_passive_admission(
     assert json.loads(evidence_paths[0].read_text("utf-8"))["result"] == "FAIL"
 
 
+@pytest.mark.parametrize("failed_scenario", ["market", "passive"])
+def test_stage4_demo_exec_preparation_failure_persists_started_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failed_scenario: str,
+) -> None:
+    runtime = _runtime()
+    frozen = freeze_demo_config(DemoConfig())
+    admissions = 0
+    public_reads = 0
+
+    def admit(*, batch: DemoAdmissionBatch, operator_token: str) -> AdmittedDemoAttempt:
+        nonlocal admissions
+        del batch
+        assert operator_token == OPERATOR_CONFIRMATION_TOKEN
+        admissions += 1
+        return cast(
+            AdmittedDemoAttempt,
+            SimpleNamespace(runtime=runtime, frozen_config=frozen),
+        )
+
+    async def public_market(_deadline: object) -> Stage4DemoExecMarketInput:
+        nonlocal public_reads
+        public_reads += 1
+        if failed_scenario == "market" or public_reads == 2:
+            raise Stage4DemoExecutionError("public market input unavailable")
+        return _market_input()
+
+    async def observe(
+        runtime_plan: Stage4DemoExecAttemptPlan,
+    ) -> Stage4DemoExecObservation:
+        return _observation(runtime_plan.scenario)
+
+    monkeypatch.setattr(stage4_demo_execution, "admit_current_demo_attempt", admit)
+    monkeypatch.setattr(
+        stage4_demo_execution, "_acquire_public_market_input", public_market
+    )
+    monkeypatch.setattr(stage4_demo_execution, "_observe_stage4_demo_attempt", observe)
+    if failed_scenario == "market":
+        monkeypatch.setattr(
+            stage4_demo,
+            "start_queue_deadline",
+            lambda _phase: SimpleNamespace(expired=lambda: True),
+        )
+    batch = cast(
+        DemoAdmissionBatch,
+        SimpleNamespace(repository_root=tmp_path / "repository"),
+    )
+    evidence_root = tmp_path / "external-evidence"
+
+    with pytest.raises(Stage4DemoExecutionError, match="record="):
+        run_stage4_demo_exec(
+            batch=batch,
+            evidence_root=evidence_root,
+            batch_id="batch_abcdefghijklmnopqrstuv",
+            acquire_market_close=lambda: Stage4DemoExecAttemptInput(
+                _market_input(), OPERATOR_CONFIRMATION_TOKEN
+            ),
+            acquire_passive_cancel=lambda: Stage4DemoExecAttemptInput(
+                _market_input(1_000_000_000), OPERATOR_CONFIRMATION_TOKEN
+            ),
+        )
+
+    paths = list(evidence_root.rglob(EXEC_EVIDENCE_FILENAME))
+    assert len(paths) == admissions == (1 if failed_scenario == "market" else 2)
+    failed = next(
+        json.loads(path.read_text("utf-8"))
+        for path in paths
+        if failed_scenario in str(path.parent)
+    )
+    validate_stage4_demo_evidence(failed)
+    assert failed["result"] == "FAIL"
+    assert failed["terminal_state"] == "HALTED"
+    assert failed["failure"]["code"] == (
+        "DATA_TIMEOUT" if failed_scenario == "market" else "DATA_INVALID"
+    )
+    assert failed["instrument"]["price_increment"] is None
+    assert failed["observations"]["market_data"]["classification"] == "missing"
+    assert failed["observations"]["account_mode"]["operator_gate_confirmed"]
+    assert failed["cleanup"]["classification"] == "cleanup_incomplete"
+    assert failed["cleanup"]["unresolved_unknown_count"] == 1
+
+
 def test_stage4_demo_exec_rejects_inflated_caller_constraints_before_admission(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1458,7 +1629,7 @@ def test_stage4_demo_exec_rejects_inflated_caller_constraints_before_admission(
     )
     batch = cast(
         DemoAdmissionBatch,
-        SimpleNamespace(repository_root=tmp_path),
+        SimpleNamespace(repository_root=tmp_path / "repository"),
     )
 
     def admit(**_kwargs: object) -> AdmittedDemoAttempt:
@@ -1482,12 +1653,23 @@ def test_stage4_demo_exec_rejects_inflated_caller_constraints_before_admission(
             public, OPERATOR_CONFIRMATION_TOKEN
         ),
     )
-    with pytest.raises(Stage4DemoExecutionError, match="constraints differ"):
+    with pytest.raises(Stage4DemoExecutionError, match="record="):
         stage4_demo_execution._admit_deferred_attempt(
             plan,
             scenario=DemoEvidenceScenario.EXEC_TESTER_MARKET_CLOSE,
             acquire=plan.acquire_market_close,
         )
+    record_path = (
+        tmp_path
+        / "evidence"
+        / "batch_abcdefghijklmnopqrstuv"
+        / DemoEvidenceScenario.EXEC_TESTER_MARKET_CLOSE.value
+        / EXEC_EVIDENCE_FILENAME
+    )
+    record = json.loads(record_path.read_text("utf-8"))
+    validate_stage4_demo_evidence(record)
+    assert record["result"] == "FAIL"
+    assert record["failure"]["code"] == "DATA_INVALID"
 
 
 def test_stage4_demo_exec_canary_rejects_numeric_two_x_before_passive(

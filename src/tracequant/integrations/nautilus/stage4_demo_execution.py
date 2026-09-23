@@ -382,35 +382,49 @@ def _admit_deferred_attempt(
     acquire: Callable[[], Stage4DemoExecAttemptInput],
     previous_market_input: Stage4DemoExecMarketInput | None = None,
 ) -> Stage4DemoExecAttemptPlan:
+    started_at_ns = time.time_ns()
     price_deadline = stage4_demo.start_queue_deadline(DeadlinePhase.PRICE_READINESS)
     attempt_input = acquire()
     admission = admit_current_demo_attempt(
         batch=plan._batch,
         operator_token=attempt_input.operator_token,
     )
-    public_market = asyncio.run(_acquire_public_market_input(price_deadline))
-    now_ns = time.time_ns()
-    if price_deadline.expired():
-        raise Stage4DemoExecutionError("attempt price readiness deadline expired")
-    _validate_market_input(
-        public_market,
-        checked_at_ns=now_ns,
-        previous=previous_market_input,
-    )
-    if not _instrument_matches(
-        attempt_input.market.instrument, public_market.instrument
-    ):
-        raise Stage4DemoExecutionError(
-            "caller market constraints differ from public data"
+    try:
+        public_market = asyncio.run(_acquire_public_market_input(price_deadline))
+        now_ns = time.time_ns()
+        if price_deadline.expired():
+            raise Stage4DemoExecutionError("attempt price readiness deadline expired")
+        _validate_market_input(
+            public_market,
+            checked_at_ns=now_ns,
+            previous=previous_market_input,
         )
-    return _build_attempt_plan(
-        scenario=scenario,
-        admission=admission,
-        repository_root=plan._batch.repository_root,
-        evidence_root=plan.evidence_root,
-        batch_id=plan.batch_id,
-        market_input=public_market,
-    )
+        if not _instrument_matches(
+            attempt_input.market.instrument, public_market.instrument
+        ):
+            raise Stage4DemoExecutionError(
+                "caller market constraints differ from public data"
+            )
+        return _build_attempt_plan(
+            scenario=scenario,
+            admission=admission,
+            repository_root=plan._batch.repository_root,
+            evidence_root=plan.evidence_root,
+            batch_id=plan.batch_id,
+            market_input=public_market,
+        )
+    except Exception as exc:
+        outcome = _persist_preparation_failure(
+            plan,
+            scenario=scenario,
+            admission=admission,
+            started_at_ns=started_at_ns,
+            timed_out=price_deadline.expired(),
+        )
+        raise Stage4DemoExecutionError(
+            f"{scenario.value} halted before instrument readiness; "
+            f"record={outcome.evidence_path}"
+        ) from exc
 
 
 async def _acquire_public_market_input(
@@ -462,32 +476,23 @@ async def _acquire_public_market_input(
             run_task=run_task,
             failure=unavailable,
         )
+        selected: Stage4DemoExecMarketInput | None = None
+        sequence = _MarketTimestampSequence(quote_ns=0, mark_ns=0)
+
+        def market_ready() -> bool:
+            nonlocal selected
+            selected = _qualified_public_market_input(cache, instrument_id, sequence)
+            return selected is not None
+
         await _wait_until(
-            lambda: (
-                isinstance(cache.instrument(instrument_id), CryptoPerpetual)
-                and cache.quote(instrument_id) is not None
-                and cache.mark_price(instrument_id) is not None
-            ),
+            market_ready,
             deadline=deadline,
             run_task=run_task,
             failure=unavailable,
         )
-        instrument = cache.instrument(instrument_id)
-        quote = cache.quote(instrument_id)
-        mark = cache.mark_price(instrument_id)
-        if not isinstance(instrument, CryptoPerpetual) or quote is None or mark is None:
+        if selected is None:
             raise Stage4DemoExecutionError("public market input disappeared")
-        if quote.instrument_id != instrument_id or mark.instrument_id != instrument_id:
-            raise Stage4DemoExecutionError("public market input identity conflict")
-        result = Stage4DemoExecMarketInput(
-            instrument=instrument,
-            best_bid=quote.bid_price,
-            best_ask=quote.ask_price,
-            mark_price=mark.value,
-            quote_ts_event_ns=quote.ts_event,
-            mark_ts_event_ns=mark.ts_event,
-            observed_at_ns=time.time_ns(),
-        )
+        result = selected
     except _Stage4DemoExecutionRuntimeError as exc:
         raise Stage4DemoExecutionError("public market input unavailable") from exc
     finally:
@@ -497,6 +502,155 @@ async def _acquire_public_market_input(
         if cleanup_failure is not None:
             raise Stage4DemoExecutionError("public market data node did not stop")
     return result
+
+
+def _qualified_public_market_input(
+    cache: Cache,
+    instrument_id: InstrumentId,
+    sequence: _MarketTimestampSequence,
+) -> Stage4DemoExecMarketInput | None:
+    """Wait through stale public values while rejecting stream identity or rollback."""
+    instrument = cache.instrument(instrument_id)
+    quote = cache.quote(instrument_id)
+    mark = cache.mark_price(instrument_id)
+    if not isinstance(instrument, CryptoPerpetual) or quote is None or mark is None:
+        return None
+    if (
+        instrument.id != instrument_id
+        or quote.instrument_id != instrument_id
+        or mark.instrument_id != instrument_id
+    ):
+        raise _RuntimeMarketConflict("public market input identity conflict")
+    if quote.ts_event < sequence.quote_ns or mark.ts_event < sequence.mark_ns:
+        raise _RuntimeMarketConflict("public market timestamp moved backward")
+    sequence.quote_ns = quote.ts_event
+    sequence.mark_ns = mark.ts_event
+    checked_at_ns = time.time_ns()
+    if any(
+        timestamp > checked_at_ns + _FUTURE_TOLERANCE_NS
+        or checked_at_ns - timestamp > _MAX_PRICE_AGE_NS
+        for timestamp in (quote.ts_event, mark.ts_event)
+    ):
+        return None
+    result = Stage4DemoExecMarketInput(
+        instrument=instrument,
+        best_bid=quote.bid_price,
+        best_ask=quote.ask_price,
+        mark_price=mark.value,
+        quote_ts_event_ns=quote.ts_event,
+        mark_ts_event_ns=mark.ts_event,
+        observed_at_ns=checked_at_ns,
+    )
+    _validate_market_input(result, checked_at_ns=checked_at_ns)
+    return result
+
+
+def _persist_preparation_failure(
+    plan: Stage4DemoExecPlan,
+    *,
+    scenario: DemoEvidenceScenario,
+    admission: AdmittedDemoAttempt,
+    started_at_ns: int,
+    timed_out: bool,
+) -> Stage4DemoExecOutcome:
+    """Record a started attempt before any order-enabled node can be built."""
+    partition = stage4_demo_partition_path(
+        repository_root=plan._batch.repository_root,
+        evidence_root=plan.evidence_root,
+        batch_id=plan.batch_id,
+        scenario=scenario,
+    )
+    missing = EvidenceClassification.MISSING.value
+    unknown = EvidenceClassification.UNKNOWN.value
+    payload: dict[str, object] = {
+        "schema": EVIDENCE_SCHEMA,
+        "source_commit": admission.runtime.source_commit,
+        "dependency_lock_sha256": admission.runtime.dependency_lock_sha256,
+        "runtime": {
+            "distribution": NAUTILUS_DISTRIBUTION,
+            "version": NAUTILUS_VERSION,
+            "upstream_commit": NAUTILUS_UPSTREAM_COMMIT,
+            "wheel_sha256": NAUTILUS_CP313_LINUX_X86_64_WHEEL_SHA256,
+        },
+        "environment": DEMO_ENVIRONMENT,
+        "config_digest": admission.frozen_config.config_digest,
+        "batch_id": plan.batch_id,
+        "instrument": {
+            "id": DEMO_INSTRUMENT_ID,
+            "price_precision": None,
+            "price_increment": None,
+            "size_precision": None,
+            "size_increment": None,
+            "minimum_quantity": None,
+            "maximum_quantity": None,
+            "minimum_notional": None,
+        },
+        "scenario": scenario.value,
+        "started_at": _utc_timestamp(started_at_ns),
+        "ended_at": _utc_timestamp(time.time_ns()),
+        "result": "FAIL",
+        "terminal_state": "HALTED",
+        "observations": {
+            "market_data": {
+                "classification": missing,
+                "quote_count": 0,
+                "trade_count": 0,
+                "timestamp_valid": False,
+            },
+            "order": {
+                "classification": missing,
+                "submitted": False,
+                "accepted": False,
+                "terminal": False,
+                "active": False,
+                "pending": False,
+                "ambiguous": False,
+            },
+            "fill": {
+                "classification": missing,
+                "complete": False,
+                "partial": False,
+                "late": False,
+            },
+            "position": {
+                "classification": unknown,
+                "open_count": 0,
+                "final_net_quantity": "0",
+            },
+            "balance": {
+                "classification": missing,
+                "before_observed": False,
+                "after_observed": False,
+                "explained_change": False,
+            },
+            "account_mode": {
+                "classification": missing,
+                "operator_gate_confirmed": True,
+                "canary_complete": False,
+                "one_way_confirmed": False,
+                "isolated_confirmed": False,
+                "leverage_one_confirmed": False,
+                "observed_initial_margin": None,
+                "allowed_initial_margin_min": None,
+                "allowed_initial_margin_max": None,
+            },
+        },
+        "cleanup": {
+            "classification": EvidenceClassification.CLEANUP_INCOMPLETE.value,
+            "active_order_count": 0,
+            "pending_order_count": 0,
+            "open_position_count": 0,
+            "unresolved_unknown_count": 1,
+            "final_net_quantity": "0",
+        },
+        "failure": {
+            "code": "DATA_TIMEOUT" if timed_out else "DATA_INVALID",
+            "phase": "data",
+            "diagnostic_codes": ["FAILED"],
+        },
+    }
+    evidence = finalize_stage4_demo_evidence(payload)
+    return _write_exec_evidence(partition, scenario, evidence)
 
 
 def _run_and_persist_attempt(
@@ -704,28 +858,36 @@ def write_stage4_demo_exec_evidence(
     evidence: dict[str, object],
 ) -> Stage4DemoExecOutcome:
     """Write one validated attempt record to a new external partition."""
-    if evidence.get("scenario") != plan.scenario.value:
+    return _write_exec_evidence(plan.evidence_partition, plan.scenario, evidence)
+
+
+def _write_exec_evidence(
+    partition: Path,
+    scenario: DemoEvidenceScenario,
+    evidence: dict[str, object],
+) -> Stage4DemoExecOutcome:
+    if evidence.get("scenario") != scenario.value:
         raise Stage4DemoExecutionError("evidence scenario does not match its plan")
-    if plan.evidence_partition.exists():
+    if partition.exists():
         raise Stage4DemoExecutionError("ExecTester evidence partition already exists")
     rendered = canonical_stage4_demo_evidence_json(evidence)
-    plan.evidence_partition.parent.mkdir(parents=True, exist_ok=True)
+    partition.parent.mkdir(parents=True, exist_ok=True)
     try:
-        plan.evidence_partition.mkdir()
+        partition.mkdir()
     except FileExistsError as exc:
         raise Stage4DemoExecutionError(
             "ExecTester evidence partition already exists"
         ) from exc
-    evidence_path = plan.evidence_partition / EXEC_EVIDENCE_FILENAME
+    evidence_path = partition / EXEC_EVIDENCE_FILENAME
     try:
         with evidence_path.open("x", encoding="utf-8", newline="\n") as stream:
             stream.write(rendered)
             stream.write("\n")
     except Exception:
         evidence_path.unlink(missing_ok=True)
-        plan.evidence_partition.rmdir()
+        partition.rmdir()
         raise
-    return Stage4DemoExecOutcome(plan.evidence_partition, evidence_path, evidence)
+    return Stage4DemoExecOutcome(partition, evidence_path, evidence)
 
 
 def prove_exact_cleanup_quantity(
