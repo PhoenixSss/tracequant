@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -123,7 +123,7 @@ class Stage4DemoExecPhasePlan:
 
     name: str
     tester_config: ExecTesterConfig
-    run_condition: Literal["always", "failure_with_cleanup_proof"]
+    run_condition: Literal["always", "cleanup_with_proof", "failure_with_cleanup_proof"]
 
 
 @dataclass(frozen=True)
@@ -268,6 +268,7 @@ class _ExecPhaseSnapshot:
     account_mode: Stage4DemoAccountModeObservation | None
     unresolved_unknown_count: int
     failure: Stage4DemoExecFailure | None
+    balance_before_total: Decimal | None = None
 
 
 @dataclass
@@ -748,18 +749,46 @@ def prove_exact_cleanup_quantity(
 async def _observe_stage4_demo_attempt(
     plan: Stage4DemoExecAttemptPlan,
 ) -> Stage4DemoExecObservation:
-    canary = await _run_exec_phase(
+    opening = await _run_exec_phase(
         plan,
         plan.phases[0],
         phase_kind="canary",
     )
+    authorization = None
+    if opening.unresolved_unknown_count == 0:
+        authorization = prove_exact_cleanup_quantity(
+            plan,
+            original_order_terminal=opening.order_terminal,
+            active_order_count=opening.active_order_count,
+            inflight_order_count=opening.inflight_order_count,
+            open_position_count=opening.open_position_count,
+            net_position=opening.final_net_quantity,
+        )
+    if authorization is None:
+        canary = replace(
+            opening,
+            failure=opening.failure
+            or Stage4DemoExecFailure(
+                "CLEANUP_INCOMPLETE", "cleanup", ("UNRESOLVED_UNKNOWN",)
+            ),
+        )
+    else:
+        closing = await _run_exec_phase(
+            plan,
+            plan.phases[1],
+            phase_kind="cleanup",
+            cleanup_authorization=authorization,
+            balance_baseline=opening.balance_before_total,
+        )
+        canary = _merge_cleanup_snapshot(opening, closing)
+
     if plan.scenario is DemoEvidenceScenario.EXEC_TESTER_MARKET_CLOSE:
         return _logical_observation(plan, canary=canary, execution=canary)
 
     if canary.failure is None:
         execution = await _run_exec_phase(
             plan,
-            plan.phases[1],
+            plan.phases[2],
             phase_kind="passive",
         )
     else:
@@ -780,9 +809,10 @@ async def _observe_stage4_demo_attempt(
     ):
         cleanup_phase = await _run_exec_phase(
             plan,
-            plan.phases[2],
+            plan.phases[3],
             phase_kind="cleanup",
             cleanup_authorization=cleanup_authorization,
+            balance_baseline=execution.balance_before_total,
         )
         execution = _merge_cleanup_snapshot(execution, cleanup_phase)
 
@@ -795,6 +825,7 @@ async def _run_exec_phase(
     *,
     phase_kind: Literal["canary", "passive", "cleanup"],
     cleanup_authorization: Stage4DemoCleanupAuthorization | None = None,
+    balance_baseline: Decimal | None = None,
 ) -> _ExecPhaseSnapshot:
     started_at_ns = time.time_ns()
     try:
@@ -857,7 +888,11 @@ async def _run_exec_phase(
             ),
         )
         account_before_count = _account_event_count(cache)
-        account_before_balance = _account_total_balance(cache, plan)
+        account_before_balance = (
+            balance_baseline
+            if phase_kind == "cleanup"
+            else _account_total_balance(cache, plan)
+        )
         if phase_kind == "cleanup":
             await _wait_until(
                 lambda: bool(cache.positions_open(instrument_id=plan.instrument.id)),
@@ -949,20 +984,7 @@ async def _run_exec_phase(
             )
         handle.stop()
         stop_requested = True
-        if phase_kind == "canary":
-            await _wait_after_stop(
-                lambda: _canary_cleanup_complete(cache, plan, strategy_id),
-                deadline=stage4_demo.start_queue_deadline(
-                    DeadlinePhase.MARKET_OR_REDUCE_ONLY_FILL
-                ),
-                run_task=run_task,
-                failure=Stage4DemoExecFailure(
-                    "CLEANUP_INCOMPLETE",
-                    "cleanup",
-                    ("OPEN_POSITION_REMAINS",),
-                ),
-            )
-        elif phase_kind == "passive":
+        if phase_kind == "passive":
             await _wait_after_stop(
                 lambda: _passive_cancel_complete(cache, plan, strategy_id),
                 deadline=stage4_demo.start_queue_deadline(DeadlinePhase.CANCELLATION),
@@ -1004,6 +1026,9 @@ async def _run_exec_phase(
             ("FAILED",),
         )
 
+    order_submission_unknown = (
+        failure is not None and "ORDER_UNKNOWN" in failure.diagnostic_codes
+    )
     cleanup_failure = await _stop_exec_tester(
         handle,
         run_task,
@@ -1024,6 +1049,7 @@ async def _run_exec_phase(
             account_before_balance=account_before_balance,
             account_mode=account_mode,
             failure=failure,
+            order_submission_unknown=order_submission_unknown,
         )
     finally:
         node.dispose()
@@ -1206,24 +1232,6 @@ def _orders_have_fill(
     )
 
 
-def _canary_cleanup_complete(
-    cache: Cache,
-    plan: Stage4DemoExecAttemptPlan,
-    strategy_id: StrategyId,
-) -> bool:
-    orders = cache.orders(
-        instrument_id=plan.instrument.id,
-        strategy_id=strategy_id,
-    )
-    return (
-        len(orders) == 2
-        and _canary_action_matches(orders, plan.canary_quantity)
-        and cache.orders_open_count(instrument_id=plan.instrument.id) == 0
-        and cache.orders_inflight_count(instrument_id=plan.instrument.id) == 0
-        and not cache.positions_open(instrument_id=plan.instrument.id)
-    )
-
-
 def _passive_cancel_complete(
     cache: Cache,
     plan: Stage4DemoExecAttemptPlan,
@@ -1392,6 +1400,7 @@ def _capture_phase_snapshot(
     account_before_balance: Decimal | None,
     account_mode: Stage4DemoAccountModeObservation | None,
     failure: Stage4DemoExecFailure | None,
+    order_submission_unknown: bool = False,
 ) -> _ExecPhaseSnapshot:
     orders = cache.orders(
         instrument_id=plan.instrument.id,
@@ -1424,9 +1433,13 @@ def _capture_phase_snapshot(
         for filled, quantity in zip(filled_quantities, order_quantities, strict=True)
     )
     positions = cache.positions_open(instrument_id=plan.instrument.id)
-    owned_positions = cache.positions(
-        instrument_id=plan.instrument.id,
-        strategy_id=_require_phase_strategy_id(phase),
+    owned_positions = (
+        cache.positions(instrument_id=plan.instrument.id)
+        if phase_kind == "cleanup"
+        else cache.positions(
+            instrument_id=plan.instrument.id,
+            strategy_id=_require_phase_strategy_id(phase),
+        )
     )
     signed_positions = [_signed_position_quantity(position) for position in positions]
     position_unknown = any(value is None for value in signed_positions)
@@ -1435,7 +1448,12 @@ def _capture_phase_snapshot(
         start=Decimal(0),
     )
     account_after_count = _account_event_count(cache)
-    unresolved = int(ambiguous) + int(bool(inflight_orders)) + int(position_unknown)
+    unresolved = (
+        int(ambiguous)
+        + int(bool(inflight_orders))
+        + int(position_unknown)
+        + int(not orders and order_submission_unknown)
+    )
     resolved_failure = failure
     action_consistent = _phase_order_action_consistent(plan, phase_kind, orders)
     if (
@@ -1469,7 +1487,9 @@ def _capture_phase_snapshot(
         resolved_failure = Stage4DemoExecFailure(
             "CANCEL_FILL_RACE", "execution", ("FAILED",)
         )
-    if resolved_failure is None and (open_orders or inflight_orders or positions):
+    if resolved_failure is None and (
+        open_orders or inflight_orders or (positions and phase_kind != "canary")
+    ):
         resolved_failure = Stage4DemoExecFailure(
             "CLEANUP_INCOMPLETE", "cleanup", ("FAILED",)
         )
@@ -1531,6 +1551,7 @@ def _capture_phase_snapshot(
         account_mode=account_mode,
         unresolved_unknown_count=unresolved,
         failure=resolved_failure,
+        balance_before_total=account_before_balance,
     )
 
 
@@ -1682,12 +1703,15 @@ def _merge_cleanup_snapshot(
         balance_before_observed=execution.balance_before_observed,
         balance_after_observed=cleanup.balance_after_observed,
         balance_change_explained=(
-            execution.balance_change_explained and cleanup.balance_change_explained
+            cleanup.balance_change_explained
+            if execution.account_mode is not None
+            else execution.balance_change_explained and cleanup.balance_change_explained
         ),
         order_action_consistent=execution.order_action_consistent,
-        account_mode=None,
+        account_mode=execution.account_mode,
         unresolved_unknown_count=cleanup.unresolved_unknown_count,
         failure=cleanup.failure or execution.failure,
+        balance_before_total=execution.balance_before_total,
     )
 
 
@@ -1923,26 +1947,6 @@ def _canary_open_order_matches(order: object, quantity: Quantity) -> bool:
     )
 
 
-def _canary_action_matches(
-    orders: list[object],
-    quantity: Quantity,
-) -> bool:
-    if len(orders) != 2:
-        return False
-    opening = [order for order in orders if _canary_open_order_matches(order, quantity)]
-    closing = [
-        order
-        for order in orders
-        if _filled_market_order_matches(
-            order,
-            side="SELL",
-            quantity=quantity,
-            reduce_only=True,
-        )
-    ]
-    return len(opening) == len(closing) == 1 and opening[0] is not closing[0]
-
-
 def _passive_order_matches(
     plan: Stage4DemoExecAttemptPlan,
     order: object,
@@ -1968,7 +1972,9 @@ def _phase_order_action_consistent(
     orders: list[object],
 ) -> bool:
     if phase_kind == "canary":
-        return _canary_action_matches(orders, plan.canary_quantity)
+        return len(orders) == 1 and _canary_open_order_matches(
+            orders[0], plan.canary_quantity
+        )
     if phase_kind == "passive":
         return len(orders) == 1 and _passive_order_matches(plan, orders[0])
     return True
@@ -1993,7 +1999,7 @@ def _build_attempt_plan(
     passive_quantity: Quantity | None = None
     phases = [
         Stage4DemoExecPhasePlan(
-            name="attempt_local_market_canary_and_exact_reduce_only_close",
+            name="attempt_local_market_canary",
             tester_config=_canary_tester_config(
                 scenario=scenario,
                 instrument_id=instrument_id,
@@ -2003,6 +2009,17 @@ def _build_attempt_plan(
             run_condition="always",
         )
     ]
+    phases.append(
+        Stage4DemoExecPhasePlan(
+            name="canary_exact_reduce_only_close_after_proof",
+            tester_config=_cleanup_tester_config(
+                instrument_id=instrument_id,
+                client_id=client_id,
+                strategy_id=StrategyId.from_str("STAGE4-CANARY-CLOSE-001"),
+            ),
+            run_condition="cleanup_with_proof",
+        )
+    )
     if scenario is DemoEvidenceScenario.EXEC_TESTER_PASSIVE_CANCEL:
         passive_price = market_input.best_bid - market_input.instrument.price_increment
         if passive_price.as_decimal() <= 0:
@@ -2027,6 +2044,7 @@ def _build_attempt_plan(
                 tester_config=_cleanup_tester_config(
                     instrument_id=instrument_id,
                     client_id=client_id,
+                    strategy_id=StrategyId.from_str("STAGE4-PASSIVE-CLOSE-001"),
                 ),
                 run_condition="failure_with_cleanup_proof",
             )
@@ -2111,8 +2129,8 @@ def _build_authorized_cleanup_runtime(
         raise Stage4DemoExecutionError(
             "ExecTester cleanup phase is not owned by its plan"
         )
-    if phase.run_condition != "failure_with_cleanup_proof":
-        raise Stage4DemoExecutionError("phase is not the failure-only cleanup phase")
+    if phase.run_condition not in {"cleanup_with_proof", "failure_with_cleanup_proof"}:
+        raise Stage4DemoExecutionError("phase is not an authorized cleanup phase")
     if (
         exact_reduce_only_quantity(
             plan.instrument,
@@ -2193,7 +2211,7 @@ def _canary_tester_config(
         enable_stop_buys=False,
         enable_stop_sells=False,
         cancel_orders_on_stop=True,
-        close_positions_on_stop=True,
+        close_positions_on_stop=False,
         close_positions_qty_precision=None,
         reduce_only_on_stop=True,
         dry_run=False,
@@ -2240,9 +2258,10 @@ def _cleanup_tester_config(
     *,
     instrument_id: InstrumentId,
     client_id: ClientId,
+    strategy_id: StrategyId,
 ) -> ExecTesterConfig:
     return ExecTesterConfig(
-        strategy_id=StrategyId.from_str("STAGE4-PASSIVE-001"),
+        strategy_id=strategy_id,
         instrument_id=instrument_id,
         client_id=client_id,
         enable_limit_buys=False,

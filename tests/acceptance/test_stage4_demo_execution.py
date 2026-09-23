@@ -297,28 +297,37 @@ def test_stage4_demo_exec_plan_is_bounded_and_cannot_target_live(
         for attempt in plan.attempts
     )
 
-    market = plan.market_close.phases[0].tester_config
-    assert plan.market_close.phases[0].run_condition == "always"
+    market, market_close = (phase.tester_config for phase in plan.market_close.phases)
+    assert [phase.run_condition for phase in plan.market_close.phases] == [
+        "always",
+        "cleanup_with_proof",
+    ]
     assert market.open_position_on_start_qty == Decimal("0.001")
     assert market.open_position_on_first_quote is True
     assert market.enable_limit_buys is False
     assert market.enable_limit_sells is False
     assert market.enable_stop_buys is False
     assert market.enable_stop_sells is False
-    assert market.close_positions_on_stop is True
-    assert market.reduce_only_on_stop is True
-    assert market.close_positions_qty_precision is None
+    assert market.close_positions_on_stop is False
+    assert market_close.open_position_on_start_qty is None
+    assert market_close.close_positions_on_stop is True
+    assert market_close.reduce_only_on_stop is True
+    assert market_close.close_positions_qty_precision is None
+    assert market_close.strategy_id != market.strategy_id
 
-    canary, passive, cleanup = (
+    canary, canary_close, passive, cleanup = (
         phase.tester_config for phase in plan.passive_cancel.phases
     )
     assert [phase.run_condition for phase in plan.passive_cancel.phases] == [
         "always",
+        "cleanup_with_proof",
         "always",
         "failure_with_cleanup_proof",
     ]
     assert canary.open_position_on_start_qty == Decimal("0.001")
-    assert canary.close_positions_on_stop is True
+    assert canary.close_positions_on_stop is False
+    assert canary_close.close_positions_on_stop is True
+    assert canary_close.strategy_id != canary.strategy_id
     assert passive.open_position_on_start_qty is None
     assert passive.enable_limit_buys is True
     assert passive.enable_limit_sells is False
@@ -336,7 +345,7 @@ def test_stage4_demo_exec_plan_is_bounded_and_cannot_target_live(
     assert cleanup.enable_limit_sells is False
     assert cleanup.close_positions_on_stop is True
     assert cleanup.reduce_only_on_stop is True
-    assert cleanup.strategy_id == passive.strategy_id
+    assert cleanup.strategy_id != passive.strategy_id
     with pytest.raises(Stage4DemoExecutionError, match="requires terminal"):
         stage4_demo_execution._build_exec_tester_node(
             plan.passive_cancel,
@@ -451,6 +460,232 @@ def test_stage4_demo_exec_attempts_adapt_independent_nautilus_owned_evidence(
     }
 
 
+def test_stage4_demo_exec_missing_canary_order_keeps_unknown_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.market_close
+    cache = cast(
+        Cache,
+        SimpleNamespace(
+            orders=lambda **kwargs: [],
+            orders_open_count=lambda **kwargs: 0,
+            orders_inflight_count=lambda **kwargs: 0,
+            positions_open=lambda **kwargs: [],
+            positions=lambda **kwargs: [],
+            account=lambda *args: None,
+            quote_count=lambda *args: 0,
+            trade_count=lambda *args: 0,
+            quote=lambda *args: None,
+            mark_price=lambda *args: None,
+        ),
+    )
+    failure = stage4_demo_execution.Stage4DemoExecFailure(
+        "ORDER_TIMEOUT", "execution", ("ORDER_UNKNOWN",)
+    )
+    snapshot = stage4_demo_execution._capture_phase_snapshot(
+        cache,
+        attempt,
+        phase=attempt.phases[0],
+        phase_kind="canary",
+        started_at_ns=1,
+        ended_at_ns=2,
+        account_before_count=0,
+        account_before_balance=None,
+        account_mode=None,
+        failure=failure,
+        order_submission_unknown=True,
+    )
+    evidence = build_stage4_demo_exec_evidence(
+        attempt,
+        stage4_demo_execution._logical_observation(
+            attempt, canary=snapshot, execution=snapshot
+        ),
+    )
+    validate_stage4_demo_evidence(evidence)
+    assert snapshot.unresolved_unknown_count == 1
+    assert evidence["result"] == "FAIL"
+    assert evidence["terminal_state"] == "HALTED"
+    cleanup = cast(dict[str, object], evidence["cleanup"])
+    assert cleanup["classification"] == "cleanup_incomplete"
+    assert cleanup["unresolved_unknown_count"] == 1
+
+
+def test_stage4_demo_exec_failed_canary_stop_cannot_auto_close_outstanding_order(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.market_close
+    phase = attempt.phases[0]
+    stopped_with_auto_close: list[bool] = []
+    stop_event = asyncio.Event()
+
+    async def run_async() -> None:
+        await stop_event.wait()
+
+    def stop() -> None:
+        stopped_with_auto_close.append(phase.tester_config.close_positions_on_stop)
+        stop_event.set()
+
+    node = SimpleNamespace(
+        cache=SimpleNamespace(account=lambda *args: None),
+        handle=lambda: SimpleNamespace(stop=stop),
+        run_async=run_async,
+        dispose=lambda: None,
+    )
+    monkeypatch.setattr(
+        stage4_demo_execution,
+        "_build_exec_tester_runtime_unchecked",
+        lambda *args: SimpleNamespace(node=node, account_query=None),
+    )
+
+    async def timeout(*args: object, **kwargs: object) -> None:
+        raise stage4_demo_execution._Stage4DemoExecutionRuntimeError(
+            stage4_demo_execution.Stage4DemoExecFailure(
+                "ORDER_TIMEOUT", "execution", ("ORDER_UNKNOWN",)
+            )
+        )
+
+    monkeypatch.setattr(stage4_demo_execution, "_wait_until", timeout)
+    outstanding = replace(
+        stage4_demo_execution._failed_phase_snapshot(
+            started_at_ns=1,
+            failure=stage4_demo_execution.Stage4DemoExecFailure(
+                "ORDER_TIMEOUT", "execution", ("ORDER_UNKNOWN",)
+            ),
+        ),
+        active_order_count=1,
+        inflight_order_count=1,
+        open_position_count=1,
+        final_net_quantity=Decimal("0.001"),
+    )
+    monkeypatch.setattr(
+        stage4_demo_execution,
+        "_capture_phase_snapshot",
+        lambda *args, **kwargs: outstanding,
+    )
+
+    result = asyncio.run(
+        stage4_demo_execution._run_exec_phase(attempt, phase, phase_kind="canary")
+    )
+    assert stopped_with_auto_close == [False]
+    assert result.active_order_count == 1
+    assert result.unresolved_unknown_count == 1
+
+
+def test_stage4_demo_exec_canary_close_receives_exact_proof(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.market_close
+    account_mode = _observation(attempt.scenario).account_mode
+    opening = replace(
+        stage4_demo_execution._failed_phase_snapshot(
+            started_at_ns=1,
+            failure=stage4_demo_execution.Stage4DemoExecFailure(
+                "CLEANUP_INCOMPLETE", "cleanup", ("FAILED",)
+            ),
+        ),
+        quote_count=1,
+        market_timestamps_valid=True,
+        order_submitted=True,
+        order_accepted=True,
+        order_terminal=True,
+        fill_complete=True,
+        open_position_count=1,
+        final_net_quantity=Decimal("0.001"),
+        balance_before_observed=True,
+        balance_after_observed=True,
+        order_action_consistent=True,
+        account_mode=account_mode,
+        unresolved_unknown_count=0,
+        failure=None,
+        balance_before_total=Decimal("100"),
+    )
+    closing = replace(
+        opening,
+        order_submitted=True,
+        order_accepted=True,
+        order_terminal=True,
+        open_position_count=0,
+        final_net_quantity=Decimal(0),
+        balance_change_explained=True,
+        account_mode=None,
+    )
+    phases: list[str] = []
+
+    async def run_phase(
+        _plan: Stage4DemoExecAttemptPlan,
+        _phase: object,
+        *,
+        phase_kind: str,
+        cleanup_authorization: Stage4DemoCleanupAuthorization | None = None,
+        balance_baseline: Decimal | None = None,
+    ) -> stage4_demo_execution._ExecPhaseSnapshot:
+        phases.append(phase_kind)
+        if phase_kind == "canary":
+            assert cleanup_authorization is None
+            return opening
+        assert cleanup_authorization == Stage4DemoCleanupAuthorization(
+            signed_position=Decimal("0.001"),
+            quantity=Quantity.from_str("0.001"),
+        )
+        assert balance_baseline == Decimal("100")
+        return closing
+
+    monkeypatch.setattr(stage4_demo_execution, "_run_exec_phase", run_phase)
+    observation = asyncio.run(
+        stage4_demo_execution._observe_stage4_demo_attempt(attempt)
+    )
+    evidence = build_stage4_demo_exec_evidence(attempt, observation)
+    validate_stage4_demo_evidence(evidence)
+    assert phases == ["canary", "cleanup"]
+    assert evidence["result"] == "PASS"
+
+
+def test_stage4_demo_exec_failed_canary_never_starts_close_without_proof(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    failure = stage4_demo_execution.Stage4DemoExecFailure(
+        "ORDER_TIMEOUT", "execution", ("ORDER_UNKNOWN",)
+    )
+    outstanding = replace(
+        stage4_demo_execution._failed_phase_snapshot(started_at_ns=1, failure=failure),
+        active_order_count=1,
+        inflight_order_count=1,
+        open_position_count=1,
+        final_net_quantity=Decimal("0.001"),
+    )
+    phases: list[str] = []
+
+    async def run_phase(
+        _plan: Stage4DemoExecAttemptPlan,
+        _phase: object,
+        *,
+        phase_kind: str,
+        cleanup_authorization: object = None,
+        balance_baseline: Decimal | None = None,
+    ) -> stage4_demo_execution._ExecPhaseSnapshot:
+        del cleanup_authorization, balance_baseline
+        phases.append(phase_kind)
+        return outstanding
+
+    monkeypatch.setattr(stage4_demo_execution, "_run_exec_phase", run_phase)
+    for attempt in plan.attempts:
+        phases.clear()
+        observation = asyncio.run(
+            stage4_demo_execution._observe_stage4_demo_attempt(attempt)
+        )
+        assert phases == ["canary"]
+        assert observation.failure == failure
+        assert observation.unresolved_unknown_count == 1
+
+
 def test_stage4_demo_exec_ambiguous_response_halts_without_retry_or_unsafe_cleanup(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -563,7 +798,7 @@ def test_stage4_demo_exec_cleanup_binds_current_position_and_actual_close_order(
     assert stage4_demo_execution._cleanup_action_matches(
         cache,
         attempt,
-        stage4_demo_execution._require_phase_strategy_id(attempt.phases[2]),
+        stage4_demo_execution._require_phase_strategy_id(attempt.phases[3]),
         authorization,
     )
     position.quantity = Quantity.from_str("0.004")
@@ -571,45 +806,6 @@ def test_stage4_demo_exec_cleanup_binds_current_position_and_actual_close_order(
         cache,
         attempt,
         authorization,
-    )
-
-
-def test_stage4_demo_exec_canary_requires_exact_market_buy_and_reduce_only_sell(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    plan, _ = _plan(monkeypatch, tmp_path)
-    quantity = plan.market_close.canary_quantity
-    opening = _cached_order(
-        side="BUY",
-        order_type="MARKET",
-        quantity="0.001",
-        filled="0.001",
-        reduce_only=False,
-        status="FILLED",
-    )
-    closing = _cached_order(
-        side="SELL",
-        order_type="MARKET",
-        quantity="0.001",
-        filled="0.001",
-        reduce_only=True,
-        status="FILLED",
-    )
-
-    assert stage4_demo_execution._canary_action_matches([opening, closing], quantity)
-    assert not stage4_demo_execution._canary_action_matches(
-        [opening, _changed_namespace(closing, side="BUY")], quantity
-    )
-    assert not stage4_demo_execution._canary_action_matches(
-        [opening, _changed_namespace(closing, is_reduce_only=False)], quantity
-    )
-    assert not stage4_demo_execution._canary_action_matches(
-        [
-            opening,
-            _changed_namespace(closing, quantity=Quantity.from_str("0.002")),
-        ],
-        quantity,
     )
 
 
@@ -639,7 +835,7 @@ def test_stage4_demo_exec_passive_terminal_must_be_canceled(
             ),
         )
 
-    strategy_id = stage4_demo_execution._require_phase_strategy_id(attempt.phases[1])
+    strategy_id = stage4_demo_execution._require_phase_strategy_id(attempt.phases[2])
     assert stage4_demo_execution._passive_cancel_complete(
         cache_with(canceled), attempt, strategy_id
     )
