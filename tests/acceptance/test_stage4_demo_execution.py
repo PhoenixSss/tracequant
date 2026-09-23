@@ -12,10 +12,16 @@ from typing import cast
 import pytest
 from nautilus_trader.adapters.binance import BinanceEnvironment
 from nautilus_trader.common import Cache
+from nautilus_trader.core import UUID4
 from nautilus_trader.model import (
+    AccountBalance,
+    AccountId,
+    AccountState,
+    AccountType,
     CryptoPerpetual,
     Currency,
     InstrumentId,
+    MarginAccount,
     Money,
     Price,
     Quantity,
@@ -313,7 +319,7 @@ def test_stage4_demo_exec_plan_is_bounded_and_cannot_target_live(
     assert market_close.close_positions_on_stop is True
     assert market_close.reduce_only_on_stop is True
     assert market_close.close_positions_qty_precision is None
-    assert market_close.strategy_id != market.strategy_id
+    assert market_close.strategy_id == market.strategy_id
 
     canary, canary_close, passive, cleanup = (
         phase.tester_config for phase in plan.passive_cancel.phases
@@ -327,7 +333,7 @@ def test_stage4_demo_exec_plan_is_bounded_and_cannot_target_live(
     assert canary.open_position_on_start_qty == Decimal("0.001")
     assert canary.close_positions_on_stop is False
     assert canary_close.close_positions_on_stop is True
-    assert canary_close.strategy_id != canary.strategy_id
+    assert canary_close.strategy_id == canary.strategy_id
     assert passive.open_position_on_start_qty is None
     assert passive.enable_limit_buys is True
     assert passive.enable_limit_sells is False
@@ -345,7 +351,7 @@ def test_stage4_demo_exec_plan_is_bounded_and_cannot_target_live(
     assert cleanup.enable_limit_sells is False
     assert cleanup.close_positions_on_stop is True
     assert cleanup.reduce_only_on_stop is True
-    assert cleanup.strategy_id != passive.strategy_id
+    assert cleanup.strategy_id == passive.strategy_id
     with pytest.raises(Stage4DemoExecutionError, match="requires terminal"):
         stage4_demo_execution._build_exec_tester_node(
             plan.passive_cancel,
@@ -530,7 +536,10 @@ def test_stage4_demo_exec_failed_canary_stop_cannot_auto_close_outstanding_order
         stop_event.set()
 
     node = SimpleNamespace(
-        cache=SimpleNamespace(account=lambda *args: None),
+        cache=SimpleNamespace(
+            account=lambda *args: None,
+            orders=lambda **kwargs: [],
+        ),
         handle=lambda: SimpleNamespace(stop=stop),
         run_async=run_async,
         dispose=lambda: None,
@@ -770,7 +779,9 @@ def test_stage4_demo_exec_cleanup_binds_current_position_and_actual_close_order(
         signed_position=Decimal("0.003"),
         quantity=Quantity.from_str("0.003"),
     )
+    strategy_id = stage4_demo_execution._require_phase_strategy_id(attempt.phases[3])
     position = SimpleNamespace(
+        strategy_id=strategy_id,
         quantity=Quantity.from_str("0.003"),
         is_long=True,
         is_short=False,
@@ -779,33 +790,58 @@ def test_stage4_demo_exec_cleanup_binds_current_position_and_actual_close_order(
         quantity=Quantity.from_str("0.003"),
         side="SELL",
         is_reduce_only=True,
+        is_closed=True,
     )
+    observed_orders: list[object] = [close_order]
     cache = cast(
         Cache,
         SimpleNamespace(
             positions_open=lambda **kwargs: [position],
             orders_open_count=lambda **kwargs: 0,
             orders_inflight_count=lambda **kwargs: 0,
-            orders=lambda **kwargs: [close_order],
+            orders=lambda **kwargs: observed_orders,
         ),
     )
 
     assert stage4_demo_execution._cleanup_cache_matches_authorization(
         cache,
         attempt,
+        strategy_id,
         authorization,
     )
     assert stage4_demo_execution._cleanup_action_matches(
         cache,
         attempt,
-        stage4_demo_execution._require_phase_strategy_id(attempt.phases[3]),
+        strategy_id,
         authorization,
     )
     position.quantity = Quantity.from_str("0.004")
     assert not stage4_demo_execution._cleanup_cache_matches_authorization(
         cache,
         attempt,
+        strategy_id,
         authorization,
+    )
+    position.quantity = Quantity.from_str("0.003")
+    position.strategy_id = stage4_demo_execution._require_phase_strategy_id(
+        attempt.phases[0]
+    )
+    assert not stage4_demo_execution._cleanup_cache_matches_authorization(
+        cache,
+        attempt,
+        strategy_id,
+        authorization,
+    )
+
+    # Reconciliation may retain the terminal entry order under the reused ID.
+    entry_order = SimpleNamespace(is_reduce_only=False, is_closed=True)
+    observed_orders[:] = [entry_order, close_order]
+    assert stage4_demo_execution._cleanup_action_matches(
+        cache, attempt, strategy_id, authorization
+    )
+    observed_orders[:] = [entry_order, close_order, close_order]
+    assert not stage4_demo_execution._cleanup_action_matches(
+        cache, attempt, strategy_id, authorization
     )
 
 
@@ -1328,6 +1364,75 @@ def test_stage4_demo_exec_canary_rejects_numeric_two_x_before_passive(
     )
     assert phases == ["canary"]
     assert observation.failure == failure
+
+
+def test_stage4_demo_exec_uses_pre_order_account_event_after_fast_fill(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.market_close
+    strategy_id = stage4_demo_execution._require_phase_strategy_id(attempt.phases[0])
+
+    def account_event(balance: str, ts_init: int) -> AccountState:
+        total = Money.from_str(f"{balance} USDT")
+        return AccountState(
+            AccountId.from_str("BINANCE-001"),
+            AccountType.MARGIN,
+            [AccountBalance(total, Money.from_str("0.00 USDT"), total)],
+            [],
+            True,
+            UUID4(),
+            ts_init,
+            ts_init,
+        )
+
+    account = MarginAccount(account_event("100.00", 10), True)
+    account.apply(account_event("99.95", 30))
+    observed_orders: list[object] = [SimpleNamespace(ts_submitted=20)]
+    cache = cast(
+        Cache,
+        SimpleNamespace(
+            orders=lambda **kwargs: observed_orders,
+            account=lambda *args: account,
+        ),
+    )
+    count, before = stage4_demo_execution._pre_order_account_observation(
+        cache, attempt, strategy_id
+    )
+    assert (count, before) == (1, Decimal("100.00"))
+    position = SimpleNamespace(
+        is_closed=True,
+        realized_pnl=Money.from_str("-0.10 USDT"),
+        commissions=lambda: [Money.from_str("0.05 USDT")],
+    )
+    assert stage4_demo_execution._balance_reconciled(
+        attempt,
+        before=before,
+        after=Decimal("99.90"),
+        positions=[position],
+        no_fill=False,
+    )
+    assert not stage4_demo_execution._balance_reconciled(
+        attempt,
+        before=Decimal("99.95"),
+        after=Decimal("99.90"),
+        positions=[position],
+        no_fill=False,
+    )
+
+    observed_orders[:] = [
+        SimpleNamespace(ts_submitted=5, is_reduce_only=False),
+        SimpleNamespace(ts_submitted=20, is_reduce_only=True),
+    ]
+    assert stage4_demo_execution._pre_order_account_observation(
+        cache, attempt, strategy_id, phase_kind="cleanup"
+    ) == (1, Decimal("100.00"))
+
+    account = MarginAccount(account_event("99.95", 30), True)
+    assert stage4_demo_execution._pre_order_account_observation(
+        cache, attempt, strategy_id, phase_kind="cleanup"
+    ) == (0, None)
 
 
 def test_stage4_demo_exec_balance_reconciles_numeric_delta(

@@ -854,8 +854,6 @@ async def _run_exec_phase(
     node = runtime.node
     cache = node.cache
     handle = node.handle()
-    account_before_count = _account_event_count(cache)
-    account_before_balance = _account_total_balance(cache, plan)
     strategy_id = _require_phase_strategy_id(phase)
     run_task: asyncio.Task[None] = asyncio.create_task(node.run_async())
     failure: Stage4DemoExecFailure | None = None
@@ -887,12 +885,6 @@ async def _run_exec_phase(
                 "CONNECT_SUBSCRIPTION_FAILED", "data", ("FAILED",)
             ),
         )
-        account_before_count = _account_event_count(cache)
-        account_before_balance = (
-            balance_baseline
-            if phase_kind == "cleanup"
-            else _account_total_balance(cache, plan)
-        )
         if phase_kind == "cleanup":
             await _wait_until(
                 lambda: bool(cache.positions_open(instrument_id=plan.instrument.id)),
@@ -909,6 +901,7 @@ async def _run_exec_phase(
                 or not _cleanup_cache_matches_authorization(
                     cache,
                     plan,
+                    strategy_id,
                     cleanup_authorization,
                 )
             ):
@@ -1038,6 +1031,9 @@ async def _run_exec_phase(
         failure = cleanup_failure
     ended_at_ns = time.time_ns()
     try:
+        account_before_count, pre_order_balance = _pre_order_account_observation(
+            cache, plan, strategy_id, phase_kind=phase_kind
+        )
         return _capture_phase_snapshot(
             cache,
             plan,
@@ -1046,7 +1042,9 @@ async def _run_exec_phase(
             started_at_ns=started_at_ns,
             ended_at_ns=ended_at_ns,
             account_before_count=account_before_count,
-            account_before_balance=account_before_balance,
+            account_before_balance=(
+                balance_baseline if phase_kind == "cleanup" else pre_order_balance
+            ),
             account_mode=account_mode,
             failure=failure,
             order_submission_unknown=order_submission_unknown,
@@ -1270,6 +1268,7 @@ def _cleanup_complete(
 def _cleanup_cache_matches_authorization(
     cache: Cache,
     plan: Stage4DemoExecAttemptPlan,
+    strategy_id: StrategyId,
     authorization: Stage4DemoCleanupAuthorization,
 ) -> bool:
     positions = cache.positions_open(instrument_id=plan.instrument.id)
@@ -1277,6 +1276,7 @@ def _cleanup_cache_matches_authorization(
         cache.orders_open_count(instrument_id=plan.instrument.id) != 0
         or cache.orders_inflight_count(instrument_id=plan.instrument.id) != 0
         or len(positions) != 1
+        or getattr(positions[0], "strategy_id", None) != strategy_id
     ):
         return False
     current = _signed_position_quantity(positions[0])
@@ -1298,9 +1298,12 @@ def _cleanup_action_matches(
         instrument_id=plan.instrument.id,
         strategy_id=strategy_id,
     )
-    if len(orders) != 1:
+    close_orders = [order for order in orders if _order_reduce_only(order)]
+    if len(close_orders) != 1 or any(
+        not _order_bool(order, "is_closed") for order in orders
+    ):
         return False
-    order = orders[0]
+    order = close_orders[0]
     expected_side = "SELL" if authorization.signed_position > 0 else "BUY"
     side = str(getattr(order, "side", "")).upper().rsplit(".", maxsplit=1)[-1]
     reduce_only = getattr(order, "is_reduce_only", False)
@@ -1745,6 +1748,56 @@ def _account_total_balance(
     return value if isinstance(value, Decimal) and value.is_finite() else None
 
 
+def _pre_order_account_observation(
+    cache: Cache,
+    plan: Stage4DemoExecAttemptPlan,
+    strategy_id: StrategyId,
+    *,
+    phase_kind: Literal["canary", "passive", "cleanup"] = "canary",
+) -> tuple[int, Decimal | None]:
+    """Use a public account event initialized before this phase's first order."""
+    orders = cache.orders(instrument_id=plan.instrument.id, strategy_id=strategy_id)
+    submitted: list[int] = []
+    for order in orders:
+        if phase_kind == "cleanup" and not _order_reduce_only(order):
+            continue
+        timestamp = getattr(order, "ts_submitted", None)
+        if not isinstance(timestamp, int) or timestamp <= 0:
+            return 0, None
+        submitted.append(timestamp)
+    if not submitted:
+        return 0, None
+    account = cache.account(AccountId.from_str(EXEC_ACCOUNT_ID))
+    events = getattr(account, "events", None) if account is not None else None
+    if not isinstance(events, (list, tuple)):
+        return 0, None
+    first_order_ns = min(submitted)
+    for index in range(len(events) - 1, -1, -1):
+        event = events[index]
+        event_ns = getattr(event, "ts_init", None)
+        if not isinstance(event_ns, int) or event_ns > first_order_ns:
+            continue
+        balances = getattr(event, "balances", None)
+        if not isinstance(balances, (list, tuple)):
+            return 0, None
+        matching = [
+            balance
+            for balance in balances
+            if getattr(getattr(balance, "total", None), "currency", None)
+            == plan.instrument.quote_currency
+        ]
+        if len(matching) != 1:
+            return 0, None
+        amount = getattr(matching[0].total, "as_decimal", None)
+        if not callable(amount):
+            return 0, None
+        value = amount()
+        if not isinstance(value, Decimal) or not value.is_finite():
+            return 0, None
+        return index + 1, value
+    return 0, None
+
+
 def _balance_reconciled(
     plan: Stage4DemoExecAttemptPlan,
     *,
@@ -2015,7 +2068,7 @@ def _build_attempt_plan(
             tester_config=_cleanup_tester_config(
                 instrument_id=instrument_id,
                 client_id=client_id,
-                strategy_id=StrategyId.from_str("STAGE4-CANARY-CLOSE-001"),
+                strategy_id=_require_phase_strategy_id(phases[0]),
             ),
             run_condition="cleanup_with_proof",
         )
@@ -2044,7 +2097,7 @@ def _build_attempt_plan(
                 tester_config=_cleanup_tester_config(
                     instrument_id=instrument_id,
                     client_id=client_id,
-                    strategy_id=StrategyId.from_str("STAGE4-PASSIVE-CLOSE-001"),
+                    strategy_id=_require_phase_strategy_id(phases[2]),
                 ),
                 run_condition="failure_with_cleanup_proof",
             )
@@ -2131,6 +2184,9 @@ def _build_authorized_cleanup_runtime(
         )
     if phase.run_condition not in {"cleanup_with_proof", "failure_with_cleanup_proof"}:
         raise Stage4DemoExecutionError("phase is not an authorized cleanup phase")
+    source = plan.phases[0] if phase is plan.phases[1] else plan.phases[2]
+    if _require_phase_strategy_id(phase) != _require_phase_strategy_id(source):
+        raise Stage4DemoExecutionError("cleanup strategy does not own the position")
     if (
         exact_reduce_only_quantity(
             plan.instrument,
