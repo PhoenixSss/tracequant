@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -70,6 +72,7 @@ _DATA_TESTER_BUILTIN: Final = "DataTester"
 EXEC_CLIENT_NAME: Final = "BINANCE"
 EXEC_ACCOUNT_ID: Final = "BINANCE-001"
 EXEC_EVIDENCE_FILENAME: Final = "evidence.json"
+_EXEC_OBSERVATIONS_FILENAME: Final = "observations.json"
 PASSIVE_OFFSET_TICKS: Final = 1
 _EXEC_NODE_NAME: Final = "TRACEQUANT-STAGE4-EXEC-TESTER"
 _EXEC_TRADER_ID: Final = "TRACEQUANT-001"
@@ -223,6 +226,7 @@ class Stage4DemoExecObservation:
     unresolved_unknown_count: int
     failure: Stage4DemoExecFailure | None = None
     market_input_conflicting: bool = False
+    phase_observations: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -278,6 +282,7 @@ class _ExecPhaseSnapshot:
     failure: Stage4DemoExecFailure | None
     balance_before_total: Decimal | None = None
     market_input_conflicting: bool = False
+    phase_observations: tuple[dict[str, object], ...] = ()
 
 
 @dataclass
@@ -736,7 +741,9 @@ def _run_and_persist_attempt(
         raise Stage4DemoExecutionError("ExecTester evidence partition already exists")
     observation = asyncio.run(_observe_stage4_demo_attempt(plan))
     evidence = build_stage4_demo_exec_evidence(plan, observation)
-    return write_stage4_demo_exec_evidence(plan, evidence)
+    return write_stage4_demo_exec_evidence(
+        plan, evidence, phase_observations=observation.phase_observations
+    )
 
 
 def build_stage4_demo_exec_evidence(
@@ -932,15 +939,20 @@ def build_stage4_demo_exec_evidence(
 def write_stage4_demo_exec_evidence(
     plan: Stage4DemoExecAttemptPlan,
     evidence: dict[str, object],
+    *,
+    phase_observations: tuple[dict[str, object], ...] = (),
 ) -> Stage4DemoExecOutcome:
     """Write one validated attempt record to a new external partition."""
-    return _write_exec_evidence(plan.evidence_partition, plan.scenario, evidence)
+    return _write_exec_evidence(
+        plan.evidence_partition, plan.scenario, evidence, phase_observations
+    )
 
 
 def _write_exec_evidence(
     partition: Path,
     scenario: DemoEvidenceScenario,
     evidence: dict[str, object],
+    phase_observations: tuple[dict[str, object], ...] = (),
 ) -> Stage4DemoExecOutcome:
     if evidence.get("scenario") != scenario.value:
         raise Stage4DemoExecutionError("evidence scenario does not match its plan")
@@ -955,11 +967,22 @@ def _write_exec_evidence(
             "ExecTester evidence partition already exists"
         ) from exc
     evidence_path = partition / EXEC_EVIDENCE_FILENAME
+    observations_path = partition / _EXEC_OBSERVATIONS_FILENAME
     try:
         with evidence_path.open("x", encoding="utf-8", newline="\n") as stream:
             stream.write(rendered)
             stream.write("\n")
+        if phase_observations:
+            observations = {
+                "evidence_sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+                "source": "nautilus_cache",
+                "phases": phase_observations,
+            }
+            with observations_path.open("x", encoding="utf-8", newline="\n") as stream:
+                json.dump(observations, stream, sort_keys=True, ensure_ascii=False)
+                stream.write("\n")
     except Exception:
+        observations_path.unlink(missing_ok=True)
         evidence_path.unlink(missing_ok=True)
         partition.rmdir()
         raise
@@ -1495,15 +1518,25 @@ def _canary_filled(
     )
 
 
+def _no_global_unresolved_orders(cache: Cache) -> bool:
+    return (
+        cache.orders_open_count() == 0
+        and cache.orders_inflight_count() == 0
+        and not any(
+            _order_bool(order, "is_pending_cancel")
+            or _order_bool(order, "is_pending_update")
+            for order in cache.orders()
+        )
+    )
+
+
 def _canary_stop_complete(
     cache: Cache,
     plan: Stage4DemoExecAttemptPlan,
     strategy_id: StrategyId,
 ) -> bool:
-    return (
-        _canary_filled(cache, plan, strategy_id)
-        and cache.orders_open_count(instrument_id=plan.instrument.id) == 0
-        and cache.orders_inflight_count(instrument_id=plan.instrument.id) == 0
+    return _canary_filled(cache, plan, strategy_id) and _no_global_unresolved_orders(
+        cache
     )
 
 
@@ -1533,8 +1566,7 @@ def _passive_cancel_complete(
     return (
         len(orders) == 1
         and _passive_order_matches(plan, orders[0])
-        and cache.orders_open_count(instrument_id=plan.instrument.id) == 0
-        and cache.orders_inflight_count(instrument_id=plan.instrument.id) == 0
+        and _no_global_unresolved_orders(cache)
     )
 
 
@@ -1550,9 +1582,8 @@ def _cleanup_complete(
     return (
         bool(orders)
         and all(_order_bool(order, "is_closed") for order in orders)
-        and cache.orders_open_count(instrument_id=plan.instrument.id) == 0
-        and cache.orders_inflight_count(instrument_id=plan.instrument.id) == 0
-        and not cache.positions_open(instrument_id=plan.instrument.id)
+        and _no_global_unresolved_orders(cache)
+        and not cache.positions_open()
     )
 
 
@@ -1574,15 +1605,14 @@ def _authorized_cleanup_position(
     strategy_id: StrategyId,
     authorization: Stage4DemoCleanupAuthorization,
 ) -> Position | None:
-    if (
-        cache.orders_open_count(instrument_id=plan.instrument.id) != 0
-        or cache.orders_inflight_count(instrument_id=plan.instrument.id) != 0
-    ):
+    if not _no_global_unresolved_orders(cache):
         return None
-    positions = cache.positions_open(instrument_id=plan.instrument.id)
+    positions = cache.positions_open()
     if len(positions) != 1 or positions[0].strategy_id != strategy_id:
         return None
     position = positions[0]
+    if position.instrument_id != plan.instrument.id:
+        return None
     current = _signed_position_quantity(position)
     if current is None or current != authorization.signed_position:
         return None
@@ -1633,7 +1663,7 @@ def _capture_account_mode(
         not str(position.id).endswith(("-LONG", "-SHORT"))
         for position in target_positions
     )
-    isolated = one_way and not all_open_orders
+    isolated = one_way and not all_open_orders and _no_global_unresolved_orders(cache)
     account = cache.account(AccountId.from_str(EXEC_ACCOUNT_ID))
     event = getattr(account, "last_event", None) if account is not None else None
     if callable(event):
@@ -1697,6 +1727,139 @@ def _account_mode_complete(
     )
 
 
+def _bounded_phase_source_facts(
+    cache: Cache,
+    plan: Stage4DemoExecAttemptPlan,
+    *,
+    phase: Stage4DemoExecPhasePlan,
+    phase_kind: Literal["canary", "passive", "cleanup"],
+    orders: list[object],
+    positions: list[object],
+    snapshot: _ExecPhaseSnapshot,
+) -> dict[str, object]:
+    """Keep a small, allowlisted copy of public Nautilus facts outside the repo."""
+    order_facts: list[dict[str, object]] = []
+    for order in orders[:8]:
+        events = getattr(order, "events", ())
+        events = events() if callable(events) else events
+        event_list = list(events) if isinstance(events, (list, tuple)) else []
+        event_facts: list[dict[str, object]] = []
+        for event in event_list[-32:]:
+            event_facts.append(
+                {
+                    "type": type(event).__name__,
+                    "ts_event": getattr(event, "ts_event", None),
+                    "last_qty": _public_quantity_text(getattr(event, "last_qty", None)),
+                    "last_px": _public_quantity_text(getattr(event, "last_px", None)),
+                }
+            )
+        order_facts.append(
+            {
+                "side": _order_enum_name(order, "side"),
+                "type": _order_enum_name(order, "order_type"),
+                "status": _order_enum_name(order, "status"),
+                "quantity": _decimal_text(_order_quantity(order)),
+                "filled_quantity": _decimal_text(_filled_quantity(order)),
+                "price": _optional_decimal_text(_order_price(order)),
+                "reduce_only": _order_reduce_only(order),
+                "post_only": _order_bool(order, "is_post_only"),
+                "ts_submitted": getattr(order, "ts_submitted", None),
+                "ts_accepted": getattr(order, "ts_accepted", None),
+                "events": event_facts,
+                "events_truncated": len(event_list) > 32,
+            }
+        )
+    account = cache.account(AccountId.from_str(EXEC_ACCOUNT_ID))
+    account_event = (
+        getattr(account, "last_event", None) if account is not None else None
+    )
+    account_event = account_event() if callable(account_event) else account_event
+    info = getattr(account_event, "info", None)
+    initial_margin = (
+        info.get("total_initial_margin") if isinstance(info, dict) else None
+    )
+    account_mode = snapshot.account_mode
+    return {
+        "phase": phase.name,
+        "phase_kind": phase_kind,
+        "started_at_ns": snapshot.started_at_ns,
+        "ended_at_ns": snapshot.ended_at_ns,
+        "orders": order_facts,
+        "orders_truncated": len(orders) > 8,
+        "positions": [
+            {
+                "instrument_id": str(getattr(position, "instrument_id", "")),
+                "signed_quantity": _optional_decimal_text(
+                    _signed_position_quantity(position)
+                ),
+            }
+            for position in positions[:8]
+        ],
+        "positions_truncated": len(positions) > 8,
+        "account": {
+            "event_count": _account_event_count(cache),
+            "last_event_ts": getattr(account_event, "ts_event", None),
+            "total_balance": _optional_decimal_text(
+                _account_total_balance(cache, plan)
+            ),
+            "initial_margin": _public_numeric_text(initial_margin),
+            "one_way_confirmed": (
+                account_mode.one_way_confirmed if account_mode is not None else None
+            ),
+            "isolated_confirmed": (
+                account_mode.isolated_confirmed if account_mode is not None else None
+            ),
+            "mark_price_min": (
+                _optional_decimal_text(account_mode.mark_price_min)
+                if account_mode is not None
+                else None
+            ),
+            "mark_price_max": (
+                _optional_decimal_text(account_mode.mark_price_max)
+                if account_mode is not None
+                else None
+            ),
+        },
+        "global_state": {
+            "active_orders": snapshot.active_order_count,
+            "inflight_orders": snapshot.inflight_order_count,
+            "pending_orders": snapshot.pending_order_count,
+            "open_positions": snapshot.open_position_count,
+            "net_quantity": _decimal_text(snapshot.final_net_quantity),
+            "unresolved_unknown": snapshot.unresolved_unknown_count,
+        },
+        "diagnostic": (
+            None
+            if snapshot.failure is None
+            else {
+                "code": snapshot.failure.code,
+                "phase": snapshot.failure.phase,
+                "codes": list(snapshot.failure.diagnostic_codes),
+            }
+        ),
+    }
+
+
+def _public_numeric_text(value: object) -> str | None:
+    if value is None:
+        return None
+    try:
+        numeric = Decimal(str(value))
+    except (ArithmeticError, ValueError):
+        return None
+    return _decimal_text(numeric) if numeric.is_finite() else None
+
+
+def _public_quantity_text(value: object) -> str | None:
+    decimal_value = getattr(value, "as_decimal", None)
+    result = decimal_value() if callable(decimal_value) else value
+    return (
+        _decimal_text(result)
+        if isinstance(result, Decimal) and result.is_finite()
+        else None
+    )
+
+
 def _capture_phase_snapshot(
     cache: Cache,
     plan: Stage4DemoExecAttemptPlan,
@@ -1718,12 +1881,12 @@ def _capture_phase_snapshot(
         instrument_id=plan.instrument.id,
         strategy_id=_require_phase_strategy_id(phase),
     )
-    open_orders = cache.orders_open_count(instrument_id=plan.instrument.id)
-    inflight_orders = cache.orders_inflight_count(instrument_id=plan.instrument.id)
+    open_orders = cache.orders_open_count()
+    inflight_orders = cache.orders_inflight_count()
     pending_orders = sum(
         _order_bool(order, "is_pending_cancel")
         or _order_bool(order, "is_pending_update")
-        for order in orders
+        for order in cache.orders()
     )
     terminal = bool(orders) and all(_order_bool(order, "is_closed") for order in orders)
     submitted = bool(orders) and all(
@@ -1744,7 +1907,7 @@ def _capture_phase_snapshot(
         0 < filled < quantity
         for filled, quantity in zip(filled_quantities, order_quantities, strict=True)
     )
-    positions = cache.positions_open(instrument_id=plan.instrument.id)
+    positions = cache.positions_open()
     owned_positions = (
         cache.positions(instrument_id=plan.instrument.id)
         if phase_kind == "cleanup"
@@ -1763,6 +1926,7 @@ def _capture_phase_snapshot(
     unresolved = (
         int(ambiguous)
         + int(bool(inflight_orders))
+        + int(bool(pending_orders))
         + int(position_unknown)
         + int(not orders and order_submission_unknown)
         + int(stop_unconfirmed)
@@ -1842,7 +2006,7 @@ def _capture_phase_snapshot(
         plan,
         ended_at_ns,
     )
-    return _ExecPhaseSnapshot(
+    snapshot = _ExecPhaseSnapshot(
         started_at_ns=started_at_ns,
         ended_at_ns=ended_at_ns,
         quote_count=quote_count,
@@ -1876,6 +2040,20 @@ def _capture_phase_snapshot(
         failure=resolved_failure,
         balance_before_total=account_before_balance,
         market_input_conflicting=market_input_conflicting,
+    )
+    return replace(
+        snapshot,
+        phase_observations=(
+            _bounded_phase_source_facts(
+                cache,
+                plan,
+                phase=phase,
+                phase_kind=phase_kind,
+                orders=orders,
+                positions=positions,
+                snapshot=snapshot,
+            ),
+        ),
     )
 
 
@@ -1937,6 +2115,11 @@ def _logical_observation(
         failure=canary.failure or execution.failure,
         market_input_conflicting=(
             canary.market_input_conflicting or execution.market_input_conflicting
+        ),
+        phase_observations=(
+            canary.phase_observations
+            if same_phase
+            else canary.phase_observations + execution.phase_observations
         ),
     )
 
@@ -2045,6 +2228,7 @@ def _merge_cleanup_snapshot(
         market_input_conflicting=(
             execution.market_input_conflicting or cleanup.market_input_conflicting
         ),
+        phase_observations=(execution.phase_observations + cleanup.phase_observations),
     )
 
 
@@ -2341,6 +2525,7 @@ def _passive_order_matches(
         _order_enum_name(order, "order_type") == "LIMIT"
         and _order_enum_name(order, "side") == "BUY"
         and not _order_reduce_only(order)
+        and _order_bool(order, "is_post_only")
         and _order_quantity(order) == plan.passive_quantity.as_decimal()
         and _filled_quantity(order) == 0
         and _order_price(order) == plan.passive_price.as_decimal()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from dataclasses import dataclass, replace
@@ -49,6 +50,7 @@ from tracequant.integrations.nautilus.stage4_demo import (
 )
 from tracequant.integrations.nautilus.stage4_demo_evidence import (
     DemoEvidenceScenario,
+    canonical_stage4_demo_evidence_json,
     validate_stage4_demo_evidence,
 )
 from tracequant.integrations.nautilus.stage4_demo_execution import (
@@ -252,6 +254,7 @@ def _cached_order(
     reduce_only: bool,
     status: str,
     price: str | None = None,
+    post_only: bool = False,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         side=side,
@@ -259,6 +262,7 @@ def _cached_order(
         quantity=Quantity.from_str(quantity),
         filled_qty=Quantity.from_str(filled),
         is_reduce_only=reduce_only,
+        is_post_only=post_only,
         status=status,
         price=Price.from_str(price) if price is not None else None,
         ts_submitted=1,
@@ -610,6 +614,7 @@ def test_stage4_demo_exec_filled_canary_stops_with_position_for_exact_close(
         status="FILLED",
     )
     position = SimpleNamespace(
+        instrument_id=attempt.instrument.id,
         strategy_id=strategy_id,
         quantity=Quantity.from_str("0.001"),
         is_long=True,
@@ -1049,6 +1054,7 @@ def test_stage4_demo_exec_cleanup_binds_current_position_and_actual_close_order(
     )
     strategy_id = stage4_demo_execution._require_phase_strategy_id(attempt.phases[3])
     position = SimpleNamespace(
+        instrument_id=attempt.instrument.id,
         strategy_id=strategy_id,
         quantity=Quantity.from_str("0.003"),
         is_long=True,
@@ -1178,6 +1184,7 @@ def test_stage4_demo_exec_private_close_is_one_shot_and_checks_current_state(
     )
     position = SimpleNamespace(
         id="POSITION-001",
+        instrument_id=attempt.instrument.id,
         strategy_id=strategy_id,
         quantity=Quantity.from_str("0.001"),
         is_long=True,
@@ -1190,6 +1197,7 @@ def test_stage4_demo_exec_private_close_is_one_shot_and_checks_current_state(
             positions_open=lambda **kwargs: [position],
             orders_open_count=lambda **kwargs: active_orders,
             orders_inflight_count=lambda **kwargs: 0,
+            orders=lambda **kwargs: [],
         ),
     )
     created: list[dict[str, object]] = []
@@ -1271,6 +1279,7 @@ def test_stage4_demo_exec_failed_cleanup_recheck_stops_without_close(
     )
     position = SimpleNamespace(
         id="POSITION-001",
+        instrument_id=attempt.instrument.id,
         strategy_id=strategy_id,
         quantity=Quantity.from_str("0.002"),
         is_long=True,
@@ -1442,6 +1451,7 @@ def test_stage4_demo_exec_passive_terminal_must_be_canceled(
         reduce_only=False,
         status="CANCELED",
         price="49999.99",
+        post_only=True,
     )
 
     def cache_with(order: object) -> Cache:
@@ -1457,6 +1467,11 @@ def test_stage4_demo_exec_passive_terminal_must_be_canceled(
     strategy_id = stage4_demo_execution._require_phase_strategy_id(attempt.phases[2])
     assert stage4_demo_execution._passive_cancel_complete(
         cache_with(canceled), attempt, strategy_id
+    )
+    assert not stage4_demo_execution._passive_cancel_complete(
+        cache_with(_changed_namespace(canceled, is_post_only=False)),
+        attempt,
+        strategy_id,
     )
     assert not stage4_demo_execution._passive_cancel_complete(
         cache_with(_changed_namespace(canceled, status="EXPIRED")),
@@ -1517,6 +1532,27 @@ def test_stage4_demo_exec_market_record_does_not_double_phase_counts(
 
     assert observation.quote_count == 3
     assert observation.trade_count == 2
+
+    canary = replace(snapshot, phase_observations=({"phase": "canary"},))
+    cleanup = replace(snapshot, phase_observations=({"phase": "cleanup"},))
+    closed_canary = stage4_demo_execution._merge_cleanup_snapshot(canary, cleanup)
+    market = stage4_demo_execution._logical_observation(
+        plan.market_close, canary=closed_canary, execution=closed_canary
+    )
+    passive = stage4_demo_execution._logical_observation(
+        plan.passive_cancel,
+        canary=closed_canary,
+        execution=replace(snapshot, phase_observations=({"phase": "passive"},)),
+    )
+    assert [item["phase"] for item in market.phase_observations] == [
+        "canary",
+        "cleanup",
+    ]
+    assert [item["phase"] for item in passive.phase_observations] == [
+        "canary",
+        "cleanup",
+        "passive",
+    ]
 
 
 def test_stage4_demo_exec_runtime_price_must_match_admitted_passive_plan(
@@ -2327,3 +2363,176 @@ def test_stage4_demo_exec_balance_reconciles_numeric_delta(
         positions=[],
         no_fill=True,
     )
+
+
+def test_stage4_demo_exec_global_state_blocks_cleanup_and_final_pass(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.market_close
+    strategy_id = stage4_demo_execution._require_phase_strategy_id(attempt.phases[1])
+    authorization = Stage4DemoCleanupAuthorization(
+        signed_position=Decimal("0.001"), quantity=Quantity.from_str("0.001")
+    )
+    target = SimpleNamespace(
+        instrument_id=attempt.instrument.id,
+        strategy_id=strategy_id,
+        quantity=Quantity.from_str("0.001"),
+        is_long=True,
+        is_short=False,
+    )
+    unrelated = SimpleNamespace(
+        instrument_id=InstrumentId.from_str("ETHUSDT-PERP.BINANCE"),
+        strategy_id=strategy_id,
+        quantity=Quantity.from_str("0.001"),
+        is_long=True,
+        is_short=False,
+    )
+    canary_order = _cached_order(
+        side="BUY",
+        order_type="MARKET",
+        quantity="0.001",
+        filled="0.001",
+        reduce_only=False,
+        status="FILLED",
+    )
+    state: dict[str, Any] = {
+        "orders": [canary_order],
+        "positions": [target],
+        "active_orders": 0,
+    }
+
+    def orders(**kwargs: object) -> list[object]:
+        return [canary_order] if kwargs else state["orders"]
+
+    cache = cast(
+        Cache,
+        SimpleNamespace(
+            orders_open_count=lambda **kwargs: state["active_orders"],
+            orders_inflight_count=lambda **kwargs: 0,
+            orders=orders,
+            positions_open=lambda **kwargs: state["positions"],
+            positions=lambda **kwargs: [target],
+            account=lambda *args: None,
+            quote_count=lambda *args: 0,
+            trade_count=lambda *args: 0,
+            quote=lambda *args: None,
+            mark_price=lambda *args: None,
+        ),
+    )
+    assert stage4_demo_execution._cleanup_cache_matches_authorization(
+        cache, attempt, strategy_id, authorization
+    )
+    state["orders"].append(SimpleNamespace(is_pending_cancel=True))
+    assert not stage4_demo_execution._cleanup_cache_matches_authorization(
+        cache, attempt, strategy_id, authorization
+    )
+    state["orders"].pop()
+    state["positions"].append(unrelated)
+    assert not stage4_demo_execution._cleanup_cache_matches_authorization(
+        cache, attempt, strategy_id, authorization
+    )
+    state["active_orders"] = 1
+    snapshot = stage4_demo_execution._capture_phase_snapshot(
+        cache,
+        attempt,
+        phase=attempt.phases[0],
+        phase_kind="canary",
+        started_at_ns=1,
+        ended_at_ns=2,
+        account_before_count=0,
+        account_before_balance=None,
+        account_mode=None,
+        failure=None,
+    )
+    assert snapshot.active_order_count == 1
+    assert snapshot.open_position_count == 2
+    observation = stage4_demo_execution._logical_observation(
+        attempt, canary=snapshot, execution=snapshot
+    )
+    evidence = build_stage4_demo_exec_evidence(attempt, observation)
+    assert evidence["result"] == "FAIL"
+    cleanup = cast(dict[str, object], evidence["cleanup"])
+    assert cleanup["active_order_count"] == 1
+    assert cleanup["open_position_count"] == 2
+
+
+def test_stage4_demo_exec_persists_nautilus_phase_facts_in_attempt_partition(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.market_close
+    quantity = attempt.canary_quantity
+    order = _cached_order(
+        side="BUY",
+        order_type="MARKET",
+        quantity=str(quantity),
+        filled=str(quantity),
+        reduce_only=False,
+        status="FILLED",
+    )
+    order.events = [
+        SimpleNamespace(
+            ts_event=123, last_qty=quantity, last_px=Price.from_str("50000.00")
+        )
+    ]
+    position = SimpleNamespace(
+        instrument_id=attempt.instrument.id,
+        quantity=quantity,
+        is_long=True,
+        is_short=False,
+    )
+    account = SimpleNamespace(
+        event_count=1,
+        last_event=SimpleNamespace(
+            ts_event=124, info={"total_initial_margin": "50.00"}
+        ),
+        balance_total=lambda currency: Money.from_str("100.00 USDT"),
+    )
+    cache = cast(
+        Cache,
+        SimpleNamespace(
+            orders=lambda **kwargs: [order],
+            orders_open_count=lambda **kwargs: 0,
+            orders_inflight_count=lambda **kwargs: 0,
+            positions_open=lambda **kwargs: [position],
+            positions=lambda **kwargs: [position],
+            account=lambda *args: account,
+            quote_count=lambda *args: 1,
+            trade_count=lambda *args: 1,
+            quote=lambda *args: None,
+            mark_price=lambda *args: None,
+        ),
+    )
+    snapshot = stage4_demo_execution._capture_phase_snapshot(
+        cache,
+        attempt,
+        phase=attempt.phases[0],
+        phase_kind="canary",
+        started_at_ns=100,
+        ended_at_ns=200,
+        account_before_count=1,
+        account_before_balance=Decimal("100.00"),
+        account_mode=_observation(attempt.scenario).account_mode,
+        failure=None,
+    )
+    facts = cast(dict[str, Any], snapshot.phase_observations[0])
+    assert facts["orders"][0]["filled_quantity"] == str(quantity)
+    assert facts["orders"][0]["events"][0]["last_qty"] == str(quantity)
+    assert facts["account"]["initial_margin"] == "50"
+    assert facts["positions"][0]["instrument_id"] == str(attempt.instrument.id)
+
+    observation = stage4_demo_execution._logical_observation(
+        attempt, canary=snapshot, execution=snapshot
+    )
+    evidence = build_stage4_demo_exec_evidence(attempt, observation)
+    outcome = write_stage4_demo_exec_evidence(
+        attempt, evidence, phase_observations=observation.phase_observations
+    )
+    sidecar = json.loads((outcome.evidence_partition / "observations.json").read_text())
+    rendered = canonical_stage4_demo_evidence_json(evidence)
+    assert sidecar["evidence_sha256"] == hashlib.sha256(rendered.encode()).hexdigest()
+    assert sidecar["phases"] == [facts]
+    assert sidecar["source"] == "nautilus_cache"
