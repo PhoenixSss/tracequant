@@ -110,6 +110,24 @@ def _market_input(offset_ns: int = 0) -> Stage4DemoExecMarketInput:
     )
 
 
+@pytest.fixture(autouse=True)
+def _offline_public_market_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    observations = 0
+
+    async def acquire(
+        _deadline: object,
+    ) -> Stage4DemoExecMarketInput:
+        nonlocal observations
+        observations += 1
+        return _market_input(observations * 1_000_000)
+
+    monkeypatch.setattr(
+        stage4_demo_execution,
+        "_acquire_public_market_input",
+        acquire,
+    )
+
+
 @dataclass(frozen=True)
 class _AdmittedPlan:
     market_close: Stage4DemoExecAttemptPlan
@@ -1010,3 +1028,149 @@ def test_stage4_demo_exec_market_halt_is_persisted_and_blocks_passive_admission(
     evidence_paths = list((tmp_path / "halt-evidence").rglob(EXEC_EVIDENCE_FILENAME))
     assert len(evidence_paths) == 1
     assert json.loads(evidence_paths[0].read_text("utf-8"))["result"] == "FAIL"
+
+
+def test_stage4_demo_exec_rejects_inflated_caller_constraints_before_admission(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    public = _market_input()
+    altered = replace(
+        public,
+        instrument=CryptoPerpetual(
+            instrument_id=public.instrument.id,
+            raw_symbol=Symbol("BTCUSDT"),
+            base_currency=Currency.from_str("BTC"),
+            quote_currency=Currency.from_str("USDT"),
+            settlement_currency=Currency.from_str("USDT"),
+            is_inverse=False,
+            price_precision=2,
+            size_precision=0,
+            price_increment=Price.from_str("0.01"),
+            size_increment=Quantity.from_str("1"),
+            min_quantity=Quantity.from_str("1"),
+            max_quantity=Quantity.from_str("10"),
+            min_notional=Money.from_str("5.00 USDT"),
+            ts_event=0,
+            ts_init=0,
+        ),
+    )
+    batch = cast(
+        DemoAdmissionBatch,
+        SimpleNamespace(repository_root=tmp_path),
+    )
+
+    def admit(**_kwargs: object) -> AdmittedDemoAttempt:
+        return cast(
+            AdmittedDemoAttempt,
+            SimpleNamespace(
+                runtime=_runtime(),
+                frozen_config=freeze_demo_config(DemoConfig()),
+            ),
+        )
+
+    monkeypatch.setattr(stage4_demo_execution, "admit_current_demo_attempt", admit)
+    plan = build_stage4_demo_exec_plan(
+        batch=batch,
+        evidence_root=tmp_path / "evidence",
+        batch_id="batch_abcdefghijklmnopqrstuv",
+        acquire_market_close=lambda: Stage4DemoExecAttemptInput(
+            altered, OPERATOR_CONFIRMATION_TOKEN
+        ),
+        acquire_passive_cancel=lambda: Stage4DemoExecAttemptInput(
+            public, OPERATOR_CONFIRMATION_TOKEN
+        ),
+    )
+    with pytest.raises(Stage4DemoExecutionError, match="constraints differ"):
+        stage4_demo_execution._admit_deferred_attempt(
+            plan,
+            scenario=DemoEvidenceScenario.EXEC_TESTER_MARKET_CLOSE,
+            acquire=plan.acquire_market_close,
+        )
+
+
+def test_stage4_demo_exec_canary_rejects_numeric_two_x_before_passive(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    bad_mode = replace(
+        _observation(DemoEvidenceScenario.EXEC_TESTER_PASSIVE_CANCEL).account_mode,
+        observed_initial_margin=Decimal("25.00"),
+    )
+    assert not stage4_demo_execution._account_mode_complete(
+        plan.passive_cancel, bad_mode
+    )
+    failure = stage4_demo_execution.Stage4DemoExecFailure(
+        "TERMINAL_FACT_UNKNOWN",
+        "account_mode",
+        ("ACCOUNT_MODE_UNKNOWN",),
+    )
+    canary = replace(
+        stage4_demo_execution._failed_phase_snapshot(
+            started_at_ns=1,
+            failure=failure,
+        ),
+        account_mode=bad_mode,
+    )
+    phases: list[str] = []
+
+    async def run_phase(
+        _plan: Stage4DemoExecAttemptPlan,
+        _phase: object,
+        *,
+        phase_kind: str,
+        cleanup_authorization: object = None,
+    ) -> stage4_demo_execution._ExecPhaseSnapshot:
+        del cleanup_authorization
+        phases.append(phase_kind)
+        return canary
+
+    monkeypatch.setattr(stage4_demo_execution, "_run_exec_phase", run_phase)
+    observation = asyncio.run(
+        stage4_demo_execution._observe_stage4_demo_attempt(plan.passive_cancel)
+    )
+    assert phases == ["canary"]
+    assert observation.failure == failure
+
+
+def test_stage4_demo_exec_balance_reconciles_numeric_delta(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    reconcile = stage4_demo_execution._balance_reconciled
+    attempt = plan.market_close
+    position = SimpleNamespace(
+        is_closed=True,
+        realized_pnl=Money.from_str("1.50 USDT"),
+        commissions=lambda: [Money.from_str("0.10 USDT")],
+    )
+    assert reconcile(
+        attempt,
+        before=Decimal("100"),
+        after=Decimal("101.50"),
+        positions=[position],
+        no_fill=False,
+    )
+    assert not reconcile(
+        attempt,
+        before=Decimal("100"),
+        after=Decimal("102"),
+        positions=[position],
+        no_fill=False,
+    )
+    assert reconcile(
+        attempt,
+        before=Decimal("100"),
+        after=Decimal("100"),
+        positions=[],
+        no_fill=True,
+    )
+    assert not reconcile(
+        attempt,
+        before=Decimal("100"),
+        after=Decimal("100.01"),
+        positions=[],
+        no_fill=True,
+    )

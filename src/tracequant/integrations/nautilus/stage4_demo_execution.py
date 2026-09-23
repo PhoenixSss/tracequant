@@ -377,26 +377,119 @@ def _admit_deferred_attempt(
 ) -> Stage4DemoExecAttemptPlan:
     price_deadline = stage4_demo.start_queue_deadline(DeadlinePhase.PRICE_READINESS)
     attempt_input = acquire()
-    now_ns = time.time_ns()
-    if price_deadline.expired():
-        raise Stage4DemoExecutionError("attempt price readiness deadline expired")
-    _validate_market_input(
-        attempt_input.market,
-        checked_at_ns=now_ns,
-        previous=previous_market_input,
-    )
     admission = admit_current_demo_attempt(
         batch=plan._batch,
         operator_token=attempt_input.operator_token,
     )
+    public_market = asyncio.run(_acquire_public_market_input(price_deadline))
+    now_ns = time.time_ns()
+    if price_deadline.expired():
+        raise Stage4DemoExecutionError("attempt price readiness deadline expired")
+    _validate_market_input(
+        public_market,
+        checked_at_ns=now_ns,
+        previous=previous_market_input,
+    )
+    if not _instrument_matches(
+        attempt_input.market.instrument, public_market.instrument
+    ):
+        raise Stage4DemoExecutionError(
+            "caller market constraints differ from public data"
+        )
     return _build_attempt_plan(
         scenario=scenario,
         admission=admission,
         repository_root=plan._batch.repository_root,
         evidence_root=plan.evidence_root,
         batch_id=plan.batch_id,
-        market_input=attempt_input.market,
+        market_input=public_market,
     )
+
+
+async def _acquire_public_market_input(
+    deadline: stage4_demo.DemoDeadline,
+) -> Stage4DemoExecMarketInput:
+    """Read public rc4 data before constructing any order-enabled node."""
+    instrument_id = InstrumentId.from_str(DEMO_INSTRUMENT_ID)
+    node = (
+        LiveNode.builder(
+            _EXEC_NODE_NAME,
+            TraderId.from_str(_EXEC_TRADER_ID),
+            Environment.LIVE,
+        )
+        .with_timeout_connection(_deadline_seconds(DeadlinePhase.CONNECT))
+        .with_timeout_disconnection_secs(_deadline_seconds(DeadlinePhase.CLEANUP))
+        .with_delay_post_stop_secs(0)
+        .with_delay_shutdown_secs(_deadline_seconds(DeadlinePhase.CLEANUP))
+        .add_data_client(
+            EXEC_CLIENT_NAME,
+            BinanceDataClientFactory(),
+            _public_data_client_config(),
+        )
+        .build()
+    )
+    node.add_builtin_actor(
+        _DATA_TESTER_BUILTIN,
+        DataTesterConfig(
+            client_id=ClientId.from_str(EXEC_CLIENT_NAME),
+            instrument_ids=[instrument_id],
+            subscribe_quotes=True,
+            subscribe_trades=False,
+            subscribe_mark_prices=True,
+            subscribe_instrument=True,
+            log_data=False,
+            log_events=False,
+            log_commands=False,
+        ),
+    )
+    cache = node.cache
+    handle = node.handle()
+    run_task = asyncio.create_task(node.run_async())
+    try:
+        unavailable = Stage4DemoExecFailure(
+            "CONNECT_SUBSCRIPTION_FAILED", "data", ("FAILED",)
+        )
+        await _wait_until(
+            lambda: handle.is_running,
+            deadline=deadline,
+            run_task=run_task,
+            failure=unavailable,
+        )
+        await _wait_until(
+            lambda: (
+                isinstance(cache.instrument(instrument_id), CryptoPerpetual)
+                and cache.quote(instrument_id) is not None
+                and cache.mark_price(instrument_id) is not None
+            ),
+            deadline=deadline,
+            run_task=run_task,
+            failure=unavailable,
+        )
+        instrument = cache.instrument(instrument_id)
+        quote = cache.quote(instrument_id)
+        mark = cache.mark_price(instrument_id)
+        if not isinstance(instrument, CryptoPerpetual) or quote is None or mark is None:
+            raise Stage4DemoExecutionError("public market input disappeared")
+        if quote.instrument_id != instrument_id or mark.instrument_id != instrument_id:
+            raise Stage4DemoExecutionError("public market input identity conflict")
+        result = Stage4DemoExecMarketInput(
+            instrument=instrument,
+            best_bid=quote.bid_price,
+            best_ask=quote.ask_price,
+            mark_price=mark.value,
+            quote_ts_event_ns=quote.ts_event,
+            mark_ts_event_ns=mark.ts_event,
+            observed_at_ns=time.time_ns(),
+        )
+    except _Stage4DemoExecutionRuntimeError as exc:
+        raise Stage4DemoExecutionError("public market input unavailable") from exc
+    finally:
+        cleanup_failure = await _stop_exec_tester(handle, run_task, request_stop=True)
+        if run_task.done():
+            node.dispose()
+        if cleanup_failure is not None:
+            raise Stage4DemoExecutionError("public market data node did not stop")
+    return result
 
 
 def _run_and_persist_attempt(
@@ -731,6 +824,7 @@ async def _run_exec_phase(
     cache = node.cache
     handle = node.handle()
     account_before_count = _account_event_count(cache)
+    account_before_balance = _account_total_balance(cache, plan)
     strategy_id = _require_phase_strategy_id(phase)
     run_task: asyncio.Task[None] = asyncio.create_task(node.run_async())
     failure: Stage4DemoExecFailure | None = None
@@ -763,6 +857,7 @@ async def _run_exec_phase(
             ),
         )
         account_before_count = _account_event_count(cache)
+        account_before_balance = _account_total_balance(cache, plan)
         if phase_kind == "cleanup":
             await _wait_until(
                 lambda: bool(cache.positions_open(instrument_id=plan.instrument.id)),
@@ -840,7 +935,7 @@ async def _run_exec_phase(
                 ),
             )
             account_mode = _capture_account_mode(cache, plan, query_at_ns)
-            if not _account_mode_complete(account_mode):
+            if not _account_mode_complete(plan, account_mode):
                 failure = Stage4DemoExecFailure(
                     "TERMINAL_FACT_UNKNOWN",
                     "account_mode",
@@ -926,6 +1021,7 @@ async def _run_exec_phase(
             started_at_ns=started_at_ns,
             ended_at_ns=ended_at_ns,
             account_before_count=account_before_count,
+            account_before_balance=account_before_balance,
             account_mode=account_mode,
             failure=failure,
         )
@@ -1268,15 +1364,19 @@ def _capture_account_mode(
     )
 
 
-def _account_mode_complete(value: Stage4DemoAccountModeObservation) -> bool:
+def _account_mode_complete(
+    plan: Stage4DemoExecAttemptPlan,
+    value: Stage4DemoAccountModeObservation,
+) -> bool:
+    allowed = _allowed_initial_margin(plan, value)
     return (
         value.operator_gate_confirmed
         and value.canary_complete
         and value.one_way_confirmed
         and value.isolated_confirmed
+        and allowed is not None
         and value.observed_initial_margin is not None
-        and value.mark_price_min is not None
-        and value.mark_price_max is not None
+        and allowed[0] <= value.observed_initial_margin <= allowed[1]
     )
 
 
@@ -1289,6 +1389,7 @@ def _capture_phase_snapshot(
     started_at_ns: int,
     ended_at_ns: int,
     account_before_count: int,
+    account_before_balance: Decimal | None,
     account_mode: Stage4DemoAccountModeObservation | None,
     failure: Stage4DemoExecFailure | None,
 ) -> _ExecPhaseSnapshot:
@@ -1382,11 +1483,13 @@ def _capture_phase_snapshot(
         and not any(filled > 0 for filled in filled_quantities)
         and not owned_positions
     )
-    filled_accounting = bool(owned_positions) and all(
-        _order_bool(position, "is_closed")
-        and getattr(position, "realized_pnl", None) is not None
-        and bool(_position_commissions(position))
-        for position in owned_positions
+    balance_after_balance = _account_total_balance(cache, plan)
+    balance_reconciled = _balance_reconciled(
+        plan,
+        before=account_before_balance,
+        after=balance_after_balance,
+        positions=owned_positions,
+        no_fill=no_fill_accounting,
     )
 
     quote_count = cache.quote_count(plan.instrument.id)
@@ -1422,7 +1525,7 @@ def _capture_phase_snapshot(
             and (account_after_count > account_before_count or no_fill_accounting)
             and terminal
             and unresolved == 0
-            and (no_fill_accounting or filled_accounting)
+            and balance_reconciled
         ),
         order_action_consistent=action_consistent,
         account_mode=account_mode,
@@ -1595,6 +1698,80 @@ def _account_event_count(cache: Cache) -> int:
     value = getattr(account, "event_count", 0)
     value = value() if callable(value) else value
     return value if isinstance(value, int) and value >= 0 else 0
+
+
+def _account_total_balance(
+    cache: Cache,
+    plan: Stage4DemoExecAttemptPlan,
+) -> Decimal | None:
+    account = cache.account(AccountId.from_str(EXEC_ACCOUNT_ID))
+    if account is None:
+        return None
+    balance_total = getattr(account, "balance_total", None)
+    if not callable(balance_total):
+        return None
+    try:
+        money = balance_total(plan.instrument.quote_currency)
+    except Exception:
+        return None
+    amount = getattr(money, "as_decimal", None)
+    if not callable(amount):
+        return None
+    value = amount()
+    return value if isinstance(value, Decimal) and value.is_finite() else None
+
+
+def _balance_reconciled(
+    plan: Stage4DemoExecAttemptPlan,
+    *,
+    before: Decimal | None,
+    after: Decimal | None,
+    positions: list[object],
+    no_fill: bool,
+) -> bool:
+    if before is None or after is None:
+        return False
+    if no_fill:
+        return after == before
+    if not positions:
+        return False
+    realized = Decimal(0)
+    for position in positions:
+        if not _order_bool(position, "is_closed"):
+            return False
+        pnl = getattr(position, "realized_pnl", None)
+        commissions = _position_commissions(position)
+        if (
+            pnl is None
+            or getattr(pnl, "currency", None) != plan.instrument.quote_currency
+            or not commissions
+            or any(
+                getattr(fee, "currency", None) != plan.instrument.quote_currency
+                for fee in commissions
+            )
+        ):
+            return False
+        amount = getattr(pnl, "as_decimal", None)
+        if not callable(amount):
+            return False
+        value = amount()
+        if not isinstance(value, Decimal) or not value.is_finite():
+            return False
+        for fee in commissions:
+            fee_amount = getattr(fee, "as_decimal", None)
+            if not callable(fee_amount):
+                return False
+            observed_fee = fee_amount()
+            if (
+                not isinstance(observed_fee, Decimal)
+                or not observed_fee.is_finite()
+                or observed_fee < 0
+            ):
+                return False
+        # Nautilus Position.realized_pnl already includes cost-currency fees.
+        realized += value
+    quantum = Decimal(1).scaleb(-plan.instrument.quote_currency.precision)
+    return abs((after - before) - realized) <= quantum
 
 
 def _cached_market_timestamps_valid(
@@ -1855,19 +2032,7 @@ def _build_attempt_plan(
             )
         )
 
-    provider = BinanceInstrumentProviderConfig(
-        load_all=False,
-        load_ids=[DEMO_INSTRUMENT_ID],
-    )
-    data_config = BinanceDataClientConfig(
-        product_type=BinanceProductType.USD_M,
-        environment=BinanceEnvironment.DEMO,
-        base_url_http=None,
-        base_url_ws=None,
-        api_key=None,
-        api_secret=None,
-        instrument_provider=provider,
-    )
+    data_config = _public_data_client_config()
     observer_config = DataTesterConfig(
         client_id=client_id,
         instrument_ids=[instrument_id],
@@ -2092,6 +2257,21 @@ def _cleanup_tester_config(
         log_data=False,
         log_events=False,
         log_commands=False,
+    )
+
+
+def _public_data_client_config() -> BinanceDataClientConfig:
+    return BinanceDataClientConfig(
+        product_type=BinanceProductType.USD_M,
+        environment=BinanceEnvironment.DEMO,
+        base_url_http=None,
+        base_url_ws=None,
+        api_key=None,
+        api_secret=None,
+        instrument_provider=BinanceInstrumentProviderConfig(
+            load_all=False,
+            load_ids=[DEMO_INSTRUMENT_ID],
+        ),
     )
 
 
