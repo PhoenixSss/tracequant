@@ -96,6 +96,10 @@ class _Stage4DemoExecutionRuntimeError(Stage4DemoExecutionError):
         self.failure = failure
 
 
+class _RuntimeMarketConflict(Stage4DemoExecutionError):
+    """The observed runtime market no longer matches the admitted plan."""
+
+
 @dataclass(frozen=True)
 class Stage4DemoExecMarketInput:
     """Fresh public rc4 values used to derive the closed execution plan."""
@@ -215,6 +219,7 @@ class Stage4DemoExecObservation:
     account_mode: Stage4DemoAccountModeObservation
     unresolved_unknown_count: int
     failure: Stage4DemoExecFailure | None = None
+    market_input_conflicting: bool = False
 
 
 @dataclass(frozen=True)
@@ -269,6 +274,7 @@ class _ExecPhaseSnapshot:
     unresolved_unknown_count: int
     failure: Stage4DemoExecFailure | None
     balance_before_total: Decimal | None = None
+    market_input_conflicting: bool = False
 
 
 @dataclass
@@ -526,7 +532,9 @@ def build_stage4_demo_exec_evidence(
         <= allowed_margin[1]
     )
     market_consistent = (
-        observation.quote_count > 0 and observation.market_timestamps_valid
+        observation.quote_count > 0
+        and observation.market_timestamps_valid
+        and not observation.market_input_conflicting
     )
     order_consistent = (
         observation.order_submitted
@@ -583,7 +591,8 @@ def build_stage4_demo_exec_evidence(
     observations: dict[str, object] = {
         "market_data": {
             "classification": _classification(
-                market_consistent, observation.quote_count > 0
+                market_consistent,
+                observation.quote_count > 0 or observation.market_input_conflicting,
             ),
             "quote_count": observation.quote_count,
             "trade_count": observation.trade_count,
@@ -859,6 +868,7 @@ async def _run_exec_phase(
     failure: Stage4DemoExecFailure | None = None
     account_mode: Stage4DemoAccountModeObservation | None = None
     stop_requested = False
+    market_input_conflicting = False
     market_sequence = _MarketTimestampSequence(
         quote_ns=plan.market_input.quote_ts_event_ns,
         mark_ns=plan.market_input.mark_ts_event_ns,
@@ -1011,6 +1021,10 @@ async def _run_exec_phase(
                     ("FAILED",),
                 )
     except _Stage4DemoExecutionRuntimeError as exc:
+        market_input_conflicting = (
+            exc.failure.code == "TERMINAL_FACT_CONFLICTING"
+            and exc.failure.phase == "data"
+        )
         failure = failure or exc.failure
     except Exception:
         failure = Stage4DemoExecFailure(
@@ -1048,6 +1062,8 @@ async def _run_exec_phase(
             account_mode=account_mode,
             failure=failure,
             order_submission_unknown=order_submission_unknown,
+            cleanup_authorization=cleanup_authorization,
+            market_input_conflicting=market_input_conflicting,
         )
     finally:
         node.dispose()
@@ -1070,6 +1086,10 @@ async def _wait_until(
         try:
             if predicate():
                 return
+        except _RuntimeMarketConflict as exc:
+            raise _Stage4DemoExecutionRuntimeError(
+                Stage4DemoExecFailure("TERMINAL_FACT_CONFLICTING", "data", ("FAILED",))
+            ) from exc
         except Exception as exc:
             raise _Stage4DemoExecutionRuntimeError(failure) from exc
         if deadline.expired():
@@ -1132,11 +1152,13 @@ def _market_ready(
     phase_kind: Literal["canary", "passive", "cleanup"] = "canary",
 ) -> bool:
     observed_instrument = cache.instrument(plan.instrument.id)
+    if observed_instrument is None:
+        return False
     if not isinstance(observed_instrument, CryptoPerpetual) or not _instrument_matches(
         observed_instrument,
         plan.instrument,
     ):
-        return False
+        raise _RuntimeMarketConflict("runtime instrument drifted from admitted input")
     quote = cache.quote(plan.instrument.id)
     mark = cache.mark_price(plan.instrument.id)
     if quote is None or mark is None:
@@ -1166,7 +1188,7 @@ def _market_ready(
     if phase_kind == "canary":
         runtime_quantity = minimum_order_quantity(observed_instrument, mark.value)
         if runtime_quantity != plan.canary_quantity:
-            raise Stage4DemoExecutionError(
+            raise _RuntimeMarketConflict(
                 "runtime canary quantity drifted from admitted price input"
             )
     elif phase_kind == "passive":
@@ -1176,7 +1198,7 @@ def _market_ready(
             runtime_price != plan.passive_price
             or runtime_quantity != plan.passive_quantity
         ):
-            raise Stage4DemoExecutionError(
+            raise _RuntimeMarketConflict(
                 "runtime passive price or quantity drifted from admitted input"
             )
     return True
@@ -1304,14 +1326,11 @@ def _cleanup_action_matches(
     ):
         return False
     order = close_orders[0]
-    expected_side = "SELL" if authorization.signed_position > 0 else "BUY"
-    side = str(getattr(order, "side", "")).upper().rsplit(".", maxsplit=1)[-1]
-    reduce_only = getattr(order, "is_reduce_only", False)
-    reduce_only = reduce_only() if callable(reduce_only) else reduce_only
-    return (
-        _order_quantity(order) == authorization.quantity.as_decimal()
-        and side == expected_side
-        and reduce_only is True
+    return _filled_market_order_matches(
+        order,
+        side="SELL" if authorization.signed_position > 0 else "BUY",
+        quantity=authorization.quantity,
+        reduce_only=True,
     )
 
 
@@ -1404,6 +1423,8 @@ def _capture_phase_snapshot(
     account_mode: Stage4DemoAccountModeObservation | None,
     failure: Stage4DemoExecFailure | None,
     order_submission_unknown: bool = False,
+    cleanup_authorization: Stage4DemoCleanupAuthorization | None = None,
+    market_input_conflicting: bool = False,
 ) -> _ExecPhaseSnapshot:
     orders = cache.orders(
         instrument_id=plan.instrument.id,
@@ -1459,6 +1480,16 @@ def _capture_phase_snapshot(
     )
     resolved_failure = failure
     action_consistent = _phase_order_action_consistent(plan, phase_kind, orders)
+    if phase_kind == "cleanup":
+        action_consistent = (
+            cleanup_authorization is not None
+            and _cleanup_action_matches(
+                cache,
+                plan,
+                _require_phase_strategy_id(phase),
+                cleanup_authorization,
+            )
+        )
     if (
         phase_kind != "cleanup"
         and terminal
@@ -1555,6 +1586,7 @@ def _capture_phase_snapshot(
         unresolved_unknown_count=unresolved,
         failure=resolved_failure,
         balance_before_total=account_before_balance,
+        market_input_conflicting=market_input_conflicting,
     )
 
 
@@ -1614,6 +1646,9 @@ def _logical_observation(
         account_mode=account_mode,
         unresolved_unknown_count=execution.unresolved_unknown_count,
         failure=canary.failure or execution.failure,
+        market_input_conflicting=(
+            canary.market_input_conflicting or execution.market_input_conflicting
+        ),
     )
 
 
@@ -1643,6 +1678,7 @@ def _skipped_phase_snapshot(canary: _ExecPhaseSnapshot) -> _ExecPhaseSnapshot:
         account_mode=None,
         unresolved_unknown_count=canary.unresolved_unknown_count,
         failure=canary.failure,
+        market_input_conflicting=canary.market_input_conflicting,
     )
 
 
@@ -1710,11 +1746,16 @@ def _merge_cleanup_snapshot(
             if execution.account_mode is not None
             else execution.balance_change_explained and cleanup.balance_change_explained
         ),
-        order_action_consistent=execution.order_action_consistent,
+        order_action_consistent=(
+            execution.order_action_consistent and cleanup.order_action_consistent
+        ),
         account_mode=execution.account_mode,
         unresolved_unknown_count=cleanup.unresolved_unknown_count,
         failure=cleanup.failure or execution.failure,
         balance_before_total=execution.balance_before_total,
+        market_input_conflicting=(
+            execution.market_input_conflicting or cleanup.market_input_conflicting
+        ),
     )
 
 
@@ -1987,6 +2028,7 @@ def _filled_market_order_matches(
         and _order_reduce_only(order) is reduce_only
         and _order_quantity(order) == expected_quantity
         and _filled_quantity(order) == expected_quantity
+        and _order_enum_name(order, "status") == "FILLED"
         and _order_bool(order, "is_closed")
     )
 

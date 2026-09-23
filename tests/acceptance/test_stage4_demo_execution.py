@@ -786,11 +786,13 @@ def test_stage4_demo_exec_cleanup_binds_current_position_and_actual_close_order(
         is_long=True,
         is_short=False,
     )
-    close_order = SimpleNamespace(
-        quantity=Quantity.from_str("0.003"),
+    close_order = _cached_order(
         side="SELL",
-        is_reduce_only=True,
-        is_closed=True,
+        order_type="MARKET",
+        quantity="0.003",
+        filled="0.003",
+        reduce_only=True,
+        status="FILLED",
     )
     observed_orders: list[object] = [close_order]
     cache = cast(
@@ -843,6 +845,96 @@ def test_stage4_demo_exec_cleanup_binds_current_position_and_actual_close_order(
     assert not stage4_demo_execution._cleanup_action_matches(
         cache, attempt, strategy_id, authorization
     )
+    for changes in (
+        {"order_type": "LIMIT"},
+        {"status": "CANCELED"},
+        {"status": "REJECTED"},
+        {"filled_qty": Quantity.from_str("0.000")},
+        {"filled_qty": Quantity.from_str("0.002")},
+        {"quantity": Quantity.from_str("0.002")},
+    ):
+        observed_orders[:] = [entry_order, _changed_namespace(close_order, **changes)]
+        assert not stage4_demo_execution._cleanup_action_matches(
+            cache, attempt, strategy_id, authorization
+        )
+
+
+def test_stage4_demo_exec_unfilled_cleanup_cannot_publish_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.market_close
+    authorization = Stage4DemoCleanupAuthorization(
+        signed_position=Decimal("0.001"),
+        quantity=Quantity.from_str("0.001"),
+    )
+    strategy_id = stage4_demo_execution._require_phase_strategy_id(attempt.phases[1])
+    canceled = _cached_order(
+        side="SELL",
+        order_type="MARKET",
+        quantity="0.001",
+        filled="0.000",
+        reduce_only=True,
+        status="CANCELED",
+    )
+    flat_cache = cast(
+        Cache,
+        SimpleNamespace(
+            orders=lambda **kwargs: [canceled],
+            orders_open_count=lambda **kwargs: 0,
+            orders_inflight_count=lambda **kwargs: 0,
+            positions_open=lambda **kwargs: [],
+        ),
+    )
+    assert stage4_demo_execution._cleanup_complete(flat_cache, attempt, strategy_id)
+    assert not stage4_demo_execution._cleanup_action_matches(
+        flat_cache, attempt, strategy_id, authorization
+    )
+
+    account_mode = _observation(attempt.scenario).account_mode
+    opening = replace(
+        stage4_demo_execution._failed_phase_snapshot(
+            started_at_ns=1,
+            failure=stage4_demo_execution.Stage4DemoExecFailure(
+                "CLEANUP_FAILED", "cleanup", ("FAILED",)
+            ),
+        ),
+        quote_count=1,
+        market_timestamps_valid=True,
+        order_submitted=True,
+        order_accepted=True,
+        order_terminal=True,
+        fill_complete=True,
+        balance_before_observed=True,
+        balance_after_observed=True,
+        balance_change_explained=True,
+        order_action_consistent=True,
+        account_mode=account_mode,
+        unresolved_unknown_count=0,
+        failure=None,
+    )
+    cleanup = replace(
+        opening,
+        order_action_consistent=False,
+        failure=stage4_demo_execution.Stage4DemoExecFailure(
+            "CLEANUP_FAILED", "cleanup", ("FAILED",)
+        ),
+    )
+    merged = stage4_demo_execution._merge_cleanup_snapshot(opening, cleanup)
+    evidence = build_stage4_demo_exec_evidence(
+        attempt,
+        stage4_demo_execution._logical_observation(
+            attempt, canary=merged, execution=merged
+        ),
+    )
+    assert not merged.order_action_consistent
+    assert evidence["result"] == "FAIL"
+    observations = cast(dict[str, object], evidence["observations"])
+    order = cast(dict[str, object], observations["order"])
+    failure = cast(dict[str, object], evidence["failure"])
+    assert order["classification"] == "conflicting"
+    assert failure["code"] == "CLEANUP_FAILED"
 
 
 def test_stage4_demo_exec_passive_terminal_must_be_canceled(
@@ -977,6 +1069,83 @@ def test_stage4_demo_exec_runtime_price_must_match_admitted_passive_plan(
             sequence,
             phase_kind="passive",
         )
+
+
+def test_stage4_demo_exec_runtime_drift_is_conflicting_in_record(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.passive_cancel
+    phase = attempt.phases[2]
+    now_ns = time.time_ns()
+    stopped = asyncio.Event()
+    canceled = _cached_order(
+        side="BUY",
+        order_type="LIMIT",
+        quantity=str(attempt.passive_quantity),
+        filled="0.000",
+        reduce_only=False,
+        status="CANCELED",
+        price=str(attempt.passive_price),
+    )
+    cache = SimpleNamespace(
+        instrument=lambda instrument_id: attempt.instrument,
+        quote=lambda instrument_id: SimpleNamespace(
+            instrument_id=attempt.instrument.id,
+            bid_price=Price.from_str("50000.01"),
+            ask_price=Price.from_str("50000.02"),
+            ts_event=now_ns,
+        ),
+        mark_price=lambda instrument_id: SimpleNamespace(
+            instrument_id=attempt.instrument.id,
+            value=Price.from_str("50000.00"),
+            ts_event=now_ns,
+        ),
+        quote_count=lambda instrument_id: 1,
+        trade_count=lambda instrument_id: 0,
+        orders=lambda **kwargs: [canceled],
+        orders_open_count=lambda **kwargs: 0,
+        orders_inflight_count=lambda **kwargs: 0,
+        positions_open=lambda **kwargs: [],
+        positions=lambda **kwargs: [],
+        account=lambda *args: None,
+    )
+
+    async def run_async() -> None:
+        await stopped.wait()
+
+    node = SimpleNamespace(
+        cache=cache,
+        handle=lambda: SimpleNamespace(is_running=True, stop=stopped.set),
+        run_async=run_async,
+        dispose=lambda: None,
+    )
+    monkeypatch.setattr(
+        stage4_demo_execution,
+        "_build_exec_tester_runtime_unchecked",
+        lambda *args: SimpleNamespace(node=node, account_query=None),
+    )
+
+    snapshot = asyncio.run(
+        stage4_demo_execution._run_exec_phase(attempt, phase, phase_kind="passive")
+    )
+    assert snapshot.failure == stage4_demo_execution.Stage4DemoExecFailure(
+        "TERMINAL_FACT_CONFLICTING", "data", ("FAILED",)
+    )
+    assert snapshot.market_timestamps_valid
+    assert snapshot.market_input_conflicting
+    observation = replace(
+        _observation(attempt.scenario),
+        failure=snapshot.failure,
+        market_input_conflicting=snapshot.market_input_conflicting,
+    )
+    evidence = build_stage4_demo_exec_evidence(attempt, observation)
+    assert evidence["result"] == "FAIL"
+    assert evidence["terminal_state"] == "HALTED"
+    observations = cast(dict[str, object], evidence["observations"])
+    market_data = cast(dict[str, object], observations["market_data"])
+    assert market_data["classification"] == "conflicting"
 
 
 def test_stage4_demo_exec_action_conflict_cannot_produce_pass_evidence(
