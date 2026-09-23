@@ -9,11 +9,12 @@ research views over that stage 2 catalog. Stage 3 includes the accepted catalog
 binding, finite causal feature/label contract, both fixed Strategies,
 deterministic LightGBM artifacts, the fixed expanding-window and accounting-only
 sensitivity evaluation, and the finite synchronous OOS rebuild which projects
-that evidence into a strict compact acceptance record. Stage 4 adds the narrow
-offline Binance Demo configuration and admission boundary described below; it
-does not provide a network client, an execution connection, a connected Demo
-runtime, or Live mode. LCK is an approved repository capability outside that
-product runtime.
+that evidence into a strict compact acceptance record.
+
+The former Stage 4 implementation has been withdrawn. A minimal single-Strategy
+Binance Demo interaction remains planned under Feature #384; no Demo or Live
+runtime is currently implemented. LCK is an approved repository capability
+outside the product runtime.
 
 ## Tracked layout
 
@@ -101,9 +102,6 @@ src/tracequant/
       stage3_model.py
       stage3_momentum.py
       stage3_oos.py
-      stage4_demo.py
-      stage4_demo_data.py
-      stage4_demo_evidence.py
       strategies/
         __init__.py
         stage1_ma_cross.py
@@ -138,20 +136,7 @@ sequentially invokes those existing Stage 3 capabilities. It accepts only
 explicit locked identity and absolute external roots, creates no scheduler or
 resume layer, and writes only the compact tracked acceptance projection in the
 checkout; models and full run evidence remain external.
-`integrations/nautilus/stage4_demo.py` and its finite
-`stage4_demo_evidence.py` companion own the bounded offline Binance USD-M
-Futures Demo boundary: fixed runtime/configuration and credential admission,
-pure normal-order and exact reduce-only quantity contracts, fixed monotonic
-deadlines, the secret-free frozen configuration digest, and the two frozen
-Stage 4 evidence schemas with fail-closed pure validation. They may construct
-the approved Nautilus execution-client configuration only from an admitted
-attempt, but do not create a network client, connect to Demo or Live, submit
-orders, fetch market or account state, aggregate or publish acceptance, or
-orchestrate execution. `stage4_demo_data.py` is the one bounded exception for
-public Demo market data: it composes the official rc4 `DataTester` with one
-Binance USD-M Demo data client, observes only the locked instrument through the
-public cache, and writes one EvidenceV1 record to a fresh external partition.
-It creates no execution client and does not read credentials.
+
 `tracequant.research` owns
 read-only Polars views, time splits, the finite Stage 3 causal feature/label
 contract, and the LightGBM training/artifact/loading boundary over the stage 2
