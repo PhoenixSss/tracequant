@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 from nautilus_trader.adapters.binance import (
     BinanceDataClientConfig,
@@ -26,6 +26,8 @@ from nautilus_trader.model import (
     ClientId,
     CryptoPerpetual,
     InstrumentId,
+    OrderSide,
+    Position,
     Price,
     Quantity,
     StrategyId,
@@ -306,10 +308,82 @@ class _AccountQueryProbe(Strategy):
         )
 
 
+class _ExactCleanupStrategy(Strategy):
+    """Private one-shot close for an already proven ExecTester position."""
+
+    def __new__(
+        cls,
+        plan: Stage4DemoExecAttemptPlan,
+        strategy_id: StrategyId,
+        authorization: Stage4DemoCleanupAuthorization,
+    ) -> _ExactCleanupStrategy:
+        del plan, authorization
+        return super().__new__(  # type: ignore[call-arg]
+            cls,
+            StrategyConfig(
+                strategy_id=strategy_id,
+                manage_stop=False,
+                log_events=False,
+                log_commands=False,
+            ),
+        )
+
+    def __init__(
+        self,
+        plan: Stage4DemoExecAttemptPlan,
+        strategy_id: StrategyId,
+        authorization: Stage4DemoCleanupAuthorization,
+    ) -> None:
+        del strategy_id
+        self._plan = plan
+        self._authorization = authorization
+        self._close_requested = False
+
+    def close_once(self, cache: Cache) -> None:
+        if self._close_requested:
+            raise Stage4DemoExecutionError("cleanup close was already requested")
+        self._close_requested = True
+        position = _authorized_cleanup_position(
+            cache,
+            self._plan,
+            self.strategy_id,
+            self._authorization,
+        )
+        if position is None:
+            raise _Stage4DemoExecutionRuntimeError(
+                Stage4DemoExecFailure(
+                    "TERMINAL_FACT_UNKNOWN",
+                    "reconciliation",
+                    ("POSITION_UNKNOWN",),
+                )
+            )
+        try:
+            order = self.order_factory.market(
+                instrument_id=self._plan.instrument.id,
+                order_side=(
+                    OrderSide.SELL
+                    if self._authorization.signed_position > 0
+                    else OrderSide.BUY
+                ),
+                quantity=self._authorization.quantity,
+                reduce_only=True,
+            )
+            self.submit_order(
+                order,
+                position_id=position.id,
+                client_id=ClientId.from_str(EXEC_CLIENT_NAME),
+            )
+        except Exception as exc:
+            raise _Stage4DemoExecutionRuntimeError(
+                Stage4DemoExecFailure("CLEANUP_FAILED", "cleanup", ("ORDER_UNKNOWN",))
+            ) from exc
+
+
 @dataclass(frozen=True)
 class _ExecTesterRuntime:
     node: LiveNode
-    account_query: _AccountQueryProbe
+    account_query: _AccountQueryProbe | None = None
+    cleanup_strategy: _ExactCleanupStrategy | None = None
 
 
 def build_stage4_demo_exec_plan(
@@ -1068,22 +1142,19 @@ async def _run_exec_phase(
                     ("POSITION_UNKNOWN",),
                 ),
             )
-            if (
-                cleanup_authorization is None
-                or not _cleanup_cache_matches_authorization(
-                    cache,
-                    plan,
-                    strategy_id,
-                    cleanup_authorization,
-                )
-            ):
-                raise _Stage4DemoExecutionRuntimeError(
-                    Stage4DemoExecFailure(
-                        "TERMINAL_FACT_UNKNOWN",
-                        "reconciliation",
-                        ("POSITION_UNKNOWN",),
-                    )
-                )
+            if runtime.cleanup_strategy is None:
+                raise Stage4DemoExecutionError("cleanup strategy is missing")
+            runtime.cleanup_strategy.close_once(cache)
+            await _wait_until(
+                lambda: _cleanup_complete(cache, plan, strategy_id),
+                deadline=stage4_demo.start_queue_deadline(
+                    DeadlinePhase.MARKET_OR_REDUCE_ONLY_FILL
+                ),
+                run_task=run_task,
+                failure=Stage4DemoExecFailure(
+                    "CLEANUP_INCOMPLETE", "cleanup", ("ORDER_UNKNOWN",)
+                ),
+            )
         else:
             acceptance_deadline = stage4_demo.start_queue_deadline(
                 DeadlinePhase.ORDER_ACCEPTANCE
@@ -1123,6 +1194,8 @@ async def _run_exec_phase(
             )
             query_at_ns = time.time_ns()
             previous_account_events = _account_event_count(cache)
+            if runtime.account_query is None:
+                raise Stage4DemoExecutionError("account query strategy is missing")
             runtime.account_query.query_once()
             await _wait_until(
                 lambda: _account_event_count(cache) > previous_account_events,
@@ -1239,9 +1312,11 @@ async def _run_exec_phase(
             order_submission_unknown=order_submission_unknown,
             cleanup_authorization=cleanup_authorization,
             market_input_conflicting=market_input_conflicting,
+            stop_unconfirmed=cleanup_failure is not None,
         )
     finally:
-        node.dispose()
+        if cleanup_failure is None:
+            node.dispose()
 
 
 async def _wait_until(
@@ -1480,21 +1555,36 @@ def _cleanup_cache_matches_authorization(
     strategy_id: StrategyId,
     authorization: Stage4DemoCleanupAuthorization,
 ) -> bool:
-    positions = cache.positions_open(instrument_id=plan.instrument.id)
+    return (
+        _authorized_cleanup_position(cache, plan, strategy_id, authorization)
+        is not None
+    )
+
+
+def _authorized_cleanup_position(
+    cache: Cache,
+    plan: Stage4DemoExecAttemptPlan,
+    strategy_id: StrategyId,
+    authorization: Stage4DemoCleanupAuthorization,
+) -> Position | None:
     if (
         cache.orders_open_count(instrument_id=plan.instrument.id) != 0
         or cache.orders_inflight_count(instrument_id=plan.instrument.id) != 0
-        or len(positions) != 1
-        or getattr(positions[0], "strategy_id", None) != strategy_id
     ):
-        return False
-    current = _signed_position_quantity(positions[0])
-    return (
-        current == authorization.signed_position
-        and current is not None
-        and exact_reduce_only_quantity(plan.instrument, current)
-        == authorization.quantity
-    )
+        return None
+    positions = cache.positions_open(instrument_id=plan.instrument.id)
+    if len(positions) != 1 or positions[0].strategy_id != strategy_id:
+        return None
+    position = positions[0]
+    current = _signed_position_quantity(position)
+    if (
+        current is None
+        or current != authorization.signed_position
+        or exact_reduce_only_quantity(plan.instrument, current)
+        != authorization.quantity
+    ):
+        return None
+    return cast(Position, position)
 
 
 def _cleanup_action_matches(
@@ -1612,6 +1702,7 @@ def _capture_phase_snapshot(
     order_submission_unknown: bool = False,
     cleanup_authorization: Stage4DemoCleanupAuthorization | None = None,
     market_input_conflicting: bool = False,
+    stop_unconfirmed: bool = False,
 ) -> _ExecPhaseSnapshot:
     orders = cache.orders(
         instrument_id=plan.instrument.id,
@@ -1664,6 +1755,7 @@ def _capture_phase_snapshot(
         + int(bool(inflight_orders))
         + int(position_unknown)
         + int(not orders and order_submission_unknown)
+        + int(stop_unconfirmed)
     )
     resolved_failure = failure
     action_consistent = _phase_order_action_consistent(plan, phase_kind, orders)
@@ -2406,7 +2498,7 @@ def _build_authorized_cleanup_runtime(
     *,
     cleanup_authorization: Stage4DemoCleanupAuthorization,
 ) -> _ExecTesterRuntime:
-    """Build the cleanup runtime only from an exact authorized quantity."""
+    """Build the sole cleanup node with a private proof-gated Strategy."""
     if not any(candidate is phase for candidate in plan.phases):
         raise Stage4DemoExecutionError(
             "ExecTester cleanup phase is not owned by its plan"
@@ -2414,7 +2506,8 @@ def _build_authorized_cleanup_runtime(
     if phase.run_condition not in {"cleanup_with_proof", "failure_with_cleanup_proof"}:
         raise Stage4DemoExecutionError("phase is not an authorized cleanup phase")
     source = plan.phases[0] if phase is plan.phases[1] else plan.phases[2]
-    if _require_phase_strategy_id(phase) != _require_phase_strategy_id(source):
+    strategy_id = _require_phase_strategy_id(phase)
+    if strategy_id != _require_phase_strategy_id(source):
         raise Stage4DemoExecutionError("cleanup strategy does not own the position")
     if (
         exact_reduce_only_quantity(
@@ -2424,7 +2517,11 @@ def _build_authorized_cleanup_runtime(
         != cleanup_authorization.quantity
     ):
         raise Stage4DemoExecutionError("cleanup quantity is not exact")
-    return _build_exec_tester_runtime_unchecked(plan, phase)
+    node = _build_exec_node(plan)
+    cleanup_strategy = _ExactCleanupStrategy(plan, strategy_id, cleanup_authorization)
+    node.add_strategy(cleanup_strategy)
+    node.add_builtin_actor(_DATA_TESTER_BUILTIN, plan.observer_config)
+    return _ExecTesterRuntime(node=node, cleanup_strategy=cleanup_strategy)
 
 
 def _build_exec_tester_runtime_unchecked(
@@ -2432,7 +2529,16 @@ def _build_exec_tester_runtime_unchecked(
     phase: Stage4DemoExecPhasePlan,
 ) -> _ExecTesterRuntime:
     """Construct a previously authorized official-tester phase node."""
-    node = (
+    node = _build_exec_node(plan)
+    account_query = _AccountQueryProbe()
+    node.add_strategy(account_query)
+    node.add_builtin_actor(_DATA_TESTER_BUILTIN, plan.observer_config)
+    node.add_builtin_strategy(plan.builtin_strategy, phase.tester_config)
+    return _ExecTesterRuntime(node=node, account_query=account_query)
+
+
+def _build_exec_node(plan: Stage4DemoExecAttemptPlan) -> LiveNode:
+    return (
         LiveNode.builder(
             _EXEC_NODE_NAME,
             TraderId.from_str(_EXEC_TRADER_ID),
@@ -2460,15 +2566,10 @@ def _build_exec_tester_runtime_unchecked(
         )
         .build()
     )
-    account_query = _AccountQueryProbe()
-    node.add_strategy(account_query)
-    node.add_builtin_actor(_DATA_TESTER_BUILTIN, plan.observer_config)
-    node.add_builtin_strategy(plan.builtin_strategy, phase.tester_config)
-    return _ExecTesterRuntime(node=node, account_query=account_query)
 
 
 def _exec_tester_only_risk_config() -> LiveRiskEngineConfig:
-    """Return the non-exported bypass used only by the official ExecTester node."""
+    """Return the non-exported bypass for this bounded Demo execution entry."""
     return LiveRiskEngineConfig(bypass=True)
 
 
@@ -2545,6 +2646,7 @@ def _cleanup_tester_config(
     client_id: ClientId,
     strategy_id: StrategyId,
 ) -> ExecTesterConfig:
+    """Keep cleanup plan metadata inert on stop; the Strategy owns its close."""
     return ExecTesterConfig(
         strategy_id=strategy_id,
         instrument_id=instrument_id,
@@ -2554,7 +2656,7 @@ def _cleanup_tester_config(
         enable_stop_buys=False,
         enable_stop_sells=False,
         cancel_orders_on_stop=True,
-        close_positions_on_stop=True,
+        close_positions_on_stop=False,
         close_positions_qty_precision=None,
         reduce_only_on_stop=True,
         dry_run=False,

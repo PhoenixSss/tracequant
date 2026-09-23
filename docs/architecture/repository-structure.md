@@ -158,9 +158,10 @@ builds two independently admitted logical attempts from the official rc4
 `ExecTester`: one market-canary/exact-reduce-only-close attempt and one fresh
 canary followed by a single passive post-only accept/cancel attempt. Its plan is
 Demo-only, sequential, capped at one active or inflight order. Each canary stops
-without automatic close; a separate official tester may issue its single exact
-reduce-only close only after terminal-order, zero-order, and current-position proof.
-Passive failure cleanup uses the same proof gate.
+without automatic close; a private cleanup-only Nautilus Strategy submits the
+single exact reduce-only market order through public order APIs only after
+terminal-order, zero-order, and current-position proof. Its stop path cannot
+submit an order. Passive failure cleanup uses the same proof gate.
 Because rc4 registers the built-in tester before `LiveNode` starts, the entry
 freezes quantity and expected passive price from a qualified attempt-local public
 input before constructing the order-enabled node, then requires the runtime cache

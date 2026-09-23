@@ -130,9 +130,9 @@ constraints；不得取整、放大或应用 `MIN_NOTIONAL`。构造前 position
 | `ST4-REQ-006` | 全部阶段使用 §3 固定 deadline，不提供 override。 |
 | `ST4-REQ-007` | 核对只用 rc4 public cache/callback/account observations，不建立第二 owner。 |
 | `ST4-REQ-008` | DataTester 只执行 §4.1，不创建 execution client。 |
-| `ST4-REQ-009` | ExecTester 只执行 §4.2；全部订单由官方 tester 提交，特殊 bypass 不外泄。 |
-| `ST4-REQ-010` | Strategy 只执行 §4.3，不读阶段 3、不产生 alpha、不做 portfolio sizing。 |
-| `ST4-REQ-011` | Strategy 只允许固定前进状态，终态为 `COMPLETE` 或 `HALTED`。 |
+| `ST4-REQ-009` | ExecTester 只执行 §4.2；canary 与 passive 订单由官方 tester 提交，唯一 exact reduce-only 清场可由本入口私有 Nautilus Strategy 通过 public `order_factory.market` / `submit_order` 提交冻结数量且 `reduce_only=True` 的单笔订单，特殊 bypass 不外泄。 |
+| `ST4-REQ-010` | 普通 Strategy 只执行 §4.3；§4.2 私有清场 Strategy 只允许提交已证明的唯一 reduce-only close；两者均不读阶段 3、不产生 alpha、不做 portfolio sizing。 |
+| `ST4-REQ-011` | §4.3 普通 Strategy 只允许固定前进状态，终态为 `COMPLETE` 或 `HALTED`；§4.2 私有清场 Strategy 只允许一次有证明的提交。 |
 | `ST4-REQ-012` | 聚合四个逻辑 scenario record；process/LiveNode/tester 拓扑不是合同。 |
 | `ST4-REQ-013` | 成功矩阵仅包含 data、market fill、passive accepted/canceled、long/short、reduce-only flat。 |
 | `ST4-REQ-014` | 阶段完成后停止扩展并保持 `LIVE_NOT_APPROVED`。 |
@@ -173,9 +173,12 @@ connect/ready 超时前不得下单。acceptance 超时是 ambiguous ACK，不�
 ### 4.2 官方 ExecTester
 
 直接使用官方 `ExecTester`；薄入口只可准备 rc4 public instrument/price 输入、构造固定 config、
-控制有界开始/停止、读取 public cache/account observations 和输出 §7 record。所有订单必须由官方
-tester 提交。实现自行选择满足结果合同的最小 rc4 public 组合；本文不规定 process、LiveNode、
-tester-instance 或 reconciliation component 数量。
+控制有界开始/停止、读取 public cache/account observations 和输出 §7 record。canary 与 passive
+订单由官方 tester 提交。由于 rc4 tester 的 `close_positions_on_stop` 在复核失败后的停机仍会
+自动下单，本入口的唯一 exact reduce-only 清场使用私有 Nautilus Strategy 的 public
+`order_factory.market` / `submit_order` 提交冻结数量且 `reduce_only=True` 的单笔订单；它必须在同一次调用中复核当前零 active/inflight 与
+精确持仓，且普通停机不下单。实现自行选择满足结果合同的最小 rc4 public 组合；本文不规定
+process、LiveNode、tester-instance 或 reconciliation component 数量。
 
 两个逻辑 attempt：
 
@@ -185,7 +188,9 @@ tester-instance 或 reconciliation component 数量。
    canary、§1.2 确认和 exact reduce-only 清平；随后提交唯一 post-only limit buy，价格为
    best bid 低一个 increment，accepted 后请求 cancel，最终证明 canceled、零 fill、零 position。
 
-两个 attempt 使用独立逻辑 partition/record，但可在同一或不同 runtime topology 顺序执行。passive
+两个 attempt 使用独立逻辑 partition/record，但可在同一或不同 runtime topology 顺序执行。
+上述私有清场 Strategy 只在已证明的唯一 close 节点注册，不能开仓或处理普通信号；其提交
+异常视为 unknown，不得重试。passive
 order 若成交、partial fill 或发生 cancel/fill race，场景立即失败；仅按 §5 proof 执行唯一有限
 cleanup。reject、ambiguous ACK、unknown/conflict 不得盲目重发。tester 所需 risk bypass 只能由该
 入口使用，普通 Strategy 不得 import/configure。
@@ -474,7 +479,7 @@ AcceptanceV1 = {
   canonicalization protocol；
 - 禁止为 Live、多交易所、多 symbol/account、hedge/cross、动态 leverage、阶段 3 模型或阶段 5
   recovery 预留接口、抽象基类或扩展点；
-- 禁止 vendor/fork/monkeypatch `nautilus_trader`，或用 log/private object/tester 外下单绕过合同；
+- 禁止 vendor/fork/monkeypatch `nautilus_trader`，或用 log/private object/未经 §4.2 唯一清场证明的 tester 外下单绕过合同；
 - 不新增第三方依赖；确实无法完成时停止并请求独立范围变更；
 - credentialed Demo 不进入普通 CI；CI 只验证 deterministic plan、边界、状态、schema、digest、
   脱敏和 failure behavior。

@@ -7,22 +7,25 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from nautilus_trader.adapters.binance import BinanceEnvironment
-from nautilus_trader.common import Cache
+from nautilus_trader.common import Cache, OrderFactory
 from nautilus_trader.core import UUID4
 from nautilus_trader.model import (
     AccountBalance,
     AccountId,
     AccountState,
     AccountType,
+    ClientId,
     CryptoPerpetual,
     Currency,
     InstrumentId,
     MarginAccount,
     Money,
+    OrderSide,
+    PositionId,
     Price,
     Quantity,
     Symbol,
@@ -316,7 +319,7 @@ def test_stage4_demo_exec_plan_is_bounded_and_cannot_target_live(
     assert market.enable_stop_sells is False
     assert market.close_positions_on_stop is False
     assert market_close.open_position_on_start_qty is None
-    assert market_close.close_positions_on_stop is True
+    assert market_close.close_positions_on_stop is False
     assert market_close.reduce_only_on_stop is True
     assert market_close.close_positions_qty_precision is None
     assert market_close.strategy_id == market.strategy_id
@@ -332,7 +335,7 @@ def test_stage4_demo_exec_plan_is_bounded_and_cannot_target_live(
     ]
     assert canary.open_position_on_start_qty == Decimal("0.001")
     assert canary.close_positions_on_stop is False
-    assert canary_close.close_positions_on_stop is True
+    assert canary_close.close_positions_on_stop is False
     assert canary_close.strategy_id == canary.strategy_id
     assert passive.open_position_on_start_qty is None
     assert passive.enable_limit_buys is True
@@ -349,7 +352,7 @@ def test_stage4_demo_exec_plan_is_bounded_and_cannot_target_live(
     assert cleanup.open_position_on_start_qty is None
     assert cleanup.enable_limit_buys is False
     assert cleanup.enable_limit_sells is False
-    assert cleanup.close_positions_on_stop is True
+    assert cleanup.close_positions_on_stop is False
     assert cleanup.reduce_only_on_stop is True
     assert cleanup.strategy_id == passive.strategy_id
     with pytest.raises(Stage4DemoExecutionError, match="requires terminal"):
@@ -584,15 +587,18 @@ def test_stage4_demo_exec_failed_canary_stop_cannot_auto_close_outstanding_order
     assert result.unresolved_unknown_count == 1
 
 
+@pytest.mark.parametrize("stop_unconfirmed", [False, True])
 def test_stage4_demo_exec_filled_canary_stops_with_position_for_exact_close(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    stop_unconfirmed: bool,
 ) -> None:
     plan, _ = _plan(monkeypatch, tmp_path)
     attempt = plan.market_close
     phase = attempt.phases[0]
     strategy_id = stage4_demo_execution._require_phase_strategy_id(phase)
     stopped = asyncio.Event()
+    disposed: list[bool] = []
     account_events = 1
     order = _cached_order(
         side="BUY",
@@ -642,7 +648,7 @@ def test_stage4_demo_exec_filled_canary_stops_with_position_for_exact_close(
         cache=cache,
         handle=lambda: SimpleNamespace(is_running=True, stop=stopped.set),
         run_async=run_async,
-        dispose=lambda: None,
+        dispose=lambda: disposed.append(True),
     )
     monkeypatch.setattr(
         stage4_demo_execution,
@@ -667,10 +673,44 @@ def test_stage4_demo_exec_filled_canary_stops_with_position_for_exact_close(
         lambda *args, **kwargs: (1, Decimal("100")),
     )
 
+    if stop_unconfirmed:
+
+        async def failed_stop(
+            *args: object, **kwargs: object
+        ) -> stage4_demo_execution.Stage4DemoExecFailure:
+            return stage4_demo_execution.Stage4DemoExecFailure(
+                "CLEANUP_FAILED", "cleanup", ("FAILED",)
+            )
+
+        def no_cleanup(*args: object, **kwargs: object) -> None:
+            pytest.fail("a new cleanup node started after unconfirmed canary stop")
+
+        monkeypatch.setattr(stage4_demo_execution, "_stop_exec_tester", failed_stop)
+        monkeypatch.setattr(
+            stage4_demo_execution, "_build_authorized_cleanup_runtime", no_cleanup
+        )
+        observation = asyncio.run(
+            stage4_demo_execution._observe_stage4_demo_attempt(attempt)
+        )
+        evidence = build_stage4_demo_exec_evidence(attempt, observation)
+        assert stopped.is_set()
+        assert not disposed
+        assert observation.order_terminal
+        assert observation.active_order_count == 0
+        assert cache.orders_inflight_count(instrument_id=attempt.instrument.id) == 0
+        assert observation.open_position_count == 1
+        assert observation.unresolved_unknown_count == 1
+        assert observation.failure == stage4_demo_execution.Stage4DemoExecFailure(
+            "CLEANUP_FAILED", "cleanup", ("FAILED",)
+        )
+        assert evidence["terminal_state"] == "HALTED"
+        return
+
     snapshot = asyncio.run(
         stage4_demo_execution._run_exec_phase(attempt, phase, phase_kind="canary")
     )
     assert stopped.is_set()
+    assert disposed == [True]
     assert phase.tester_config.close_positions_on_stop is False
     assert snapshot.failure is None
     assert snapshot.order_terminal and snapshot.fill_complete
@@ -964,6 +1004,228 @@ def test_stage4_demo_exec_cleanup_binds_current_position_and_actual_close_order(
         assert not stage4_demo_execution._cleanup_action_matches(
             cache, attempt, strategy_id, authorization
         )
+
+
+def test_stage4_demo_exec_cleanup_node_has_no_stop_close_tester(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.market_close
+    authorization = Stage4DemoCleanupAuthorization(
+        signed_position=Decimal("0.001"),
+        quantity=Quantity.from_str("0.001"),
+    )
+    strategies: list[object] = []
+    builtins: list[str] = []
+    node = SimpleNamespace(
+        add_strategy=strategies.append,
+        add_builtin_actor=lambda name, config: None,
+        add_builtin_strategy=lambda name, config: builtins.append(name),
+    )
+    monkeypatch.setattr(stage4_demo_execution, "_build_exec_node", lambda plan: node)
+
+    runtime = stage4_demo_execution._build_authorized_cleanup_runtime(
+        attempt,
+        attempt.phases[1],
+        cleanup_authorization=authorization,
+    )
+
+    assert cast(object, runtime.node) is node
+    assert strategies == [runtime.cleanup_strategy]
+    assert runtime.cleanup_strategy is not None
+    assert runtime.cleanup_strategy.strategy_id == (
+        stage4_demo_execution._require_phase_strategy_id(attempt.phases[0])
+    )
+    cleanup_config = runtime.cleanup_strategy.config
+    assert cleanup_config is not None
+    assert cleanup_config.manage_stop is False
+    assert builtins == []
+
+
+def test_stage4_demo_exec_private_close_is_one_shot_and_checks_current_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.market_close
+    strategy_id = stage4_demo_execution._require_phase_strategy_id(attempt.phases[1])
+    authorization = Stage4DemoCleanupAuthorization(
+        signed_position=Decimal("0.001"),
+        quantity=Quantity.from_str("0.001"),
+    )
+    position = SimpleNamespace(
+        id="POSITION-001",
+        strategy_id=strategy_id,
+        quantity=Quantity.from_str("0.001"),
+        is_long=True,
+        is_short=False,
+    )
+    active_orders = 0
+    cache = cast(
+        Cache,
+        SimpleNamespace(
+            positions_open=lambda **kwargs: [position],
+            orders_open_count=lambda **kwargs: active_orders,
+            orders_inflight_count=lambda **kwargs: 0,
+        ),
+    )
+    created: list[dict[str, object]] = []
+    submitted: list[tuple[object, object, object]] = []
+    close_order = object()
+
+    def market(**kwargs: object) -> object:
+        created.append(kwargs)
+        return close_order
+
+    class RecordingCleanup(stage4_demo_execution._ExactCleanupStrategy):
+        @property
+        def order_factory(self) -> OrderFactory:
+            return cast(OrderFactory, SimpleNamespace(market=market))
+
+        def submit_order(
+            self,
+            order: Any,
+            position_id: PositionId | None = None,
+            client_id: ClientId | None = None,
+            params: dict[Any, Any] | None = None,
+        ) -> None:
+            submitted.append((order, position_id, client_id))
+
+    strategy = RecordingCleanup(attempt, strategy_id, authorization)
+    cleanup_config = strategy.config
+    assert cleanup_config is not None
+    assert cleanup_config.manage_stop is False
+    active_orders = 1
+    with pytest.raises(stage4_demo_execution._Stage4DemoExecutionRuntimeError):
+        strategy.close_once(cache)
+    strategy.on_stop()
+    assert created == []
+    assert submitted == []
+    with pytest.raises(Stage4DemoExecutionError, match="already requested"):
+        strategy.close_once(cache)
+
+    active_orders = 0
+    position.quantity = Quantity.from_str("0.002")
+    changed = RecordingCleanup(attempt, strategy_id, authorization)
+    with pytest.raises(stage4_demo_execution._Stage4DemoExecutionRuntimeError):
+        changed.close_once(cache)
+    changed.on_stop()
+    assert created == []
+    assert submitted == []
+
+    position.quantity = Quantity.from_str("0.001")
+    approved = RecordingCleanup(attempt, strategy_id, authorization)
+    approved.close_once(cache)
+    assert created == [
+        {
+            "instrument_id": attempt.instrument.id,
+            "order_side": OrderSide.SELL,
+            "quantity": authorization.quantity,
+            "reduce_only": True,
+        }
+    ]
+    assert len(submitted) == 1
+    assert submitted[0][0] is close_order
+    assert submitted[0][1] == position.id
+    assert str(submitted[0][2]) == stage4_demo_execution.EXEC_CLIENT_NAME
+    with pytest.raises(Stage4DemoExecutionError, match="already requested"):
+        approved.close_once(cache)
+    approved.on_stop()
+    assert len(submitted) == 1
+
+
+def test_stage4_demo_exec_failed_cleanup_recheck_stops_without_close(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, _ = _plan(monkeypatch, tmp_path)
+    attempt = plan.market_close
+    phase = attempt.phases[1]
+    strategy_id = stage4_demo_execution._require_phase_strategy_id(phase)
+    authorization = Stage4DemoCleanupAuthorization(
+        signed_position=Decimal("0.001"),
+        quantity=Quantity.from_str("0.001"),
+    )
+    position = SimpleNamespace(
+        id="POSITION-001",
+        strategy_id=strategy_id,
+        quantity=Quantity.from_str("0.002"),
+        is_long=True,
+        is_short=False,
+    )
+    submitted: list[object] = []
+
+    class RecordingCleanup(stage4_demo_execution._ExactCleanupStrategy):
+        @property
+        def order_factory(self) -> OrderFactory:
+            return cast(OrderFactory, SimpleNamespace(market=lambda **kwargs: object()))
+
+        def submit_order(
+            self,
+            order: Any,
+            position_id: PositionId | None = None,
+            client_id: ClientId | None = None,
+            params: dict[Any, Any] | None = None,
+        ) -> None:
+            submitted.append(order)
+
+    strategy = RecordingCleanup(attempt, strategy_id, authorization)
+    cache = SimpleNamespace(
+        positions_open=lambda **kwargs: [position],
+        positions=lambda **kwargs: [position],
+        orders_open_count=lambda **kwargs: 0,
+        orders_inflight_count=lambda **kwargs: 0,
+        orders=lambda **kwargs: [],
+        quote_count=lambda *args: 1,
+        trade_count=lambda *args: 0,
+        account=lambda *args: None,
+    )
+    stopped = asyncio.Event()
+
+    async def run_async() -> None:
+        await stopped.wait()
+
+    node = SimpleNamespace(
+        cache=cache,
+        handle=lambda: SimpleNamespace(is_running=True, stop=stopped.set),
+        run_async=run_async,
+        dispose=lambda: None,
+    )
+    monkeypatch.setattr(
+        stage4_demo_execution,
+        "_build_authorized_cleanup_runtime",
+        lambda *args, **kwargs: SimpleNamespace(
+            node=node, account_query=None, cleanup_strategy=strategy
+        ),
+    )
+    monkeypatch.setattr(
+        stage4_demo_execution, "_market_ready", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        stage4_demo_execution,
+        "_pre_order_account_observation",
+        lambda *args, **kwargs: (0, None),
+    )
+    monkeypatch.setattr(
+        stage4_demo_execution,
+        "_cached_market_timestamps_valid",
+        lambda *args, **kwargs: True,
+    )
+    snapshot = asyncio.run(
+        stage4_demo_execution._run_exec_phase(
+            attempt,
+            phase,
+            phase_kind="cleanup",
+            cleanup_authorization=authorization,
+        )
+    )
+    assert stopped.is_set()
+    assert submitted == []
+    assert phase.tester_config.close_positions_on_stop is False
+    assert snapshot.failure == stage4_demo_execution.Stage4DemoExecFailure(
+        "TERMINAL_FACT_UNKNOWN", "reconciliation", ("POSITION_UNKNOWN",)
+    )
 
 
 def test_stage4_demo_exec_unfilled_cleanup_cannot_publish_success(
