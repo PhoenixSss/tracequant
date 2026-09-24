@@ -40,6 +40,7 @@ from .issue_profiles import (
 from .models import LckStopError
 from .research_policy import (
     RESEARCH_OUTCOME_FIELD,
+    RESEARCH_POLICY_ID,
     ResearchPolicyError,
     architecture_decision_is_consistent,
     bind_research_outcome,
@@ -1998,6 +1999,11 @@ def validate_profile_review(
         evidence = _coerce_evidence(method(execution_context, issue, normalized_input))
         _validate_policy_evidence(policy, evidence, stage="review", leaf_contract=issue)
     artifact = normalized_input.get("artifact")
+    if profile.supports_research_outcome and evidence is not None:
+        reviewed_artifact = evidence.payload.get("artifact")
+        if not isinstance(reviewed_artifact, Mapping):
+            raise ProfilePolicyError("Research Review evidence has no artifact")
+        artifact = reviewed_artifact
     check = validate_profile_contract(
         profile, issue, registry=registry, context=execution_context
     )
@@ -2013,6 +2019,109 @@ def validate_profile_review(
         artifact=dict(artifact) if isinstance(artifact, Mapping) else None,
         profile_evidence=envelope,
     )
+
+
+def accepted_research_review_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve a typed Research PASS, including the old pending-record defect.
+
+    The returned copy is only for consumption; the stored Review is never changed.
+    """
+    identity = record.get("identity")
+    outer = record.get("research_artifact")
+    envelope = record.get("profile_evidence")
+    review = envelope.get("review") if isinstance(envelope, Mapping) else None
+    payload = review.get("payload") if isinstance(review, Mapping) else None
+    if (
+        record.get("verdict") != "PASS"
+        or record.get("status") != "READY_FOR_MERGE_PREFLIGHT"
+        or not isinstance(identity, Mapping)
+        or not isinstance(identity.get("research_artifact"), Mapping)
+        or not isinstance(outer, Mapping)
+        or not isinstance(envelope, Mapping)
+        or envelope.get("profile_id") != "research"
+        or not isinstance(review, Mapping)
+        or review.get("kind") != "research.review.v1"
+        or review.get("schema_version") != PROFILE_EVIDENCE_SCHEMA_VERSION
+        or not isinstance(payload, Mapping)
+        or payload.get("status") != "pass"
+        or payload.get("verdict") != "PASS"
+        or not isinstance(payload.get("result"), Mapping)
+        or payload["result"].get("status") != "pass"
+        or not isinstance(payload.get("artifact"), Mapping)
+    ):
+        raise ResearchOutcomeRequired("accepted Research Review evidence is incomplete")
+    original = identity["research_artifact"]
+    evidence_artifact = payload["artifact"]
+    if dict(outer) != dict(original):
+        raise ResearchOutcomeRequired("Research Review artifacts diverge")
+    try:
+        outcome = require_typed_research_outcome(evidence_artifact)
+    except ResearchPolicyError as exc:
+        raise ResearchOutcomeRequired(str(exc)) from exc
+    if (
+        evidence_artifact.get("outcome_status") != "typed"
+        or evidence_artifact.get("outcome") != outcome.value
+        or evidence_artifact.get("policy_id") != RESEARCH_POLICY_ID
+    ):
+        raise ResearchOutcomeRequired("Research Review outcome or policy is invalid")
+    files = evidence_artifact.get("artifact_files")
+    digests = evidence_artifact.get("artifact_digests")
+    if (
+        not isinstance(files, list)
+        or not files
+        or not all(
+            isinstance(path, str) and path.startswith("docs/research/")
+            for path in files
+        )
+        or not isinstance(digests, list)
+        or len(files) != len(digests)
+        or any(
+            not isinstance(item, Mapping)
+            or item.get("path") != path
+            or not isinstance(item.get("sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) is None
+            for path, item in zip(files, digests)
+        )
+        or evidence_artifact.get("artifact_sha256") != sha256_json(digests)
+    ):
+        raise ResearchOutcomeRequired(
+            "Research Review artifact digest binding is invalid"
+        )
+    for field in (
+        "task_number",
+        "pr_number",
+        "base_sha",
+        "head_sha",
+        "task_body_sha256",
+        "merge_base_sha",
+        "effective_diff_sha256",
+    ):
+        if evidence_artifact.get(field) != identity.get(field):
+            raise ResearchOutcomeRequired(f"Research Review {field} binding diverges")
+    if dict(original) == dict(evidence_artifact):
+        if record.get("research_outcome") != outcome.value:
+            raise ResearchOutcomeRequired("Research Review outcome diverges")
+        return dict(record)
+    if (
+        original.get("outcome") is not None
+        or original.get("outcome_status") != "pending"
+        or record.get("research_outcome") is not None
+        or {k: v for k, v in original.items() if k not in {"outcome", "outcome_status"}}
+        != {
+            k: v
+            for k, v in evidence_artifact.items()
+            if k not in {"outcome", "outcome_status"}
+        }
+    ):
+        raise ResearchOutcomeRequired("Research Review artifact binding diverges")
+    resolved_identity = dict(identity)
+    resolved_identity["research_artifact"] = dict(evidence_artifact)
+    return {
+        **record,
+        "identity": resolved_identity,
+        "research_artifact": dict(evidence_artifact),
+        "research_outcome": outcome.value,
+    }
 
 
 def validate_profile_completion(

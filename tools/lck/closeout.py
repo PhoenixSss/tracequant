@@ -31,6 +31,7 @@ from .profile_policies import (
     ProfilePolicyError,
     ProfilePolicyRegistry,
     ProfileResolver,
+    accepted_research_review_record,
     profile_cleanup_label,
     resolve_issue_policy,
     validate_profile_completion,
@@ -644,6 +645,8 @@ class CloseoutCompleter:
                 registry=self.policy_registry,
                 profile_resolver=self.profile_resolver or resolve_leaf_issue_profile,
             )
+            if profile.supports_research_outcome:
+                review_record = accepted_research_review_record(review_record)
             raw_envelope = review_record.get("profile_evidence")
             review_evidence = (
                 raw_envelope.get("review")
