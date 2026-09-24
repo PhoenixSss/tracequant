@@ -81,7 +81,7 @@ Codex 在工具内逐项选择、执行和分析官方 DataTester、ExecTester�
 | 安全停止 | 出现未知订单/持仓等风险，停止后续带订单探查。 |
 
 “可用”只对本次固定环境和观察窗口成立，不推断长期稳定性。实际过程与结果写入
-独立的脱敏 Markdown 文档 docs/product/stage-4-binance-demo-capability-report.md；
+独立的脱敏 Markdown 文档 docs/research/stage-4-binance-demo-capability-report.md；
 可复用的 checklist 和填写规则留在本基线。每次尝试记录：
 
 1. 尝试编号、关联 checklist ID、UTC 起止时间、实际 TraceQuant 提交与 rc4 版本；
