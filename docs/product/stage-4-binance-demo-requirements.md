@@ -1,32 +1,117 @@
-# 阶段 4：单 Strategy Binance Demo 交互验证
+# 阶段 4：Nautilus rc4 Binance Demo 能力探查基线
 
 | 项目 | 边界 |
 | --- | --- |
 | Feature | [#384](https://github.com/PhoenixSss/tracequant/issues/384) |
-| Runtime | 固定 NautilusTrader `2.0.0rc4` |
-| Venue | Binance USD-M Futures Demo；不得连接 Live 或 legacy Testnet |
-| Instrument | `BTCUSDT-PERP.BINANCE`，不扩展 symbol |
-| 产品状态 | `DEMO_ONLY`、`LIVE_NOT_APPROVED` |
+| Runtime | 固定 NautilusTrader 2.0.0rc4；记录实际安装版本与 TraceQuant 源码提交 |
+| Venue | Binance USD-M Futures Demo |
+| Instrument | BTCUSDT-PERP.BINANCE |
+| 产品状态 | DEMO_ONLY、LIVE_NOT_APPROVED |
 
-本基线按维护者重新确定的 #384 范围，取代历史《TraceQuant 分阶段推进计划》§5 中将 DataTester、ExecTester 和多场景矩阵列为阶段退出条件的安排；原研究文件保留为历史记录。
+阶段 4 的目标是在真实 Demo 环境中摸清固定 rc4 的基础行情、执行和状态观察能力：
+哪些可用、依赖什么条件、在哪一步失败，以及哪些仍无法判断。一次拒单、超时或
+接口限制是调查结果；清单不要求全部成功。只有真实 Demo 探查能支持能力结论，
+离线 fixture 与 CI 结果不能代替交易所观察。
 
-## 目标和运行路径
+本文取代此前“单 Strategy 开仓和平仓必须成功”以及更早的四场景自动验收矩阵，
+作为当前阶段 4 的产品基线。历史《TraceQuant 分阶段推进计划》及已关闭的旧任务
+保留为决策记录；当前实际探查分别由只读研究和订单研究承担。
 
-本阶段只验证 NautilusTrader 的官方 Binance data/execution 接口能让一个简单 Strategy 与 Demo 交易所完成基础交互。策略可在首个合格行情后触发一次交易；不评价 alpha、收益率或长期稳定性。
+## 操作方式
 
-1. 操作者在 Demo UI 核对 one-way、isolated、1x、flat 和零活动订单。Demo 凭据只从本地 Demo 专用环境变量读取，不进入仓库、Issue、日志或验收摘要。请求的配置和人工核对如实记录，不伪称 rc4 提供了逐次 typed venue 模式成功回执。
-2. Strategy 通过 Nautilus 公开 instrument 和行情取得有效价格及最小合法订单量。一个运行最多提交一次 market 开仓；完整成交且公开净持仓确定后，按该持仓精确数量最多提交一次 reduce-only market 平仓。每时刻最多一个活动或未决订单。
-3. 只使用 Nautilus Strategy/order API 与公开订单、成交、持仓、账户观察核对结果。不使用 raw Binance client 或独立订单账本。订单去向、持仓或配置出现未知/冲突时停止新增提交，不盲目重试，也不宣称已清场；由操作者检查 Demo 账户。
-4. 从真实带凭据运行保存脱敏摘要：运行时间、源码与 rc4 identity、Demo 环境、instrument、行情、相关订单 ID/状态/成交、最终公开持仓和活动订单状态。原始运行日志留在仓库外。只有完整的实际运行事实支持成功；离线测试或 CI 不能代替实跑。
+Codex 在工具内逐项选择、执行和分析官方 DataTester、ExecTester、Nautilus 公开接口
+或必要的一次性最小 Strategy 探针。先取得只读 instrument/行情事实，再判断带订单
+探查的前置条件。每次尝试后查看公开事件、cache 和账户观察，记录首个失败点及
+结束状态，再决定下一步。下表按风险分组，不是固定脚本顺序，也不是全 PASS 门槛。
 
-## 完成条件
+必要的临时命令或小脚本仅服务当前探查，记录实际动作与版本。不建设场景 runner、
+批量调度、自动重试/清场、自动判定、EvidenceV1/digest、聚合器或通用证据平台。
+最小 Strategy 若被使用，只验证官方 data/execution 接口的端到端交互，不读取阶段 3
+模型、不评价收益率。
 
-- 一个 Nautilus Strategy 确实连接 Binance Demo 并观察到有效行情。
-- 一次极小 market 开仓完整成交；一次 exact reduce-only 平仓完整成交；公开事实支持最终 flat、零活动订单，且订单归属可关联。
-- 失败或未知状态不会被写成成功；摘要脱敏并声明 `LIVE_NOT_APPROVED`。
+## 安全边界
 
-## 范围边界
+- 固定 Demo、USD-M、目标 instrument、单一 Demo 账户和极小合法订单量。不得提供
+  Live/Testnet endpoint、第二 symbol/account 或放大数量的覆盖入口。一次最多一个
+  活动或未决订单；正常数量参考当次公开 Instrument 约束与有效价格，无法确定合法
+  数量时不下单。
+- 订单探查前由操作者在 Demo UI 核对 one-way、isolated、1x、flat 和零活动订单。
+  Nautilus 请求配置、人工核对、公开观察分别记录；不得声称 rc4 提供了未取得的
+  逐次 typed venue 模式成功回执。观察到相反事实时停止下单。
+- Demo 凭据只从本地 BINANCE_DEMO_API_KEY、BINANCE_DEMO_API_SECRET 读取。
+  不把 secret、完整账户身份、认证 header、签名请求或原始敏感日志写入仓库、
+  Issue 或脱敏报告；原始日志保存在仓库外。
+- 对订单拒绝、部分成交、超时、撤单/成交竞态或事实冲突，先记录当时可见事实。
+  一旦订单去向、活动订单数或净持仓不明，停止后续带订单探查，由操作者核查
+  Demo 账户。不盲目重发，不猜测 flat，不用自动清场掩盖失败。
+- 只用 Nautilus 官方接口及公开订单、成交、持仓、账户事实。不给 rc4 补私有
+  接口、raw Binance client、影子订单状态或独立对账系统。
 
-DataTester、ExecTester、双方向交易、post-only limit/cancel、四场景矩阵、batch 聚合、EvidenceV1/digest、全流行情证明、通用恢复、soak、阶段 3 模型与 Live 授权均不是本阶段完成条件。固定 rc4 无法给出的 typed venue 回执也不是成功条件。
+## 待探查能力 checklist
 
-旧代码已由 [#397](https://github.com/PhoenixSss/tracequant/issues/397) 撤回。当前交付依次为 [#399](https://github.com/PhoenixSss/tracequant/issues/399) 实现单 Strategy、[#400](https://github.com/PhoenixSss/tracequant/issues/400) 在合并后的 main 实际运行和核对。历史 #385–#391 不构成新的前置矩阵。
+每项可以通过一次或多次有界尝试形成结论。复查另起记录，不覆盖先前的失败。
+因安全停止而不能继续的项目保留“未尝试”或“安全停止”及原因。
+
+| ID | 要回答的问题 | 需要记录的主要事实 |
+| --- | --- | --- |
+| C01 | 实际运行的 TraceQuant 提交、rc4 版本和 Demo 路由是什么？ | 版本、提交、实际配置及可见环境；有任何路由不明即不下单。 |
+| C02 | 官方 DataTester 能否取得目标 instrument？ | instrument ID、price/size precision、increment、最小数量/名义金额等公开约束及缺失项。 |
+| C03 | 官方 DataTester 能否取得 quote 与 trade？ | 订阅请求、各类事件数量、样本 instrument 与价格、连接/订阅错误。 |
+| C04 | 收到的数据时间是否可解释？ | UTC 观察窗口、事件时间、接收时间、过期、未来或倒序样本。 |
+| C05 | 订单前的账户模式与初始状态能确认到什么程度？ | 操作者 Demo UI 核对、Nautilus 请求配置、公开账户/持仓/订单事实及无法证明之处。 |
+| C06 | 极小 market 单如何被处理？ | 官方 ExecTester 或最小探针的提交、订单归属、接受/拒绝/超时与首个失败点。 |
+| C07 | 成交和账户状态可解释到什么程度？ | 完整/部分成交、公开订单与净持仓、可见余额/费用变化、缺失或冲突事实。 |
+| C08 | 已确认净持仓能否 exact reduce-only 平仓？ | 所用官方入口、确认的净数量、提交数量与指令、成交/拒绝、最终状态；tester 自身不支持时写明限制。 |
+| C09 | 被动 limit 单能否被接受？ | 提交价格、post-only 请求是否可用、接受/拒绝、是否意外成交。只在账户状态明确时尝试。 |
+| C10 | 已确认归属的活动订单能否撤销？ | cancel 请求、最终订单状态、成交/撤单竞态与剩余持仓；去向不明即停止。 |
+| C11 | 必要时最小 Strategy 能否贯通行情与执行？ | 实际触发、订单/成交/持仓关联及停止点；不要求成功往返作为阶段出口。 |
+| C12 | 实际遇到了哪些失败或异常？ | 拒单、部分/迟到成交、超时、重复/乱序事件、handler 异常或状态冲突的实际触发条件与观察；不为凑清单主动制造未知敞口。 |
+
+## 结论与逐次记录
+
+每个 checklist 项最终标注一个结论，并说明适用的版本、环境与观察窗口：
+
+| 结论 | 含义 |
+| --- | --- |
+| 未尝试 | 没有执行；记录缺失的前置条件或安全原因。 |
+| 可用 | 本次真实 Demo 探查取得了足以支持该项能力的公开事实。 |
+| 有条件可用 | 能观察到能力，但依赖已记录的条件或有明确限制。 |
+| 不可用 | 已尝试且明确失败，或 rc4 公开接口缺少所需能力；说明失败点。 |
+| 无法判断 | 已尝试，但公开事实不足、相互冲突或环境阻碍结论。 |
+| 安全停止 | 出现未知订单/持仓等风险，停止后续带订单探查。 |
+
+“可用”只对本次固定环境和观察窗口成立，不推断长期稳定性。实际过程与结果写入
+独立的脱敏 Markdown 文档 docs/product/stage-4-binance-demo-capability-report.md；
+可复用的 checklist 和填写规则留在本基线。每次尝试记录：
+
+1. 尝试编号、关联 checklist ID、UTC 起止时间、实际 TraceQuant 提交与 rc4 版本；
+2. Demo 环境、instrument、前置账户状态；订单探查附操作者 UI 核对、
+   Nautilus 请求配置与公开观察，分别注明来源；
+3. 所用官方 tester/命令或一次性探针的位置与版本、本次预期观察及实际步骤；
+4. 关键公开事实：行情时间/价格、订单 ID/状态/数量、成交、净持仓、
+   活动/未决订单和可见账户变化；无法读取的事实单独标明；
+5. 首个失败点、错误或冲突、尝试结束时的活动订单/净持仓/未知状态；
+6. 本项结论、依据、局限、下一步问题及仓库外脱敏原始日志位置（如有）。
+
+逐次记录使用以下模板。没有事实可填时写“未观察到”及原因，不补造成功值：
+
+> - 尝试编号 / checklist ID：
+> - UTC 起止时间；TraceQuant 提交；rc4 安装版本：
+> - Demo 环境与 instrument：
+> - 尝试前状态（人工 UI 核对 / Nautilus 请求配置 / 公开观察，分别写）：
+> - 所用 tester、命令或一次性探针及其版本：
+> - 预期观察：
+> - 实际步骤与公开事实（时间、行情、订单 ID/状态/数量、成交、持仓、账户）：
+> - 首个失败点或冲突：
+> - 结束时活动/未决订单、净持仓、未知状态：
+> - 结论与依据；局限和后续问题：
+> - 仓库外脱敏原始日志位置（如有）：
+
+不要覆盖失败记录；新尝试按时间追加。最终摘要列出已确认可用、受限/不可用、
+无法判断和未尝试项目，说明阻止进一步探查的条件。没有真实 Demo 探查记录时
+不能宣称阶段 4 完成；报告不需要所有项目通过，且始终声明 LIVE_NOT_APPROVED。
+
+## 阶段边界
+
+阶段 4 不实现持久化、重启/断连恢复、长期 soak、生产风控、阶段 3 策略评价、
+多账户/多标的或 Live 准入。上述能力属于后续独立工作，不由本次结果自动授权。
