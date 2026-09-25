@@ -46,6 +46,7 @@ from tools.lck.feature_audit import (
 from tools.lck.profile_policies import (
     ProfileEffectDescriptor,
     ResearchValidationGate,
+    accepted_research_review_record,
     validate_profile_completion,
 )
 from tools.lck.research_policy import (
@@ -335,9 +336,15 @@ def test_root_projectv2_graphql_error_is_incomplete() -> None:
     assert warnings
 
 
+@pytest.mark.parametrize(
+    ("report_declares_outcome", "legacy_record"),
+    [(True, False), (False, False), (False, True)],
+)
 def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    report_declares_outcome: bool,
+    legacy_record: bool,
 ) -> None:
     artifact = tmp_path / "docs" / "research" / "report.md"
     artifact.parent.mkdir(parents=True)
@@ -375,7 +382,11 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
     # closed-PR Closeout path, Project Research Outcome, and blocker admission.
     report = tmp_path / "docs" / "research" / "lifecycle.md"
     report.write_text(
-        "# Research report\n\nResearch Outcome: NEEDS MORE EVIDENCE\n",
+        (
+            "# Research report\n\nResearch Outcome: NEEDS MORE EVIDENCE\n"
+            if report_declares_outcome
+            else "# Research report\n\nEvidence is still incomplete.\n"
+        ),
         encoding="utf-8",
     )
     review_root = tmp_path / "review-root"
@@ -667,10 +678,35 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
         checks_gate=cast(Any, Checks()),
         store=review_store,
         workspace=cast(Any, FakeReviewWorkspace(review_root)),
-    ).complete(199, review_id, verdict="PASS")
+    ).complete(
+        199,
+        review_id,
+        verdict="PASS",
+        research_outcome=None if report_declares_outcome else "NEEDS MORE EVIDENCE",
+    )
     assert review_result.status == "READY_FOR_MERGE_PREFLIGHT"
     review_record = review_store.read_record(199, review_id)
+    typed_artifact = review_record["profile_evidence"]["review"]["payload"]["artifact"]
+    assert review_result.to_dict()["research_artifact"] == typed_artifact
+    assert review_record["identity"]["research_artifact"] == typed_artifact
+    assert review_record["research_artifact"] == typed_artifact
     assert review_record["research_outcome"] == "NEEDS MORE EVIDENCE"
+    if legacy_record:
+        pending = dict(binding)
+        assert pending["outcome"] is None
+        review_record["identity"]["research_artifact"] = pending
+        review_record["research_artifact"] = pending
+        review_record["research_outcome"] = None
+        review_store.write_record(199, review_id, review_record)
+        original_bytes = review_store.record_path(199, review_id).read_bytes()
+    assert (
+        lck_review.ReviewPassGate(resolver, store=review_store).run(199, state)[
+            "status"
+        ]
+        == "pass"
+    )
+    if legacy_record:
+        assert review_store.record_path(199, review_id).read_bytes() == original_bytes
 
     merge_result = lck_review.MergePreflight(
         resolver,
@@ -753,6 +789,126 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
         downstream_profile=issue_profiles.TASK_PROFILE,
     )
     assert blocker_gate["status"] == "pass"
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "missing_evidence",
+        "failed_evidence",
+        "illegal_outcome",
+        "invalid_outcome_status",
+        "task",
+        "pr",
+        "base",
+        "head",
+        "diff",
+        "file_digest",
+        "outer_artifact",
+        "missing_binding",
+        "envelope_schema",
+        "evidence_policy",
+        "contract_ref_task",
+        "contract_ref_digest",
+        "changed_files",
+    ],
+)
+def test_legacy_research_outcome_recovery_rejects_tampering(
+    tmp_path: Path, tamper: str
+) -> None:
+    report = tmp_path / "docs" / "research" / "report.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("# Report\n\nEvidence.\n", encoding="utf-8")
+    pending = research_artifact_binding(
+        tmp_path,
+        task_number=199,
+        pr_number=299,
+        base_sha=SHA,
+        head_sha="c" * 40,
+        task_body_sha256=DIGEST,
+        merge_base_sha=SHA,
+        effective_diff_sha256="d" * 64,
+        changed_files=("docs/research/report.md",),
+    )
+    typed = bind_research_outcome(pending, "NEEDS MORE EVIDENCE")
+    identity = {
+        "task_number": 199,
+        "pr_number": 299,
+        "base_sha": SHA,
+        "head_sha": "c" * 40,
+        "task_body_sha256": DIGEST,
+        "merge_base_sha": SHA,
+        "effective_diff_sha256": "d" * 64,
+        "changed_files": ["docs/research/report.md"],
+        "research_artifact": pending,
+    }
+    record: dict[str, Any] = {
+        "verdict": "PASS",
+        "status": "READY_FOR_MERGE_PREFLIGHT",
+        "identity": identity,
+        "research_artifact": pending.copy(),
+        "research_outcome": None,
+        "profile_evidence": {
+            "profile_id": "research",
+            "schema_version": 1,
+            "review": {
+                "kind": "research.review.v1",
+                "schema_version": 1,
+                "payload": {
+                    "policy_id": "research",
+                    "contract_ref": {"number": 199, "body_sha256": DIGEST},
+                    "status": "pass",
+                    "verdict": "PASS",
+                    "result": {"status": "pass"},
+                    "artifact": typed,
+                },
+            },
+        },
+    }
+    untouched = json.loads(json.dumps(record))
+    leaf_contract = {"number": 199, "body_sha256": DIGEST}
+    recovered = accepted_research_review_record(record, leaf_contract=leaf_contract)
+    assert recovered["research_outcome"] == "NEEDS MORE EVIDENCE"
+    assert recovered["identity"]["research_artifact"] == typed
+    assert record == untouched
+
+    evidence = record["profile_evidence"]["review"]["payload"]
+    if tamper == "missing_evidence":
+        record["profile_evidence"]["review"] = None
+    elif tamper == "failed_evidence":
+        evidence["status"] = "fail"
+    elif tamper == "illegal_outcome":
+        typed["outcome"] = "UNKNOWN"
+    elif tamper == "invalid_outcome_status":
+        typed["outcome_status"] = "pending"
+    elif tamper == "task":
+        typed["task_number"] = 198
+    elif tamper == "pr":
+        typed["pr_number"] = 298
+    elif tamper == "base":
+        typed["base_sha"] = "b" * 40
+    elif tamper == "head":
+        typed["head_sha"] = "b" * 40
+    elif tamper == "diff":
+        typed["effective_diff_sha256"] = "e" * 64
+    elif tamper == "file_digest":
+        typed["artifact_digests"][0]["sha256"] = "f" * 64
+    elif tamper == "outer_artifact":
+        record["research_artifact"]["head_sha"] = "b" * 40
+    elif tamper == "missing_binding":
+        del record["identity"]["research_artifact"]["artifact_sha256"]
+    elif tamper == "envelope_schema":
+        record["profile_evidence"]["schema_version"] = 2
+    elif tamper == "evidence_policy":
+        del evidence["policy_id"]
+    elif tamper == "contract_ref_task":
+        evidence["contract_ref"]["number"] = 198
+    elif tamper == "contract_ref_digest":
+        evidence["contract_ref"]["body_sha256"] = "f" * 64
+    elif tamper == "changed_files":
+        identity["changed_files"] = ["docs/research/other.md"]
+    with pytest.raises(lck_models.LckStopError):
+        accepted_research_review_record(record, leaf_contract=leaf_contract)
 
 
 @pytest.mark.parametrize("outcome", ("IMPLEMENT", "DO NOT IMPLEMENT"))
@@ -915,7 +1071,7 @@ def test_closeout_rejects_missing_review_artifact_before_any_effect(
 
     with pytest.raises(
         lck_models.LckStopError,
-        match="reviewed artifact binding",
+        match="accepted Research Review evidence is incomplete",
     ):
         handler.complete(199)
 

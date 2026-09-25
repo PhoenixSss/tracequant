@@ -31,6 +31,7 @@ from .profile_policies import (
     ProfilePolicyError,
     ProfilePolicyRegistry,
     ProfileResolver,
+    accepted_research_review_record,
     resolve_issue_policy,
     validate_profile_review,
 )
@@ -732,6 +733,11 @@ class ReviewPassGate:
                 registry=self.policy_registry,
                 profile_resolver=self.profile_resolver or resolve_leaf_issue_profile,
             )
+            if profile.supports_research_outcome:
+                record = accepted_research_review_record(
+                    record, leaf_contract=_policy_issue_from_state(state)
+                )
+                recorded = _identity_from_mapping(record["identity"])
             validate_profile_review(
                 profile,
                 _policy_issue_from_state(state),
