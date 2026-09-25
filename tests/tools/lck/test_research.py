@@ -806,6 +806,11 @@ def test_research_profile_binds_typed_outcome_to_reviewed_artifact(
         "file_digest",
         "outer_artifact",
         "missing_binding",
+        "envelope_schema",
+        "evidence_policy",
+        "contract_ref_task",
+        "contract_ref_digest",
+        "changed_files",
     ],
 )
 def test_legacy_research_outcome_recovery_rejects_tampering(
@@ -845,10 +850,13 @@ def test_legacy_research_outcome_recovery_rejects_tampering(
         "research_outcome": None,
         "profile_evidence": {
             "profile_id": "research",
+            "schema_version": 1,
             "review": {
                 "kind": "research.review.v1",
                 "schema_version": 1,
                 "payload": {
+                    "policy_id": "research",
+                    "contract_ref": {"number": 199, "body_sha256": DIGEST},
                     "status": "pass",
                     "verdict": "PASS",
                     "result": {"status": "pass"},
@@ -858,7 +866,8 @@ def test_legacy_research_outcome_recovery_rejects_tampering(
         },
     }
     untouched = json.loads(json.dumps(record))
-    recovered = accepted_research_review_record(record)
+    leaf_contract = {"number": 199, "body_sha256": DIGEST}
+    recovered = accepted_research_review_record(record, leaf_contract=leaf_contract)
     assert recovered["research_outcome"] == "NEEDS MORE EVIDENCE"
     assert recovered["identity"]["research_artifact"] == typed
     assert record == untouched
@@ -888,8 +897,18 @@ def test_legacy_research_outcome_recovery_rejects_tampering(
         record["research_artifact"]["head_sha"] = "b" * 40
     elif tamper == "missing_binding":
         del record["identity"]["research_artifact"]["artifact_sha256"]
+    elif tamper == "envelope_schema":
+        record["profile_evidence"]["schema_version"] = 2
+    elif tamper == "evidence_policy":
+        del evidence["policy_id"]
+    elif tamper == "contract_ref_task":
+        evidence["contract_ref"]["number"] = 198
+    elif tamper == "contract_ref_digest":
+        evidence["contract_ref"]["body_sha256"] = "f" * 64
+    elif tamper == "changed_files":
+        identity["changed_files"] = ["docs/research/other.md"]
     with pytest.raises(lck_models.LckStopError):
-        accepted_research_review_record(record)
+        accepted_research_review_record(record, leaf_contract=leaf_contract)
 
 
 @pytest.mark.parametrize("outcome", ("IMPLEMENT", "DO NOT IMPLEMENT"))

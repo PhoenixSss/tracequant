@@ -646,7 +646,9 @@ class CloseoutCompleter:
                 profile_resolver=self.profile_resolver or resolve_leaf_issue_profile,
             )
             if profile.supports_research_outcome:
-                review_record = accepted_research_review_record(review_record)
+                review_record = accepted_research_review_record(
+                    review_record, leaf_contract=_policy_issue_from_state(state)
+                )
             raw_envelope = review_record.get("profile_evidence")
             review_evidence = (
                 raw_envelope.get("review")

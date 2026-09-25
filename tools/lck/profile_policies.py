@@ -2021,7 +2021,9 @@ def validate_profile_review(
     )
 
 
-def accepted_research_review_record(record: Mapping[str, Any]) -> dict[str, Any]:
+def accepted_research_review_record(
+    record: Mapping[str, Any], *, leaf_contract: Mapping[str, Any]
+) -> dict[str, Any]:
     """Resolve a typed Research PASS, including the old pending-record defect.
 
     The returned copy is only for consumption; the stored Review is never changed.
@@ -2039,6 +2041,7 @@ def accepted_research_review_record(record: Mapping[str, Any]) -> dict[str, Any]
         or not isinstance(outer, Mapping)
         or not isinstance(envelope, Mapping)
         or envelope.get("profile_id") != "research"
+        or envelope.get("schema_version") != PROFILE_EVIDENCE_SCHEMA_VERSION
         or not isinstance(review, Mapping)
         or review.get("kind") != "research.review.v1"
         or review.get("schema_version") != PROFILE_EVIDENCE_SCHEMA_VERSION
@@ -2052,6 +2055,17 @@ def accepted_research_review_record(record: Mapping[str, Any]) -> dict[str, Any]
         raise ResearchOutcomeRequired("accepted Research Review evidence is incomplete")
     original = identity["research_artifact"]
     evidence_artifact = payload["artifact"]
+    try:
+        _validate_policy_evidence(
+            DEFAULT_PROFILE_POLICY_REGISTRY.resolve_profile_id("research"),
+            _coerce_evidence(review),
+            stage="review",
+            leaf_contract=leaf_contract,
+        )
+    except ProfilePolicyError as exc:
+        raise ResearchOutcomeRequired(
+            f"accepted Research Review evidence is invalid: {exc}"
+        ) from exc
     if dict(outer) != dict(original):
         raise ResearchOutcomeRequired("Research Review artifacts diverge")
     try:
@@ -2083,6 +2097,7 @@ def accepted_research_review_record(record: Mapping[str, Any]) -> dict[str, Any]
             for path, item in zip(files, digests)
         )
         or evidence_artifact.get("artifact_sha256") != sha256_json(digests)
+        or identity.get("changed_files") != files
     ):
         raise ResearchOutcomeRequired(
             "Research Review artifact digest binding is invalid"
