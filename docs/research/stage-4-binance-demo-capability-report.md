@@ -1,4 +1,4 @@
-# 阶段 4 Binance USD-M Demo 只读能力探查报告（#399）
+# 阶段 4 Binance USD-M Demo 只读能力探查报告（#399、#400）
 
 - 探查日期及复测日期：2026-09-24 UTC。
 - TraceQuant 探查时源码提交：`1b1e466554e3b5a9a0c05910464c6c5c8dc0d91a`（#399 的 LCK Delivery Prepare 基线）；Python 3.13.14；实际导入的 `nautilus_trader.__version__` 为 `2.0.0rc4`。R399-05 复测时源码提交另见该次记录。
@@ -117,3 +117,55 @@ R399-01–04 的一次性探针位于仓库外：`/tmp/tracequant-399-instrument
 | C12 | 有条件可用 | R399-05 再次观察到 instrument 0 时间戳与 `UnsubscribeInstrument` 未实现警告；R399-02 的异步停止 API 错误按版本缺失的历史记录保留，未进行订单异常探查。 |
 
 已排除本次行情不可达、目标 instrument 不存在或 quote/trade 全无事件作为**R399-05 等已记录窗口**的失败原因。后续带订单探查仍缺少操作者 Demo UI 的 one-way、isolated、1x、flat、零活动订单核对；缺少公开账户/持仓/活动订单事实及将这些事实与 UI 对齐的确认；还需在下单前用当时有效的 instrument 约束与行情计算极小合法数量。本报告没有为任何订单、撤单、仓位或账户状态提供授权，也不能将 `ts_event=0` 解释为 instrument 更新时刻。阶段 4 尚未完成；**LIVE_NOT_APPROVED**。
+
+## #400：带凭据 Demo 订单与状态研究（安全前置阻塞结论，2026-09-26 UTC）
+
+本节承接 #399 的公开行情结果，不改写其历史结论。#400 的 LCK Delivery Prepare 基线为 TraceQuant 提交 `d6f7017c4b9aaefe0d22bcf6c5e66976852627c2`；实际导入 NautilusTrader `2.0.0rc4`，Python 3.13.14。以下探针固定 `BinanceProductType.USD_M`、`BinanceEnvironment.DEMO` 和 `BTCUSDT-PERP.BINANCE`，不覆盖 HTTP/WS endpoint；HTTP 和 WebSocket 使用本机已配置的 HTTPS 代理，不记录代理值。凭据由仓库外权限 `600` 的本地文件按 `BINANCE_DEMO_API_KEY`、`BINANCE_DEMO_API_SECRET` 读取，工具未回显值；原始日志在 `/tmp`，均为权限 `600`，检查未发现密钥值。`/tmp` 不保证长期保存。**DEMO_ONLY、LIVE_NOT_APPROVED**。
+
+本节 R400-01–04 均未提交、撤销或修改订单，未调用自动清场。操作者尚未提供本轮 Demo UI 的 one-way、isolated、1x、flat、零活动订单核对，因此本轮不允许带订单动作。rc4 签名查询的 `dual_side_position=false` 只是该次 API 观察，不能代替 UI 对全部前置状态的核对。
+
+### R400-01：最小执行客户端认证（C01、C05、C12）
+
+- UTC 日志窗口：`2026-09-26T04:37:14.154508574Z`–`04:37:39.276709494Z`；上述提交与 rc4。命令：`timeout 85s uv run --frozen python /tmp/tracequant-400-auth-probe.py`；脚本 SHA-256 `b27d34eb289b0c7d6d2db56dc2b741262c1cc87768487d98ea133fd4f33a2008`。
+- 配置与预期：仅注册官方 `BinanceExecutionClientFactory`，关闭 WS trading 下单入口，不注册策略；期望只读认证并取得账户状态。凭据格式、非占位符和文件权限检查通过；之前对公开 `https://demo-fapi.binance.com/fapi/v1/ping` 的请求返回 HTTP 200，精确 UTC 未记录。
+- 事实：执行客户端报告 `Hedge mode (dual side position): false`。固定 rc4 源码在此日志前调用签名的 `query_hedge_mode()`；因此本次 Demo 私有 REST 签名查询返回成功。未见账户状态或完整执行客户端 `Connected`。
+- 首个失败点与结束状态：探针的 25 秒执行连接上限触发 `exec-connect timeout`，外层探针最终报 `RuntimeError`；节点日志显示停止和释放。未观察到订单、成交或持仓快照；探针没有订单命令。不能将此轮归为完整账户连接成功，也没有凭据拒绝证据。
+- 仓库外原始日志：`/tmp/tracequant-400-auth-h0lvv9qk.log`，SHA-256 `f006346917f8df5f34c02df54f3807cdc96dfe14665cfd78749e4aac7f9ac7a5`。
+
+### R400-02：限定目标合约的认证复核（C01、C05、C12）
+
+- UTC 日志窗口：`2026-09-26T04:41:26.946643410Z`–`04:42:03.833082478Z`；命令：`timeout 110s uv run --frozen python /tmp/tracequant-400-auth-probe-scoped.py`；脚本 SHA-256 `86530e94aee18346eb7c7e80aee2f39ce4bd900efdafc76437e28325dd2ff564`。
+- 相对 R400-01：`BinanceInstrumentProviderConfig(load_all=False, load_ids=["BTCUSDT-PERP.BINANCE"])`；连接上限 60 秒；仍只读、无策略或订单命令。
+- 事实：签名持仓模式查询再次返回 `dual_side_position=false`，执行客户端报告 `Connected`。[固定 rc4 的连接顺序](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc4/crates/adapters/binance/src/futures/execution.rs)先建立私有 user stream，随后 `refresh_account_state()` 并等待账户注册，才从 `connect()` 返回；因此此日志支持这次 Demo 私有流及账户读取/注册已完成。该来源与人工 UI 观察分别保留，不推断 isolated、1x 或 flat。
+- 首个失败点与结束状态：一次性探针的外层观察/收尾报 `RuntimeError`，未得到结构化 cache 摘要；不能把脚本进程退出视为正常收尾。日志显示执行客户端断开并释放，无订单命令；此轮没有可复核的订单/持仓计数。
+- 仓库外原始日志：`/tmp/tracequant-400-auth-16gdy6x_.log`，SHA-256 `ab7886459c7080379e4aab00ee917812749d9188c1a93f837dc5915495419770`。
+
+### R400-03：官方 ExecTester 的首次 dry-run（C05、C11、C12）
+
+- UTC 日志窗口：`2026-09-26T04:56:38.501437129Z`–`04:57:58.586810901Z`；命令：`timeout 115s uv run --frozen python /tmp/tracequant-400-exec-dry-run.py`；脚本 SHA-256 `caf5bfcaede9f85712afe2c045a6c5a2abbcdeb938460f8225d32be9231fab67`。
+- 配置与预期：同时注册官方 Demo 数据与执行客户端，目标合约过滤，执行对账开启；`ExecTesterConfig(dry_run=True)`，以目标合约首条 quote 触发一次开仓意图，但 dry-run 在订单创建/提交前跳过；关闭 limit、停止撤单和停止平仓。期望观察 tester 链路而不产生交易所订单。
+- 事实与失败点：Demo 数据客户端 `Connected`；一次性探针的 55 秒停止计时在执行客户端连接完成前介入，随后出现 `exec-connect timeout` 和外层 `RuntimeError`。没有足够事实判断执行客户端本身能否在更长窗口内连接；未见账户或订单/持仓快照，未见订单命令。
+- 结束状态：进程退出，无残留探针进程；Demo 账户状态仍未知。仓库外原始日志：`/tmp/tracequant-400-exec-dry-gnedtvne.log`，SHA-256 `4ca7a1661d2e9ebfdd12cfe6caab3ba815c250ba3669cceb1e6fc5c57b6d0ea7`。
+
+### R400-04：延长窗口的官方 ExecTester dry-run（C05、C11、C12）
+
+- UTC 日志窗口：`2026-09-26T04:58:44.012757113Z`–`05:00:31.365287978Z`；命令：`timeout 160s uv run --frozen python /tmp/tracequant-400-exec-dry-run-long.py`，外层退出码 124；脚本 SHA-256 `6441ddd52e05fcb322399011185cbb428602167f8dc7321fbf2be8ef9bb1e321`。精确进程终止 UTC 未由探针记录。
+- 相对 R400-03：内部停止计时改为 100 秒、连接上限 110 秒；其余 Demo、目标合约、dry-run、无停止清场配置相同。未配置 leverage 或 margin-type 写请求，WS trading 下单入口关闭。
+- 实际公开事实：数据与执行客户端均报告 `Connected`；账户 `AccountState` 被接收并注册。启动 `ExecutionMassStatus` 得到 **0 个 OrderStatusReports、0 个 FillReports、0 个 PositionReports**；reconciliation 摘要为 `reconciled=0, external=0, open=0, fills=0, positions=0, skipped=0, filtered=0`，portfolio 初始化 **0 个活动订单、0 个持仓**。这些是该次公开接口快照，不是持续 flat 保证，也不能代替 UI 核对。ExecTester 启动并订阅目标 quote/trade，随后明确记录 `Dry run, skipping open position`；没有订单提交命令。
+- 首个失败点与结束状态：在 `Dry run, skipping open position` 后，探针未于外层 160 秒上限前完成正常收尾；进程被 `timeout` 终止，已核对无残留探针进程。无订单动作，不存在本探针引入的未知订单去向；进程终止后未再取得交易所快照，故账户当前状态仍需重新核对。此轮证明了认证、连接、账户读取、启动对账和 ExecTester 的 dry-run 路径，不证明真实订单或正常停止。
+- 仓库外原始日志：`/tmp/tracequant-400-exec-dry-q6fnm781.log`，SHA-256 `7465fb770c2d004e68d91b7c4b6e48293ead8dfdf45b15a9c56978f8ca451fd2`。
+
+### #400 本轮结论与安全停止点
+
+| ID | 当前结论 | 证据和限制 |
+| --- | --- | --- |
+| C01 | 有条件可用 | rc4、源码提交、Demo/USD-M 配置已核对；公开 Demo HTTP ping 为 200，签名账户相关查询与私有流连接成功。代理已配置但未记录其值；没有捕获网络层目标地址。 |
+| C02–C04 | 参见 #399 | #399 的有界公开行情/instrument 观察仍是历史依据；下单前必须重新取得当次约束与价格。 |
+| C05 | 无法判断 | R400-04 的公开 API 快照显示 0 活动订单和 0 持仓，R400-01/02 签名查询显示 one-way；操作者尚未完成本轮 UI 的 isolated、1x、flat 和零活动订单核对，也没有可核对的逐次 typed venue 模式成功回执。 |
+| C06–C10 | 未尝试 | UI 前置核对未完成，不进行真实 market、成交、reduce-only、limit 或 cancel 探查。dry-run 不证明任何真实订单能力。 |
+| C11 | 未尝试 | R400-04 的官方 ExecTester 已连接、订阅并走到 dry-run 跳过开仓；实际 Strategy→订单→成交→持仓端到端能力未尝试。 |
+| C12 | 有条件可用 | 实际观察到探针连接上限、收尾 RuntimeError 与外层 timeout；这属于本次探针/启动窗口限制，没有真实订单拒绝、部分成交或撤单竞态证据。 |
+
+本轮带订单研究的停止点是缺少操作者 Demo UI 前置核对。取得该核对后，还要重新验证当时的 API 订单/持仓快照与目标 instrument 约束、有效价格，并坚持一次最多一个活动或未决订单；任一状态不明即停止，不重发或自动清场。**LIVE_NOT_APPROVED**。
+
+本轮已确认 Demo 公开 HTTP、签名持仓模式查询、私有执行连接、账户状态读取和启动对账在记录窗口内可观察；ExecTester 的 dry-run 路径也到达预期的跳过下单点。失败/限制包括较短连接窗口、一次性探针的外层 `RuntimeError` 与超时后未正常收尾，均按原始尝试保留。没有观察到本轮产生的未知订单或持仓，因为所有探针均无订单命令；但结束后的外部账户实时状态未复查。缺少 UI 安全前置时，本研究不能给真实 market、成交、reduce-only、limit/cancel 或最小 Strategy 端到端能力发布成功结论；需由操作者核对后另起有界尝试。#400 本轮研究在此安全停止，阶段 4 的真实订单能力仍未证实，**LIVE_NOT_APPROVED**。
