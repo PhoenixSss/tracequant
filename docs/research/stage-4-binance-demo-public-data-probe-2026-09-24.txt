@@ -1,0 +1,158 @@
+"""One-time, public-data-only Binance USD-M Demo probe for Research #399."""
+
+import asyncio
+import json
+import os
+import time
+from datetime import UTC, datetime
+
+import nautilus_trader
+from nautilus_trader.adapters.binance import (
+    BINANCE_CLIENT_ID,
+    BinanceDataClientConfig,
+    BinanceDataClientFactory,
+    BinanceEnvironment,
+    BinanceInstrumentProviderConfig,
+    BinanceProductType,
+    load_binance_instruments,
+)
+from nautilus_trader.common import DataActor, DataActorConfig, Environment
+from nautilus_trader.live import LiveNode
+from nautilus_trader.model import InstrumentId, TraderId
+from nautilus_trader.testkit import DataTesterConfig
+
+
+TARGET = InstrumentId.from_str("BTCUSDT-PERP.BINANCE")
+
+
+def utc_now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def utc_ns(value: int) -> str:
+    return datetime.fromtimestamp(value / 1_000_000_000, UTC).isoformat()
+
+
+def emit(kind: str, **fields: object) -> None:
+    print(json.dumps({"kind": kind, "utc": utc_now(), **fields}, sort_keys=True), flush=True)
+
+
+class Observer(DataActor):
+    def __init__(self) -> None:
+        super().__init__(DataActorConfig())
+        self.instrument_callbacks = 0
+        self.stats = {
+            "quote": {"count": 0, "first": None, "last": None, "previous_ns": None,
+                      "reverse": 0, "future_over_1s": 0, "samples": []},
+            "trade": {"count": 0, "first": None, "last": None, "previous_ns": None,
+                      "reverse": 0, "future_over_1s": 0, "samples": []},
+        }
+
+    def on_start(self) -> None:
+        emit("observer_start")
+        self.subscribe_instrument(TARGET, client_id=BINANCE_CLIENT_ID)
+        self.subscribe_quotes(TARGET, client_id=BINANCE_CLIENT_ID)
+        self.subscribe_trades(TARGET, client_id=BINANCE_CLIENT_ID)
+
+    def on_instrument(self, instrument: object) -> None:
+        self.instrument_callbacks += 1
+        if self.instrument_callbacks <= 2:
+            emit("instrument_callback", instrument_id=str(instrument.id),
+                 ts_event=int(instrument.ts_event), ts_init=int(instrument.ts_init))
+
+    def _record(self, kind: str, item: object, values: dict[str, str]) -> None:
+        stat = self.stats[kind]
+        event_ns = int(item.ts_event)
+        received_ns = time.time_ns()
+        if stat["previous_ns"] is not None and event_ns < stat["previous_ns"]:
+            stat["reverse"] += 1
+        if event_ns > received_ns + 1_000_000_000:
+            stat["future_over_1s"] += 1
+        stat["previous_ns"] = event_ns
+        stat["first"] = stat["first"] or utc_ns(event_ns)
+        stat["last"] = utc_ns(event_ns)
+        stat["count"] += 1
+        if len(stat["samples"]) < 2:
+            stat["samples"].append({"instrument_id": str(item.instrument_id),
+                                    "ts_event": utc_ns(event_ns),
+                                    "ts_init": utc_ns(int(item.ts_init)),
+                                    "received": utc_ns(received_ns), **values})
+
+    def on_quote(self, quote: object) -> None:
+        self._record("quote", quote,
+                     {"bid": str(quote.bid_price), "ask": str(quote.ask_price)})
+
+    def on_trade(self, trade: object) -> None:
+        self._record("trade", trade,
+                     {"price": str(trade.price), "size": str(trade.size)})
+
+    def summary(self) -> dict[str, object]:
+        return {"instrument_callbacks": self.instrument_callbacks,
+                "quote": {key: value for key, value in self.stats["quote"].items()
+                          if key != "previous_ns"},
+                "trade": {key: value for key, value in self.stats["trade"].items()
+                          if key != "previous_ns"}}
+
+
+async def main() -> None:
+    proxy = os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY")
+    if not proxy:
+        raise RuntimeError("HTTPS proxy unavailable")
+    if nautilus_trader.__version__ != "2.0.0rc4":
+        raise RuntimeError("unexpected NautilusTrader version")
+    config = BinanceDataClientConfig(
+        product_type=BinanceProductType.USD_M,
+        environment=BinanceEnvironment.DEMO,
+        api_key=None,
+        api_secret=None,
+        proxy_url=proxy,
+        instrument_provider=BinanceInstrumentProviderConfig(
+            load_all=False,
+            load_ids=[str(TARGET)],
+            query_commission_rates=False,
+        ),
+    )
+    emit("config", version=nautilus_trader.__version__, product="USD_M",
+         environment="DEMO", target=str(TARGET), has_proxy=config.has_proxy_url,
+         base_url_http=config.base_url_http, base_url_ws=config.base_url_ws)
+    instruments = await asyncio.wait_for(load_binance_instruments(config), timeout=90)
+    for instrument in instruments:
+        emit("instrument", instrument_id=str(instrument.id),
+             price_precision=instrument.price_precision,
+             size_precision=instrument.size_precision,
+             price_increment=str(instrument.price_increment),
+             size_increment=str(instrument.size_increment),
+             min_quantity=str(instrument.min_quantity),
+             max_quantity=str(instrument.max_quantity),
+             min_notional=str(instrument.min_notional),
+             min_price=str(instrument.min_price), max_price=str(instrument.max_price),
+             ts_event=int(instrument.ts_event), ts_init=int(instrument.ts_init))
+    observer = Observer()
+    node = (LiveNode.builder("R399-READ-ONLY", TraderId.from_str("R399-001"),
+                             Environment.LIVE)
+            .add_data_client(None, BinanceDataClientFactory(), config)
+            .with_timeout_connection(90)
+            .with_delay_post_stop_secs(0)
+            .with_reconciliation(False)
+            .build())
+    node.add_builtin_actor("DataTester", DataTesterConfig(
+        client_id=BINANCE_CLIENT_ID, instrument_ids=[TARGET],
+        subscribe_instrument=True, subscribe_quotes=True, subscribe_trades=True,
+        request_instruments=True, log_data=False))
+    node.add_actor(observer)
+    emit("stream_start")
+    run_task = asyncio.create_task(node.run_async())
+    try:
+        await asyncio.sleep(30)
+    finally:
+        if node.is_running:
+            node.handle().stop()
+        try:
+            await asyncio.wait_for(run_task, timeout=30)
+        finally:
+            node.dispose()
+    emit("stream_summary", **observer.summary())
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
